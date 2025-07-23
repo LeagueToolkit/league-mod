@@ -1,0 +1,20 @@
+name = "old-summoners-rift"
+display_name = "Old Summoners Rift"
+version = "0.1.0-beta.5"
+description = "A mod for League of Legends that changes the map to the old Summoners Rift"
+
+authors = ["TheKillerey", { name = "Crauzer", role = "Contributor" }]
+license = "MIT"
+[[transformers]]
+name = "tex-converter"
+patterns = ["**/*.dds", "**/*.png"]
+
+[[layers]]
+name = "base"
+priority = 0
+description = "Base layer of the mod"
+
+[[layers]]
+name = "chroma1"
+priority = 20
+description = "Chroma 1"
