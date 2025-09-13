@@ -47,10 +47,13 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         let mut chunks = HashMap::new();
         for _ in 0..chunk_count {
             let chunk = ModpkgChunk::read(&mut reader)?;
-            chunks.insert(
-                (chunk.path_hash, layer_indices[chunk.layer_index as usize]),
-                chunk,
-            );
+            let layer_hash = if chunk.layer_index == -1 {
+                u64::MAX
+            } else {
+                layer_indices[chunk.layer_index as usize]
+            };
+
+            chunks.insert((chunk.path_hash, layer_hash), chunk);
         }
 
         Ok(Self {

@@ -276,14 +276,14 @@ impl ModpkgBuilder {
             writer.write_all(&compressed_data)?;
 
             let path_hash = chunk_builder.path_hash;
-            let layer_idx = match layer_indices.get(&hash_layer_name(&chunk_builder.layer)) {
-                Some(idx) => *idx,
-                None => {
-                    return Err(ModpkgBuilderError::LayerNotFound(
-                        chunk_builder.layer.clone(),
-                    ))
-                }
-            };
+            let layer_index = layer_indices
+                .get(&hash_layer_name(&chunk_builder.layer))
+                .map(|idx| *idx as i32)
+                .unwrap_or(-1);
+            let wad_index = wad_indices
+                .get(&hash_wad_name(&chunk_builder.wad))
+                .map(|idx| *idx as i32)
+                .unwrap_or(-1);
 
             let chunk = ModpkgChunk {
                 path_hash,
@@ -294,10 +294,8 @@ impl ModpkgBuilder {
                 compressed_checksum,
                 uncompressed_checksum,
                 path_index: *chunk_path_indices.get(&path_hash).unwrap_or(&0),
-                layer_index: layer_idx,
-                wad_index: *wad_indices
-                    .get(&hash_wad_name(&chunk_builder.wad))
-                    .unwrap_or(&0),
+                layer_index,
+                wad_index,
             };
 
             final_chunks.push(chunk);
