@@ -1,12 +1,10 @@
-use binrw::{binrw, BinRead};
-use byteorder::{ReadBytesExt, LE};
+use binrw::binrw;
 use chunk::ModpkgChunk;
 use error::ModpkgError;
-use io_ext::ReaderExt;
 use std::{
     collections::HashMap,
     fmt::Display,
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{Read, Seek},
 };
 
 pub mod builder;
@@ -16,6 +14,7 @@ mod error;
 mod extractor;
 mod license;
 mod metadata;
+mod read;
 pub mod utils;
 
 pub use decoder::ModpkgDecoder;
@@ -28,14 +27,20 @@ pub use utils::*;
 pub struct Modpkg<TSource: Read + Seek> {
     signature: Vec<u8>,
 
+    pub layer_indices: Vec<u64>,
     pub layers: HashMap<u64, ModpkgLayer>,
+
+    pub chunk_path_indices: Vec<u64>,
     pub chunk_paths: HashMap<u64, String>,
+
+    pub wads_indices: Vec<u64>,
+    pub wads: HashMap<u64, String>,
 
     pub metadata: ModpkgMetadata,
 
     /// The chunks in the mod package.
     ///
-    /// The key is a tuple of the path hash and the layer hash.
+    /// The key is a tuple of the path hash and the layer hash respectively.
     pub chunks: HashMap<(u64, u64), ModpkgChunk>,
 
     /// The original byte source.
@@ -67,72 +72,29 @@ pub enum ModpkgCompression {
 }
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
-    const MAGIC: [u8; 8] = *b"_modpkg_";
-
-    pub fn mount_from_reader(mut source: TSource) -> Result<Self, ModpkgError> {
-        let mut reader = BufReader::new(&mut source);
-
-        let magic = reader.read_u64::<LE>()?;
-        if magic != u64::from_le_bytes(Self::MAGIC) {
-            return Err(ModpkgError::InvalidMagic(magic));
-        }
-
-        let version = reader.read_u32::<LE>()?;
-        if version != 1 {
-            return Err(ModpkgError::InvalidVersion(version));
-        }
-
-        let signature_size = reader.read_u32::<LE>()?;
-        let chunk_count = reader.read_u32::<LE>()?;
-
-        let mut signature = vec![0; signature_size as usize];
-        reader.read_exact(&mut signature)?;
-
-        let layer_count = reader.read_u32::<LE>()?;
-        let mut layers = HashMap::new();
-        for _ in 0..layer_count {
-            let layer = ModpkgLayer::read(&mut reader)?;
-            layers.insert(hash_layer_name(&layer.name), layer);
-        }
-
-        let chunk_paths_count = reader.read_u32::<LE>()?;
-        let mut chunk_paths = HashMap::new();
-        for _ in 0..chunk_paths_count {
-            let chunk_path = reader.read_str_until_nul()?;
-            let chunk_path_hash = hash_chunk_name(&chunk_path);
-            chunk_paths.insert(chunk_path_hash, chunk_path);
-        }
-
-        let metadata = ModpkgMetadata::read(&mut reader)?;
-
-        // Skip alignment
-        let position = reader.stream_position()?;
-        reader.seek(SeekFrom::Current(((8 - (position % 8)) % 8) as i64))?;
-
-        let mut chunks = HashMap::new();
-        for _ in 0..chunk_count {
-            let chunk = ModpkgChunk::read(&mut reader)?;
-            chunks.insert((chunk.path_hash, chunk.layer_hash), chunk);
-        }
-
-        Ok(Self {
-            signature,
-            layers,
-            chunk_paths,
-            metadata,
-            chunks,
-            source,
-        })
-    }
-
     /// Create a decoder for this modpkg
-    pub fn decoder(&mut self) -> ModpkgDecoder<TSource> {
+    pub fn decoder(&'_ mut self) -> ModpkgDecoder<'_, TSource> {
         ModpkgDecoder {
             source: &mut self.source,
         }
     }
 
-    /// Load the raw data of a chunk
+    fn candidate_path_hashes(path: &str) -> (u64, Option<u64>) {
+        let literal_hash = hash_chunk_name(path);
+
+        let lower = path.to_lowercase();
+        let stripped = utils::sanitize_chunk_name(&lower);
+        let stripped = stripped.split('.').next().unwrap_or(stripped);
+        if utils::is_hex_chunk_name(stripped) {
+            if let Ok(parsed) = u64::from_str_radix(stripped, 16) {
+                return (literal_hash, Some(parsed));
+            }
+        }
+
+        (literal_hash, None)
+    }
+
+    /// Load the raw data of a chunk using the path hash and layer hash
     pub fn load_chunk_raw(
         &mut self,
         path_hash: u64,
@@ -145,7 +107,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         self.decoder().load_chunk_raw(&chunk)
     }
 
-    /// Load and decompress the data of a chunk
+    /// Load and decompress the data of a chunk using the path hash and layer hash
     pub fn load_chunk_decompressed(
         &mut self,
         path_hash: u64,
@@ -164,10 +126,16 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         path: &str,
         layer: &str,
     ) -> Result<Box<[u8]>, ModpkgError> {
-        let path_hash = hash_chunk_name(path);
+        let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
         let layer_hash = hash_layer_name(layer);
 
-        self.load_chunk_raw(path_hash, layer_hash)
+        if let Ok(data) = self.load_chunk_raw(literal_hash, layer_hash) {
+            return Ok(data);
+        }
+        if let Some(hh) = hex_hash {
+            return self.load_chunk_raw(hh, layer_hash);
+        }
+        self.load_chunk_raw(literal_hash, layer_hash)
     }
 
     /// Load and decompress the data of a chunk by path and layer name
@@ -176,28 +144,46 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         path: &str,
         layer: &str,
     ) -> Result<Box<[u8]>, ModpkgError> {
-        let path_hash = hash_chunk_name(path);
+        let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
         let layer_hash = hash_layer_name(layer);
 
-        self.load_chunk_decompressed(path_hash, layer_hash)
+        if let Ok(data) = self.load_chunk_decompressed(literal_hash, layer_hash) {
+            return Ok(data);
+        }
+        if let Some(hh) = hex_hash {
+            return self.load_chunk_decompressed(hh, layer_hash);
+        }
+        self.load_chunk_decompressed(literal_hash, layer_hash)
     }
 
     /// Get a chunk by path and layer name
     pub fn get_chunk(&self, path: &str, layer: &str) -> Result<&ModpkgChunk, ModpkgError> {
-        let path_hash = hash_chunk_name(path);
+        let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
         let layer_hash = hash_layer_name(layer);
 
-        self.chunks
-            .get(&(path_hash, layer_hash))
-            .ok_or(ModpkgError::MissingChunk(path_hash))
+        if let Some(chunk) = self.chunks.get(&(literal_hash, layer_hash)) {
+            return Ok(chunk);
+        }
+        if let Some(hh) = hex_hash {
+            if let Some(chunk) = self.chunks.get(&(hh, layer_hash)) {
+                return Ok(chunk);
+            }
+        }
+        Err(ModpkgError::MissingChunk(literal_hash))
     }
 
     /// Check if a chunk exists by path and layer name
     pub fn has_chunk(&self, path: &str, layer: &str) -> Result<bool, ModpkgError> {
-        let path_hash = hash_chunk_name(path);
+        let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
         let layer_hash = hash_layer_name(layer);
 
-        Ok(self.chunks.contains_key(&(path_hash, layer_hash)))
+        if self.chunks.contains_key(&(literal_hash, layer_hash)) {
+            return Ok(true);
+        }
+        if let Some(hh) = hex_hash {
+            return Ok(self.chunks.contains_key(&(hh, layer_hash)));
+        }
+        Ok(false)
     }
 }
 
@@ -296,14 +282,14 @@ mod tests {
         let mut cursor = Cursor::new(scratch);
 
         let test_data = [0xBB; 100];
-        let hex_path = "deadbeef";
+        let test_chunk_path = "data/test_chunk.bin";
         let layer_name = "base";
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path(hex_path)
+                    .with_path(test_chunk_path)
                     .unwrap()
                     .with_compression(ModpkgCompression::None),
             );
@@ -319,9 +305,12 @@ mod tests {
         cursor.set_position(0);
         let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
 
+        println!("{:?}", modpkg.layers);
+        println!("{:?}", modpkg.chunks);
+
         // Test loading by hex path
         let data_by_hex_path = modpkg
-            .load_chunk_decompressed_by_path(hex_path, layer_name)
+            .load_chunk_decompressed_by_path(test_chunk_path, layer_name)
             .unwrap();
         assert_eq!(&data_by_hex_path[..], &test_data[..]);
     }
@@ -347,7 +336,7 @@ mod tests {
             )
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path(hex_path)
+                    .with_hashed_chunk_name(hex_path)
                     .unwrap()
                     .with_compression(ModpkgCompression::None),
             );

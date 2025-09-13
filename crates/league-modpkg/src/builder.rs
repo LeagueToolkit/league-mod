@@ -2,10 +2,11 @@ use binrw::BinWrite;
 use byteorder::{WriteBytesExt, LE};
 use std::collections::HashMap;
 use std::io::{self, BufWriter, Cursor, Seek, SeekFrom, Write};
+use std::path::Path;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::{chunk::ModpkgChunk, metadata::ModpkgMetadata, ModpkgCompression};
-use crate::{hash_chunk_name, hash_layer_name, utils};
+use crate::{hash_chunk_name, hash_layer_name, hash_wad_name, utils};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ModpkgBuilderError {
@@ -41,6 +42,7 @@ pub struct ModpkgChunkBuilder {
     pub path: String,
     pub compression: ModpkgCompression,
     pub layer: String,
+    pub wad: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,6 +84,7 @@ impl ModpkgBuilder {
         // Collect all unique paths and layers
         let (chunk_paths, chunk_path_indices) = Self::collect_unique_paths(&self.chunks);
         let (layers, _) = Self::collect_unique_layers(&self.chunks);
+        let (wads, wad_indices) = Self::collect_unique_wads(&self.chunks);
 
         Self::validate_layers(&self.layers, &layers)?;
 
@@ -114,6 +117,13 @@ impl ModpkgBuilder {
             writer.write_all(&[0])?; // Null terminator
         }
 
+        // Write wads
+        writer.write_u32::<LE>(wads.len() as u32)?;
+        for wad in &wads {
+            writer.write_all(wad.as_bytes())?;
+            writer.write_all(&[0])?; // Null terminator
+        }
+
         // Write metadata
         self.metadata.write(&mut writer)?;
 
@@ -129,11 +139,19 @@ impl ModpkgBuilder {
         writer.write_all(&vec![0; self.chunks.len() * ModpkgChunk::size_of()])?;
 
         // Process chunks
+        // Build layer index map from defined layers order
+        let mut layer_index_map = HashMap::new();
+        for (idx, layer) in self.layers.iter().enumerate() {
+            layer_index_map.insert(hash_layer_name(&layer.name), idx as u32);
+        }
+
         let final_chunks = Self::process_chunks(
             &self.chunks,
             &mut writer,
             provide_chunk_data,
             &chunk_path_indices,
+            &layer_index_map,
+            &wad_indices,
         )?;
 
         // Write chunks
@@ -169,11 +187,11 @@ impl ModpkgBuilder {
         let mut layer_indices = HashMap::new();
         for chunk in chunks {
             let hash = hash_layer_name(&chunk.layer);
-
-            if !layer_indices.contains_key(&hash) {
-                layer_indices.insert(hash, layers.len() as u32);
+            layer_indices.entry(hash).or_insert_with(|| {
+                let index = layers.len();
                 layers.push(chunk.layer.clone());
-            }
+                index as u32
+            });
         }
 
         (layers, layer_indices)
@@ -192,6 +210,21 @@ impl ModpkgBuilder {
         }
 
         (paths, path_indices)
+    }
+
+    fn collect_unique_wads(chunks: &[ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
+        let mut wads = Vec::new();
+        let mut wad_indices = HashMap::new();
+        for chunk in chunks {
+            wad_indices
+                .entry(hash_wad_name(&chunk.wad))
+                .or_insert_with(|| {
+                    let index = wads.len();
+                    wads.push(chunk.wad.clone());
+                    index as u32
+                });
+        }
+        (wads, wad_indices)
     }
 
     fn validate_layers(
@@ -221,11 +254,13 @@ impl ModpkgBuilder {
         writer: &mut BufWriter<TWriter>,
         provide_chunk_data: TChunkDataProvider,
         chunk_path_indices: &HashMap<u64, u32>,
+        layer_indices: &HashMap<u64, u32>,
+        wad_indices: &HashMap<u64, u32>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
         let mut final_chunks = Vec::new();
         for chunk_builder in chunks {
             let mut data_writer = Cursor::new(Vec::new());
-            provide_chunk_data(&chunk_builder, &mut data_writer)?;
+            provide_chunk_data(chunk_builder, &mut data_writer)?;
 
             let uncompressed_data = data_writer.get_ref();
             let uncompressed_size = uncompressed_data.len();
@@ -240,7 +275,15 @@ impl ModpkgBuilder {
             let data_offset = writer.stream_position()?;
             writer.write_all(&compressed_data)?;
 
-            let path_hash = hash_chunk_name(&chunk_builder.path);
+            let path_hash = chunk_builder.path_hash;
+            let layer_idx = match layer_indices.get(&hash_layer_name(&chunk_builder.layer)) {
+                Some(idx) => *idx,
+                None => {
+                    return Err(ModpkgBuilderError::LayerNotFound(
+                        chunk_builder.layer.clone(),
+                    ))
+                }
+            };
 
             let chunk = ModpkgChunk {
                 path_hash,
@@ -251,7 +294,10 @@ impl ModpkgBuilder {
                 compressed_checksum,
                 uncompressed_checksum,
                 path_index: *chunk_path_indices.get(&path_hash).unwrap_or(&0),
-                layer_hash: hash_layer_name(&chunk_builder.layer),
+                layer_index: layer_idx,
+                wad_index: *wad_indices
+                    .get(&hash_wad_name(&chunk_builder.wad))
+                    .unwrap_or(&0),
             };
 
             final_chunks.push(chunk);
@@ -271,28 +317,48 @@ impl ModpkgChunkBuilder {
             path: String::new(),
             compression: ModpkgCompression::None,
             layer: Self::DEFAULT_LAYER.to_string(),
+            wad: String::new(),
         }
     }
 
-    /// Set the path of the chunk.
+    /// Set the path of the chunk (input path is case insensitive).
     ///
-    /// If the path is a hex string, it will be used as the path hash.
-    /// Otherwise, it will be hashed using xxhash64.
+    /// This will always hash the provided path string using `hash_chunk_name`.
     pub fn with_path(mut self, path: &str) -> Result<Self, ModpkgBuilderError> {
-        // Strip the path of the extension
-
         let path = path.to_lowercase();
-        let stripped_path = utils::sanitize_chunk_name(&path);
-        let stripped_path = stripped_path.split('.').next().unwrap_or(stripped_path);
+        self.path_hash = hash_chunk_name(&path);
+        self.path = path;
+        Ok(self)
+    }
 
-        if utils::is_hex_chunk_name(stripped_path) {
-            self.path_hash = u64::from_str_radix(stripped_path, 16)
-                .map_err(|_| ModpkgBuilderError::InvalidChunkName(path.to_string()))?;
-        } else {
-            self.path_hash = hash_chunk_name(&path);
+    /// Set the path hash from a hex-encoded chunk name that represents the actual path hash.
+    ///
+    /// Accepts values with or without the `0x` prefix. The builder will store the provided
+    /// string (lowercased and without `0x` prefix) as the chunk's display path while using
+    /// the parsed numeric value as the `path_hash`.
+    pub fn with_hashed_chunk_name(mut self, hashed_name: &str) -> Result<Self, ModpkgBuilderError> {
+        let provided = hashed_name.to_lowercase();
+
+        // Store the path without 0x prefix
+        let display_path = utils::sanitize_chunk_name(&provided).to_string();
+
+        // Extract the hex part for hash parsing - find the base name before any extensions
+        let path = Path::new(&display_path);
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&display_path);
+
+        // Split on the first dot to get the base name without any extensions
+        let hex_part = filename.split('.').next().unwrap_or(filename);
+
+        if !utils::is_hex_chunk_name(hex_part) {
+            return Err(ModpkgBuilderError::InvalidChunkName(provided));
         }
 
-        self.path = path;
+        self.path_hash = u64::from_str_radix(hex_part, 16)
+            .map_err(|_| ModpkgBuilderError::InvalidChunkName(provided.clone()))?;
+        self.path = display_path;
         Ok(self)
     }
 
@@ -346,7 +412,7 @@ mod tests {
     use crate::{Modpkg, ModpkgLayer};
 
     use super::*;
-    use binrw::{BinRead, NullString};
+
     use std::io::Cursor;
 
     #[test]
@@ -403,5 +469,41 @@ mod tests {
                 priority: 0,
             })
         );
+    }
+
+    #[test]
+    fn test_with_hashed_chunk_name() {
+        // Test with 0x prefix and extension
+        let chunk = ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("0xabcdef123456.bin.dds")
+            .unwrap();
+        assert_eq!(chunk.path_hash(), 0xabcdef123456);
+        assert_eq!(chunk.path, "abcdef123456.bin.dds");
+
+        // Test without 0x prefix but with extension
+        let chunk = ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("fedcba987654.txt")
+            .unwrap();
+        assert_eq!(chunk.path_hash(), 0xfedcba987654);
+        assert_eq!(chunk.path, "fedcba987654.txt");
+
+        // Test with multiple extensions
+        let chunk = ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("123abc456def.texture.dds")
+            .unwrap();
+        assert_eq!(chunk.path_hash(), 0x123abc456def);
+        assert_eq!(chunk.path, "123abc456def.texture.dds");
+
+        // Test without extension
+        let chunk = ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("0x789def")
+            .unwrap();
+        assert_eq!(chunk.path_hash(), 0x789def);
+        assert_eq!(chunk.path, "789def");
+
+        // Test invalid hex should fail
+        assert!(ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("not_hex.bin")
+            .is_err());
     }
 }

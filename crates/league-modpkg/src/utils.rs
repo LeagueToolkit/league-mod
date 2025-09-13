@@ -44,6 +44,11 @@ pub fn hash_chunk_name(name: &str) -> u64 {
     xxh64::xxh64(name.to_lowercase().as_bytes(), 0)
 }
 
+/// Hash a wad name using xxhash3.
+pub fn hash_wad_name(name: &str) -> u64 {
+    xxh3::xxh3_64(name.to_lowercase().as_bytes())
+}
+
 #[cfg(test)]
 pub mod test {
     use binrw::{meta, BinWrite};

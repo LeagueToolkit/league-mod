@@ -16,12 +16,13 @@ pub struct ModpkgChunk {
     pub uncompressed_checksum: u64,
 
     pub path_index: u32,
-    pub layer_hash: u64,
+    pub layer_index: u32,
+    pub wad_index: u32,
 }
 
 impl ModpkgChunk {
     pub fn size_of() -> usize {
-        (std::mem::size_of::<u64>() * 7) + (std::mem::size_of::<u32>()) + 1
+        (std::mem::size_of::<u64>() * 6) + (std::mem::size_of::<u32>() * 3) + 1
     }
 }
 
