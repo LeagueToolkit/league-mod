@@ -91,7 +91,7 @@ Handles mod project configuration files and metadata structures.
       "name": "tex-converter",
       "patterns": ["**/*.dds", "**/*.png"]
     }
-  ]90
+  ]
 }
 ```
 
