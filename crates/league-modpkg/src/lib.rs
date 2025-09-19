@@ -1,5 +1,5 @@
 use binrw::binrw;
-use chunk::ModpkgChunk;
+use chunk::{ModpkgChunk, NO_LAYER_HASH};
 use error::ModpkgError;
 use std::{
     collections::HashMap,
@@ -15,13 +15,21 @@ mod extractor;
 mod license;
 mod metadata;
 mod read;
+mod thumbnail;
 pub mod utils;
 
 pub use decoder::ModpkgDecoder;
 pub use extractor::ModpkgExtractor;
 pub use license::*;
 pub use metadata::*;
+pub use thumbnail::*;
 pub use utils::*;
+
+/// The name of the base layer.
+pub const BASE_LAYER_NAME: &str = "base";
+
+/// The name of the metadata folder inside the mod package.
+pub const METADATA_FOLDER_NAME: &str = "_meta_";
 
 #[derive(Debug, PartialEq)]
 pub struct Modpkg<TSource: Read + Seek> {
@@ -47,6 +55,7 @@ pub struct Modpkg<TSource: Read + Seek> {
     source: TSource,
 }
 
+/// Describes a layer in the mod package.
 #[binrw]
 #[brw(little)]
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +71,7 @@ pub struct ModpkgLayer {
     pub priority: i32,
 }
 
+/// The compression type of a chunk.
 #[binrw]
 #[brw(little, repr = u8)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
@@ -108,7 +118,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     }
 
     /// Load and decompress the data of a chunk using the path hash and layer hash
-    pub fn load_chunk_decompressed(
+    pub fn load_chunk_decompressed_by_hash(
         &mut self,
         path_hash: u64,
         layer_hash: u64,
@@ -124,10 +134,13 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     pub fn load_chunk_raw_by_path(
         &mut self,
         path: &str,
-        layer: &str,
+        layer: Option<&str>,
     ) -> Result<Box<[u8]>, ModpkgError> {
         let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
-        let layer_hash = hash_layer_name(layer);
+        let layer_hash = match layer {
+            Some(layer_name) => hash_layer_name(layer_name),
+            None => NO_LAYER_HASH,
+        };
 
         if let Ok(data) = self.load_chunk_raw(literal_hash, layer_hash) {
             return Ok(data);
@@ -142,24 +155,30 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     pub fn load_chunk_decompressed_by_path(
         &mut self,
         path: &str,
-        layer: &str,
+        layer: Option<&str>,
     ) -> Result<Box<[u8]>, ModpkgError> {
         let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
-        let layer_hash = hash_layer_name(layer);
+        let layer_hash = match layer {
+            Some(layer_name) => hash_layer_name(layer_name),
+            None => NO_LAYER_HASH,
+        };
 
-        if let Ok(data) = self.load_chunk_decompressed(literal_hash, layer_hash) {
+        if let Ok(data) = self.load_chunk_decompressed_by_hash(literal_hash, layer_hash) {
             return Ok(data);
         }
         if let Some(hh) = hex_hash {
-            return self.load_chunk_decompressed(hh, layer_hash);
+            return self.load_chunk_decompressed_by_hash(hh, layer_hash);
         }
-        self.load_chunk_decompressed(literal_hash, layer_hash)
+        self.load_chunk_decompressed_by_hash(literal_hash, layer_hash)
     }
 
     /// Get a chunk by path and layer name
-    pub fn get_chunk(&self, path: &str, layer: &str) -> Result<&ModpkgChunk, ModpkgError> {
+    pub fn get_chunk(&self, path: &str, layer: Option<&str>) -> Result<&ModpkgChunk, ModpkgError> {
         let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
-        let layer_hash = hash_layer_name(layer);
+        let layer_hash = match layer {
+            Some(layer_name) => hash_layer_name(layer_name),
+            None => NO_LAYER_HASH,
+        };
 
         if let Some(chunk) = self.chunks.get(&(literal_hash, layer_hash)) {
             return Ok(chunk);
@@ -172,10 +191,21 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         Err(ModpkgError::MissingChunk(literal_hash))
     }
 
+    /// Load a chunk into memory
+    pub fn load_chunk_decompressed(
+        &mut self,
+        chunk: &ModpkgChunk,
+    ) -> Result<Box<[u8]>, ModpkgError> {
+        self.decoder().load_chunk_decompressed(chunk)
+    }
+
     /// Check if a chunk exists by path and layer name
-    pub fn has_chunk(&self, path: &str, layer: &str) -> Result<bool, ModpkgError> {
+    pub fn has_chunk(&self, path: &str, layer: Option<&str>) -> Result<bool, ModpkgError> {
         let (literal_hash, hex_hash) = Self::candidate_path_hashes(path);
-        let layer_hash = hash_layer_name(layer);
+        let layer_hash = match layer {
+            Some(layer_name) => hash_layer_name(layer_name),
+            None => NO_LAYER_HASH,
+        };
 
         if self.chunks.contains_key(&(literal_hash, layer_hash)) {
             return Ok(true);
@@ -261,12 +291,14 @@ mod tests {
         assert_eq!(&decompressed_data[..], &test_data[..]);
 
         // Test raw loading by path
-        let raw_data_by_path = modpkg.load_chunk_raw_by_path(path, layer_name).unwrap();
+        let raw_data_by_path = modpkg
+            .load_chunk_raw_by_path(path, Some(layer_name))
+            .unwrap();
         assert_eq!(raw_data_by_path.len(), chunk.compressed_size as usize);
 
         // Test decompressed loading by path
         let decompressed_data_by_path = modpkg
-            .load_chunk_decompressed_by_path(path, layer_name)
+            .load_chunk_decompressed_by_path(path, Some(layer_name))
             .unwrap();
         assert_eq!(
             decompressed_data_by_path.len(),
@@ -310,7 +342,7 @@ mod tests {
 
         // Test loading by hex path
         let data_by_hex_path = modpkg
-            .load_chunk_decompressed_by_path(test_chunk_path, layer_name)
+            .load_chunk_decompressed_by_path(test_chunk_path, Some(layer_name))
             .unwrap();
         assert_eq!(&data_by_hex_path[..], &test_data[..]);
     }
@@ -353,19 +385,21 @@ mod tests {
         let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
 
         // Test has_chunk
-        assert!(modpkg.has_chunk(path, layer_name).unwrap());
-        assert!(modpkg.has_chunk(hex_path, layer_name).unwrap());
-        assert!(!modpkg.has_chunk("nonexistent", layer_name).unwrap());
+        assert!(modpkg.has_chunk(path, Some(layer_name)).unwrap());
+        assert!(modpkg.has_chunk(hex_path, Some(layer_name)).unwrap());
+        assert!(!modpkg.has_chunk("nonexistent", Some(layer_name)).unwrap());
 
         // Test get_chunk
-        let chunk = modpkg.get_chunk(path, layer_name).unwrap();
+        let chunk = modpkg.get_chunk(path, Some(layer_name)).unwrap();
         assert_eq!(chunk.uncompressed_size, 100);
         assert_eq!(chunk.compression, ModpkgCompression::None);
+        assert!(chunk.layer().is_some()); // Layer should be present
 
-        let hex_chunk = modpkg.get_chunk(hex_path, layer_name).unwrap();
+        let hex_chunk = modpkg.get_chunk(hex_path, Some(layer_name)).unwrap();
         assert_eq!(hex_chunk.uncompressed_size, 100);
         assert_eq!(hex_chunk.compression, ModpkgCompression::None);
+        assert!(hex_chunk.layer().is_some()); // Layer should be present
 
-        assert!(modpkg.get_chunk("nonexistent", layer_name).is_err());
+        assert!(modpkg.get_chunk("nonexistent", Some(layer_name)).is_err());
     }
 }

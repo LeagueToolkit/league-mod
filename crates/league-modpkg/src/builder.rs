@@ -5,8 +5,12 @@ use std::io::{self, BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 use xxhash_rust::xxh3::xxh3_64;
 
-use crate::{chunk::ModpkgChunk, metadata::ModpkgMetadata, ModpkgCompression};
-use crate::{hash_chunk_name, hash_layer_name, hash_wad_name, utils};
+use crate::{
+    chunk::{ModpkgChunk, NO_LAYER_INDEX, NO_WAD_INDEX},
+    metadata::ModpkgMetadata,
+    ModpkgCompression,
+};
+use crate::{hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ModpkgBuilderError {
@@ -186,6 +190,10 @@ impl ModpkgBuilder {
         let mut layers = Vec::new();
         let mut layer_indices = HashMap::new();
         for chunk in chunks {
+            // Skip empty layer names (they represent chunks with no layer)
+            if chunk.layer.is_empty() {
+                continue;
+            }
             let hash = hash_layer_name(&chunk.layer);
             layer_indices.entry(hash).or_insert_with(|| {
                 let index = layers.len();
@@ -216,6 +224,10 @@ impl ModpkgBuilder {
         let mut wads = Vec::new();
         let mut wad_indices = HashMap::new();
         for chunk in chunks {
+            // Skip empty wad names (they represent chunks with no wad)
+            if chunk.wad.is_empty() {
+                continue;
+            }
             wad_indices
                 .entry(hash_wad_name(&chunk.wad))
                 .or_insert_with(|| {
@@ -232,12 +244,19 @@ impl ModpkgBuilder {
         unique_layers: &[String],
     ) -> Result<(), ModpkgBuilderError> {
         // Check if defined layers have base layer
-        if !defined_layers.iter().any(|layer| layer.name == "base") {
+        if !defined_layers
+            .iter()
+            .any(|layer| layer.name == BASE_LAYER_NAME)
+        {
             return Err(ModpkgBuilderError::MissingBaseLayer);
         }
 
         // Check if all unique layers are defined
         for layer in unique_layers {
+            // Skip validation for empty layer names (they represent chunks with no layer)
+            if layer.is_empty() {
+                continue;
+            }
             if !defined_layers.iter().any(|l| l.name == layer.as_ref()) {
                 return Err(ModpkgBuilderError::LayerNotFound(layer.to_string()));
             }
@@ -276,14 +295,22 @@ impl ModpkgBuilder {
             writer.write_all(&compressed_data)?;
 
             let path_hash = chunk_builder.path_hash;
-            let layer_index = layer_indices
-                .get(&hash_layer_name(&chunk_builder.layer))
-                .map(|idx| *idx as i32)
-                .unwrap_or(-1);
-            let wad_index = wad_indices
-                .get(&hash_wad_name(&chunk_builder.wad))
-                .map(|idx| *idx as i32)
-                .unwrap_or(-1);
+            let layer_index = if chunk_builder.layer.is_empty() {
+                NO_LAYER_INDEX
+            } else {
+                layer_indices
+                    .get(&hash_layer_name(&chunk_builder.layer))
+                    .map(|idx| *idx as i32)
+                    .unwrap_or(NO_LAYER_INDEX)
+            };
+            let wad_index = if chunk_builder.wad.is_empty() {
+                NO_WAD_INDEX
+            } else {
+                wad_indices
+                    .get(&hash_wad_name(&chunk_builder.wad))
+                    .map(|idx| *idx as i32)
+                    .unwrap_or(NO_WAD_INDEX)
+            };
 
             let chunk = ModpkgChunk {
                 path_hash,
@@ -399,7 +426,7 @@ impl ModpkgLayerBuilder {
 
     pub fn base() -> Self {
         Self {
-            name: "base".to_string(),
+            name: BASE_LAYER_NAME.to_string(),
             priority: 0,
         }
     }

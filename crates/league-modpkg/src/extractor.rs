@@ -95,7 +95,7 @@ impl<'modpkg, TSource: Read + Seek> ModpkgExtractor<'modpkg, TSource> {
         layer: &str,
         output_dir: impl AsRef<Path>,
     ) -> Result<PathBuf, ModpkgError> {
-        let chunk = *self.modpkg.get_chunk(path, layer)?;
+        let chunk = *self.modpkg.get_chunk(path, Some(layer))?;
         self.extract_chunk(&chunk, output_dir)
     }
 }

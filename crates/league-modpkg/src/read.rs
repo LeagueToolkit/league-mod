@@ -8,8 +8,9 @@ use std::{
 use io_ext::ReaderExt;
 
 use crate::{
-    chunk::ModpkgChunk, error::ModpkgError, hash_chunk_name, hash_layer_name, hash_wad_name,
-    Modpkg, ModpkgLayer, ModpkgMetadata,
+    chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},
+    error::ModpkgError,
+    hash_chunk_name, hash_layer_name, hash_wad_name, Modpkg, ModpkgLayer, ModpkgMetadata,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -47,8 +48,8 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         let mut chunks = HashMap::new();
         for _ in 0..chunk_count {
             let chunk = ModpkgChunk::read(&mut reader)?;
-            let layer_hash = if chunk.layer_index == -1 {
-                u64::MAX
+            let layer_hash = if chunk.layer_index == NO_LAYER_INDEX {
+                NO_LAYER_HASH
             } else {
                 layer_indices[chunk.layer_index as usize]
             };

@@ -39,6 +39,8 @@ pub enum ModpkgError {
     DuplicateChunk(u64),
     #[error("Chunk not found: {0:x}")]
     MissingChunk(u64),
+    #[error("Invalid thumbnail chunk: must not belong to any layer or wad")]
+    InvalidThumbnailChunk,
 
     #[error("Msgpack decode error: {0}")]
     MsgpackDecode(#[from] rmp_serde::decode::Error),
