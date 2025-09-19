@@ -42,6 +42,13 @@ pub struct ModProject {
     /// If not specified, a default "base" layer with priority 0 is assumed
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<ModProjectLayer>,
+
+    /// The thumbnail file path relative to the mod project folder
+    /// Optional field - if not specified, default thumbnail will be used
+    ///
+    /// Example: `thumbnail.webp`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
 }
 
 /// Represents a layer in a mod project
@@ -159,6 +166,7 @@ mod tests {
                     description: Some("Chroma 1".to_string()),
                 },
             ],
+            thumbnail: None,
         }
     }
 
@@ -176,5 +184,37 @@ mod tests {
             toml::from_str(include_str!("../test-data/mod.config.toml")).unwrap();
 
         assert_eq!(project, create_example_project());
+    }
+
+    #[test]
+    fn test_thumbnail_optional() {
+        // Test that thumbnail is None when not specified
+        let config_without_thumbnail = r#"
+        {
+            "name": "test-mod",
+            "display_name": "Test Mod",
+            "version": "1.0.0",
+            "description": "A test mod",
+            "authors": ["Test Author"]
+        }
+        "#;
+
+        let project: ModProject = serde_json::from_str(config_without_thumbnail).unwrap();
+        assert_eq!(project.thumbnail, None);
+
+        // Test that custom thumbnail path is preserved
+        let config_with_thumbnail = r#"
+        {
+            "name": "test-mod",
+            "display_name": "Test Mod",
+            "version": "1.0.0",
+            "description": "A test mod",
+            "authors": ["Test Author"],
+            "thumbnail": "custom/path.png"
+        }
+        "#;
+
+        let project: ModProject = serde_json::from_str(config_with_thumbnail).unwrap();
+        assert_eq!(project.thumbnail, Some("custom/path.png".to_string()));
     }
 }

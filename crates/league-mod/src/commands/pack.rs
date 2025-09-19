@@ -11,7 +11,7 @@ use league_modpkg::{
     utils::hash_layer_name,
     ModpkgCompression, ModpkgMetadata,
 };
-use mod_project::{default_layers, ModProject, ModProjectLayer};
+use mod_project::{ModProject, ModProjectLayer};
 
 use crate::utils::{self, validate_mod_name, validate_version_format};
 
@@ -176,7 +176,7 @@ fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> ModpkgBui
         authors: mod_project
             .authors
             .iter()
-            .map(|a| utils::modpkg::convert_project_author(a))
+            .map(utils::modpkg::convert_project_author)
             .collect(),
         license: utils::modpkg::convert_project_license(&mod_project.license),
     })
