@@ -82,6 +82,7 @@ fn create_default_mod_project(name: Option<String>, display_name: Option<String>
         license: None,
         transformers: vec![],
         layers: mod_project::default_layers(),
+        thumbnail: None,
     }
 }
 

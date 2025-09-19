@@ -37,7 +37,7 @@ where
         let mut data: Vec<u8> = vec![0; chunk.uncompressed_size as usize];
 
         zstd::Decoder::new(&mut self.source)
-            .map_err(|e| ModpkgError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+            .map_err(|e| ModpkgError::Io(std::io::Error::other(e)))?
             .read_exact(&mut data)?;
 
         Ok(data.into_boxed_slice())

@@ -1,6 +1,18 @@
 use crate::ModpkgCompression;
 use binrw::binrw;
 
+/// Layer index value indicating that a chunk does not belong to any layer
+pub const NO_LAYER_INDEX: i32 = -1;
+
+/// Wad index value indicating that a chunk does not belong to any `wad` file
+pub const NO_WAD_INDEX: i32 = -1;
+
+/// Layer hash value used for chunks that do not belong to any layer
+pub const NO_LAYER_HASH: u64 = u64::MAX;
+
+/// Wad hash value used for chunks that do not belong to any `wad` file
+pub const NO_WAD_HASH: u64 = u64::MAX;
+
 #[binrw]
 #[brw(little)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
@@ -16,12 +28,25 @@ pub struct ModpkgChunk {
     pub uncompressed_checksum: u64,
 
     pub path_index: u32,
-    pub layer_hash: u64,
+    pub layer_index: i32,
+    pub wad_index: i32,
 }
 
 impl ModpkgChunk {
     pub fn size_of() -> usize {
-        (std::mem::size_of::<u64>() * 7) + (std::mem::size_of::<u32>()) + 1
+        (std::mem::size_of::<u64>() * 6)
+            + std::mem::size_of::<u32>()
+            + (std::mem::size_of::<i32>() * 2)
+            + 1
+    }
+
+    /// Get the layer index as an Option, where NO_LAYER_INDEX represents None (no layer)
+    pub fn layer(&self) -> Option<i32> {
+        if self.layer_index == NO_LAYER_INDEX {
+            None
+        } else {
+            Some(self.layer_index)
+        }
     }
 }
 
