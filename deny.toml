@@ -19,9 +19,6 @@ ignore = [
     # Add any specific advisories you want to ignore here
 ]
 
-[advisories.severity]
-unmaintained = "warn"
-
 [licenses]
 allow = [
     "MIT",
