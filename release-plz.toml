@@ -7,6 +7,10 @@ changelog_update = true
 git_tag_enable = true
 # Create GitHub releases
 git_release_enable = true
+# Create draft release PRs that update with new changes
+pr_draft = true
+# Create draft GitHub releases for review before publishing
+git_release_draft = true
 # Git tag name format
 git_tag_name = "v{version}"
 # Release name format  
