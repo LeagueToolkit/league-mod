@@ -1,0 +1,36 @@
+[workspace]
+# Skip cargo publishing since we only need GitHub releases for winget distribution
+publish = false
+# Generate changelogs using conventional commits
+changelog_update = true
+# Create git tags for releases
+git_tag_enable = true
+# Create GitHub releases
+git_release_enable = true
+# Git tag name format
+git_tag_name = "v{version}"
+# Release name format  
+git_release_name = "Release {version}"
+# Include changelog in GitHub release body
+git_release_body = "{changelog}"
+
+[[package]]
+name = "league-mod"
+# Skip cargo publishing for this package
+publish = false
+# Enable changelog generation
+changelog_update = true
+# Use root changelog path
+changelog_path = "CHANGELOG.md"
+
+[changelog]
+# Header for the changelog
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+"""

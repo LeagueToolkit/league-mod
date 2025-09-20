@@ -1,0 +1,147 @@
+name: Release-plz
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  # Create a PR with the new versions and changelog, preparing the next release.
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'LeagueToolkit' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - &checkout
+        name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - &install-rust
+        name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Release unpublished packages.
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'LeagueToolkit' }}
+    permissions:
+      contents: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      releases: ${{ steps.release.outputs.releases }}
+    steps:
+      - *checkout
+      - *install-rust
+      - name: Run release-plz
+        id: release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build Windows binaries and attach to releases
+  build-windows:
+    name: Build Windows Binary
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Extract release info
+        id: release_info
+        shell: powershell
+        run: |
+          $releases = '${{ needs.release-plz-release.outputs.releases }}' | ConvertFrom-Json
+          $leagueModRelease = $releases | Where-Object { $_.package_name -eq "league-mod" }
+          
+          if ($leagueModRelease) {
+            $version = $leagueModRelease.version
+            $tag = $leagueModRelease.tag
+            echo "version=$version" >> $env:GITHUB_OUTPUT
+            echo "tag=$tag" >> $env:GITHUB_OUTPUT
+            echo "Found release: $tag with version $version"
+          } else {
+            echo "No league-mod release found"
+            exit 1
+          }
+
+      - name: Build release binary
+        run: cargo build --release --bin league-mod
+
+      - name: Create release directory
+        run: |
+          mkdir release
+          Copy-Item target/release/league-mod.exe release/
+          Copy-Item README.md release/
+          Copy-Item LICENSE release/
+
+      - name: Create ZIP archive
+        shell: powershell
+        run: |
+          $version = "${{ steps.release_info.outputs.version }}"
+          Compress-Archive -Path release/* -DestinationPath "league-mod-$version-windows-x64.zip"
+
+      - name: Generate SHA256 checksum
+        shell: powershell
+        run: |
+          $version = "${{ steps.release_info.outputs.version }}"
+          $hash = Get-FileHash "league-mod-$version-windows-x64.zip" -Algorithm SHA256
+          $hash.Hash | Out-File "league-mod-$version-windows-x64.zip.sha256" -Encoding ASCII
+          echo "SHA256: $($hash.Hash)"
+
+      - name: Upload assets to existing release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          files: |
+            league-mod-${{ steps.release_info.outputs.version }}-windows-x64.zip
+            league-mod-${{ steps.release_info.outputs.version }}-windows-x64.zip.sha256
+          append_body: true
+          body: |
+
+            ### Windows Installation
+
+            **Via winget (Windows Package Manager):**
+            ```powershell
+            winget install LeagueToolkit.LeagueMod
+            ```
+
+            **Manual Installation:**
+            1. Download the ZIP file below
+            2. Extract to your preferred location  
+            3. Add the extracted directory to your PATH
+
+            **SHA256 Checksum:**
+            ```
+            Get-FileHash league-mod-${{ steps.release_info.outputs.version }}-windows-x64.zip -Algorithm SHA256
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

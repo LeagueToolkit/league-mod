@@ -247,6 +247,33 @@ This project is licensed under the [GNU Affero General Public License v3.0](LICE
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
+### Commit Message Format
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automated changelog generation and semantic versioning:
+
+```bash
+# Features (minor version bump)
+git commit -m "feat: add support for custom transformers"
+
+# Bug fixes (patch version bump)  
+git commit -m "fix: resolve file path handling on Windows"
+
+# Breaking changes (major version bump)
+git commit -m "feat!: change configuration file format"
+
+# Other types: docs, style, refactor, test, chore
+git commit -m "docs: update installation instructions"
+```
+
+### Release Process
+
+Releases are automated using [release-plz](https://release-plz.dev/docs):
+
+1. Make commits using conventional commit format
+2. Push to main branch
+3. Release-plz creates a Release PR with version bump and changelog
+4. Merge the PR to trigger automatic release with Windows binaries
+
 ## 📚 Documentation
 
 For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/LeagueToolkit/league-mod/wiki).

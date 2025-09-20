@@ -15,21 +15,49 @@ Before submitting to winget, ensure you have:
 
 ### Step 1: Create a Release
 
-1. Update the version in `crates/league-mod/Cargo.toml`
-2. Commit your changes
-3. Create and push a git tag:
+**Automated Release Process (Recommended):**
+
+1. Make your changes and commit them using [conventional commit messages](https://www.conventionalcommits.org/):
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   # For new features
+   git commit -m "feat: add new mod validation system"
+   
+   # For bug fixes  
+   git commit -m "fix: resolve path handling issue on Windows"
+   
+   # For breaking changes
+   git commit -m "feat!: change config file format to TOML"
    ```
-4. The GitHub Actions workflow will automatically build and create a release
+
+2. Push to the main branch:
+   ```bash
+   git push origin main
+   ```
+
+3. **Release-plz will automatically:**
+   - Create a Release PR with version bump and changelog updates
+   - When you merge the PR, it creates a GitHub release with Windows binaries
+   - Generate changelog based on your conventional commits
+   - Create git tags and GitHub releases
+
+**Manual Release Process:**
+
+If you need to release manually:
+1. Update the version in `crates/league-mod/Cargo.toml`
+2. Update `CHANGELOG.md` with your changes
+3. Commit and push to main - the release workflow will trigger automatically
 
 ### Step 2: Update Manifest Files
 
-1. Update the version in all manifest files in `winget/manifests/LeagueToolkit/LeagueMod/0.1.0/`
-2. Update the `InstallerUrl` in the installer manifest to point to your actual GitHub release
-3. Update the `InstallerSha256` with the SHA256 hash from the release
-4. Update URLs to point to your actual repository (already configured for LeagueToolkit organization)
+After a release is created:
+
+1. Get the SHA256 hash from your GitHub release assets
+2. Update the manifest using the helper script:
+   ```powershell
+   cd winget
+   .\update-manifest.ps1 -Version "0.2.0" -GitHubUsername "LeagueToolkit" -Sha256Hash "actual-hash-from-release"
+   ```
+3. The script will automatically create new version manifests with correct URLs
 
 ### Step 3: Validate Manifests
 
