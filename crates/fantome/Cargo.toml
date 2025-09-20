@@ -2,3 +2,12 @@
 name = "fantome"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+zip = "2.2.0"
+image = "0.25.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+eyre = "0.6"
+walkdir = "2.5.0"
+mod-project = { path = "../mod-project" }

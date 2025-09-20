@@ -6,6 +6,7 @@ use std::{
 };
 
 use colored::Colorize;
+use fantome::pack_to_fantome;
 use league_modpkg::{
     builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder},
     utils::hash_layer_name,
@@ -15,30 +16,45 @@ use mod_project::{ModProject, ModProjectLayer};
 
 use crate::utils::{self, validate_mod_name, validate_version_format};
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum PackFormat {
+    Modpkg,
+    Fantome,
+}
+
 #[derive(Debug)]
 pub struct PackModProjectArgs {
     pub config_path: Option<String>,
     pub file_name: Option<String>,
     pub output_dir: String,
+    pub format: PackFormat,
 }
 
 pub fn pack_mod_project(args: PackModProjectArgs) -> eyre::Result<()> {
-    let config_path = resolve_config_path(args.config_path)?;
-    let content_dir = resolve_content_dir(&config_path)?;
-
+    let config_path = resolve_config_path(args.config_path.clone())?;
     let mod_project = load_config(&config_path)?;
 
-    validate_layer_presence(&mod_project, &config_path)?;
     validate_mod_name(&mod_project.name)?;
     validate_version_format(&mod_project.version)?;
 
+    match args.format {
+        PackFormat::Modpkg => pack_to_modpkg(args, config_path, mod_project),
+        PackFormat::Fantome => pack_to_fantome_format(args, config_path, mod_project),
+    }
+}
+
+fn pack_to_modpkg(
+    args: PackModProjectArgs,
+    config_path: PathBuf,
+    mod_project: ModProject,
+) -> eyre::Result<()> {
+    let content_dir = resolve_content_dir(&config_path)?;
+
+    validate_layer_presence(&mod_project, &config_path)?;
+
     println!("Packing mod project: {}", mod_project.name.bright_yellow());
 
-    let output_dir = PathBuf::from(&args.output_dir);
-    let output_dir = match output_dir.is_absolute() {
-        true => output_dir,
-        false => config_path.parent().unwrap().join(output_dir),
-    };
+    let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
 
     if !output_dir.exists() {
         println!("Creating output directory: {}", output_dir.display());
@@ -56,7 +72,7 @@ pub fn pack_mod_project(args: PackModProjectArgs) -> eyre::Result<()> {
         &mut chunk_filepaths,
     )?;
 
-    let modpkg_file_name = create_modpkg_file_name(&mod_project);
+    let modpkg_file_name = create_modpkg_file_name(&mod_project, args.file_name);
     let mut writer = BufWriter::new(File::create(output_dir.join(&modpkg_file_name))?);
 
     modpkg_builder.build_to_writer(&mut writer, |chunk_builder, cursor| {
@@ -82,6 +98,79 @@ pub fn pack_mod_project(args: PackModProjectArgs) -> eyre::Result<()> {
     );
 
     Ok(())
+}
+
+fn pack_to_fantome_format(
+    args: PackModProjectArgs,
+    config_path: PathBuf,
+    mod_project: ModProject,
+) -> eyre::Result<()> {
+    println!(
+        "Packing mod project to Fantome format: {}",
+        mod_project.name.bright_yellow()
+    );
+
+    // Warn about non-base layers not being supported
+    warn_about_unsupported_layers(&mod_project);
+
+    let project_root = config_path.parent().unwrap();
+    let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
+
+    if !output_dir.exists() {
+        println!("Creating output directory: {}", output_dir.display());
+        std::fs::create_dir_all(&output_dir)?;
+    }
+
+    let fantome_file_name = create_fantome_file_name(&mod_project, args.file_name);
+    let output_path = output_dir.join(&fantome_file_name);
+
+    let file = File::create(&output_path)?;
+    let writer = BufWriter::new(file);
+
+    pack_to_fantome(writer, &mod_project, project_root)?;
+
+    println!(
+        "{}\n{}",
+        "Fantome mod package created successfully!"
+            .bright_green()
+            .bold(),
+        format!("Path: {}", output_path.display()).bright_green()
+    );
+
+    Ok(())
+}
+
+fn warn_about_unsupported_layers(mod_project: &ModProject) {
+    let non_base_layers: Vec<_> = mod_project
+        .layers
+        .iter()
+        .filter(|layer| layer.name != "base")
+        .collect();
+
+    if !non_base_layers.is_empty() {
+        println!(
+            "{}",
+            "⚠️  WARNING: Fantome format only supports the base layer!"
+                .bright_yellow()
+                .bold()
+        );
+        println!(
+            "{}",
+            "   The following layers will NOT be included in the Fantome package:".bright_yellow()
+        );
+        for layer in non_base_layers {
+            println!(
+                "   - {} (priority: {})",
+                layer.name.bright_red(),
+                layer.priority
+            );
+        }
+        println!(
+            "{}",
+            "   Consider using --format modpkg to include all layers.".bright_yellow()
+        );
+        println!(); // Empty line for spacing
+    }
 }
 
 // Config utils
@@ -128,6 +217,15 @@ fn load_config(config_path: &Path) -> eyre::Result<ModProject> {
 
 fn resolve_content_dir(config_path: &Path) -> eyre::Result<PathBuf> {
     Ok(config_path.parent().unwrap().join("content"))
+}
+
+fn resolve_output_dir(output_dir: &str, config_path: &Path) -> eyre::Result<PathBuf> {
+    let output_dir = PathBuf::from(output_dir);
+    let output_dir = match output_dir.is_absolute() {
+        true => output_dir,
+        false => config_path.parent().unwrap().join(output_dir),
+    };
+    Ok(output_dir)
 }
 
 // Layer utils
@@ -250,8 +348,34 @@ fn build_chunk_from_file(
     Ok((modpkg_builder.with_chunk(chunk_builder), path_hash))
 }
 
-fn create_modpkg_file_name(mod_project: &ModProject) -> String {
-    let version = semver::Version::parse(&mod_project.version).unwrap();
+fn create_modpkg_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
+    match custom_name {
+        Some(name) => {
+            if name.ends_with(".modpkg") {
+                name
+            } else {
+                format!("{}.modpkg", name)
+            }
+        }
+        None => {
+            let version = semver::Version::parse(&mod_project.version).unwrap();
+            format!("{}_{}.modpkg", mod_project.name, version)
+        }
+    }
+}
 
-    format!("{}_{}.modpkg", mod_project.name, version)
+fn create_fantome_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
+    match custom_name {
+        Some(name) => {
+            if name.ends_with(".fantome") {
+                name
+            } else {
+                format!("{}.fantome", name)
+            }
+        }
+        None => {
+            let version = semver::Version::parse(&mod_project.version).unwrap();
+            format!("{}_{}.fantome", mod_project.name, version)
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use commands::{
     extract_mod_package, info_mod_package, init_mod_project, pack_mod_project,
-    ExtractModPackageArgs, InfoModPackageArgs, InitModProjectArgs, PackModProjectArgs,
+    ExtractModPackageArgs, InfoModPackageArgs, InitModProjectArgs, PackFormat, PackModProjectArgs,
 };
 
 mod commands;
@@ -36,6 +36,10 @@ pub enum Commands {
         /// The directory to output the mod package to
         #[arg(short, long, default_value = "build")]
         output_dir: String,
+
+        /// The output format for the mod package
+        #[arg(long, value_enum, default_value = "modpkg")]
+        format: PackFormat,
     },
     /// Show information about a mod package
     Info {
@@ -72,10 +76,12 @@ fn main() -> eyre::Result<()> {
             config_path,
             file_name,
             output_dir,
+            format,
         } => pack_mod_project(PackModProjectArgs {
             config_path,
             file_name,
             output_dir,
+            format,
         }),
         Commands::Info { file_path } => info_mod_package(InfoModPackageArgs { file_path }),
         Commands::Extract {
