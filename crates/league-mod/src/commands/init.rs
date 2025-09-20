@@ -4,6 +4,7 @@ use std::{
 };
 
 use colored::Colorize;
+use miette::IntoDiagnostic;
 use mod_project::{ModProject, ModProjectAuthor};
 
 use crate::utils::{is_valid_slug, validate_mod_name};
@@ -17,7 +18,7 @@ pub struct InitModProjectArgs {
     pub output_dir: Option<String>,
 }
 
-pub fn init_mod_project(args: InitModProjectArgs) -> eyre::Result<()> {
+pub fn init_mod_project(args: InitModProjectArgs) -> miette::Result<()> {
     let display_name = match args.display_name {
         Some(ref display_name) => display_name.clone(),
         None => prompt_mod_display_name()?,
@@ -31,26 +32,42 @@ pub fn init_mod_project(args: InitModProjectArgs) -> eyre::Result<()> {
         None => prompt_mod_name(&display_name)?,
     };
 
-    println!("Initializing new project: {}", name.bold().bright_cyan());
+    println!(
+        "{} {}",
+        "🚀 Initializing new project:".bright_blue().bold(),
+        name.bright_cyan().bold()
+    );
 
     let mod_project_dir_path = match args.output_dir {
         Some(ref output_dir) => PathBuf::from(output_dir).join(&name),
-        None => create_mod_project_dir_path(&name)?,
+        None => create_mod_project_dir_path(&name).into_diagnostic()?,
     };
 
     println!(
-        "Creating mod project directory at: {}",
+        "{} {}",
+        "📁 Creating mod project directory at:".bright_yellow(),
         mod_project_dir_path
             .display()
             .to_string()
+            .bright_white()
             .bold()
-            .bright_cyan()
     );
-    std::fs::create_dir_all(&mod_project_dir_path)?;
+    std::fs::create_dir_all(&mod_project_dir_path).into_diagnostic()?;
 
     create_mod_project_file(&mod_project_dir_path, &name, &display_name)?;
 
-    prepare_base_layer_dir(&mod_project_dir_path)?;
+    prepare_base_layer_dir(&mod_project_dir_path).into_diagnostic()?;
+
+    println!(
+        "{}\n{} {}",
+        "✅ Project initialized successfully!".bright_green().bold(),
+        "📍 Location:".bright_green(),
+        mod_project_dir_path
+            .display()
+            .to_string()
+            .bright_white()
+            .bold()
+    );
 
     Ok(())
 }
@@ -59,15 +76,16 @@ fn create_mod_project_file(
     mod_project_dir_path: impl AsRef<Path>,
     name: &str,
     display_name: &str,
-) -> eyre::Result<()> {
+) -> miette::Result<()> {
     let mod_project =
         create_default_mod_project(Some(name.to_string()), Some(display_name.to_string()));
 
-    let mod_project_file_content = serde_json::to_string_pretty(&mod_project)?;
+    let mod_project_file_content = serde_json::to_string_pretty(&mod_project).into_diagnostic()?;
     std::fs::write(
         mod_project_dir_path.as_ref().join("mod.config.json"),
         mod_project_file_content,
-    )?;
+    )
+    .into_diagnostic()?;
 
     Ok(())
 }
@@ -90,7 +108,7 @@ fn create_mod_project_dir_path(name: impl AsRef<Path>) -> io::Result<PathBuf> {
     Ok(std::path::Path::new(&std::env::current_dir()?).join(name))
 }
 
-pub fn prompt_mod_name(suggested_name: impl AsRef<str>) -> eyre::Result<String> {
+pub fn prompt_mod_name(suggested_name: impl AsRef<str>) -> miette::Result<String> {
     let validator = |input: &str| {
         if is_valid_slug(input) {
             Ok(Validation::Valid)
@@ -107,13 +125,16 @@ pub fn prompt_mod_name(suggested_name: impl AsRef<str>) -> eyre::Result<String> 
         .with_validator(validator)
         .with_default(&slugified)
         .with_placeholder(&slugified)
-        .prompt()?;
+        .prompt()
+        .into_diagnostic()?;
 
     Ok(name)
 }
 
-fn prompt_mod_display_name() -> eyre::Result<String> {
-    let name = Text::new("Enter mod display name:").prompt()?;
+fn prompt_mod_display_name() -> miette::Result<String> {
+    let name = Text::new("Enter mod display name:")
+        .prompt()
+        .into_diagnostic()?;
 
     Ok(name)
 }

@@ -1,4 +1,5 @@
-use eyre::eyre;
+use crate::errors::CliError;
+use miette::Result;
 use regex::Regex;
 
 pub mod modpkg;
@@ -9,21 +10,19 @@ pub fn is_valid_slug(name: impl AsRef<str>) -> bool {
         .is_match(name.as_ref())
 }
 
-pub fn validate_mod_name(name: impl AsRef<str>) -> eyre::Result<()> {
-    if !is_valid_slug(name) {
-        return Err(eyre!(
-            "Invalid mod name, must be alphanumeric and contain no spaces or special characters (You can set a display name later)"
-        ));
+pub fn validate_mod_name(name: impl AsRef<str>) -> Result<()> {
+    let name_str = name.as_ref();
+    if !is_valid_slug(name_str) {
+        return Err(CliError::invalid_mod_name(name_str.to_string(), None).into());
     }
 
     Ok(())
 }
 
-pub fn validate_version_format(version: impl AsRef<str>) -> eyre::Result<()> {
-    if semver::Version::parse(version.as_ref()).is_err() {
-        return Err(eyre!(
-            "Invalid version format, must be a valid semantic version"
-        ));
+pub fn validate_version_format(version: impl AsRef<str>) -> Result<()> {
+    let version_str = version.as_ref();
+    if semver::Version::parse(version_str).is_err() {
+        return Err(CliError::invalid_version(version_str.to_string(), None).into());
     }
 
     Ok(())

@@ -3,8 +3,10 @@ use commands::{
     extract_mod_package, info_mod_package, init_mod_project, pack_mod_project,
     ExtractModPackageArgs, InfoModPackageArgs, InitModProjectArgs, PackFormat, PackModProjectArgs,
 };
+use miette::Result;
 
 mod commands;
+mod errors;
 mod utils;
 
 #[derive(Parser, Debug)]
@@ -59,7 +61,7 @@ pub enum Commands {
     },
 }
 
-fn main() -> eyre::Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
