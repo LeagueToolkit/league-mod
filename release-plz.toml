@@ -27,6 +27,27 @@ changelog_update = true
 # Use root changelog path
 changelog_path = "CHANGELOG.md"
 
+[[package]]
+name = "fantome"
+# Skip cargo publishing for this package
+publish = false
+# Disable changelog generation for this crate
+changelog_update = false
+
+[[package]]
+name = "league-modpkg"
+# Skip cargo publishing for this package
+publish = false
+# Disable changelog generation for this crate
+changelog_update = false
+
+[[package]]
+name = "mod-project"
+# Skip cargo publishing for this package
+publish = false
+# Disable changelog generation for this crate
+changelog_update = false
+
 [changelog]
 # Header for the changelog
 header = """
