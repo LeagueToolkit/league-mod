@@ -2,6 +2,20 @@
 
 A comprehensive Rust-based toolkit for creating, managing, and distributing League of Legends mods using the modpkg format.
 
+## 🔧 Installation
+
+### Windows (Recommended)
+
+**Via winget (Windows Package Manager):**
+```powershell
+winget install LeagueToolkit.LeagueMod
+```
+
+**Via GitHub Releases:**
+1. Download the latest release from [GitHub Releases](https://github.com/LeagueToolkit/league-mod/releases)
+2. Extract the ZIP file to your preferred location
+3. Add the extracted directory to your [PATH environment variable](https://www.architectryan.com/2018/03/17/add-to-the-path-on-windows-10/)
+
 ## 🚀 Features
 
 - **Project Management**: Initialize and manage mod projects with layered structure
@@ -116,18 +130,20 @@ my-mod/
 └── README.md                 # Project documentation/description
 ```
 
-## 🔧 Installation
+### Building from Source
 
-### Prerequisites
+**Prerequisites:**
 - Rust 1.70+ (2021 edition)
 - Git
 
-### Building from Source
+**Build steps:**
 ```bash
-git clone https://github.com/your-username/league-mod.git
+git clone https://github.com/LeagueToolkit/league-mod.git
 cd league-mod
 cargo build --release
 ```
+
+The compiled binary will be available at `target/release/league-mod.exe`
 
 ## 📖 Quick Start
 
@@ -231,15 +247,56 @@ This project is licensed under the [GNU Affero General Public License v3.0](LICE
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
+### Commit Message Format
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automated changelog generation and semantic versioning:
+
+```bash
+# Features (minor version bump)
+git commit -m "feat: add support for custom transformers"
+
+# Bug fixes (patch version bump)  
+git commit -m "fix: resolve file path handling on Windows"
+
+# Breaking changes (major version bump)
+git commit -m "feat!: change configuration file format"
+
+# Other types: docs, style, refactor, test, chore
+git commit -m "docs: update installation instructions"
+```
+
+### Development Workflow
+
+All contributions go through our CI pipeline:
+
+1. **Create a PR** - All changes must be submitted via pull request
+2. **CI Checks** - Automated checks run on every PR:
+   - ✅ Code compilation on Linux, Windows, and macOS
+   - ✅ Test suite execution
+   - ✅ Clippy linting for code quality
+   - ✅ Code formatting verification
+   - ✅ Security audit for vulnerabilities
+   - ✅ License and dependency checks
+3. **Review & Merge** - Maintainer review and merge approved PRs
+
+### Release Process
+
+Releases are automated using [release-plz](https://release-plz.dev/docs):
+
+1. Make commits using conventional commit format
+2. Push to main branch
+3. Release-plz creates a Release PR with version bump and changelog
+4. Merge the PR to trigger automatic release with Windows binaries
+
 ## 📚 Documentation
 
-For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/your-username/league-mod/wiki).
+For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/LeagueToolkit/league-mod/wiki).
 
 ## 🙋‍♀️ Support
 
 If you encounter any issues or have questions:
-1. Check the [GitHub Issues](https://github.com/your-username/league-mod/issues)
-2. Consult the [Wiki documentation](https://github.com/your-username/league-mod/wiki)
+1. Check the [GitHub Issues](https://github.com/LeagueToolkit/league-mod/issues)
+2. Consult the [Wiki documentation](https://github.com/LeagueToolkit/league-mod/wiki)
 3. Join our community discussions
 
 ---

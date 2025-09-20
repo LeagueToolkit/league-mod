@@ -20,7 +20,7 @@ pub fn validate_mod_name(name: impl AsRef<str>) -> eyre::Result<()> {
 }
 
 pub fn validate_version_format(version: impl AsRef<str>) -> eyre::Result<()> {
-    if !semver::Version::parse(version.as_ref()).is_ok() {
+    if semver::Version::parse(version.as_ref()).is_err() {
         return Err(eyre!(
             "Invalid version format, must be a valid semantic version"
         ));
