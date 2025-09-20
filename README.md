@@ -2,6 +2,20 @@
 
 A comprehensive Rust-based toolkit for creating, managing, and distributing League of Legends mods using the modpkg format.
 
+## 🔧 Installation
+
+### Windows (Recommended)
+
+**Via winget (Windows Package Manager):**
+```powershell
+winget install LeagueToolkit.LeagueMod
+```
+
+**Via GitHub Releases:**
+1. Download the latest release from [GitHub Releases](https://github.com/LeagueToolkit/league-mod/releases)
+2. Extract the ZIP file to your preferred location
+3. Add the extracted directory to your [PATH environment variable](https://www.architectryan.com/2018/03/17/add-to-the-path-on-windows-10/)
+
 ## 🚀 Features
 
 - **Project Management**: Initialize and manage mod projects with layered structure
@@ -116,18 +130,20 @@ my-mod/
 └── README.md                 # Project documentation/description
 ```
 
-## 🔧 Installation
+### Building from Source
 
-### Prerequisites
+**Prerequisites:**
 - Rust 1.70+ (2021 edition)
 - Git
 
-### Building from Source
+**Build steps:**
 ```bash
-git clone https://github.com/your-username/league-mod.git
+git clone https://github.com/LeagueToolkit/league-mod.git
 cd league-mod
 cargo build --release
 ```
+
+The compiled binary will be available at `target/release/league-mod.exe`
 
 ## 📖 Quick Start
 
@@ -233,13 +249,13 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ## 📚 Documentation
 
-For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/your-username/league-mod/wiki).
+For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/LeagueToolkit/league-mod/wiki).
 
 ## 🙋‍♀️ Support
 
 If you encounter any issues or have questions:
-1. Check the [GitHub Issues](https://github.com/your-username/league-mod/issues)
-2. Consult the [Wiki documentation](https://github.com/your-username/league-mod/wiki)
+1. Check the [GitHub Issues](https://github.com/LeagueToolkit/league-mod/issues)
+2. Consult the [Wiki documentation](https://github.com/LeagueToolkit/league-mod/wiki)
 3. Join our community discussions
 
 ---

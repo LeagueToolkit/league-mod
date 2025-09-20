@@ -2,6 +2,15 @@
 name = "league-mod"
 version = "0.1.0"
 edition = "2021"
+description = "A comprehensive toolkit for creating, managing, and distributing League of Legends mods"
+license = "AGPL-3.0"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+readme = "../../README.md"
+keywords = ["league-of-legends", "modding", "gaming", "cli", "toolkit"]
+categories = ["command-line-utilities", "game-development"]
+authors = ["LeagueToolkit"]
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
