@@ -15,6 +15,7 @@ mod extractor;
 mod license;
 mod metadata;
 mod read;
+mod readme;
 mod thumbnail;
 pub mod utils;
 
@@ -22,6 +23,7 @@ pub use decoder::ModpkgDecoder;
 pub use extractor::ModpkgExtractor;
 pub use license::*;
 pub use metadata::*;
+pub use readme::*;
 pub use thumbnail::*;
 pub use utils::*;
 
