@@ -265,6 +265,20 @@ git commit -m "feat!: change configuration file format"
 git commit -m "docs: update installation instructions"
 ```
 
+### Development Workflow
+
+All contributions go through our CI pipeline:
+
+1. **Create a PR** - All changes must be submitted via pull request
+2. **CI Checks** - Automated checks run on every PR:
+   - ✅ Code compilation on Linux, Windows, and macOS
+   - ✅ Test suite execution
+   - ✅ Clippy linting for code quality
+   - ✅ Code formatting verification
+   - ✅ Security audit for vulnerabilities
+   - ✅ License and dependency checks
+3. **Review & Merge** - Maintainer review and merge approved PRs
+
 ### Release Process
 
 Releases are automated using [release-plz](https://release-plz.dev/docs):

@@ -11,6 +11,7 @@ pub const NO_WAD_INDEX: i32 = -1;
 pub const NO_LAYER_HASH: u64 = u64::MAX;
 
 /// Wad hash value used for chunks that do not belong to any `wad` file
+#[allow(dead_code)] // May be used in future features
 pub const NO_WAD_HASH: u64 = u64::MAX;
 
 #[binrw]
