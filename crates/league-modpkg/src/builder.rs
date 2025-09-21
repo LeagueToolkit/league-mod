@@ -300,7 +300,7 @@ impl ModpkgBuilder {
             } else {
                 layer_indices
                     .get(&hash_layer_name(&chunk_builder.layer))
-                    .map(|idx| *idx as i32)
+                    .copied()
                     .unwrap_or(NO_LAYER_INDEX)
             };
             let wad_index = if chunk_builder.wad.is_empty() {
@@ -308,7 +308,7 @@ impl ModpkgBuilder {
             } else {
                 wad_indices
                     .get(&hash_wad_name(&chunk_builder.wad))
-                    .map(|idx| *idx as i32)
+                    .copied()
                     .unwrap_or(NO_WAD_INDEX)
             };
 
@@ -383,6 +383,7 @@ impl ModpkgChunkBuilder {
         self.path_hash = u64::from_str_radix(hex_part, 16)
             .map_err(|_| ModpkgBuilderError::InvalidChunkName(provided.clone()))?;
         self.path = display_path;
+
         Ok(self)
     }
 
