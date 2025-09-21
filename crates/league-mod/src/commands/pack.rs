@@ -14,6 +14,7 @@ use league_modpkg::{
 };
 use mod_project::{ModProject, ModProjectLayer};
 
+use crate::println_pad;
 use crate::{
     errors::CliError,
     utils::{self, validate_mod_name, validate_version_format},
@@ -56,7 +57,7 @@ fn pack_to_modpkg(
 
     validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
 
-    println!(
+    println_pad!(
         "{} {}",
         "📦 Packing mod project:".bright_blue().bold(),
         mod_project.name.bright_cyan().bold()
@@ -65,7 +66,7 @@ fn pack_to_modpkg(
     let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
 
     if !output_dir.exists() {
-        println!("Creating output directory: {}", output_dir.display());
+        println_pad!("Creating output directory: {}", output_dir.display());
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
@@ -102,10 +103,10 @@ fn pack_to_modpkg(
         })
         .into_diagnostic()?;
 
-    println!(
+    println_pad!(
         "{}\n{} {}",
-        "✅ Mod package created successfully!".bright_green().bold(),
-        "📍 Path:".bright_green(),
+        "Mod package created successfully!".bright_green().bold(),
+        "Path:".bright_green(),
         output_dir
             .join(modpkg_file_name)
             .display()
@@ -122,9 +123,9 @@ fn pack_to_fantome_format(
     config_path: PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
-    println!(
+    println_pad!(
         "{} {}",
-        "🎭 Packing mod project to Fantome format:"
+        "Packing mod project to Fantome format:"
             .bright_blue()
             .bold(),
         mod_project.name.bright_cyan().bold()
@@ -137,7 +138,7 @@ fn pack_to_fantome_format(
     let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
 
     if !output_dir.exists() {
-        println!(
+        println_pad!(
             "{} {}",
             "📁 Creating output directory:".bright_yellow(),
             output_dir.display().to_string().bright_white().bold()
@@ -154,12 +155,12 @@ fn pack_to_fantome_format(
     pack_to_fantome(writer, &mod_project, project_root)
         .map_err(|e| miette!("Failed to pack to Fantome format: {}", e))?;
 
-    println!(
+    println_pad!(
         "{}\n{} {}",
-        "✅ Fantome mod package created successfully!"
+        "Fantome mod package created successfully!"
             .bright_green()
             .bold(),
-        "📍 Path:".bright_green(),
+        "Path:".bright_green(),
         output_path.display().to_string().bright_white().bold()
     );
 
@@ -174,34 +175,34 @@ fn warn_about_unsupported_layers(mod_project: &ModProject) {
         .collect();
 
     if !non_base_layers.is_empty() {
-        println!(
+        println_pad!(
             "{}",
             "⚠️  WARNING: Fantome format only supports the base layer!"
                 .bright_yellow()
                 .bold()
         );
-        println!(
+        println_pad!(
             "{}",
             "   The following layers will NOT be included in the Fantome package:"
                 .bright_yellow()
                 .dimmed()
         );
         for layer in non_base_layers {
-            println!(
+            println_pad!(
                 "   {} {} {}",
                 "•".bright_red(),
                 layer.name.bright_red().bold(),
                 format!("(priority: {})", layer.priority).dimmed()
             );
         }
-        println!(
+        println_pad!(
             "   {} {}",
             "💡 Tip:".bright_cyan().bold(),
             "Consider using --format modpkg to include all layers."
                 .bright_yellow()
                 .dimmed()
         );
-        println!(); // Empty line for spacing
+        println!(); // Empty line for spacing (no padding needed for blank line)
     }
 }
 
@@ -344,7 +345,7 @@ fn build_layers(
             continue;
         }
 
-        println!(
+        println_pad!(
             "{} {}",
             "🏗️  Building layer:".bright_yellow(),
             layer.name.bright_cyan().bold()
