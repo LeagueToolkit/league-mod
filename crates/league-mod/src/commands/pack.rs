@@ -85,7 +85,6 @@ fn pack_to_modpkg(
         &mut chunk_filepaths,
     )?;
 
-    // Add meta chunks (README.md and thumbnail.webp) with no layer/wad
     modpkg_builder = add_meta_chunks(modpkg_builder, &project_root, &mod_project)?;
 
     let modpkg_file_name = create_modpkg_file_name(&mod_project, args.file_name);

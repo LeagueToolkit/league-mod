@@ -4,8 +4,6 @@ use regex::Regex;
 
 pub mod modpkg;
 
-// Println helper that adds a small left padding to every output line
-// to improve readability in terminals.
 #[macro_export]
 macro_rules! println_pad {
     ($($arg:tt)*) => {{
