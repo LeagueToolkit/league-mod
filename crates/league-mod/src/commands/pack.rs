@@ -340,10 +340,6 @@ fn build_layers(
 
     // Process layers
     for layer in &mod_project.layers {
-        if layer.name == "base" {
-            // Base layer is handled separately and must always have priority 0
-            continue;
-        }
         println!(
             "{} {}",
             "🏗️  Building layer:".bright_magenta(),
