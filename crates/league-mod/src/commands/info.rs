@@ -1,8 +1,8 @@
 use std::fs::File;
 
 use colored::Colorize;
-use miette::IntoDiagnostic;
 use league_modpkg::Modpkg;
+use miette::IntoDiagnostic;
 
 pub struct InfoModPackageArgs {
     pub file_path: String,

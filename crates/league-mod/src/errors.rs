@@ -131,6 +131,7 @@ impl CliError {
         Self::InvalidVersion { version, span }
     }
 
+    #[allow(unused)]
     pub fn config_parse_error(
         source: Box<dyn std::error::Error + Send + Sync>,
         span: Option<SourceSpan>,
@@ -138,10 +139,12 @@ impl CliError {
         Self::ConfigParseError { source, span }
     }
 
+    #[allow(unused)]
     pub fn file_not_found(path: PathBuf) -> Self {
         Self::FileNotFound { path }
     }
 
+    #[allow(unused)]
     pub fn directory_creation_failed(path: PathBuf, source: std::io::Error) -> Self {
         Self::DirectoryCreationFailed { path, source }
     }

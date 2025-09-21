@@ -2,8 +2,8 @@ use std::fs::File;
 use std::path::Path;
 
 use colored::Colorize;
-use miette::IntoDiagnostic;
 use league_modpkg::{Modpkg, ModpkgExtractor};
+use miette::IntoDiagnostic;
 
 pub struct ExtractModPackageArgs {
     pub file_path: String,
