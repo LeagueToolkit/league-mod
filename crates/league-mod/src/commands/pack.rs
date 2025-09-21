@@ -340,6 +340,10 @@ fn build_layers(
 
     // Process layers
     for layer in &mod_project.layers {
+        if layer.name == "base" {
+            continue;
+        }
+
         println!(
             "{} {}",
             "🏗️  Building layer:".bright_yellow(),
