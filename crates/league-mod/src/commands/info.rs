@@ -1,5 +1,6 @@
 use std::fs::File;
 
+use crate::println_pad;
 use colored::Colorize;
 use league_modpkg::Modpkg;
 use miette::IntoDiagnostic;
@@ -12,17 +13,17 @@ pub fn info_mod_package(args: InfoModPackageArgs) -> miette::Result<()> {
     let file = File::open(&args.file_path).into_diagnostic()?;
     let modpkg = Modpkg::mount_from_reader(file).into_diagnostic()?;
 
-    println!(
+    println_pad!(
         "{} {}",
         "📦 Modpkg:".bright_blue().bold(),
         modpkg.metadata.name.bright_cyan().bold()
     );
-    println!(
+    println_pad!(
         "{} {}",
         "🏷️  Version:".bright_green(),
         modpkg.metadata.version.bright_white().bold()
     );
-    println!(
+    println_pad!(
         "{} {}",
         "📝 Description:".bright_yellow(),
         modpkg
@@ -32,14 +33,14 @@ pub fn info_mod_package(args: InfoModPackageArgs) -> miette::Result<()> {
             .bright_white()
     );
 
-    println!("\n{}", "🏗️  Layers:".bright_magenta().bold());
+    println_pad!("\n{}", "🏗️  Layers:".bright_magenta().bold());
     for layer in modpkg.layers.values() {
-        println!("   {} {}", "•".bright_cyan(), layer.name.bright_cyan());
+        println_pad!("   {} {}", "•".bright_cyan(), layer.name.bright_cyan());
     }
 
-    println!("\n{}", "📄 Chunks:".bright_red().bold());
+    println_pad!("\n{}", "📄 Chunks:".bright_red().bold());
     for chunk in modpkg.chunks.values() {
-        println!(
+        println_pad!(
             "   {} {}",
             "•".bright_red().dimmed(),
             modpkg.chunk_paths[&chunk.path_hash].bright_white().dimmed()

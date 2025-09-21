@@ -4,6 +4,18 @@ use regex::Regex;
 
 pub mod modpkg;
 
+// Println helper that adds a small left padding to every output line
+// to improve readability in terminals.
+#[macro_export]
+macro_rules! println_pad {
+    ($($arg:tt)*) => {{
+        let __s = format!($($arg)*);
+        for __line in __s.lines() {
+            println!("    {}", __line);
+        }
+    }};
+}
+
 pub fn is_valid_slug(name: impl AsRef<str>) -> bool {
     Regex::new(r"^[[:word:]-]+$")
         .unwrap()

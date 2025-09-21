@@ -7,6 +7,7 @@ use colored::Colorize;
 use miette::IntoDiagnostic;
 use mod_project::{ModProject, ModProjectAuthor};
 
+use crate::println_pad;
 use crate::utils::{is_valid_slug, validate_mod_name};
 use inquire::{validator::Validation, Text};
 
@@ -32,7 +33,7 @@ pub fn init_mod_project(args: InitModProjectArgs) -> miette::Result<()> {
         None => prompt_mod_name(&display_name)?,
     };
 
-    println!(
+    println_pad!(
         "{} {}",
         "🚀 Initializing new project:".bright_blue().bold(),
         name.bright_cyan().bold()
@@ -43,7 +44,7 @@ pub fn init_mod_project(args: InitModProjectArgs) -> miette::Result<()> {
         None => create_mod_project_dir_path(&name).into_diagnostic()?,
     };
 
-    println!(
+    println_pad!(
         "{} {}",
         "📁 Creating mod project directory at:".bright_yellow(),
         mod_project_dir_path
@@ -58,10 +59,10 @@ pub fn init_mod_project(args: InitModProjectArgs) -> miette::Result<()> {
 
     prepare_base_layer_dir(&mod_project_dir_path).into_diagnostic()?;
 
-    println!(
+    println_pad!(
         "{}\n{} {}",
-        "✅ Project initialized successfully!".bright_green().bold(),
-        "📍 Location:".bright_green(),
+        "Project initialized successfully!".bright_green().bold(),
+        "Location:".bright_green(),
         mod_project_dir_path
             .display()
             .to_string()
