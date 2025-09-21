@@ -1,7 +1,7 @@
 use std::fs::File;
 
-use colored::Colorize;
 use crate::println_pad;
+use colored::Colorize;
 use league_modpkg::Modpkg;
 use miette::IntoDiagnostic;
 
