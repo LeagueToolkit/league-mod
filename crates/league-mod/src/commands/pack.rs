@@ -54,7 +54,7 @@ fn pack_to_modpkg(
 ) -> Result<()> {
     let content_dir = resolve_content_dir(&config_path)?;
 
-    validate_layer_presence(&mod_project, &config_path)?;
+    validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
 
     println!(
         "{} {}",
@@ -288,8 +288,9 @@ fn validate_layer_presence(mod_project: &ModProject, mod_project_dir: &Path) -> 
             return Err(CliError::invalid_layer_name(layer.name.clone(), None).into());
         }
 
-        if layer.name == "base" {
-            return Err(CliError::reserved_layer_name("base".to_string(), None).into());
+        // If the user explicitly defines the base layer, ensure its priority is 0
+        if layer.name == "base" && layer.priority != 0 {
+            return Err(CliError::invalid_base_layer_priority(layer.priority).into());
         }
 
         validate_layer_dir_presence(mod_project_dir, &layer.name)?;
@@ -339,9 +340,13 @@ fn build_layers(
 
     // Process layers
     for layer in &mod_project.layers {
+        if layer.name == "base" {
+            continue;
+        }
+
         println!(
             "{} {}",
-            "🏗️  Building layer:".bright_magenta(),
+            "🏗️  Building layer:".bright_yellow(),
             layer.name.bright_cyan().bold()
         );
         modpkg_builder = modpkg_builder

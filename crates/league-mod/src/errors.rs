@@ -22,17 +22,6 @@ pub enum CliError {
         span: Option<SourceSpan>,
     },
 
-    #[error("Reserved layer name")]
-    #[diagnostic(
-        code(layer::reserved_name),
-        help("The 'base' layer name is reserved. Please use a different name for custom layers.")
-    )]
-    ReservedLayerName {
-        name: String,
-        #[label("reserved name used here")]
-        span: Option<SourceSpan>,
-    },
-
     #[error("Layer directory not found: {layer_name}")]
     #[diagnostic(
         code(layer::directory_missing),
@@ -101,6 +90,13 @@ pub enum CliError {
         #[from]
         source: std::io::Error,
     },
+
+    #[error("Invalid base layer priority: {provided}")]
+    #[diagnostic(
+        code(layer::invalid_base_priority),
+        help("The 'base' layer must have priority 0")
+    )]
+    InvalidBaseLayerPriority { provided: i32 },
 }
 
 impl CliError {
@@ -110,10 +106,6 @@ impl CliError {
 
     pub fn invalid_layer_name(name: String, span: Option<SourceSpan>) -> Self {
         Self::InvalidLayerName { name, span }
-    }
-
-    pub fn reserved_layer_name(name: String, span: Option<SourceSpan>) -> Self {
-        Self::ReservedLayerName { name, span }
     }
 
     pub fn layer_directory_missing(layer_name: String, expected_path: PathBuf) -> Self {
@@ -147,5 +139,10 @@ impl CliError {
     #[allow(unused)]
     pub fn directory_creation_failed(path: PathBuf, source: std::io::Error) -> Self {
         Self::DirectoryCreationFailed { path, source }
+    }
+
+    #[allow(unused)]
+    pub fn invalid_base_layer_priority(provided: i32) -> Self {
+        Self::InvalidBaseLayerPriority { provided }
     }
 }
