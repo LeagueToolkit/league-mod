@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     io::{Read, Seek},
+    path::Path,
 };
 
 pub mod builder;
@@ -93,13 +94,17 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
 
     fn candidate_path_hashes(path: &str) -> (u64, Option<u64>) {
         let literal_hash = hash_chunk_name(path);
+        let filename_lower = Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_else(|| path.to_lowercase());
 
-        let lower = path.to_lowercase();
-        let stripped = utils::sanitize_chunk_name(&lower);
-        let stripped = stripped.split('.').next().unwrap_or(stripped);
-        if utils::is_hex_chunk_name(stripped) {
-            if let Ok(parsed) = u64::from_str_radix(stripped, 16) {
-                return (literal_hash, Some(parsed));
+        if utils::is_hex_chunk_name(&filename_lower) {
+            if let Some(base) = filename_lower.split('.').next() {
+                if let Ok(parsed) = u64::from_str_radix(base, 16) {
+                    return (literal_hash, Some(parsed));
+                }
             }
         }
 
@@ -316,14 +321,14 @@ mod tests {
         let mut cursor = Cursor::new(scratch);
 
         let test_data = [0xBB; 100];
-        let test_chunk_path = "data/test_chunk.bin";
+        let test_chunk_path = "abcdef1234567890.dds";
         let layer_name = "base";
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path(test_chunk_path)
+                    .with_hashed_chunk_name(test_chunk_path)
                     .unwrap()
                     .with_compression(ModpkgCompression::None),
             );
@@ -342,7 +347,7 @@ mod tests {
         println!("{:?}", modpkg.layers);
         println!("{:?}", modpkg.chunks);
 
-        // Test loading by hex path
+        // Test loading by hex path (uses hex base of file name)
         let data_by_hex_path = modpkg
             .load_chunk_decompressed_by_path(test_chunk_path, Some(layer_name))
             .unwrap();
@@ -357,7 +362,7 @@ mod tests {
 
         let test_data = [0xCC; 100];
         let path = "test.bin";
-        let hex_path = "abcdef";
+        let hex_path = "abcdef1234567890";
         let layer_name = "base";
 
         let builder = ModpkgBuilder::default()
