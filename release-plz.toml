@@ -12,11 +12,11 @@ pr_draft = true
 # Create draft GitHub releases for review before publishing
 git_release_draft = true
 # Git tag name format
-git_tag_name = "v{version}"
+git_tag_name = "v{{ version }}"
 # Release name format  
-git_release_name = "Release {version}"
+git_release_name = "Release {{ version }}"
 # Include changelog in GitHub release body
-git_release_body = "{changelog}"
+git_release_body = "{{ changelog }}"
 
 [[package]]
 name = "league-mod"
