@@ -22,16 +22,19 @@ pub(crate) fn nullstr_write<'a>(s: impl Into<&'a String>) -> NullString {
     NullString::from(s.into().as_str())
 }
 
-pub fn is_hex_chunk_name(file_name: &str) -> bool {
-    file_name.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-pub fn sanitize_chunk_name(file_name: &str) -> &str {
-    if let Some(stripped) = file_name.strip_prefix("0x") {
-        return stripped;
+pub fn is_hex_chunk_name(chunk_name: &str) -> bool {
+    // Reject 0x prefix
+    if chunk_name.starts_with("0x") {
+        return false;
     }
 
-    file_name
+    // Validate the base name (before extension)
+    let base = chunk_name.split('.').next().unwrap_or(chunk_name);
+    if base.len() != 16 {
+        return false;
+    }
+
+    base.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Hash a layer name using xxhash3.

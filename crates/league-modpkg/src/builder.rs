@@ -358,14 +358,14 @@ impl ModpkgChunkBuilder {
 
     /// Set the path hash from a hex-encoded chunk name that represents the actual path hash.
     ///
-    /// Accepts values with or without the `0x` prefix. The builder will store the provided
-    /// string (lowercased and without `0x` prefix) as the chunk's display path while using
-    /// the parsed numeric value as the `path_hash`.
+    /// The input must have a base filename of exactly 16 hexadecimal characters. Any number of
+    /// extensions after the base is allowed (only the base is parsed). The `0x` prefix is NOT
+    /// allowed.
+    /// The builder stores the provided (lowercased) string as the display path and parses the
+    /// base as hexadecimal for the `path_hash`.
     pub fn with_hashed_chunk_name(mut self, hashed_name: &str) -> Result<Self, ModpkgBuilderError> {
         let provided = hashed_name.to_lowercase();
-
-        // Store the path without 0x prefix
-        let display_path = utils::sanitize_chunk_name(&provided).to_string();
+        let display_path = provided.clone();
 
         // Extract the hex part for hash parsing - find the base name before any extensions
         let path = Path::new(&display_path);
@@ -374,7 +374,6 @@ impl ModpkgChunkBuilder {
             .and_then(|s| s.to_str())
             .unwrap_or(&display_path);
 
-        // Split on the first dot to get the base name without any extensions
         let hex_part = filename.split('.').next().unwrap_or(filename);
 
         if !utils::is_hex_chunk_name(hex_part) {
@@ -498,37 +497,48 @@ mod tests {
 
     #[test]
     fn test_with_hashed_chunk_name() {
-        // Test with 0x prefix and extension
+        // Test with an extension
         let chunk = ModpkgChunkBuilder::new()
-            .with_hashed_chunk_name("0xabcdef123456.bin.dds")
+            .with_hashed_chunk_name("abcdef1234567890.dds")
             .unwrap();
-        assert_eq!(chunk.path_hash(), 0xabcdef123456);
-        assert_eq!(chunk.path, "abcdef123456.bin.dds");
+        assert_eq!(chunk.path_hash(), 0xabcdef1234567890);
+        assert_eq!(chunk.path, "abcdef1234567890.dds");
 
-        // Test without 0x prefix but with extension
+        // Test with an extension (no 0x prefix)
         let chunk = ModpkgChunkBuilder::new()
-            .with_hashed_chunk_name("fedcba987654.txt")
+            .with_hashed_chunk_name("fedcba9876543210.txt")
             .unwrap();
-        assert_eq!(chunk.path_hash(), 0xfedcba987654);
-        assert_eq!(chunk.path, "fedcba987654.txt");
+        assert_eq!(chunk.path_hash(), 0xfedcba9876543210);
+        assert_eq!(chunk.path, "fedcba9876543210.txt");
 
-        // Test with multiple extensions
+        // Test with an extension
         let chunk = ModpkgChunkBuilder::new()
-            .with_hashed_chunk_name("123abc456def.texture.dds")
+            .with_hashed_chunk_name("1234abc456def789.dds")
             .unwrap();
-        assert_eq!(chunk.path_hash(), 0x123abc456def);
-        assert_eq!(chunk.path, "123abc456def.texture.dds");
+        assert_eq!(chunk.path_hash(), 0x1234abc456def789);
+        assert_eq!(chunk.path, "1234abc456def789.dds");
 
         // Test without extension
         let chunk = ModpkgChunkBuilder::new()
-            .with_hashed_chunk_name("0x789def")
+            .with_hashed_chunk_name("789def0011223344")
             .unwrap();
-        assert_eq!(chunk.path_hash(), 0x789def);
-        assert_eq!(chunk.path, "789def");
+        assert_eq!(chunk.path_hash(), 0x789def0011223344);
+        assert_eq!(chunk.path, "789def0011223344");
 
         // Test invalid hex should fail
         assert!(ModpkgChunkBuilder::new()
             .with_hashed_chunk_name("not_hex.bin")
+            .is_err());
+
+        // Multiple extensions are allowed as long as base is valid
+        let chunk = ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("abcdef1234567890.texture.dds")
+            .unwrap();
+        assert_eq!(chunk.path_hash(), 0xabcdef1234567890);
+
+        // 0x prefix should fail
+        assert!(ModpkgChunkBuilder::new()
+            .with_hashed_chunk_name("0xabcdef1234567890.dds")
             .is_err());
     }
 }
