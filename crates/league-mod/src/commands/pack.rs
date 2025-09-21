@@ -1,25 +1,28 @@
+use crate::println_pad;
+use crate::{
+    errors::CliError,
+    utils::{self, validate_mod_name, validate_version_format},
+};
+use colored::Colorize;
+use fantome::pack_to_fantome;
+use image::ImageFormat;
+use league_modpkg::{
+    builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
+    utils::hash_layer_name,
+    ModpkgCompression, ModpkgMetadata, README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
+};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
+use mod_project::{ModProject, ModProjectLayer};
+use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::io::Cursor;
 use std::{
     collections::HashMap,
     fs::File,
     io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
 };
-
-use colored::Colorize;
-use fantome::pack_to_fantome;
-use league_modpkg::{
-    builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder},
-    utils::hash_layer_name,
-    ModpkgCompression, ModpkgMetadata,
-};
-use mod_project::{ModProject, ModProjectLayer};
-
-use crate::println_pad;
-use crate::{
-    errors::CliError,
-    utils::{self, validate_mod_name, validate_version_format},
-};
-use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum PackFormat {
@@ -54,6 +57,7 @@ fn pack_to_modpkg(
     mod_project: ModProject,
 ) -> Result<()> {
     let content_dir = resolve_content_dir(&config_path)?;
+    let project_root = config_path.parent().unwrap().to_path_buf();
 
     validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
 
@@ -81,25 +85,23 @@ fn pack_to_modpkg(
         &mut chunk_filepaths,
     )?;
 
+    // Add meta chunks (README.md and thumbnail.webp) with no layer/wad
+    modpkg_builder = add_meta_chunks(modpkg_builder, &project_root, &mod_project)?;
+
     let modpkg_file_name = create_modpkg_file_name(&mod_project, args.file_name);
     let mut writer =
         BufWriter::new(File::create(output_dir.join(&modpkg_file_name)).into_diagnostic()?);
 
     modpkg_builder
         .build_to_writer(&mut writer, |chunk_builder, cursor| {
-            let file_path = chunk_filepaths
-                .get(&(
-                    chunk_builder.path_hash(),
-                    hash_layer_name(chunk_builder.layer()),
-                ))
-                .unwrap();
-
-            let mut file = File::open(file_path)?;
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
-            cursor.write_all(&buffer)?;
-
-            Ok(())
+            write_chunk_payload(
+                chunk_builder,
+                cursor,
+                &project_root,
+                &mod_project,
+                &chunk_filepaths,
+            )
+            .map_err(ModpkgBuilderError::from)
         })
         .into_diagnostic()?;
 
@@ -115,6 +117,85 @@ fn pack_to_modpkg(
             .bold()
     );
 
+    Ok(())
+}
+
+fn add_meta_chunks(
+    mut builder: ModpkgBuilder,
+    project_root: &Path,
+    mod_project: &ModProject,
+) -> Result<ModpkgBuilder> {
+    // README.md as meta chunk (no layer/wad) - optional
+    let readme_path = project_root.join("README.md");
+    if readme_path.exists() {
+        let readme_chunk = ModpkgChunkBuilder::new()
+            .with_path(README_CHUNK_PATH)
+            .into_diagnostic()?
+            .with_compression(ModpkgCompression::None)
+            .with_layer("");
+        builder = builder.with_chunk(readme_chunk);
+    }
+
+    // Thumbnail as meta chunk (no layer/wad). Include only if configured/default file exists.
+    let configured_thumb_exists = mod_project
+        .thumbnail
+        .as_ref()
+        .map(|p| project_root.join(p).exists())
+        .unwrap_or(false);
+    let default_thumb_exists = project_root.join("thumbnail.webp").exists();
+    if configured_thumb_exists || default_thumb_exists {
+        let thumb_chunk = ModpkgChunkBuilder::new()
+            .with_path(THUMBNAIL_CHUNK_PATH)
+            .into_diagnostic()?
+            .with_compression(ModpkgCompression::None)
+            .with_layer("");
+        builder = builder.with_chunk(thumb_chunk);
+    }
+
+    Ok(builder)
+}
+
+fn write_meta_chunk_readme(cursor: &mut Cursor<Vec<u8>>, project_root: &Path) -> io::Result<()> {
+    let readme_path = project_root.join("README.md");
+    if readme_path.exists() {
+        let data = fs::read(readme_path)?;
+        cursor.write_all(&data)?;
+    }
+    Ok(())
+}
+
+fn write_meta_chunk_thumbnail(
+    cursor: &mut Cursor<Vec<u8>>,
+    project_root: &Path,
+    mod_project: &ModProject,
+) -> io::Result<()> {
+    // Use configured path if present; otherwise fall back to project_root/thumbnail.webp
+    let thumbnail_path = mod_project
+        .thumbnail
+        .as_ref()
+        .map(|p| project_root.join(p))
+        .unwrap_or_else(|| project_root.join("thumbnail.webp"));
+    if !thumbnail_path.exists() {
+        return Ok(());
+    }
+
+    let is_webp = thumbnail_path
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|ext| ext.eq_ignore_ascii_case("webp"))
+        .unwrap_or(false);
+
+    if is_webp {
+        let data = fs::read(thumbnail_path)?;
+        cursor.write_all(&data)?;
+        return Ok(());
+    }
+
+    let img = image::open(&thumbnail_path).map_err(io::Error::other)?;
+    let mut tmp = Cursor::new(Vec::new());
+    img.write_to(&mut tmp, ImageFormat::WebP)
+        .map_err(io::Error::other)?;
+    cursor.write_all(tmp.get_ref())?;
     Ok(())
 }
 
@@ -435,4 +516,50 @@ fn create_fantome_file_name(mod_project: &ModProject, custom_name: Option<String
             format!("{}_{}.fantome", mod_project.name, version)
         }
     }
+}
+
+fn write_chunk_payload(
+    chunk_builder: &ModpkgChunkBuilder,
+    cursor: &mut Cursor<Vec<u8>>,
+    project_root: &Path,
+    mod_project: &ModProject,
+    chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
+) -> io::Result<()> {
+    // Handle meta chunks specially (no layer/wad)
+    if chunk_builder.layer().is_empty() {
+        match chunk_builder.path.as_str() {
+            README_CHUNK_PATH => {
+                write_meta_chunk_readme(cursor, project_root)?;
+                return Ok(());
+            }
+            THUMBNAIL_CHUNK_PATH => {
+                write_meta_chunk_thumbnail(cursor, project_root, mod_project)?;
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    // Default: layer-bound content chunk from filepaths map
+    if let Some(file_path) = chunk_filepaths.get(&(
+        chunk_builder.path_hash(),
+        hash_layer_name(chunk_builder.layer()),
+    )) {
+        let mut file = File::open(file_path)?;
+        let mut buffer = Vec::new();
+
+        file.read_to_end(&mut buffer)?;
+        cursor.write_all(&buffer)?;
+
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "Missing file path for chunk: {} (layer: '{}')",
+            chunk_builder.path,
+            chunk_builder.layer()
+        ),
+    ))
 }

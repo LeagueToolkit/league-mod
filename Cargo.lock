@@ -990,6 +990,7 @@ dependencies = [
  "colored",
  "fantome",
  "glob",
+ "image",
  "inquire",
  "league-modpkg",
  "miette",
