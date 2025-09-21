@@ -54,7 +54,7 @@ fn pack_to_modpkg(
 ) -> Result<()> {
     let content_dir = resolve_content_dir(&config_path)?;
 
-    validate_layer_presence(&mod_project, &config_path)?;
+    validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
 
     println!(
         "{} {}",
@@ -342,7 +342,7 @@ fn build_layers(
     for layer in &mod_project.layers {
         println!(
             "{} {}",
-            "🏗️  Building layer:".bright_magenta(),
+            "🏗️  Building layer:".bright_yellow(),
             layer.name.bright_cyan().bold()
         );
         modpkg_builder = modpkg_builder
