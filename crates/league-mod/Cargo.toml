@@ -14,7 +14,8 @@ authors = ["LeagueToolkit"]
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
-eyre = "0.6.12"
+miette = { version = "7", features = ["fancy"] }
+thiserror = "2.0"
 toml = "0.8.19"
 mod-project = { path = "../mod-project" }
 regex = "1.11.1"
