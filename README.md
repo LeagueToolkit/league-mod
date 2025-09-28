@@ -6,6 +6,12 @@ A comprehensive Rust-based toolkit for creating, managing, and distributing Leag
 
 ### Windows (Recommended)
 
+**Quick install (PowerShell, no admin):**
+```powershell
+irm https://raw.githubusercontent.com/LeagueToolkit/league-mod/main/scripts/install-league-mod.ps1 | iex
+```
+This downloads the latest release, installs it to `%LOCALAPPDATA%\LeagueToolkit\league-mod`, and adds it to your user `PATH`.
+
 **Via winget (Windows Package Manager):**
 ```powershell
 winget install LeagueToolkit.LeagueMod
