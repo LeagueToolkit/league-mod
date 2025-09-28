@@ -3,6 +3,14 @@ name = "ltk_mod_project"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+description = "Types and helpers for League Toolkit mod project definitions"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+readme = "../../README.md"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

@@ -3,6 +3,14 @@ name = "ltk_modpkg"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+description = "League Toolkit mod package (.modpkg) reader/writer and utilities"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+readme = "../../README.md"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
 
 [dependencies]
 thiserror = "1.0.60"

@@ -3,6 +3,14 @@ name = "ltk_fantome"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
+description = "Helper library for working with League of Legends mods in the legacy Fantome format"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+readme = "../../README.md"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
 
 [dependencies]
 zip = "2.2.0"
