@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::println_pad;
 use colored::Colorize;
-use league_modpkg::{Modpkg, ModpkgExtractor};
+use ltk_modpkg::{Modpkg, ModpkgExtractor};
 use miette::IntoDiagnostic;
 
 pub struct ExtractModPackageArgs {

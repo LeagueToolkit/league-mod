@@ -1,6 +1,6 @@
 use eyre::Result;
 use image::ImageFormat;
-use mod_project::{ModProject, ModProjectAuthor};
+use ltk_mod_project::{ModProject, ModProjectAuthor};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, read_dir};
 use std::io::Write;

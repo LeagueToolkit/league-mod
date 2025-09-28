@@ -640,19 +640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fantome"
-version = "0.1.0"
-dependencies = [
- "eyre",
- "image",
- "mod-project",
- "serde",
- "serde_json",
- "walkdir",
- "zip",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -909,17 +896,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "io-ext"
-version = "0.1.0"
-source = "git+https://github.com/LeagueToolkit/league-toolkit.git#788ca899036e53d4002947a8e833826a0a3907ff"
-dependencies = [
- "byteorder",
- "glam",
- "league-primitives",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "is_ci"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -988,47 +964,19 @@ dependencies = [
  "binrw",
  "clap",
  "colored",
- "fantome",
  "glob",
  "image",
  "inquire",
- "league-modpkg",
+ "ltk_fantome",
+ "ltk_mod_project",
+ "ltk_modpkg",
  "miette",
- "mod-project",
  "regex",
  "semver",
  "serde_json",
  "slug",
  "thiserror 2.0.16",
  "toml",
-]
-
-[[package]]
-name = "league-modpkg"
-version = "0.1.0"
-dependencies = [
- "binrw",
- "byteorder",
- "io-ext",
- "itertools 0.14.0",
- "proptest",
- "proptest-derive",
- "rmp-serde",
- "serde",
- "tempfile",
- "thiserror 1.0.69",
- "xxhash-rust",
- "zstd",
-]
-
-[[package]]
-name = "league-primitives"
-version = "0.1.0"
-source = "git+https://github.com/LeagueToolkit/league-toolkit.git#788ca899036e53d4002947a8e833826a0a3907ff"
-dependencies = [
- "byteorder",
- "glam",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1082,6 +1030,69 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "ltk_fantome"
+version = "0.1.0"
+dependencies = [
+ "eyre",
+ "image",
+ "ltk_mod_project",
+ "serde",
+ "serde_json",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "ltk_io_ext"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cefeb90ba24a3a1a3ee79aaf40f1f222137ec514bd9276af047e15f412de04bf"
+dependencies = [
+ "byteorder",
+ "glam",
+ "ltk_primitives",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ltk_mod_project"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "ltk_modpkg"
+version = "0.1.0"
+dependencies = [
+ "binrw",
+ "byteorder",
+ "itertools 0.14.0",
+ "ltk_io_ext",
+ "proptest",
+ "proptest-derive",
+ "rmp-serde",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "xxhash-rust",
+ "zstd",
+]
+
+[[package]]
+name = "ltk_primitives"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d1e4201e5e688c249c8b35f8e6914ee9eb16dc4489b712625f214f81d52253a"
+dependencies = [
+ "byteorder",
+ "glam",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1177,15 +1188,6 @@ dependencies = [
  "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "mod-project"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "toml",
 ]
 
 [[package]]
