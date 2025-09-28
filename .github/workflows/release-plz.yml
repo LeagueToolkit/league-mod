@@ -54,6 +54,7 @@ jobs:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # Build Windows binaries and attach to releases
   build-windows:
@@ -81,7 +82,7 @@ jobs:
         run: |
           $releases = '${{ needs.release-plz-release.outputs.releases }}' | ConvertFrom-Json
           $leagueModRelease = $releases | Where-Object { $_.package_name -eq "league-mod" }
-          
+
           if ($leagueModRelease) {
             $version = $leagueModRelease.version
             $tag = $leagueModRelease.tag
