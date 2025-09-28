@@ -7,7 +7,7 @@ pub enum ModpkgError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("IO error: {0}")]
-    IoExtError(#[from] io_ext::ReaderError),
+    IoExtError(#[from] ltk_io_ext::ReaderError),
     #[error("Binrw error: {0}")]
     BinrwError(#[from] binrw::Error),
 

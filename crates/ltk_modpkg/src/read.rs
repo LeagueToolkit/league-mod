@@ -5,7 +5,7 @@ use std::{
     io::{BufReader, Read, Seek, SeekFrom},
 };
 
-use io_ext::ReaderExt;
+use ltk_io_ext::ReaderExt;
 
 use crate::{
     chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},

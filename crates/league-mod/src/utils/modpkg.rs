@@ -1,5 +1,5 @@
-use league_modpkg::{ModpkgAuthor, ModpkgLicense};
-use mod_project::{ModProjectAuthor, ModProjectLicense};
+use ltk_mod_project::{ModProjectAuthor, ModProjectLicense};
+use ltk_modpkg::{ModpkgAuthor, ModpkgLicense};
 
 pub fn convert_project_author(author: &ModProjectAuthor) -> ModpkgAuthor {
     match author {

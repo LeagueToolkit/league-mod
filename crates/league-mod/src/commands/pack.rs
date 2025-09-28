@@ -4,15 +4,15 @@ use crate::{
     utils::{self, validate_mod_name, validate_version_format},
 };
 use colored::Colorize;
-use fantome::pack_to_fantome;
 use image::ImageFormat;
-use league_modpkg::{
+use ltk_fantome::pack_to_fantome;
+use ltk_mod_project::{ModProject, ModProjectLayer};
+use ltk_modpkg::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     utils::hash_layer_name,
     ModpkgCompression, ModpkgMetadata, README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
 };
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
-use mod_project::{ModProject, ModProjectLayer};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;

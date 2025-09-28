@@ -4,8 +4,8 @@ use std::{
 };
 
 use colored::Colorize;
+use ltk_mod_project::{ModProject, ModProjectAuthor};
 use miette::IntoDiagnostic;
-use mod_project::{ModProject, ModProjectAuthor};
 
 use crate::println_pad;
 use crate::utils::{is_valid_slug, validate_mod_name};
@@ -100,7 +100,7 @@ fn create_default_mod_project(name: Option<String>, display_name: Option<String>
         authors: vec![ModProjectAuthor::Name("<Your Name>".to_string())],
         license: None,
         transformers: vec![],
-        layers: mod_project::default_layers(),
+        layers: ltk_mod_project::default_layers(),
         thumbnail: None,
     }
 }

@@ -2,7 +2,7 @@ use std::fs::File;
 
 use crate::println_pad;
 use colored::Colorize;
-use league_modpkg::Modpkg;
+use ltk_modpkg::Modpkg;
 use miette::IntoDiagnostic;
 
 pub struct InfoModPackageArgs {

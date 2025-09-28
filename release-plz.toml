@@ -1,55 +1,35 @@
 [workspace]
-# Skip cargo publishing since we only need GitHub releases for winget distribution
-publish = false
-# Generate changelogs using conventional commits
+release_always = false
 changelog_update = true
-# Create git tags for releases
 git_tag_enable = true
-# Create GitHub releases
 git_release_enable = true
-# Create draft release PRs that update with new changes
 pr_draft = true
-# Create draft GitHub releases for review before publishing
-git_release_draft = true
-# Git tag name format
-git_tag_name = "v{{ version }}"
-# Release name format  
-git_release_name = "Release {{ version }}"
-# Include changelog in GitHub release body
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_name = "{{ package }} v{{ version }}"
 git_release_body = "{{ changelog }}"
+changelog_path = "./CHANGELOG.md"
 
 [[package]]
 name = "league-mod"
-# Skip cargo publishing for this package
 publish = false
-# Enable changelog generation
 changelog_update = true
-# Use root changelog path
-changelog_path = "CHANGELOG.md"
 
 [[package]]
-name = "fantome"
-# Skip cargo publishing for this package
-publish = false
-# Disable changelog generation for this crate
-changelog_update = false
+name = "ltk_fantome"
+publish = true
+changelog_update = true
 
 [[package]]
-name = "league-modpkg"
-# Skip cargo publishing for this package
-publish = false
-# Disable changelog generation for this crate
-changelog_update = false
+name = "ltk_modpkg"
+publish = true
+changelog_update = true
 
 [[package]]
-name = "mod-project"
-# Skip cargo publishing for this package
-publish = false
-# Disable changelog generation for this crate
-changelog_update = false
+name = "ltk_mod_project"
+publish = true
+changelog_update = true
 
 [changelog]
-# Header for the changelog
 header = """
 # Changelog
 
