@@ -1,4 +1,6 @@
-use clap::{Parser, Subcommand};
+use clap::builder::{styling::AnsiColor, Styles};
+use clap::ColorChoice;
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use commands::{
     extract_mod_package, info_mod_package, init_mod_project, pack_mod_project,
     ExtractModPackageArgs, InfoModPackageArgs, InitModProjectArgs, PackFormat, PackModProjectArgs,
@@ -61,8 +63,24 @@ pub enum Commands {
     },
 }
 
+fn parse_args() -> Args {
+    // Configure colored/styled help output
+    let styles = Styles::styled()
+        .header(AnsiColor::Yellow.on_default().bold())
+        .usage(AnsiColor::Green.on_default().bold())
+        .literal(AnsiColor::Cyan.on_default())
+        .placeholder(AnsiColor::Blue.on_default());
+
+    let matches = Args::command()
+        .styles(styles)
+        .color(ColorChoice::Auto)
+        .get_matches();
+
+    Args::from_arg_matches(&matches).expect("failed to parse arguments")
+}
+
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let args = parse_args();
 
     match args.command {
         Commands::Init {
