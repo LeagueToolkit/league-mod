@@ -15,7 +15,7 @@ param(
 Write-Host "Updating winget manifests for version $Version" -ForegroundColor Green
 
 # Create new version directory
-$versionDir = "manifests/LeagueToolkit/LeagueMod/$Version"
+$versionDir = "winget/manifests/LeagueToolkit/LeagueMod/$Version"
 if (!(Test-Path $versionDir)) {
     New-Item -ItemType Directory -Path $versionDir -Force
     Write-Host "Created directory: $versionDir" -ForegroundColor Yellow
