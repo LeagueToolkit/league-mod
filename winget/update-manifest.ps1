@@ -43,7 +43,6 @@ Platform:
 - Windows.Desktop
 MinimumOSVersion: 10.0.0.0
 InstallerType: zip
-Scope: user
 InstallModes:
 - interactive
 - silent
