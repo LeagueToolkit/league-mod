@@ -41,6 +41,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_modpkg-v0.1.0) - 2025-09-28
 
+### Added
+
+- add initial winget stuff
+
+### Fixed
+
+- typo
+
+### Other
+
+- update Cargo.toml files for pkgs with metadata
+- prepare repo for crates releases
+- add ci workflow
+- add release-plz
+- add readme
+
+## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_fantome-v0.1.0) - 2025-09-28
+
+### Added
+
+- add initial winget stuff
+
+### Fixed
+
+- typo
+
+### Other
+
+- update Cargo.toml files for pkgs with metadata
+- prepare repo for crates releases
+- add ci workflow
+- add release-plz
+- add readme
+
+## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_mod_project-v0.1.0) - 2025-09-28
+
+### Added
+
+- add initial winget stuff
+
+### Fixed
+
+- typo
+
+### Other
+
+- update Cargo.toml files for pkgs with metadata
+- prepare repo for crates releases
+- add ci workflow
+- add release-plz
+- add readme
+
+## [0.1.1](https://github.com/LeagueToolkit/league-mod/releases/tag/league-mod-v0.1.1) - 2025-09-28
+
+### Added
+
+- improve cli command and use miette
+- add initial winget stuff
+- add support for packing to fantome
+- add option to specify thumbnail in mod project config
+
+### Fixed
+
+- pack readme and thumbnail into modpkg
+- fmt
+- pad println output
+- skip base layer conditionally
+- layer presence lookup
+- base skip
+- error if explicit base layer
+- typo
+
+### Other
+
+- bump league-mod version to 0.1.1
+- prepare repo for crates releases
+- remove comments
+- fix checks
+- fix deny licenses
+- add ci workflow
+- add release-plz
+- add readme
+- move existing mod crates
+
+## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_modpkg-v0.1.0) - 2025-09-28
+
 ### Other
 
 - prepare repo for crates releases
