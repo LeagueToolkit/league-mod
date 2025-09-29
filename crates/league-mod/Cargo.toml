@@ -1,6 +1,6 @@
 [package]
 name = "league-mod"
-version = "0.1.1"
+version = "0.0.1"
 edition = "2021"
 description = "A comprehensive toolkit for creating, managing, and distributing League of Legends mods"
 license = "AGPL-3.0-only"
@@ -33,3 +33,9 @@ image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
 ] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
+serde = { version = "1.0", features = ["derive"] }

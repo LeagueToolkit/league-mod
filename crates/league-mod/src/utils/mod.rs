@@ -2,7 +2,9 @@ use crate::errors::CliError;
 use miette::Result;
 use regex::Regex;
 
+pub mod config;
 pub mod modpkg;
+pub mod update;
 
 #[macro_export]
 macro_rules! println_pad {
@@ -36,6 +38,26 @@ pub fn validate_version_format(version: impl AsRef<str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Prints the provided lines inside an ASCII box
+pub fn print_ansi_boxed_lines(lines: &[String]) {
+    let ansi = Regex::new("\x1b\\[[0-9;]*m").unwrap();
+    let visible_len = |s: &str| ansi.replace_all(s, "").chars().count();
+
+    let width = lines
+        .iter()
+        .map(|s| visible_len(s.as_str()))
+        .max()
+        .unwrap_or(0);
+
+    let border = "-".repeat(width + 4);
+    println_pad!("{}", border);
+    for line in lines {
+        let pad = width - visible_len(line.as_str());
+        println_pad!("| {}{} |", line, " ".repeat(pad));
+    }
+    println_pad!("{}", border);
 }
 
 #[cfg(test)]
