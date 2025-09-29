@@ -1,4 +1,5 @@
 use crate::println_pad;
+use crate::transformers::{plan_transforms, TransformPlan};
 use crate::{
     errors::CliError,
     utils::{self, validate_mod_name, validate_version_format},
@@ -78,10 +79,14 @@ fn pack_to_modpkg(
     let mut chunk_filepaths = HashMap::new();
 
     modpkg_builder = build_metadata(modpkg_builder, &mod_project);
+    // Plan file transforms (barebones planner - no execution yet)
+    let transform_plan = plan_transforms(&mod_project, &content_dir);
+
     modpkg_builder = build_layers(
         modpkg_builder,
         &content_dir,
         &mod_project,
+        &transform_plan,
         &mut chunk_filepaths,
     )?;
 
@@ -409,6 +414,7 @@ fn build_layers(
     mut modpkg_builder: ModpkgBuilder,
     content_dir: &Path,
     mod_project: &ModProject,
+    transform_plan: &TransformPlan,
     chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
 ) -> Result<ModpkgBuilder> {
     // Process base layer
@@ -416,6 +422,7 @@ fn build_layers(
         modpkg_builder,
         content_dir,
         &ModProjectLayer::base(),
+        transform_plan,
         chunk_filepaths,
     )?;
 
@@ -432,7 +439,13 @@ fn build_layers(
         );
         modpkg_builder = modpkg_builder
             .with_layer(ModpkgLayerBuilder::new(layer.name.as_str()).with_priority(layer.priority));
-        modpkg_builder = build_layer_from_dir(modpkg_builder, content_dir, layer, chunk_filepaths)?;
+        modpkg_builder = build_layer_from_dir(
+            modpkg_builder,
+            content_dir,
+            layer,
+            transform_plan,
+            chunk_filepaths,
+        )?;
     }
 
     Ok(modpkg_builder)
@@ -442,6 +455,7 @@ fn build_layer_from_dir(
     mut modpkg_builder: ModpkgBuilder,
     content_dir: &Path,
     layer: &ModProjectLayer,
+    transform_plan: &TransformPlan,
     chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
 ) -> Result<ModpkgBuilder> {
     let layer_dir = content_dir.join(layer.name.as_str());
@@ -454,6 +468,13 @@ fn build_layer_from_dir(
             continue;
         }
 
+        // Skip files that are transformer inputs for this layer
+        if let Some(layer_plan) = transform_plan.get(layer.name.as_str()) {
+            if layer_plan.excluded_inputs.contains(&entry) {
+                continue;
+            }
+        }
+
         let layer_hash = hash_layer_name(layer.name.as_str());
         let (modpkg_builder_new, path_hash) =
             build_chunk_from_file(modpkg_builder, layer, &entry, &layer_dir)?;
@@ -463,6 +484,24 @@ fn build_layer_from_dir(
             .or_insert(entry);
 
         modpkg_builder = modpkg_builder_new;
+    }
+
+    // Ensure expected outputs are included if they already exist on disk
+    if let Some(layer_plan) = transform_plan.get(layer.name.as_str()) {
+        for output_path in &layer_plan.expected_outputs {
+            if output_path.exists() && output_path.is_file() {
+                let (builder2, _hash) =
+                    build_chunk_from_file(modpkg_builder, layer, output_path, &layer_dir)?;
+                modpkg_builder = builder2;
+            } else {
+                // Warn (non-fatal) for missing expected outputs
+                println_pad!(
+                    "{} {}",
+                    "⚠️  Missing expected transformed output:".bright_yellow(),
+                    output_path.display().to_string().bright_white().bold()
+                );
+            }
+        }
     }
 
     Ok(modpkg_builder)
