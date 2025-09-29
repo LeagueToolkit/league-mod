@@ -128,12 +128,13 @@ jobs:
           append_body: true
           body: |
 
-            ### Windows Installation
+            ### Windows (Recommended)
 
-            **Via winget (Windows Package Manager):**
+            **Quick install (PowerShell, no admin):**
             ```powershell
-            winget install LeagueToolkit.LeagueMod
+            irm https://raw.githubusercontent.com/LeagueToolkit/league-mod/main/scripts/install-league-mod.ps1 | iex
             ```
+            This downloads the latest release, installs it to `%LOCALAPPDATA%\LeagueToolkit\league-mod`, and adds it to your user `PATH`.
 
             **Manual Installation:**
             1. Download the ZIP file below

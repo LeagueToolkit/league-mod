@@ -12,11 +12,6 @@ irm https://raw.githubusercontent.com/LeagueToolkit/league-mod/main/scripts/inst
 ```
 This downloads the latest release, installs it to `%LOCALAPPDATA%\LeagueToolkit\league-mod`, and adds it to your user `PATH`.
 
-**Via winget (Windows Package Manager):**
-```powershell
-winget install LeagueToolkit.LeagueMod
-```
-
 **Via GitHub Releases:**
 1. Download the latest release from [GitHub Releases](https://github.com/LeagueToolkit/league-mod/releases)
 2. Extract the ZIP file to your preferred location
@@ -60,27 +55,25 @@ league-mod extract --file-path ./my-mod.modpkg --output-dir ./extracted
 league-mod info --file-path ./my-mod.modpkg
 ```
 
-### `league-modpkg` - Binary Format Library
+### `ltk_modpkg` - Binary Format Library
 
-A robust library for reading, writing, and manipulating the modpkg binary format.
+Library for reading, writing, and manipulating the modpkg binary format.
 
 **Features:**
-- Binary serialization/deserialization with `binrw`
-- Zstd compression for efficient storage
+- Reading and Writing
+- Zstd compression
 - Layer-based file organization
-- Hash-based file lookup for performance
 - Chunk-based data storage with metadata
 
-### `mod-project` - Configuration Library
+### `ltk_mod_project` - Configuration Library
 
 Handles mod project configuration files and metadata structures.
 
 **Features:**
-- Serde-based JSON/TOML serialization
-- Layer configuration with priority system
-- Author and license metadata
+- JSON/TOML config support
+- Layer system
+- Author, license, readme and distribution metadata
 - File transformer configuration
-- Validation and schema support
 
 **Configuration Example:**
 ```json
@@ -136,21 +129,6 @@ my-mod/
 └── README.md                 # Project documentation/description
 ```
 
-### Building from Source
-
-**Prerequisites:**
-- Rust 1.70+ (2021 edition)
-- Git
-
-**Build steps:**
-```bash
-git clone https://github.com/LeagueToolkit/league-mod.git
-cd league-mod
-cargo build --release
-```
-
-The compiled binary will be available at `target/release/league-mod.exe`
-
 ## 📖 Quick Start
 
 ### 1. Create a New Mod Project
@@ -162,8 +140,8 @@ league-mod init
 ### 2. Add Your Content
 Place your mod files in the appropriate layer directories:
 ```bash
-my-mod/content/base/data/characters/annie/annie.bin
-my-mod/content/base/assets/characters/annie/annie.dds
+reworked-aatrox/content/base/data/characters/aatrox/skins/skin0.bin
+reworked-aatrox/content/base/assets/characters/aatrox/skins/base/aatrox_base_tx_cm.tex
 ```
 
 ### 3. Configure Your Mod
@@ -171,16 +149,15 @@ Edit `mod.config.json` to add metadata, authors, and configure layers:
 
 ```json
 {
-  "name": "annie-rework",
-  "display_name": "Annie Visual Rework",
+  "name": "aatrox-rework",
+  "display_name": "Aatrox Visual Rework",
   "version": "1.0.0",
-  "description": "A complete visual overhaul for Annie",
-  "authors": ["YourName"],
+  "description": "A complete visual overhaul for Aatrox",
+  "authors": ["Your Name"],
   "layers": [
     {
       "name": "base",
       "priority": 0,
-      "description": "Core Annie modifications"
     }
   ]
 }
@@ -189,7 +166,7 @@ Edit `mod.config.json` to add metadata, authors, and configure layers:
 ### 4. Pack Your Mod
 ```bash
 league-mod pack
-# Creates annie-rework_1.0.0.modpkg in the build/ directory
+# Creates aatrox-rework_1.0.0.modpkg in the build/ directory
 ```
 
 ## 🔄 Layer System
@@ -243,7 +220,20 @@ Transformers allow preprocessing of files during the packing process:
   ]
 }
 ```
+## Building from Source
 
+**Prerequisites:**
+- Rust 1.70+ (2021 edition)
+- Git
+
+**Build steps:**
+```bash
+git clone https://github.com/LeagueToolkit/league-mod.git
+cd league-mod
+cargo build --release
+```
+
+The compiled binary will be available at `target/release/league-mod.exe`
 
 ## 📜 License
 

@@ -80,6 +80,8 @@ fn parse_args() -> Args {
 }
 
 fn main() -> Result<()> {
+    utils::update::check_for_update_blocking();
+
     let args = parse_args();
 
     match args.command {
