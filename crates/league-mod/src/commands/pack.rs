@@ -299,7 +299,7 @@ fn resolve_config_path(config_path: Option<String>) -> Result<Utf8PathBuf> {
         None => {
             let cwd = std::env::current_dir().into_diagnostic()?;
             resolve_correct_config_extension(
-                &Utf8Path::from_path(&cwd).expect("cwd must be valid UTF-8"),
+                Utf8Path::from_path(&cwd).expect("cwd must be valid UTF-8"),
             )
         }
     }
