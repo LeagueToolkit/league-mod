@@ -1,8 +1,10 @@
 use crate::println_pad;
+use crate::transformers::{plan_transforms, TransformPlan};
 use crate::{
     errors::CliError,
     utils::{self, validate_mod_name, validate_version_format},
 };
+use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use image::ImageFormat;
 use ltk_fantome::pack_to_fantome;
@@ -13,7 +15,6 @@ use ltk_modpkg::{
     ModpkgCompression, ModpkgMetadata, README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
 };
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::io::Cursor;
@@ -21,7 +22,6 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufWriter, Read, Write},
-    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -53,11 +53,11 @@ pub fn pack_mod_project(args: PackModProjectArgs) -> Result<()> {
 
 fn pack_to_modpkg(
     args: PackModProjectArgs,
-    config_path: PathBuf,
+    config_path: Utf8PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
     let content_dir = resolve_content_dir(&config_path)?;
-    let project_root = config_path.parent().unwrap().to_path_buf();
+    let project_root = config_path.parent().unwrap();
 
     validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
 
@@ -70,7 +70,7 @@ fn pack_to_modpkg(
     let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
 
     if !output_dir.exists() {
-        println_pad!("Creating output directory: {}", output_dir.display());
+        println_pad!("Creating output directory: {}", output_dir.as_str());
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
@@ -78,14 +78,18 @@ fn pack_to_modpkg(
     let mut chunk_filepaths = HashMap::new();
 
     modpkg_builder = build_metadata(modpkg_builder, &mod_project);
+    // Plan file transforms (barebones planner - no execution yet)
+    let transform_plan = plan_transforms(&mod_project, &content_dir);
+
     modpkg_builder = build_layers(
         modpkg_builder,
         &content_dir,
         &mod_project,
+        &transform_plan,
         &mut chunk_filepaths,
     )?;
 
-    modpkg_builder = add_meta_chunks(modpkg_builder, &project_root, &mod_project)?;
+    modpkg_builder = add_meta_chunks(modpkg_builder, project_root, &mod_project)?;
 
     let modpkg_file_name = create_modpkg_file_name(&mod_project, args.file_name);
     let mut writer =
@@ -96,7 +100,7 @@ fn pack_to_modpkg(
             write_chunk_payload(
                 chunk_builder,
                 cursor,
-                &project_root,
+                project_root,
                 &mod_project,
                 &chunk_filepaths,
             )
@@ -110,8 +114,7 @@ fn pack_to_modpkg(
         "Path:".bright_green(),
         output_dir
             .join(modpkg_file_name)
-            .display()
-            .to_string()
+            .as_str()
             .bright_white()
             .bold()
     );
@@ -121,7 +124,7 @@ fn pack_to_modpkg(
 
 fn add_meta_chunks(
     mut builder: ModpkgBuilder,
-    project_root: &Path,
+    project_root: &Utf8Path,
     mod_project: &ModProject,
 ) -> Result<ModpkgBuilder> {
     // README.md as meta chunk (no layer/wad) - optional
@@ -154,7 +157,10 @@ fn add_meta_chunks(
     Ok(builder)
 }
 
-fn write_meta_chunk_readme(cursor: &mut Cursor<Vec<u8>>, project_root: &Path) -> io::Result<()> {
+fn write_meta_chunk_readme(
+    cursor: &mut Cursor<Vec<u8>>,
+    project_root: &Utf8Path,
+) -> io::Result<()> {
     let readme_path = project_root.join("README.md");
     if readme_path.exists() {
         let data = fs::read(readme_path)?;
@@ -165,7 +171,7 @@ fn write_meta_chunk_readme(cursor: &mut Cursor<Vec<u8>>, project_root: &Path) ->
 
 fn write_meta_chunk_thumbnail(
     cursor: &mut Cursor<Vec<u8>>,
-    project_root: &Path,
+    project_root: &Utf8Path,
     mod_project: &ModProject,
 ) -> io::Result<()> {
     // Use configured path if present; otherwise fall back to project_root/thumbnail.webp
@@ -180,7 +186,6 @@ fn write_meta_chunk_thumbnail(
 
     let is_webp = thumbnail_path
         .extension()
-        .and_then(OsStr::to_str)
         .map(|ext| ext.eq_ignore_ascii_case("webp"))
         .unwrap_or(false);
 
@@ -200,7 +205,7 @@ fn write_meta_chunk_thumbnail(
 
 fn pack_to_fantome_format(
     args: PackModProjectArgs,
-    config_path: PathBuf,
+    config_path: Utf8PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
     println_pad!(
@@ -221,7 +226,7 @@ fn pack_to_fantome_format(
         println_pad!(
             "{} {}",
             "📁 Creating output directory:".bright_yellow(),
-            output_dir.display().to_string().bright_white().bold()
+            output_dir.as_str().bright_white().bold()
         );
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
@@ -241,7 +246,7 @@ fn pack_to_fantome_format(
             .bright_green()
             .bold(),
         "Path:".bright_green(),
-        output_path.display().to_string().bright_white().bold()
+        output_path.as_str().bright_white().bold()
     );
 
     Ok(())
@@ -288,17 +293,19 @@ fn warn_about_unsupported_layers(mod_project: &ModProject) {
 
 // Config utils
 
-fn resolve_config_path(config_path: Option<String>) -> Result<PathBuf> {
+fn resolve_config_path(config_path: Option<String>) -> Result<Utf8PathBuf> {
     match config_path {
-        Some(path) => Ok(PathBuf::from(path)),
+        Some(path) => Ok(Utf8PathBuf::from(path)),
         None => {
             let cwd = std::env::current_dir().into_diagnostic()?;
-            resolve_correct_config_extension(&cwd)
+            resolve_correct_config_extension(
+                Utf8Path::from_path(&cwd).expect("cwd must be valid UTF-8"),
+            )
         }
     }
 }
 
-fn resolve_correct_config_extension(project_dir: &Path) -> Result<PathBuf> {
+fn resolve_correct_config_extension(project_dir: &Utf8Path) -> Result<Utf8PathBuf> {
     // JSON first, then TOML
     let config_extensions = ["json", "toml"];
 
@@ -312,34 +319,26 @@ fn resolve_correct_config_extension(project_dir: &Path) -> Result<PathBuf> {
     Err(CliError::config_not_found(project_dir.to_owned()).into())
 }
 
-fn load_config(config_path: &Path) -> Result<ModProject> {
+fn load_config(config_path: &Utf8Path) -> Result<ModProject> {
     let config_extension = config_path.extension().unwrap_or_default();
 
-    match config_extension.to_str() {
-        Some("json") => {
-            let file = File::open(config_path).into_diagnostic().with_context(|| {
-                format!("Failed to open config file: {}", config_path.display())
-            })?;
+    match config_extension {
+        "json" => {
+            let file = File::open(config_path)
+                .into_diagnostic()
+                .with_context(|| format!("Failed to open config file: {}", config_path.as_str()))?;
             serde_json::from_reader(file)
                 .into_diagnostic()
                 .with_context(|| {
-                    format!(
-                        "Failed to parse JSON config file: {}",
-                        config_path.display()
-                    )
+                    format!("Failed to parse JSON config file: {}", config_path.as_str())
                 })
         }
-        Some("toml") => {
+        "toml" => {
             let content = std::fs::read_to_string(config_path)
                 .into_diagnostic()
-                .with_context(|| {
-                    format!("Failed to read config file: {}", config_path.display())
-                })?;
+                .with_context(|| format!("Failed to read config file: {}", config_path.as_str()))?;
             toml::from_str(&content).into_diagnostic().with_context(|| {
-                format!(
-                    "Failed to parse TOML config file: {}",
-                    config_path.display()
-                )
+                format!("Failed to parse TOML config file: {}", config_path.as_str())
             })
         }
         _ => Err(miette!(
@@ -348,12 +347,12 @@ fn load_config(config_path: &Path) -> Result<ModProject> {
     }
 }
 
-fn resolve_content_dir(config_path: &Path) -> Result<PathBuf> {
+fn resolve_content_dir(config_path: &Utf8Path) -> Result<Utf8PathBuf> {
     Ok(config_path.parent().unwrap().join("content"))
 }
 
-fn resolve_output_dir(output_dir: &str, config_path: &Path) -> Result<PathBuf> {
-    let output_dir = PathBuf::from(output_dir);
+fn resolve_output_dir(output_dir: &str, config_path: &Utf8Path) -> Result<Utf8PathBuf> {
+    let output_dir = Utf8PathBuf::from(output_dir);
     let output_dir = match output_dir.is_absolute() {
         true => output_dir,
         false => config_path.parent().unwrap().join(output_dir),
@@ -363,7 +362,7 @@ fn resolve_output_dir(output_dir: &str, config_path: &Path) -> Result<PathBuf> {
 
 // Layer utils
 
-fn validate_layer_presence(mod_project: &ModProject, mod_project_dir: &Path) -> Result<()> {
+fn validate_layer_presence(mod_project: &ModProject, mod_project_dir: &Utf8Path) -> Result<()> {
     for layer in &mod_project.layers {
         if !utils::is_valid_slug(&layer.name) {
             return Err(CliError::invalid_layer_name(layer.name.clone(), None).into());
@@ -380,7 +379,7 @@ fn validate_layer_presence(mod_project: &ModProject, mod_project_dir: &Path) -> 
     Ok(())
 }
 
-fn validate_layer_dir_presence(mod_project_dir: &Path, layer_name: &str) -> Result<()> {
+fn validate_layer_dir_presence(mod_project_dir: &Utf8Path, layer_name: &str) -> Result<()> {
     let layer_dir = mod_project_dir.join("content").join(layer_name);
     if !layer_dir.exists() {
         return Err(CliError::layer_directory_missing(layer_name.to_string(), layer_dir).into());
@@ -407,15 +406,17 @@ fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> ModpkgBui
 
 fn build_layers(
     mut modpkg_builder: ModpkgBuilder,
-    content_dir: &Path,
+    content_dir: &Utf8Path,
     mod_project: &ModProject,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
+    transform_plan: &TransformPlan,
+    chunk_filepaths: &mut HashMap<(u64, u64), Utf8PathBuf>,
 ) -> Result<ModpkgBuilder> {
     // Process base layer
     modpkg_builder = build_layer_from_dir(
         modpkg_builder,
         content_dir,
         &ModProjectLayer::base(),
+        transform_plan,
         chunk_filepaths,
     )?;
 
@@ -432,7 +433,13 @@ fn build_layers(
         );
         modpkg_builder = modpkg_builder
             .with_layer(ModpkgLayerBuilder::new(layer.name.as_str()).with_priority(layer.priority));
-        modpkg_builder = build_layer_from_dir(modpkg_builder, content_dir, layer, chunk_filepaths)?;
+        modpkg_builder = build_layer_from_dir(
+            modpkg_builder,
+            content_dir,
+            layer,
+            transform_plan,
+            chunk_filepaths,
+        )?;
     }
 
     Ok(modpkg_builder)
@@ -440,29 +447,57 @@ fn build_layers(
 
 fn build_layer_from_dir(
     mut modpkg_builder: ModpkgBuilder,
-    content_dir: &Path,
+    content_dir: &Utf8Path,
     layer: &ModProjectLayer,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
+    transform_plan: &TransformPlan,
+    chunk_filepaths: &mut HashMap<(u64, u64), Utf8PathBuf>,
 ) -> Result<ModpkgBuilder> {
     let layer_dir = content_dir.join(layer.name.as_str());
 
-    for entry in glob::glob(layer_dir.join("**/*").to_str().unwrap())
+    for entry in glob::glob(layer_dir.join("**/*").as_str())
         .into_diagnostic()?
         .filter_map(Result::ok)
     {
+        let entry = Utf8Path::from_path(&entry).expect("entry must be valid UTF-8");
+
         if !entry.is_file() {
             continue;
         }
 
+        // Skip files that are transformer inputs for this layer
+        if let Some(layer_plan) = transform_plan.get(layer.name.as_str()) {
+            if layer_plan.excluded_inputs.contains(entry) {
+                continue;
+            }
+        }
+
         let layer_hash = hash_layer_name(layer.name.as_str());
         let (modpkg_builder_new, path_hash) =
-            build_chunk_from_file(modpkg_builder, layer, &entry, &layer_dir)?;
+            build_chunk_from_file(modpkg_builder, layer, entry, &layer_dir)?;
 
         chunk_filepaths
             .entry((path_hash, layer_hash))
-            .or_insert(entry);
+            .or_insert(entry.to_path_buf());
 
         modpkg_builder = modpkg_builder_new;
+    }
+
+    // Ensure expected outputs are included if they already exist on disk
+    if let Some(layer_plan) = transform_plan.get(layer.name.as_str()) {
+        for output_path in &layer_plan.expected_outputs {
+            if output_path.exists() && output_path.is_file() {
+                let (builder2, _hash) =
+                    build_chunk_from_file(modpkg_builder, layer, output_path, &layer_dir)?;
+                modpkg_builder = builder2;
+            } else {
+                // Warn (non-fatal) for missing expected outputs
+                println_pad!(
+                    "{} {}",
+                    "⚠️  Missing expected transformed output:".bright_yellow(),
+                    output_path.as_str().bright_white().bold()
+                );
+            }
+        }
     }
 
     Ok(modpkg_builder)
@@ -471,12 +506,12 @@ fn build_layer_from_dir(
 fn build_chunk_from_file(
     modpkg_builder: ModpkgBuilder,
     layer: &ModProjectLayer,
-    file_path: &Path,
-    layer_dir: &Path,
+    file_path: &Utf8Path,
+    layer_dir: &Utf8Path,
 ) -> Result<(ModpkgBuilder, u64)> {
     let relative_path = file_path.strip_prefix(layer_dir).into_diagnostic()?;
     let chunk_builder = ModpkgChunkBuilder::new()
-        .with_path(relative_path.to_str().unwrap())
+        .with_path(relative_path.as_str())
         .into_diagnostic()?
         .with_compression(ModpkgCompression::Zstd)
         .with_layer(layer.name.as_str());
@@ -520,9 +555,9 @@ fn create_fantome_file_name(mod_project: &ModProject, custom_name: Option<String
 fn write_chunk_payload(
     chunk_builder: &ModpkgChunkBuilder,
     cursor: &mut Cursor<Vec<u8>>,
-    project_root: &Path,
+    project_root: &Utf8Path,
     mod_project: &ModProject,
-    chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
+    chunk_filepaths: &HashMap<(u64, u64), Utf8PathBuf>,
 ) -> io::Result<()> {
     // Handle meta chunks specially (no layer/wad)
     if chunk_builder.layer().is_empty() {

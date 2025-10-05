@@ -9,6 +9,7 @@ use miette::Result;
 
 mod commands;
 mod errors;
+mod transformers;
 mod utils;
 
 #[derive(Parser, Debug)]

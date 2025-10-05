@@ -1,10 +1,10 @@
+use camino::Utf8Path;
 use eyre::Result;
 use image::ImageFormat;
 use ltk_mod_project::{ModProject, ModProjectAuthor};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, read_dir};
 use std::io::Write;
-use std::path::Path;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
 /// Fantome metadata structure that goes into info.json
@@ -24,7 +24,7 @@ pub struct FantomeInfo {
 pub fn pack_to_fantome<W: Write + std::io::Seek>(
     writer: W,
     mod_project: &ModProject,
-    project_root: &Path,
+    project_root: &Utf8Path,
 ) -> Result<()> {
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -43,7 +43,7 @@ pub fn pack_to_fantome<W: Write + std::io::Seek>(
 
 fn pack_base_layer<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    project_root: &Path,
+    project_root: &Utf8Path,
     options: &SimpleFileOptions,
 ) -> Result<()> {
     let base_layer_path = project_root.join("content").join("base");
@@ -51,24 +51,18 @@ fn pack_base_layer<W: Write + std::io::Seek>(
     if !base_layer_path.exists() {
         return Err(eyre::eyre!(
             "Base layer directory does not exist: {}",
-            base_layer_path.display()
+            base_layer_path.as_str()
         ));
     }
 
     // Iterate through all .wad.client directories in the base layer
-    for entry in read_dir(&base_layer_path)? {
-        let entry = entry?;
+    for entry in read_dir(&base_layer_path)?.flatten() {
         let path = entry.path();
+        let path = Utf8Path::from_path(&path).expect("path must be valid UTF-8");
+        let file_name = path.file_name().expect("File must have a name");
 
-        if path.is_dir()
-            && path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with(".wad.client")
-        {
-            let wad_name = path.file_name().unwrap().to_string_lossy();
-            pack_wad_directory(zip, &path, &format!("WAD/{}", wad_name), options)?;
+        if path.is_dir() && file_name.ends_with(".wad.client") {
+            pack_wad_directory(zip, path, &format!("WAD/{}", file_name), options)?;
         }
     }
 
@@ -77,7 +71,7 @@ fn pack_base_layer<W: Write + std::io::Seek>(
 
 fn pack_wad_directory<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    wad_dir: &Path,
+    wad_dir: &Utf8Path,
     zip_prefix: &str,
     options: &SimpleFileOptions,
 ) -> Result<()> {
@@ -105,7 +99,7 @@ fn pack_wad_directory<W: Write + std::io::Seek>(
 fn pack_metadata<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
     mod_project: &ModProject,
-    project_root: &Path,
+    project_root: &Utf8Path,
     options: &SimpleFileOptions,
 ) -> Result<()> {
     // Create info.json
@@ -140,7 +134,7 @@ fn pack_metadata<W: Write + std::io::Seek>(
 
 fn pack_image<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    image_path: &Path,
+    image_path: &Utf8Path,
     options: &SimpleFileOptions,
 ) -> Result<()> {
     let img = image::open(image_path)?;
