@@ -1,5 +1,5 @@
+use camino::Utf8PathBuf;
 use miette::{Diagnostic, SourceSpan};
-use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug, Diagnostic)]
@@ -9,7 +9,7 @@ pub enum CliError {
         code(config::not_found),
         help("Create a mod.config.json or mod.config.toml file in your project directory")
     )]
-    ConfigNotFound { search_path: PathBuf },
+    ConfigNotFound { search_path: Utf8PathBuf },
 
     #[error("Invalid layer name: {name}")]
     #[diagnostic(
@@ -29,7 +29,7 @@ pub enum CliError {
     )]
     LayerDirectoryMissing {
         layer_name: String,
-        expected_path: PathBuf,
+        expected_path: Utf8PathBuf,
     },
 
     #[error("Invalid mod name: {name}")]
@@ -71,7 +71,7 @@ pub enum CliError {
         code(file::not_found),
         help("Make sure the file exists and the path is correct")
     )]
-    FileNotFound { path: PathBuf },
+    FileNotFound { path: Utf8PathBuf },
 
     #[error("Directory creation failed")]
     #[diagnostic(
@@ -79,7 +79,7 @@ pub enum CliError {
         help("Check file permissions and available disk space")
     )]
     DirectoryCreationFailed {
-        path: PathBuf,
+        path: Utf8PathBuf,
         #[source]
         source: std::io::Error,
     },
@@ -100,7 +100,7 @@ pub enum CliError {
 }
 
 impl CliError {
-    pub fn config_not_found(search_path: PathBuf) -> Self {
+    pub fn config_not_found(search_path: Utf8PathBuf) -> Self {
         Self::ConfigNotFound { search_path }
     }
 
@@ -108,7 +108,7 @@ impl CliError {
         Self::InvalidLayerName { name, span }
     }
 
-    pub fn layer_directory_missing(layer_name: String, expected_path: PathBuf) -> Self {
+    pub fn layer_directory_missing(layer_name: String, expected_path: Utf8PathBuf) -> Self {
         Self::LayerDirectoryMissing {
             layer_name,
             expected_path,
@@ -132,12 +132,12 @@ impl CliError {
     }
 
     #[allow(unused)]
-    pub fn file_not_found(path: PathBuf) -> Self {
+    pub fn file_not_found(path: Utf8PathBuf) -> Self {
         Self::FileNotFound { path }
     }
 
     #[allow(unused)]
-    pub fn directory_creation_failed(path: PathBuf, source: std::io::Error) -> Self {
+    pub fn directory_creation_failed(path: Utf8PathBuf, source: std::io::Error) -> Self {
         Self::DirectoryCreationFailed { path, source }
     }
 
