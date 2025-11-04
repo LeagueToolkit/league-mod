@@ -16,6 +16,7 @@ unmaintained = "workspace"
 yanked = "warn"
 ignore = [
     # Add any specific advisories you want to ignore here
+    "RUSTSEC-2023-0071", # Marvin Attack: timing sidechannel (rsa crate)
 ]
 
 [licenses]
