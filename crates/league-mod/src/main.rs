@@ -44,6 +44,10 @@ pub enum Commands {
         /// The output format for the mod package
         #[arg(long, value_enum, default_value = "modpkg")]
         format: PackFormat,
+
+        /// Whether to sign the mod
+        #[arg(long, default_value_t = true)]
+        sign: bool,
     },
     /// Show information about a mod package
     Info {
@@ -99,11 +103,13 @@ fn main() -> Result<()> {
             file_name,
             output_dir,
             format,
+            sign,
         } => pack_mod_project(PackModProjectArgs {
             config_path,
             file_name,
             output_dir,
             format,
+            sign,
         }),
         Commands::Info { file_path } => info_mod_package(InfoModPackageArgs { file_path }),
         Commands::Extract {
