@@ -36,6 +36,7 @@ pub struct PackModProjectArgs {
     pub file_name: Option<String>,
     pub output_dir: String,
     pub format: PackFormat,
+    #[allow(dead_code)]
     pub sign: bool,
 }
 
