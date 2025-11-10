@@ -20,6 +20,9 @@ pub enum ModpkgBuilderError {
     #[error("binrw error")]
     BinWriteError(#[from] binrw::Error),
 
+    #[error("modpkg error: {0}")]
+    ModpkgError(#[from] crate::error::ModpkgError),
+
     #[error("unsupported compression type: {0:?}")]
     UnsupportedCompressionType(ModpkgCompression),
 
