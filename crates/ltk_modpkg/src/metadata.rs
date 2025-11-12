@@ -5,6 +5,53 @@ use std::io::{Read, Seek, Write};
 /// The path to the info.msgpack chunk.
 pub const METADATA_CHUNK_PATH: &str = "_meta_/info.msgpack";
 
+/// Information about the distributor site and mod ID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
+pub struct DistributorInfo {
+    /// The identifier of the distributor site (e.g., "runeforge").
+    pub site_id: String,
+    /// The display name of the distributor site (e.g., "Runeforge").
+    pub site_name: String,
+    /// The base URL of the distributor site (e.g., "https://runeforge.dev").
+    pub site_url: String,
+    /// The mod ID on the distributor site.
+    pub mod_id: String,
+}
+
+impl DistributorInfo {
+    /// Create a new distributor info.
+    pub fn new(site_id: String, site_name: String, site_url: String, mod_id: String) -> Self {
+        Self {
+            site_id,
+            site_name,
+            site_url,
+            mod_id,
+        }
+    }
+
+    /// Get the distributor site ID.
+    pub fn site_id(&self) -> &str {
+        &self.site_id
+    }
+
+    /// Get the display name of the distributor site.
+    pub fn site_name(&self) -> &str {
+        &self.site_name
+    }
+
+    /// Get the base URL of the distributor site.
+    pub fn site_url(&self) -> &str {
+        &self.site_url
+    }
+
+    /// Get the mod ID on the distributor site.
+    pub fn mod_id(&self) -> &str {
+        &self.mod_id
+    }
+}
+
 /// The metadata of a mod package.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +61,7 @@ pub struct ModpkgMetadata {
     pub display_name: String,
     pub description: Option<String>,
     pub version: String,
-    pub distributor: Option<String>,
+    pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
 }
@@ -71,9 +118,9 @@ impl ModpkgMetadata {
     pub fn version(&self) -> &str {
         &self.version
     }
-    /// Get the distributor of the mod package.
-    pub fn distributor(&self) -> Option<&str> {
-        self.distributor.as_deref()
+    /// Get the distributor info of the mod package.
+    pub fn distributor(&self) -> Option<&DistributorInfo> {
+        self.distributor.as_ref()
     }
     /// Get the authors of the mod package.
     pub fn authors(&self) -> &[ModpkgAuthor] {
@@ -138,7 +185,12 @@ mod tests {
             display_name: "test".to_string(),
             description: Some("test".to_string()),
             version: "1.0.0".to_string(),
-            distributor: Some("test".to_string()),
+            distributor: Some(DistributorInfo {
+                site_id: "test_site".to_string(),
+                site_name: "Test Site".to_string(),
+                site_url: "https://test-site.com".to_string(),
+                mod_id: "12345".to_string(),
+            }),
             authors: vec![ModpkgAuthor {
                 name: "test".to_string(),
                 role: Some("test".to_string()),
@@ -163,7 +215,12 @@ mod tests {
             display_name: "Test Mod".to_string(),
             description: Some("A test mod".to_string()),
             version: "1.0.0".to_string(),
-            distributor: Some("TestDist".to_string()),
+            distributor: Some(DistributorInfo {
+                site_id: "nexus".to_string(),
+                site_name: "Nexus Mods".to_string(),
+                site_url: "https://www.nexusmods.com".to_string(),
+                mod_id: "12345".to_string(),
+            }),
             authors: vec![ModpkgAuthor {
                 name: "Author1".to_string(),
                 role: Some("Developer".to_string()),

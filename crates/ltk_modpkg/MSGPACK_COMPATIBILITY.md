@@ -20,9 +20,16 @@ pub struct ModpkgMetadata {
     pub display_name: String,
     pub description: Option<String>,
     pub version: String,
-    pub distributor: Option<String>,
+    pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
+}
+
+pub struct DistributorInfo {
+    pub site_id: String,
+    pub site_name: String,
+    pub site_url: String,
+    pub mod_id: String,
 }
 
 pub struct ModpkgAuthor {
@@ -41,6 +48,7 @@ pub enum ModpkgLicense {
 
 **Structs** are encoded as **MessagePack maps** (named fields):
 - `ModpkgMetadata` → Map with keys: `{"name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ...}`
+- `DistributorInfo` → Map with keys: `{"site_id": ..., "site_name": ..., "site_url": ..., "mod_id": ...}`
 - `ModpkgAuthor` → Map with keys: `{"name": ..., "role": ...}`
 - Field names use `snake_case`
 
@@ -79,13 +87,23 @@ public class ModpkgMetadata
     public string Version { get; set; }
     
     [Key(4)]
-    public string? Distributor { get; set; }
+    public DistributorInfo? Distributor { get; set; }
+}
+
+[MessagePackObject]
+public class DistributorInfo
+{
+    [Key(0)]
+    public string SiteId { get; set; }
     
-    [Key(5)]
-    public List<ModpkgAuthor> Authors { get; set; }
+    [Key(1)]
+    public string SiteName { get; set; }
     
-    [Key(6)]
-    public ModpkgLicense License { get; set; }
+    [Key(2)]
+    public string SiteUrl { get; set; }
+    
+    [Key(3)]
+    public string ModId { get; set; }
 }
 
 [MessagePackObject]
@@ -169,12 +187,19 @@ class LicenseCustom(ModpkgLicense):
     url: str
 
 @dataclass
+class DistributorInfo:
+    site_id: str
+    site_name: str
+    site_url: str
+    mod_id: str
+
+@dataclass
 class ModpkgMetadata:
     name: str
     display_name: str
     description: Optional[str]
     version: str
-    distributor: Optional[str]
+    distributor: Optional[DistributorInfo]
     authors: List[ModpkgAuthor]
     license: ModpkgLicense
     
@@ -195,12 +220,23 @@ class ModpkgMetadata:
                     url=license_data["Custom"][1]
                 )
         
+        # Parse distributor
+        distributor_data = data[4]
+        distributor = None
+        if distributor_data is not None:
+            distributor = DistributorInfo(
+                site_id=distributor_data["site_id"],
+                site_name=distributor_data["site_name"],
+                site_url=distributor_data["site_url"],
+                mod_id=distributor_data["mod_id"]
+            )
+        
         return ModpkgMetadata(
             name=data[0],
             display_name=data[1],
             description=data[2],
             version=data[3],
-            distributor=data[4],
+            distributor=distributor,
             authors=authors,
             license=license
         )
