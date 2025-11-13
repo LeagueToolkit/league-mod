@@ -2,7 +2,7 @@ use binrw::BinRead;
 use byteorder::{ReadBytesExt, LE};
 use std::{
     collections::HashMap,
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom},
 };
 
 use ltk_io_ext::ReaderExt;
@@ -10,7 +10,9 @@ use ltk_io_ext::ReaderExt;
 use crate::{
     chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},
     error::ModpkgError,
-    hash_chunk_name, hash_layer_name, hash_wad_name, Modpkg, ModpkgLayer, ModpkgMetadata,
+    hash_chunk_name, hash_layer_name, hash_wad_name,
+    metadata::{ModpkgMetadata, METADATA_CHUNK_PATH},
+    Modpkg, ModpkgLayer,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -39,8 +41,6 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         let (chunk_path_indices, chunk_paths) = read_chunk_paths(&mut reader)?;
         let (wads_indices, wads) = read_wads(&mut reader)?;
 
-        let metadata = ModpkgMetadata::read(&mut reader)?;
-
         // Skip alignment
         let position = reader.stream_position()?;
         reader.seek(SeekFrom::Current(((8 - (position % 8)) % 8) as i64))?;
@@ -57,7 +57,10 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             chunks.insert((chunk.path_hash, layer_hash), chunk);
         }
 
-        Ok(Self {
+        // Drop the BufReader so we can use source directly
+        drop(reader);
+
+        let mut result = Self {
             signature,
             layer_indices,
             layers,
@@ -65,11 +68,30 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             chunk_paths,
             wads_indices,
             wads,
-            metadata,
             chunks,
+            metadata: ModpkgMetadata::default(),
             source,
-        })
+        };
+
+        // Read and cache the metadata chunk
+        let metadata = read_metadata(&mut result)?;
+        result.metadata = metadata;
+
+        Ok(result)
     }
+}
+
+fn read_metadata<TSource: Read + Seek>(
+    modpkg: &mut Modpkg<TSource>,
+) -> Result<ModpkgMetadata, ModpkgError> {
+    let metadata_path_hash = hash_chunk_name(METADATA_CHUNK_PATH);
+    let chunk = *modpkg
+        .chunks
+        .get(&(metadata_path_hash, NO_LAYER_HASH))
+        .ok_or(ModpkgError::MissingChunk(metadata_path_hash))?;
+
+    let data = modpkg.decoder().load_chunk_decompressed(&chunk)?;
+    ModpkgMetadata::read(&mut Cursor::new(data))
 }
 
 fn read_layers<R: Read + Seek>(

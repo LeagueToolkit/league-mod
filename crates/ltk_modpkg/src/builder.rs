@@ -6,11 +6,13 @@ use std::path::Path;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::{
-    chunk::{ModpkgChunk, NO_LAYER_INDEX, NO_WAD_INDEX},
-    metadata::ModpkgMetadata,
+    chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX, NO_WAD_INDEX},
+    metadata::{ModpkgMetadata, METADATA_CHUNK_PATH},
     ModpkgCompression,
 };
-use crate::{hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME};
+use crate::{
+    hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME, README_CHUNK_PATH,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ModpkgBuilderError {
@@ -19,6 +21,9 @@ pub enum ModpkgBuilderError {
 
     #[error("binrw error")]
     BinWriteError(#[from] binrw::Error),
+
+    #[error("modpkg error: {0}")]
+    ModpkgError(#[from] crate::error::ModpkgError),
 
     #[error("unsupported compression type: {0:?}")]
     UnsupportedCompressionType(ModpkgCompression),
@@ -33,11 +38,38 @@ pub enum ModpkgBuilderError {
     InvalidChunkName(String),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ModpkgBuilder {
-    metadata: ModpkgMetadata,
-    chunks: Vec<ModpkgChunkBuilder>,
-    layers: Vec<ModpkgLayerBuilder>,
+    pub readme: Option<String>,
+    pub metadata: ModpkgMetadata,
+    pub chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
+    pub meta_chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
+    pub layers: Vec<ModpkgLayerBuilder>,
+}
+
+impl Default for ModpkgBuilder {
+    fn default() -> Self {
+        let mut builder = Self {
+            readme: None,
+            metadata: ModpkgMetadata::default(),
+            chunks: HashMap::new(),
+            meta_chunks: HashMap::new(),
+            layers: Vec::new(),
+        };
+
+        // Always include metadata chunk by default
+        let metadata_chunk = ModpkgChunkBuilder::new()
+            .with_path(METADATA_CHUNK_PATH)
+            .unwrap()
+            .with_compression(ModpkgCompression::None)
+            .with_layer("");
+        builder.meta_chunks.insert(
+            (hash_chunk_name(METADATA_CHUNK_PATH), NO_LAYER_HASH),
+            metadata_chunk,
+        );
+
+        builder
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,18 +88,17 @@ pub struct ModpkgLayerBuilder {
 }
 
 impl ModpkgBuilder {
-    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Self {
-        self.metadata = metadata;
-        self
-    }
-
+    /// Add a layer to the builder.
     pub fn with_layer(mut self, layer: ModpkgLayerBuilder) -> Self {
         self.layers.push(layer);
         self
     }
 
+    /// Add a chunk to the builder.
+    /// This will insert the chunk into the map, replacing any existing chunk with the same key.
     pub fn with_chunk(mut self, chunk: ModpkgChunkBuilder) -> Self {
-        self.chunks.push(chunk);
+        let key = chunk.key();
+        self.chunks.insert(key, chunk);
         self
     }
 
@@ -85,72 +116,34 @@ impl ModpkgBuilder {
     ) -> Result<(), ModpkgBuilderError> {
         let mut writer = BufWriter::new(writer);
 
-        // Collect all unique paths and layers
-        let (chunk_paths, chunk_path_indices) = Self::collect_unique_paths(&self.chunks);
-        let (layers, _) = Self::collect_unique_layers(&self.chunks);
-        let (wads, wad_indices) = Self::collect_unique_wads(&self.chunks);
+        // Collect all unique paths, layers, and wads
+        let (chunk_paths, chunk_path_indices) = self.collect_unique_paths();
+        let (layers, _) = self.collect_unique_layers();
+        let (wads, wad_indices) = self.collect_unique_wads();
 
         Self::validate_layers(&self.layers, &layers)?;
 
-        // Write the magic header
-        writer.write_all(b"_modpkg_")?;
+        let total_chunks = self.chunks.len() + self.meta_chunks.len();
 
-        // Write version (1)
-        writer.write_u32::<LE>(1)?;
+        Self::write_header(&mut writer, total_chunks)?;
+        Self::write_layers(&mut writer, &self.layers)?;
+        Self::write_chunk_paths(&mut writer, &chunk_paths)?;
+        Self::write_wads(&mut writer, &wads)?;
+        Self::write_alignment(&mut writer)?;
 
-        // Write placeholder for signature size and chunk count
-        writer.write_u32::<LE>(0)?; // Placeholder for signature size
-        writer.write_u32::<LE>(self.chunks.len() as u32)?;
-
-        // Write signature (empty for now)
-        let signature = Vec::new();
-        writer.write_all(&signature)?;
-
-        // Write layers
-        writer.write_u32::<LE>(self.layers.len() as u32)?;
-        for layer in &self.layers {
-            writer.write_u32::<LE>(layer.name.len() as u32)?;
-            writer.write_all(layer.name.as_bytes())?;
-            writer.write_i32::<LE>(layer.priority)?;
-        }
-
-        // Write chunk paths
-        writer.write_u32::<LE>(chunk_paths.len() as u32)?;
-        for path in &chunk_paths {
-            writer.write_all(path.as_bytes())?;
-            writer.write_all(&[0])?; // Null terminator
-        }
-
-        // Write wads
-        writer.write_u32::<LE>(wads.len() as u32)?;
-        for wad in &wads {
-            writer.write_all(wad.as_bytes())?;
-            writer.write_all(&[0])?; // Null terminator
-        }
-
-        // Write metadata
-        self.metadata.write(&mut writer)?;
-
-        // Align to 8 bytes for chunks
-        let current_pos = writer.stream_position()?;
-        let padding = (8 - (current_pos % 8)) % 8;
-        for _ in 0..padding {
-            writer.write_all(&[0])?;
-        }
-
-        // Write dummy chunk data
+        // Reserve space for chunk TOC
         let chunk_toc_offset = writer.stream_position()?;
-        writer.write_all(&vec![0; self.chunks.len() * ModpkgChunk::size_of()])?;
+        writer.write_all(&vec![0; total_chunks * ModpkgChunk::size_of()])?;
 
-        // Process chunks
-        // Build layer index map from defined layers order
-        let mut layer_index_map = HashMap::new();
-        for (idx, layer) in self.layers.iter().enumerate() {
-            layer_index_map.insert(hash_layer_name(&layer.name), idx as u32);
-        }
+        let layer_index_map = Self::build_layer_index_map(&self.layers);
 
-        let final_chunks = Self::process_chunks(
-            &self.chunks,
+        let all_chunks = Self::process_all_chunks(
+            &self.metadata,
+            &self
+                .chunks
+                .values()
+                .chain(self.meta_chunks.values())
+                .collect::<Vec<_>>(),
             &mut writer,
             provide_chunk_data,
             &chunk_path_indices,
@@ -158,13 +151,169 @@ impl ModpkgBuilder {
             &wad_indices,
         )?;
 
-        // Write chunks
-        writer.seek(SeekFrom::Start(chunk_toc_offset))?;
-        for chunk in &final_chunks {
-            chunk.write(&mut writer)?;
+        // Go back and write the actual chunk TOC
+        Self::write_chunk_toc(&mut writer, chunk_toc_offset, &all_chunks)?;
+
+        Ok(())
+    }
+
+    fn write_header<W: io::Write>(
+        writer: &mut W,
+        total_chunks: usize,
+    ) -> Result<(), ModpkgBuilderError> {
+        // Write magic header
+        writer.write_all(b"_modpkg_")?;
+
+        // Write version
+        writer.write_u32::<LE>(1)?;
+
+        // Write signature size and chunk count
+        writer.write_u32::<LE>(0)?; // Placeholder for signature size
+        writer.write_u32::<LE>(total_chunks as u32)?;
+
+        // Write signature (empty for now)
+        let signature = Vec::new();
+        writer.write_all(&signature)?;
+
+        Ok(())
+    }
+
+    fn write_layers<W: io::Write>(
+        writer: &mut W,
+        layers: &[ModpkgLayerBuilder],
+    ) -> Result<(), ModpkgBuilderError> {
+        writer.write_u32::<LE>(layers.len() as u32)?;
+        for layer in layers {
+            writer.write_u32::<LE>(layer.name.len() as u32)?;
+            writer.write_all(layer.name.as_bytes())?;
+            writer.write_i32::<LE>(layer.priority)?;
+        }
+        Ok(())
+    }
+
+    fn write_chunk_paths<W: io::Write>(
+        writer: &mut W,
+        chunk_paths: &[String],
+    ) -> Result<(), ModpkgBuilderError> {
+        // Write count
+        writer.write_u32::<LE>(chunk_paths.len() as u32)?;
+
+        // Write all chunk paths (including meta chunks)
+        for path in chunk_paths {
+            writer.write_all(path.as_bytes())?;
+            writer.write_all(&[0])?; // Null terminator
         }
 
         Ok(())
+    }
+
+    fn write_wads<W: io::Write>(writer: &mut W, wads: &[String]) -> Result<(), ModpkgBuilderError> {
+        writer.write_u32::<LE>(wads.len() as u32)?;
+        for wad in wads {
+            writer.write_all(wad.as_bytes())?;
+            writer.write_all(&[0])?; // Null terminator
+        }
+        Ok(())
+    }
+
+    fn write_alignment<W: io::Write + io::Seek>(writer: &mut W) -> Result<(), ModpkgBuilderError> {
+        let current_pos = writer.stream_position()?;
+        let padding = (8 - (current_pos % 8)) % 8;
+        for _ in 0..padding {
+            writer.write_all(&[0])?;
+        }
+        Ok(())
+    }
+
+    fn build_layer_index_map(layers: &[ModpkgLayerBuilder]) -> HashMap<u64, u32> {
+        let mut layer_index_map = HashMap::new();
+        for (idx, layer) in layers.iter().enumerate() {
+            layer_index_map.insert(hash_layer_name(&layer.name), idx as u32);
+        }
+        layer_index_map
+    }
+
+    fn process_all_chunks<
+        TWriter: io::Write + io::Seek,
+        TChunkDataProvider: Fn(&ModpkgChunkBuilder, &mut Cursor<Vec<u8>>) -> Result<(), ModpkgBuilderError>,
+    >(
+        metadata: &ModpkgMetadata,
+        user_chunks: &[&ModpkgChunkBuilder],
+        writer: &mut BufWriter<TWriter>,
+        provide_chunk_data: TChunkDataProvider,
+        chunk_path_indices: &HashMap<u64, u32>,
+        layer_index_map: &HashMap<u64, u32>,
+        wad_indices: &HashMap<u64, u32>,
+    ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
+        // Process metadata chunk first (it's always in meta_chunks by default)
+        let metadata_path_hash = hash_chunk_name(METADATA_CHUNK_PATH);
+        let metadata_chunk = Self::process_metadata_chunk(metadata, writer, chunk_path_indices)?;
+
+        // Filter out metadata chunk from user chunks since we already processed it
+        let user_chunks_filtered: Vec<_> = user_chunks
+            .iter()
+            .filter(|chunk| chunk.path_hash != metadata_path_hash)
+            .copied()
+            .collect();
+
+        // Process remaining user chunks
+        let mut user_chunks_processed = Self::process_chunks(
+            &user_chunks_filtered,
+            writer,
+            provide_chunk_data,
+            chunk_path_indices,
+            layer_index_map,
+            wad_indices,
+        )?;
+
+        // Combine metadata chunk with user chunks
+        let mut all_chunks = vec![metadata_chunk];
+        all_chunks.append(&mut user_chunks_processed);
+
+        Ok(all_chunks)
+    }
+
+    fn write_chunk_toc<W: io::Write + io::Seek>(
+        writer: &mut W,
+        chunk_toc_offset: u64,
+        chunks: &[ModpkgChunk],
+    ) -> Result<(), ModpkgBuilderError> {
+        writer.seek(SeekFrom::Start(chunk_toc_offset))?;
+        for chunk in chunks {
+            chunk.write(writer)?;
+        }
+        Ok(())
+    }
+
+    fn process_metadata_chunk<TWriter: io::Write + io::Seek>(
+        metadata: &ModpkgMetadata,
+        writer: &mut BufWriter<TWriter>,
+        chunk_path_indices: &HashMap<u64, u32>,
+    ) -> Result<ModpkgChunk, ModpkgBuilderError> {
+        // Serialize metadata to msgpack
+        let mut metadata_bytes = Vec::new();
+        metadata.write(&mut metadata_bytes)?;
+
+        let size = metadata_bytes.len();
+        let checksum = xxh3_64(&metadata_bytes);
+
+        let data_offset = writer.stream_position()?;
+        writer.write_all(&metadata_bytes)?;
+
+        Ok(ModpkgChunk {
+            path_hash: hash_chunk_name(METADATA_CHUNK_PATH),
+            data_offset,
+            compression: ModpkgCompression::None,
+            compressed_size: size as u64,
+            uncompressed_size: size as u64,
+            compressed_checksum: checksum,
+            uncompressed_checksum: checksum,
+            path_index: *chunk_path_indices
+                .get(&hash_chunk_name(METADATA_CHUNK_PATH))
+                .unwrap_or(&0),
+            layer_index: NO_LAYER_INDEX,
+            wad_index: NO_WAD_INDEX,
+        })
     }
 
     fn compress_chunk_data(
@@ -186,10 +335,10 @@ impl ModpkgBuilder {
         Ok((compressed_data, compression))
     }
 
-    fn collect_unique_layers(chunks: &[ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_layers(&self) -> (Vec<String>, HashMap<u64, u32>) {
         let mut layers = Vec::new();
         let mut layer_indices = HashMap::new();
-        for chunk in chunks {
+        for chunk in self.chunks.values() {
             // Skip empty layer names (they represent chunks with no layer)
             if chunk.layer.is_empty() {
                 continue;
@@ -205,11 +354,12 @@ impl ModpkgBuilder {
         (layers, layer_indices)
     }
 
-    fn collect_unique_paths(chunks: &[ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_paths(&self) -> (Vec<String>, HashMap<u64, u32>) {
         let mut paths = Vec::new();
         let mut path_indices = HashMap::new();
 
-        for chunk in chunks {
+        // Collect paths from both regular chunks and meta chunks
+        for chunk in self.chunks.values().chain(self.meta_chunks.values()) {
             path_indices.entry(chunk.path_hash).or_insert_with(|| {
                 let index = paths.len();
                 paths.push(chunk.path.clone());
@@ -220,10 +370,10 @@ impl ModpkgBuilder {
         (paths, path_indices)
     }
 
-    fn collect_unique_wads(chunks: &[ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_wads(&self) -> (Vec<String>, HashMap<u64, u32>) {
         let mut wads = Vec::new();
         let mut wad_indices = HashMap::new();
-        for chunk in chunks {
+        for chunk in self.chunks.values().chain(self.meta_chunks.values()) {
             // Skip empty wad names (they represent chunks with no wad)
             if chunk.wad.is_empty() {
                 continue;
@@ -269,7 +419,7 @@ impl ModpkgBuilder {
         TWriter: io::Write + io::Seek,
         TChunkDataProvider: Fn(&ModpkgChunkBuilder, &mut Cursor<Vec<u8>>) -> Result<(), ModpkgBuilderError>,
     >(
-        chunks: &[ModpkgChunkBuilder],
+        chunks: &[&ModpkgChunkBuilder],
         writer: &mut BufWriter<TWriter>,
         provide_chunk_data: TChunkDataProvider,
         chunk_path_indices: &HashMap<u64, u32>,
@@ -404,6 +554,48 @@ impl ModpkgChunkBuilder {
     pub fn layer(&self) -> &str {
         &self.layer
     }
+
+    /// Compute the key for this chunk: (path_hash, layer_hash)
+    /// This mirrors how chunks are keyed in the final Modpkg struct
+    pub fn key(&self) -> (u64, u64) {
+        let layer_hash = if self.layer.is_empty() {
+            NO_LAYER_HASH
+        } else {
+            hash_layer_name(&self.layer)
+        };
+        (self.path_hash, layer_hash)
+    }
+}
+
+impl ModpkgBuilder {
+    /// Set the metadata for the builder.
+    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Result<Self, ModpkgBuilderError> {
+        self.metadata = metadata;
+
+        self.meta_chunks.insert(
+            (hash_chunk_name(METADATA_CHUNK_PATH), NO_LAYER_HASH),
+            ModpkgChunkBuilder::new()
+                .with_path(METADATA_CHUNK_PATH)?
+                .with_compression(ModpkgCompression::None)
+                .with_layer(""),
+        );
+
+        Ok(self)
+    }
+
+    /// Set the readme for the builder.
+    pub fn with_readme(mut self, readme: &str) -> Result<Self, ModpkgBuilderError> {
+        self.readme = Some(readme.to_string());
+        let readme_chunk = ModpkgChunkBuilder::new()
+            .with_path(README_CHUNK_PATH)?
+            .with_compression(ModpkgCompression::None)
+            .with_layer("");
+
+        let key = readme_chunk.key();
+        self.meta_chunks.insert(key, readme_chunk);
+
+        Ok(self)
+    }
 }
 
 impl ModpkgLayerBuilder {
@@ -447,6 +639,7 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_metadata(ModpkgMetadata::default())
+            .unwrap()
             .with_layer(ModpkgLayerBuilder::new("base").with_priority(0))
             .with_chunk(
                 ModpkgChunkBuilder::new()
@@ -468,7 +661,8 @@ mod tests {
 
         let modpkg = Modpkg::mount_from_reader(&mut cursor).unwrap();
 
-        assert_eq!(modpkg.chunks.len(), 1);
+        // Now we have 2 chunks: metadata + test.png
+        assert_eq!(modpkg.chunks.len(), 2);
 
         let chunk = modpkg
             .chunks

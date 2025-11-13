@@ -81,8 +81,13 @@ mod tests {
         cursor.set_position(0);
         let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
 
-        // Get the chunk
-        let chunk = modpkg.chunks.values().next().expect("No chunks in modpkg");
+        // Get the test.bin chunk (not the metadata chunk)
+        let test_path_hash = crate::hash_chunk_name("test.bin");
+        let base_layer_hash = crate::hash_layer_name("base");
+        let chunk = modpkg
+            .chunks
+            .get(&(test_path_hash, base_layer_hash))
+            .expect("test.bin chunk not found");
 
         // Create a decoder and test it
         let mut decoder = ModpkgDecoder {
