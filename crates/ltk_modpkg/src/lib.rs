@@ -52,10 +52,6 @@ pub struct Modpkg<TSource: Read + Seek> {
     /// The key is a tuple of the path hash and the layer hash respectively.
     pub chunks: HashMap<(u64, u64), ModpkgChunk>,
 
-    /// The metadata of the mod package.
-    /// This is read and cached when the modpkg is mounted.
-    pub metadata: ModpkgMetadata,
-
     /// The original byte source.
     source: TSource,
 }

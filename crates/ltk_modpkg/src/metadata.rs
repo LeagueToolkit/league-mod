@@ -1,9 +1,27 @@
-use crate::{license::ModpkgLicense, Modpkg};
+use crate::{
+    chunk::{NO_LAYER_INDEX, NO_WAD_INDEX},
+    error::ModpkgError,
+    license::ModpkgLicense,
+    Modpkg,
+};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 /// The path to the info.msgpack chunk.
 pub const METADATA_CHUNK_PATH: &str = "_meta_/info.msgpack";
+
+impl<TSource: Read + Seek> Modpkg<TSource> {
+    /// Load the metadata chunk from the mod package.
+    pub(crate) fn load_metadata(&mut self) -> Result<ModpkgMetadata, ModpkgError> {
+        let chunk = *self.get_chunk(METADATA_CHUNK_PATH, None)?;
+
+        if chunk.layer_index != NO_LAYER_INDEX || chunk.wad_index != NO_WAD_INDEX {
+            return Err(ModpkgError::InvalidMetaChunk);
+        }
+
+        ModpkgMetadata::read(&mut Cursor::new(self.load_chunk_decompressed(&chunk)?))
+    }
+}
 
 /// Information about the distributor site and mod ID.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

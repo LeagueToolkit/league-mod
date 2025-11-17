@@ -138,19 +138,32 @@ fn add_meta_chunks(
     }
 
     // Thumbnail as meta chunk (no layer/wad). Include only if configured/default file exists.
-    let configured_thumb_exists = mod_project
+    let thumbnail_path = mod_project
         .thumbnail
         .as_ref()
-        .map(|p| project_root.join(p).exists())
-        .unwrap_or(false);
-    let default_thumb_exists = project_root.join("thumbnail.webp").exists();
-    if configured_thumb_exists || default_thumb_exists {
-        let thumb_chunk = ModpkgChunkBuilder::new()
-            .with_path(THUMBNAIL_CHUNK_PATH)
-            .into_diagnostic()?
-            .with_compression(ModpkgCompression::None)
-            .with_layer("");
-        builder = builder.with_chunk(thumb_chunk);
+        .map(|p| project_root.join(p))
+        .unwrap_or_else(|| project_root.join("thumbnail.webp"));
+
+    if thumbnail_path.exists() {
+        let thumbnail_data = if thumbnail_path
+            .extension()
+            .and_then(OsStr::to_str)
+            .map(|ext| ext.eq_ignore_ascii_case("webp"))
+            .unwrap_or(false)
+        {
+            fs::read(&thumbnail_path).into_diagnostic()?
+        } else {
+            let img = image::open(&thumbnail_path)
+                .into_diagnostic()
+                .wrap_err("Failed to open thumbnail image")?;
+            let mut tmp = Cursor::new(Vec::new());
+            img.write_to(&mut tmp, ImageFormat::WebP)
+                .into_diagnostic()
+                .wrap_err("Failed to convert thumbnail to WebP")?;
+            tmp.into_inner()
+        };
+
+        builder = builder.with_thumbnail(thumbnail_data).into_diagnostic()?;
     }
 
     Ok(builder)
@@ -543,10 +556,8 @@ fn write_chunk_payload(
                 write_meta_chunk_readme(cursor, project_root)?;
                 return Ok(());
             }
-            THUMBNAIL_CHUNK_PATH => {
-                write_meta_chunk_thumbnail(cursor, project_root, mod_project)?;
-                return Ok(());
-            }
+            // Thumbnail is handled specially in the builder (like metadata)
+            // and won't reach this function
             _ => {}
         }
     }

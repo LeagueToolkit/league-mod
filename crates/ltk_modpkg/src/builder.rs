@@ -8,6 +8,7 @@ use xxhash_rust::xxh3::xxh3_64;
 use crate::{
     chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX, NO_WAD_INDEX},
     metadata::{ModpkgMetadata, METADATA_CHUNK_PATH},
+    thumbnail::THUMBNAIL_CHUNK_PATH,
     ModpkgCompression,
 };
 use crate::{
@@ -41,6 +42,7 @@ pub enum ModpkgBuilderError {
 #[derive(Debug, Clone)]
 pub struct ModpkgBuilder {
     pub readme: Option<String>,
+    pub thumbnail: Option<Vec<u8>>,
     pub metadata: ModpkgMetadata,
     pub chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
     pub meta_chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
@@ -51,6 +53,7 @@ impl Default for ModpkgBuilder {
     fn default() -> Self {
         let mut builder = Self {
             readme: None,
+            thumbnail: None,
             metadata: ModpkgMetadata::default(),
             chunks: HashMap::new(),
             meta_chunks: HashMap::new(),
@@ -139,6 +142,7 @@ impl ModpkgBuilder {
 
         let all_chunks = Self::process_all_chunks(
             &self.metadata,
+            self.thumbnail.as_ref(),
             &self
                 .chunks
                 .values()
@@ -238,6 +242,7 @@ impl ModpkgBuilder {
         TChunkDataProvider: Fn(&ModpkgChunkBuilder, &mut Cursor<Vec<u8>>) -> Result<(), ModpkgBuilderError>,
     >(
         metadata: &ModpkgMetadata,
+        thumbnail: Option<&Vec<u8>>,
         user_chunks: &[&ModpkgChunkBuilder],
         writer: &mut BufWriter<TWriter>,
         provide_chunk_data: TChunkDataProvider,
@@ -249,10 +254,20 @@ impl ModpkgBuilder {
         let metadata_path_hash = hash_chunk_name(METADATA_CHUNK_PATH);
         let metadata_chunk = Self::process_metadata_chunk(metadata, writer, chunk_path_indices)?;
 
-        // Filter out metadata chunk from user chunks since we already processed it
+        // Process thumbnail chunk if present
+        let thumbnail_path_hash = hash_chunk_name(THUMBNAIL_CHUNK_PATH);
+        let mut meta_chunks = vec![metadata_chunk];
+        if let Some(thumbnail_data) = thumbnail {
+            let thumbnail_chunk = Self::process_thumbnail_chunk(thumbnail_data, writer, chunk_path_indices)?;
+            meta_chunks.push(thumbnail_chunk);
+        }
+
+        // Filter out metadata and thumbnail chunks from user chunks since we already processed them
         let user_chunks_filtered: Vec<_> = user_chunks
             .iter()
-            .filter(|chunk| chunk.path_hash != metadata_path_hash)
+            .filter(|chunk| {
+                chunk.path_hash != metadata_path_hash && chunk.path_hash != thumbnail_path_hash
+            })
             .copied()
             .collect();
 
@@ -266,11 +281,10 @@ impl ModpkgBuilder {
             wad_indices,
         )?;
 
-        // Combine metadata chunk with user chunks
-        let mut all_chunks = vec![metadata_chunk];
-        all_chunks.append(&mut user_chunks_processed);
+        // Combine meta chunks with user chunks
+        meta_chunks.append(&mut user_chunks_processed);
 
-        Ok(all_chunks)
+        Ok(meta_chunks)
     }
 
     fn write_chunk_toc<W: io::Write + io::Seek>(
@@ -310,6 +324,33 @@ impl ModpkgBuilder {
             uncompressed_checksum: checksum,
             path_index: *chunk_path_indices
                 .get(&hash_chunk_name(METADATA_CHUNK_PATH))
+                .unwrap_or(&0),
+            layer_index: NO_LAYER_INDEX,
+            wad_index: NO_WAD_INDEX,
+        })
+    }
+
+    fn process_thumbnail_chunk<TWriter: io::Write + io::Seek>(
+        thumbnail_data: &[u8],
+        writer: &mut BufWriter<TWriter>,
+        chunk_path_indices: &HashMap<u64, u32>,
+    ) -> Result<ModpkgChunk, ModpkgBuilderError> {
+        let size = thumbnail_data.len();
+        let checksum = xxh3_64(thumbnail_data);
+
+        let data_offset = writer.stream_position()?;
+        writer.write_all(thumbnail_data)?;
+
+        Ok(ModpkgChunk {
+            path_hash: hash_chunk_name(THUMBNAIL_CHUNK_PATH),
+            data_offset,
+            compression: ModpkgCompression::None,
+            compressed_size: size as u64,
+            uncompressed_size: size as u64,
+            compressed_checksum: checksum,
+            uncompressed_checksum: checksum,
+            path_index: *chunk_path_indices
+                .get(&hash_chunk_name(THUMBNAIL_CHUNK_PATH))
                 .unwrap_or(&0),
             layer_index: NO_LAYER_INDEX,
             wad_index: NO_WAD_INDEX,
@@ -593,6 +634,20 @@ impl ModpkgBuilder {
 
         let key = readme_chunk.key();
         self.meta_chunks.insert(key, readme_chunk);
+
+        Ok(self)
+    }
+
+    /// Set the thumbnail for the builder.
+    pub fn with_thumbnail(mut self, thumbnail: Vec<u8>) -> Result<Self, ModpkgBuilderError> {
+        self.thumbnail = Some(thumbnail.clone());
+        let thumbnail_chunk = ModpkgChunkBuilder::new()
+            .with_path(THUMBNAIL_CHUNK_PATH)?
+            .with_compression(ModpkgCompression::None)
+            .with_layer("");
+
+        let key = thumbnail_chunk.key();
+        self.meta_chunks.insert(key, thumbnail_chunk);
 
         Ok(self)
     }
