@@ -140,14 +140,7 @@ impl ModpkgBuilder {
 
         let layer_index_map = Self::build_layer_index_map(&self.layers);
 
-        let all_chunks = Self::process_all_chunks(
-            &self.metadata,
-            self.thumbnail.as_ref(),
-            &self
-                .chunks
-                .values()
-                .chain(self.meta_chunks.values())
-                .collect::<Vec<_>>(),
+        let all_chunks = self.process_all_chunks(
             &mut writer,
             provide_chunk_data,
             &chunk_path_indices,
@@ -241,9 +234,7 @@ impl ModpkgBuilder {
         TWriter: io::Write + io::Seek,
         TChunkDataProvider: Fn(&ModpkgChunkBuilder, &mut Cursor<Vec<u8>>) -> Result<(), ModpkgBuilderError>,
     >(
-        metadata: &ModpkgMetadata,
-        thumbnail: Option<&Vec<u8>>,
-        user_chunks: &[&ModpkgChunkBuilder],
+        &self,
         writer: &mut BufWriter<TWriter>,
         provide_chunk_data: TChunkDataProvider,
         chunk_path_indices: &HashMap<u64, u32>,
@@ -252,23 +243,26 @@ impl ModpkgBuilder {
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
         // Process metadata chunk first (it's always in meta_chunks by default)
         let metadata_path_hash = hash_chunk_name(METADATA_CHUNK_PATH);
-        let metadata_chunk = Self::process_metadata_chunk(metadata, writer, chunk_path_indices)?;
+        let metadata_chunk =
+            Self::process_metadata_chunk(&self.metadata, writer, chunk_path_indices)?;
 
         // Process thumbnail chunk if present
         let thumbnail_path_hash = hash_chunk_name(THUMBNAIL_CHUNK_PATH);
         let mut meta_chunks = vec![metadata_chunk];
-        if let Some(thumbnail_data) = thumbnail {
-            let thumbnail_chunk = Self::process_thumbnail_chunk(thumbnail_data, writer, chunk_path_indices)?;
+        if let Some(thumbnail_data) = self.thumbnail.as_ref() {
+            let thumbnail_chunk =
+                Self::process_thumbnail_chunk(thumbnail_data, writer, chunk_path_indices)?;
             meta_chunks.push(thumbnail_chunk);
         }
 
         // Filter out metadata and thumbnail chunks from user chunks since we already processed them
-        let user_chunks_filtered: Vec<_> = user_chunks
-            .iter()
+        let user_chunks_filtered: Vec<_> = self
+            .chunks
+            .values()
+            .chain(self.meta_chunks.values())
             .filter(|chunk| {
                 chunk.path_hash != metadata_path_hash && chunk.path_hash != thumbnail_path_hash
             })
-            .copied()
             .collect();
 
         // Process remaining user chunks
