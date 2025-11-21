@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_pki-v0.1.0) - 2025-11-21
+
+### Added
+
+- initial PKI implementation
+- add check for update
+- add initial winget stuff
+
+### Fixed
+
+- typo
+
+### Other
+
+- add quick install instructions for league-mod using PowerShell
+- add ci workflow
+- add release-plz
+- add readme
+
+## [0.2.0](https://github.com/LeagueToolkit/league-mod/releases/tag/league-mod-v0.2.0) - 2025-11-21
+
+### Added
+
+- update version handling in metadata to use semver::Version
+- add layers to metadata
+- better meta handling
+- use metadata chunk
+- add support for signing mod packages (argument only)
+- add check for update
+- add color styling to clap output
+- improve cli command and use miette
+- add initial winget stuff
+- add support for packing to fantome
+- add option to specify thumbnail in mod project config
+
+### Fixed
+
+- minor clone stuff
+- convert version to string format for consistent display in info_mod_package
+- pack readme and thumbnail into modpkg
+- fmt
+- pad println output
+- skip base layer conditionally
+- layer presence lookup
+- base skip
+- error if explicit base layer
+- typo
+
+### Other
+
+- include schema version when building metadata
+- mark 'sign' field as dead code in PackModProjectArgs
+- release
+- bump version to 0.2.0
+- add quick install instructions for league-mod using PowerShell
+- bump league-mod version to 0.1.1
+- prepare repo for crates releases
+- remove comments
+- fix checks
+- fix deny licenses
+- add ci workflow
+- add release-plz
+- add readme
+- move existing mod crates
+
+## [0.1.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.1...ltk_modpkg-v0.1.2) - 2025-11-21
+
+### Added
+
+- add layers metadata structure and update ModpkgMetadata to include layers
+- update version handling in metadata to use semver::Version
+- add schema version to metadata
+- add layers to metadata
+- better meta handling
+- add distributor info to metadata
+- use metadata chunk
+- *(modpkg)* msgpack metadata
+
+### Fixed
+
+- minor clone stuff
+
+### Other
+
+- update c# modpkg metadata object for consistency
+- clean up builder code
+
 ## [0.2.0](https://github.com/LeagueToolkit/league-mod/releases/tag/league-mod-v0.2.0) - 2025-09-29
 
 ### Added
