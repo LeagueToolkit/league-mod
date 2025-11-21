@@ -77,10 +77,8 @@ impl DistributorInfo {
 pub struct ModpkgLayerMetadata {
     /// The name of the layer (e.g. "base", "chroma1").
     pub name: String,
-
     /// The priority of the layer as stored in the modpkg header.
     pub priority: i32,
-
     /// Optional human-readable description of the layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -91,6 +89,10 @@ pub struct ModpkgLayerMetadata {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct ModpkgMetadata {
+    /// The schema version of this metadata structure.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+
     pub name: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -104,6 +106,10 @@ pub struct ModpkgMetadata {
     /// still the modpkg header.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<ModpkgLayerMetadata>,
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 impl ModpkgMetadata {
@@ -218,6 +224,7 @@ mod tests {
     #[test]
     fn test_modpkg_metadata_read() {
         let metadata = ModpkgMetadata {
+            schema_version: 1,
             name: "test".to_string(),
             display_name: "test".to_string(),
             description: Some("test".to_string()),
@@ -249,6 +256,7 @@ mod tests {
     fn test_msgpack_format_visualization() {
         // This test shows what the msgpack encoding looks like with named fields (maps)
         let metadata = ModpkgMetadata {
+            schema_version: 1,
             name: "TestMod".to_string(),
             display_name: "Test Mod".to_string(),
             description: Some("A test mod".to_string()),

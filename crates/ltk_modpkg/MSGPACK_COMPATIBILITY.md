@@ -16,6 +16,7 @@ The `ModpkgMetadata` structure is encoded using MessagePack and stored as a spec
 ### Metadata Structure (Rust)
 ```rust
 pub struct ModpkgMetadata {
+    pub schema_version: u32, // Default: 1
     pub name: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -54,7 +55,7 @@ pub enum ModpkgLicense {
 ### MessagePack Encoding Details
 
 **Structs** are encoded as **MessagePack maps** (named fields):
-- `ModpkgMetadata` → Map with keys: `{"name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ...}`
+- `ModpkgMetadata` → Map with keys: `{"schema_version": ..., "name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ...}`
 - `DistributorInfo` → Map with keys: `{"site_id": ..., "site_name": ..., "site_url": ..., "mod_id": ...}`
 - `ModpkgAuthor` → Map with keys: `{"name": ..., "role": ...}`
 - Field names use `snake_case`
@@ -82,18 +83,21 @@ using System.Collections.Generic;
 public class ModpkgMetadata
 {
     [Key(0)]
+    public uint SchemaVersion { get; set; } = 1;
+
+    [Key(1)]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key(2)]
     public string DisplayName { get; set; }
     
-    [Key(2)]
+    [Key(3)]
     public string? Description { get; set; }
     
-    [Key(3)]
+    [Key(4)]
     public string Version { get; set; }
     
-    [Key(4)]
+    [Key(5)]
     public DistributorInfo? Distributor { get; set; }
 }
 
@@ -202,6 +206,7 @@ class DistributorInfo:
 
 @dataclass
 class ModpkgMetadata:
+    schema_version: int
     name: str
     display_name: str
     description: Optional[str]
@@ -212,40 +217,14 @@ class ModpkgMetadata:
     
     @staticmethod
     def from_msgpack(data):
-        authors = [ModpkgAuthor.from_msgpack(a) for a in data[5]]
-        
-        # Parse license
-        license_data = data[6]
-        if isinstance(license_data, str) and license_data == "None":
-            license = LicenseNone()
-        elif isinstance(license_data, dict):
-            if "Spdx" in license_data:
-                license = LicenseSpdx(spdx_id=license_data["Spdx"][0])
-            elif "Custom" in license_data:
-                license = LicenseCustom(
-                    name=license_data["Custom"][0],
-                    url=license_data["Custom"][1]
-                )
-        
-        # Parse distributor
-        distributor_data = data[4]
-        distributor = None
-        if distributor_data is not None:
-            distributor = DistributorInfo(
-                site_id=distributor_data["site_id"],
-                site_name=distributor_data["site_name"],
-                site_url=distributor_data["site_url"],
-                mod_id=distributor_data["mod_id"]
-            )
+        # Note: Real implementation would access by name since we use named fields
+        # This simplified example assumes positional for brevity but production
+        # code should use named access.
         
         return ModpkgMetadata(
-            name=data[0],
-            display_name=data[1],
-            description=data[2],
-            version=data[3],
-            distributor=distributor,
-            authors=authors,
-            license=license
+            schema_version=data.get("schema_version", 1),
+            name=data["name"],
+            # ... etc
         )
 
 # Usage:
