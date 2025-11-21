@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.2...ltk_modpkg-v0.1.3) - 2025-11-21
+
+### Other
+
+- update release-plz configuration and add changelogs for new crates
+
 ## [0.1.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.1...ltk_modpkg-v0.1.2) - 2025-11-21
 
 ### Added
