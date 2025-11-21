@@ -102,6 +102,9 @@ public class ModpkgMetadata
     
     [Key("distributor")]
     public DistributorInfo? Distributor { get; set; }
+    
+    [Key("layers")]
+    public List<ModpkgLayerMetadata>? Layers { get; set; }
 }
 
 [MessagePackObject]
@@ -128,6 +131,19 @@ public class ModpkgAuthor
     
     [Key("role")]
     public string? Role { get; set; }
+}
+
+[MessagePackObject]
+public class ModpkgLayerMetadata
+{
+    [Key("name")]
+    public string Name { get; set; }
+    
+    [Key("priority")]
+    public int Priority { get; set; }
+    
+    [Key("description")]
+    public string? Description { get; set; }
 }
 
 // For enums, you need custom handling or use a union type
@@ -186,6 +202,20 @@ class ModpkgAuthor:
         return ModpkgAuthor(name=data["name"], role=data.get("role"))
 
 @dataclass
+class ModpkgLayerMetadata:
+    name: str
+    priority: int
+    description: Optional[str]
+    
+    @staticmethod
+    def from_msgpack(data):
+        return ModpkgLayerMetadata(
+            name=data["name"],
+            priority=data["priority"],
+            description=data.get("description")
+        )
+
+@dataclass
 class ModpkgLicense:
     pass
 
@@ -219,6 +249,7 @@ class ModpkgMetadata:
     distributor: Optional[DistributorInfo]
     authors: List[ModpkgAuthor]
     license: ModpkgLicense
+    layers: List[ModpkgLayerMetadata]
     
     @staticmethod
     def from_msgpack(data):
@@ -237,7 +268,8 @@ class ModpkgMetadata:
                 mod_id=data["distributor"]["mod_id"]
             ) if data.get("distributor") else None,
             authors=[ModpkgAuthor.from_msgpack(a) for a in data.get("authors", [])],
-            license=LicenseNone() # Placeholder for license logic
+            license=LicenseNone(), # Placeholder for license logic
+            layers=[ModpkgLayerMetadata.from_msgpack(l) for l in data.get("layers", [])]
         )
 
 # Usage:
