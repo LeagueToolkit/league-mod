@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/LeagueToolkit/league-mod/releases/tag/league-mod-v0.2.1) - 2025-11-21
+
+### Added
+
+- update version handling in metadata to use semver::Version
+- add layers to metadata
+- better meta handling
+- use metadata chunk
+- add support for signing mod packages (argument only)
+- add check for update
+- add color styling to clap output
+- improve cli command and use miette
+- add initial winget stuff
+- add support for packing to fantome
+- add option to specify thumbnail in mod project config
+
+### Fixed
+
+- minor clone stuff
+- convert version to string format for consistent display in info_mod_package
+- pack readme and thumbnail into modpkg
+- fmt
+- pad println output
+- skip base layer conditionally
+- layer presence lookup
+- base skip
+- error if explicit base layer
+- typo
+
+### Other
+
+- *(league-mod)* bump version to v0.2.1
+- *(league-mod)* release v0.2.0
+- update release-plz configuration and add changelogs for new crates
+- release
+- include schema version when building metadata
+- mark 'sign' field as dead code in PackModProjectArgs
+- release
+- bump version to 0.2.0
+- add quick install instructions for league-mod using PowerShell
+- bump league-mod version to 0.1.1
+- prepare repo for crates releases
+- remove comments
+- fix checks
+- fix deny licenses
+- add ci workflow
+- add release-plz
+- add readme
+- move existing mod crates
+
 ## [0.2.0](https://github.com/LeagueToolkit/league-mod/releases/tag/league-mod-v0.2.0) - 2025-11-21
 
 ### Added
