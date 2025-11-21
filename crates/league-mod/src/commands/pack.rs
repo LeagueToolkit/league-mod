@@ -366,6 +366,7 @@ fn validate_layer_dir_presence(mod_project_dir: &Path, layer_name: &str) -> Resu
 fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> Result<ModpkgBuilder> {
     let builder = builder
         .with_metadata(ModpkgMetadata {
+            schema_version: 1,
             name: mod_project.name.clone(),
             display_name: mod_project.display_name.clone(),
             description: Some(mod_project.description.clone()),
