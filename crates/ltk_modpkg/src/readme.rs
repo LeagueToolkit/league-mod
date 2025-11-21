@@ -6,18 +6,20 @@ use crate::{
     Modpkg,
 };
 
-pub const THUMBNAIL_CHUNK_PATH: &str = "_meta_/thumbnail.webp";
+/// The path to the README.md chunk.
+pub const README_CHUNK_PATH: &str = "_meta_/readme.md";
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
-    pub fn retrieve_thumbnail_data(&mut self) -> Result<Vec<u8>, ModpkgError> {
-        let chunk = *self.get_chunk(THUMBNAIL_CHUNK_PATH, None)?;
+    /// Load the README.md chunk from the mod package.
+    pub fn load_readme(&mut self) -> Result<Vec<u8>, ModpkgError> {
+        let chunk = *self.get_chunk(README_CHUNK_PATH, None)?;
 
         if chunk.layer_index != NO_LAYER_INDEX || chunk.wad_index != NO_WAD_INDEX {
             return Err(ModpkgError::InvalidMetaChunk);
         }
 
-        let thumbnail_data = self.load_chunk_decompressed(&chunk)?;
+        let data = self.load_chunk_decompressed(&chunk)?;
 
-        Ok(thumbnail_data.into_vec())
+        Ok(data.into_vec())
     }
 }

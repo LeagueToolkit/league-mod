@@ -2,7 +2,7 @@ use binrw::BinRead;
 use byteorder::{ReadBytesExt, LE};
 use std::{
     collections::HashMap,
-    io::{BufReader, Cursor, Read, Seek, SeekFrom},
+    io::{BufReader, Read, Seek, SeekFrom},
 };
 
 use ltk_io_ext::ReaderExt;
@@ -10,9 +10,7 @@ use ltk_io_ext::ReaderExt;
 use crate::{
     chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},
     error::ModpkgError,
-    hash_chunk_name, hash_layer_name, hash_wad_name,
-    metadata::{ModpkgMetadata, METADATA_CHUNK_PATH},
-    Modpkg, ModpkgLayer,
+    hash_chunk_name, hash_layer_name, hash_wad_name, Modpkg, ModpkgLayer,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -57,10 +55,9 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             chunks.insert((chunk.path_hash, layer_hash), chunk);
         }
 
-        // Drop the BufReader so we can use source directly
         drop(reader);
 
-        let mut result = Self {
+        Ok(Self {
             signature,
             layer_indices,
             layers,
@@ -69,29 +66,9 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             wads_indices,
             wads,
             chunks,
-            metadata: ModpkgMetadata::default(),
             source,
-        };
-
-        // Read and cache the metadata chunk
-        let metadata = read_metadata(&mut result)?;
-        result.metadata = metadata;
-
-        Ok(result)
+        })
     }
-}
-
-fn read_metadata<TSource: Read + Seek>(
-    modpkg: &mut Modpkg<TSource>,
-) -> Result<ModpkgMetadata, ModpkgError> {
-    let metadata_path_hash = hash_chunk_name(METADATA_CHUNK_PATH);
-    let chunk = *modpkg
-        .chunks
-        .get(&(metadata_path_hash, NO_LAYER_HASH))
-        .ok_or(ModpkgError::MissingChunk(metadata_path_hash))?;
-
-    let data = modpkg.decoder().load_chunk_decompressed(&chunk)?;
-    ModpkgMetadata::read(&mut Cursor::new(data))
 }
 
 fn read_layers<R: Read + Seek>(

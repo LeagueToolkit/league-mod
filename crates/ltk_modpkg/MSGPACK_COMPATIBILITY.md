@@ -16,13 +16,15 @@ The `ModpkgMetadata` structure is encoded using MessagePack and stored as a spec
 ### Metadata Structure (Rust)
 ```rust
 pub struct ModpkgMetadata {
+    pub schema_version: u32, // Default: 1
     pub name: String,
     pub display_name: String,
     pub description: Option<String>,
-    pub version: String,
+    pub version: semver::Version,
     pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
+    pub layers: Vec<ModpkgLayerMetadata>,
 }
 
 pub struct DistributorInfo {
@@ -37,6 +39,12 @@ pub struct ModpkgAuthor {
     pub role: Option<String>,
 }
 
+pub struct ModpkgLayerMetadata {
+    pub name: String,
+    pub priority: i32,
+    pub description: Option<String>,
+}
+
 pub enum ModpkgLicense {
     None,
     Spdx { spdx_id: String },
@@ -47,7 +55,7 @@ pub enum ModpkgLicense {
 ### MessagePack Encoding Details
 
 **Structs** are encoded as **MessagePack maps** (named fields):
-- `ModpkgMetadata` → Map with keys: `{"name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ...}`
+- `ModpkgMetadata` → Map with keys: `{"schema_version": ..., "name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ...}`
 - `DistributorInfo` → Map with keys: `{"site_id": ..., "site_name": ..., "site_url": ..., "mod_id": ...}`
 - `ModpkgAuthor` → Map with keys: `{"name": ..., "role": ...}`
 - Field names use `snake_case`
@@ -60,6 +68,9 @@ pub enum ModpkgLicense {
 **Option<T>** encodes as:
 - `None` → MessagePack `nil`
 - `Some(value)` → The value directly
+
+**semver::Version** encodes as:
+- A string (e.g., `"1.0.0"`)
 
 This format is much more cross-language friendly than positional arrays!
 
@@ -74,46 +85,65 @@ using System.Collections.Generic;
 [MessagePackObject]
 public class ModpkgMetadata
 {
-    [Key(0)]
+    [Key("schema_version")]
+    public uint SchemaVersion { get; set; } = 1;
+
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key("display_name")]
     public string DisplayName { get; set; }
     
-    [Key(2)]
+    [Key("description")]
     public string? Description { get; set; }
     
-    [Key(3)]
-    public string Version { get; set; }
+    [Key("version")]
+    public string Version { get; set; } // Semver string
     
-    [Key(4)]
+    [Key("distributor")]
     public DistributorInfo? Distributor { get; set; }
+    
+    [Key("layers")]
+    public List<ModpkgLayerMetadata>? Layers { get; set; }
 }
 
 [MessagePackObject]
 public class DistributorInfo
 {
-    [Key(0)]
+    [Key("site_id")]
     public string SiteId { get; set; }
     
-    [Key(1)]
+    [Key("site_name")]
     public string SiteName { get; set; }
     
-    [Key(2)]
+    [Key("site_url")]
     public string SiteUrl { get; set; }
     
-    [Key(3)]
+    [Key("mod_id")]
     public string ModId { get; set; }
 }
 
 [MessagePackObject]
 public class ModpkgAuthor
 {
-    [Key(0)]
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key("role")]
     public string? Role { get; set; }
+}
+
+[MessagePackObject]
+public class ModpkgLayerMetadata
+{
+    [Key("name")]
+    public string Name { get; set; }
+    
+    [Key("priority")]
+    public int Priority { get; set; }
+    
+    [Key("description")]
+    public string? Description { get; set; }
 }
 
 // For enums, you need custom handling or use a union type
@@ -131,24 +161,26 @@ public class LicenseNone : ModpkgLicense
 [MessagePackObject]
 public class LicenseSpdx : ModpkgLicense
 {
-    [Key(0)]
+    [Key("spdx_id")]
     public string SpdxId { get; set; }
 }
 
 [MessagePackObject]
 public class LicenseCustom : ModpkgLicense
 {
-    [Key(0)]
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key("url")]
     public string Url { get; set; }
 }
 
 // Usage:
 using (var stream = File.OpenRead("metadata.msgpack"))
 {
-    var metadata = MessagePackSerializer.Deserialize<ModpkgMetadata>(stream);
+    var options = MessagePackSerializerOptions.Standard.WithResolver(
+        MessagePack.Resolvers.ContractlessStandardResolver.Instance);
+    var metadata = MessagePackSerializer.Deserialize<ModpkgMetadata>(stream, options);
     Console.WriteLine($"Mod Name: {metadata.Name}");
 }
 ```
@@ -167,7 +199,21 @@ class ModpkgAuthor:
     
     @staticmethod
     def from_msgpack(data):
-        return ModpkgAuthor(name=data[0], role=data[1])
+        return ModpkgAuthor(name=data["name"], role=data.get("role"))
+
+@dataclass
+class ModpkgLayerMetadata:
+    name: str
+    priority: int
+    description: Optional[str]
+    
+    @staticmethod
+    def from_msgpack(data):
+        return ModpkgLayerMetadata(
+            name=data["name"],
+            priority=data["priority"],
+            description=data.get("description")
+        )
 
 @dataclass
 class ModpkgLicense:
@@ -195,50 +241,35 @@ class DistributorInfo:
 
 @dataclass
 class ModpkgMetadata:
+    schema_version: int
     name: str
     display_name: str
     description: Optional[str]
-    version: str
+    version: str # Semver string
     distributor: Optional[DistributorInfo]
     authors: List[ModpkgAuthor]
     license: ModpkgLicense
+    layers: List[ModpkgLayerMetadata]
     
     @staticmethod
     def from_msgpack(data):
-        authors = [ModpkgAuthor.from_msgpack(a) for a in data[5]]
-        
-        # Parse license
-        license_data = data[6]
-        if isinstance(license_data, str) and license_data == "None":
-            license = LicenseNone()
-        elif isinstance(license_data, dict):
-            if "Spdx" in license_data:
-                license = LicenseSpdx(spdx_id=license_data["Spdx"][0])
-            elif "Custom" in license_data:
-                license = LicenseCustom(
-                    name=license_data["Custom"][0],
-                    url=license_data["Custom"][1]
-                )
-        
-        # Parse distributor
-        distributor_data = data[4]
-        distributor = None
-        if distributor_data is not None:
-            distributor = DistributorInfo(
-                site_id=distributor_data["site_id"],
-                site_name=distributor_data["site_name"],
-                site_url=distributor_data["site_url"],
-                mod_id=distributor_data["mod_id"]
-            )
-        
         return ModpkgMetadata(
-            name=data[0],
-            display_name=data[1],
-            description=data[2],
-            version=data[3],
-            distributor=distributor,
-            authors=authors,
-            license=license
+            schema_version=data.get("schema_version", 1),
+            name=data["name"],
+            display_name=data["display_name"],
+            description=data.get("description"),
+            version=data["version"],
+            # ... etc
+            # For nested types, you'd instantiate them here using their from_msgpack methods
+            distributor=DistributorInfo(
+                site_id=data["distributor"]["site_id"],
+                site_name=data["distributor"]["site_name"],
+                site_url=data["distributor"]["site_url"],
+                mod_id=data["distributor"]["mod_id"]
+            ) if data.get("distributor") else None,
+            authors=[ModpkgAuthor.from_msgpack(a) for a in data.get("authors", [])],
+            license=LicenseNone(), # Placeholder for license logic
+            layers=[ModpkgLayerMetadata.from_msgpack(l) for l in data.get("layers", [])]
         )
 
 # Usage:
