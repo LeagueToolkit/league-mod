@@ -12,7 +12,7 @@ pub const METADATA_CHUNK_PATH: &str = "_meta_/info.msgpack";
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
     /// Load the metadata chunk from the mod package.
-    pub(crate) fn load_metadata(&mut self) -> Result<ModpkgMetadata, ModpkgError> {
+    pub fn load_metadata(&mut self) -> Result<ModpkgMetadata, ModpkgError> {
         let chunk = *self.get_chunk(METADATA_CHUNK_PATH, None)?;
 
         if chunk.layer_index != NO_LAYER_INDEX || chunk.wad_index != NO_WAD_INDEX {
@@ -70,6 +70,22 @@ impl DistributorInfo {
     }
 }
 
+/// Per-layer metadata that can be stored inside the mod package metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
+pub struct ModpkgLayerMetadata {
+    /// The name of the layer (e.g. "base", "chroma1").
+    pub name: String,
+
+    /// The priority of the layer as stored in the modpkg header.
+    pub priority: i32,
+
+    /// Optional human-readable description of the layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// The metadata of a mod package.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,14 +98,12 @@ pub struct ModpkgMetadata {
     pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
-}
 
-impl<TSource: Read + Seek> Modpkg<TSource> {
-    /// Get a reference to the metadata of the mod package.
-    /// The metadata is read and cached when the modpkg is mounted.
-    pub fn metadata(&self) -> &ModpkgMetadata {
-        &self.metadata
-    }
+    /// This is purely informational and does not affect how the modpkg loader
+    /// resolves layers; the canonical source of truth for layer priority is
+    /// still the modpkg header.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<ModpkgLayerMetadata>,
 }
 
 impl ModpkgMetadata {
@@ -147,6 +161,11 @@ impl ModpkgMetadata {
     /// Get the license of the mod package.
     pub fn license(&self) -> &ModpkgLicense {
         &self.license
+    }
+
+    /// Get the per-layer metadata entries, if any.
+    pub fn layers(&self) -> &[ModpkgLayerMetadata] {
+        &self.layers
     }
 }
 
@@ -216,6 +235,7 @@ mod tests {
             license: ModpkgLicense::Spdx {
                 spdx_id: "MIT".to_string(),
             },
+            layers: vec![],
         };
         let mut cursor = Cursor::new(Vec::new());
         metadata.write(&mut cursor).unwrap();
@@ -246,6 +266,7 @@ mod tests {
             license: ModpkgLicense::Spdx {
                 spdx_id: "MIT".to_string(),
             },
+            layers: vec![],
         };
 
         let encoded = rmp_serde::to_vec_named(&metadata).unwrap();

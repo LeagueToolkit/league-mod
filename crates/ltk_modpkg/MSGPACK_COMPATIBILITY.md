@@ -23,6 +23,7 @@ pub struct ModpkgMetadata {
     pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
+    pub layers: Vec<ModpkgLayerMetadata>,
 }
 
 pub struct DistributorInfo {
@@ -37,6 +38,12 @@ pub struct ModpkgAuthor {
     pub role: Option<String>,
 }
 
+pub struct ModpkgLayerMetadata {
+    pub name: String,
+    pub priority: i32,
+    pub description: Option<String>,
+}
+
 pub enum ModpkgLicense {
     None,
     Spdx { spdx_id: String },
@@ -47,7 +54,7 @@ pub enum ModpkgLicense {
 ### MessagePack Encoding Details
 
 **Structs** are encoded as **MessagePack maps** (named fields):
-- `ModpkgMetadata` → Map with keys: `{"name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ...}`
+- `ModpkgMetadata` → Map with keys: `{"name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ...}`
 - `DistributorInfo` → Map with keys: `{"site_id": ..., "site_name": ..., "site_url": ..., "mod_id": ...}`
 - `ModpkgAuthor` → Map with keys: `{"name": ..., "role": ...}`
 - Field names use `snake_case`

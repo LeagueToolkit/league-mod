@@ -10,7 +10,7 @@ use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_modpkg::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     utils::hash_layer_name,
-    ModpkgCompression, ModpkgMetadata, README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
+    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata, README_CHUNK_PATH,
 };
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use std::ffi::OsStr;
@@ -95,14 +95,8 @@ fn pack_to_modpkg(
 
     modpkg_builder
         .build_to_writer(&mut writer, |chunk_builder, cursor| {
-            write_chunk_payload(
-                chunk_builder,
-                cursor,
-                &project_root,
-                &mod_project,
-                &chunk_filepaths,
-            )
-            .map_err(ModpkgBuilderError::from)
+            write_chunk_payload(chunk_builder, cursor, &project_root, &chunk_filepaths)
+                .map_err(ModpkgBuilderError::from)
         })
         .into_diagnostic()?;
 
@@ -175,41 +169,6 @@ fn write_meta_chunk_readme(cursor: &mut Cursor<Vec<u8>>, project_root: &Path) ->
         let data = fs::read(readme_path)?;
         cursor.write_all(&data)?;
     }
-    Ok(())
-}
-
-fn write_meta_chunk_thumbnail(
-    cursor: &mut Cursor<Vec<u8>>,
-    project_root: &Path,
-    mod_project: &ModProject,
-) -> io::Result<()> {
-    // Use configured path if present; otherwise fall back to project_root/thumbnail.webp
-    let thumbnail_path = mod_project
-        .thumbnail
-        .as_ref()
-        .map(|p| project_root.join(p))
-        .unwrap_or_else(|| project_root.join("thumbnail.webp"));
-    if !thumbnail_path.exists() {
-        return Ok(());
-    }
-
-    let is_webp = thumbnail_path
-        .extension()
-        .and_then(OsStr::to_str)
-        .map(|ext| ext.eq_ignore_ascii_case("webp"))
-        .unwrap_or(false);
-
-    if is_webp {
-        let data = fs::read(thumbnail_path)?;
-        cursor.write_all(&data)?;
-        return Ok(());
-    }
-
-    let img = image::open(&thumbnail_path).map_err(io::Error::other)?;
-    let mut tmp = Cursor::new(Vec::new());
-    img.write_to(&mut tmp, ImageFormat::WebP)
-        .map_err(io::Error::other)?;
-    cursor.write_all(tmp.get_ref())?;
     Ok(())
 }
 
@@ -418,6 +377,7 @@ fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> Result<Mo
                 .map(utils::modpkg::convert_project_author)
                 .collect(),
             license: utils::modpkg::convert_project_license(&mod_project.license),
+            layers: build_metadata_layers(mod_project),
         })
         .into_diagnostic()
         .with_context(|| {
@@ -428,6 +388,36 @@ fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> Result<Mo
         })?;
 
     Ok(builder)
+}
+
+/// Build the per-layer metadata section that will be embedded into the
+/// `_meta_/info.msgpack` metadata chunk.
+fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
+    let mut layers = Vec::new();
+
+    // Base layer: always present in the packed modpkg, even if the project
+    // config omits it from the `layers` list.
+    let base_from_config = mod_project.layers.iter().find(|l| l.name == "base");
+    let base_description = base_from_config
+        .and_then(|l| l.description.clone())
+        .or_else(|| Some("Base layer of the mod".to_string()));
+
+    layers.push(ModpkgLayerMetadata {
+        name: "base".to_string(),
+        priority: 0,
+        description: base_description,
+    });
+
+    // All non-base layers from the project config are mirrored as-is.
+    for layer in mod_project.layers.iter().filter(|l| l.name != "base") {
+        layers.push(ModpkgLayerMetadata {
+            name: layer.name.clone(),
+            priority: layer.priority,
+            description: layer.description.clone(),
+        });
+    }
+
+    layers
 }
 
 fn build_layers(
@@ -546,20 +536,12 @@ fn write_chunk_payload(
     chunk_builder: &ModpkgChunkBuilder,
     cursor: &mut Cursor<Vec<u8>>,
     project_root: &Path,
-    mod_project: &ModProject,
     chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
 ) -> io::Result<()> {
     // Handle meta chunks specially (no layer/wad)
-    if chunk_builder.layer().is_empty() {
-        match chunk_builder.path.as_str() {
-            README_CHUNK_PATH => {
-                write_meta_chunk_readme(cursor, project_root)?;
-                return Ok(());
-            }
-            // Thumbnail is handled specially in the builder (like metadata)
-            // and won't reach this function
-            _ => {}
-        }
+    if chunk_builder.layer().is_empty() && chunk_builder.path.as_str() == README_CHUNK_PATH {
+        write_meta_chunk_readme(cursor, project_root)?;
+        return Ok(());
     }
 
     // Default: layer-bound content chunk from filepaths map
