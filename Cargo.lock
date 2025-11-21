@@ -1486,7 +1486,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "ltk_fantome"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "eyre",
  "image",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_mod_project"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1520,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_modpkg"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "binrw",
  "byteorder",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_pki"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "binrw",
  "cms",

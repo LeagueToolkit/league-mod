@@ -1,6 +1,6 @@
 [package]
 name = "ltk_fantome"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Helper library for working with League of Legends mods in the legacy Fantome format"
@@ -19,4 +19,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 eyre = "0.6"
 walkdir = "2.5.0"
-ltk_mod_project = { version = "0.1.1", path = "../ltk_mod_project" }
+ltk_mod_project = { version = "0.1.2", path = "../ltk_mod_project" }
