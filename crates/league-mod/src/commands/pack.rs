@@ -370,7 +370,7 @@ fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> Result<Mo
             name: mod_project.name.clone(),
             display_name: mod_project.display_name.clone(),
             description: Some(mod_project.description.clone()),
-            version: mod_project.version.clone(),
+            version: semver::Version::parse(&mod_project.version).into_diagnostic()?,
             distributor: None,
             authors: mod_project
                 .authors

@@ -4,6 +4,7 @@ use crate::{
     license::ModpkgLicense,
     Modpkg,
 };
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Seek, Write};
 
@@ -85,7 +86,7 @@ pub struct ModpkgLayerMetadata {
 }
 
 /// The metadata of a mod package.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct ModpkgMetadata {
@@ -96,7 +97,8 @@ pub struct ModpkgMetadata {
     pub name: String,
     pub display_name: String,
     pub description: Option<String>,
-    pub version: String,
+    #[cfg_attr(test, proptest(value = "Version::new(0, 1, 0)"))]
+    pub version: Version,
     pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
@@ -106,6 +108,22 @@ pub struct ModpkgMetadata {
     /// still the modpkg header.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<ModpkgLayerMetadata>,
+}
+
+impl Default for ModpkgMetadata {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            name: String::new(),
+            display_name: String::new(),
+            description: None,
+            version: Version::new(0, 0, 0),
+            distributor: None,
+            authors: Vec::new(),
+            license: ModpkgLicense::None,
+            layers: Vec::new(),
+        }
+    }
 }
 
 fn default_schema_version() -> u32 {
@@ -153,7 +171,7 @@ impl ModpkgMetadata {
         self.description.as_deref()
     }
     /// Get the version of the mod package.
-    pub fn version(&self) -> &str {
+    pub fn version(&self) -> &Version {
         &self.version
     }
     /// Get the distributor info of the mod package.
@@ -228,7 +246,7 @@ mod tests {
             name: "test".to_string(),
             display_name: "test".to_string(),
             description: Some("test".to_string()),
-            version: "1.0.0".to_string(),
+            version: Version::parse("1.0.0").unwrap(),
             distributor: Some(DistributorInfo {
                 site_id: "test_site".to_string(),
                 site_name: "Test Site".to_string(),
@@ -260,7 +278,7 @@ mod tests {
             name: "TestMod".to_string(),
             display_name: "Test Mod".to_string(),
             description: Some("A test mod".to_string()),
-            version: "1.0.0".to_string(),
+            version: Version::parse("1.0.0").unwrap(),
             distributor: Some(DistributorInfo {
                 site_id: "nexus".to_string(),
                 site_name: "Nexus Mods".to_string(),

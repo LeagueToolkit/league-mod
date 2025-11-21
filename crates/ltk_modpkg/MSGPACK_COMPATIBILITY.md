@@ -20,7 +20,7 @@ pub struct ModpkgMetadata {
     pub name: String,
     pub display_name: String,
     pub description: Option<String>,
-    pub version: String,
+    pub version: semver::Version,
     pub distributor: Option<DistributorInfo>,
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
@@ -69,6 +69,9 @@ pub enum ModpkgLicense {
 - `None` → MessagePack `nil`
 - `Some(value)` → The value directly
 
+**semver::Version** encodes as:
+- A string (e.g., `"1.0.0"`)
+
 This format is much more cross-language friendly than positional arrays!
 
 ## C# Implementation Example
@@ -95,7 +98,7 @@ public class ModpkgMetadata
     public string? Description { get; set; }
     
     [Key(4)]
-    public string Version { get; set; }
+    public string Version { get; set; } // Semver string
     
     [Key(5)]
     public DistributorInfo? Distributor { get; set; }
@@ -210,7 +213,7 @@ class ModpkgMetadata:
     name: str
     display_name: str
     description: Optional[str]
-    version: str
+    version: str # Semver string
     distributor: Optional[DistributorInfo]
     authors: List[ModpkgAuthor]
     license: ModpkgLicense
