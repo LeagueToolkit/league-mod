@@ -85,48 +85,48 @@ using System.Collections.Generic;
 [MessagePackObject]
 public class ModpkgMetadata
 {
-    [Key(0)]
+    [Key("schema_version")]
     public uint SchemaVersion { get; set; } = 1;
 
-    [Key(1)]
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(2)]
+    [Key("display_name")]
     public string DisplayName { get; set; }
     
-    [Key(3)]
+    [Key("description")]
     public string? Description { get; set; }
     
-    [Key(4)]
+    [Key("version")]
     public string Version { get; set; } // Semver string
     
-    [Key(5)]
+    [Key("distributor")]
     public DistributorInfo? Distributor { get; set; }
 }
 
 [MessagePackObject]
 public class DistributorInfo
 {
-    [Key(0)]
+    [Key("site_id")]
     public string SiteId { get; set; }
     
-    [Key(1)]
+    [Key("site_name")]
     public string SiteName { get; set; }
     
-    [Key(2)]
+    [Key("site_url")]
     public string SiteUrl { get; set; }
     
-    [Key(3)]
+    [Key("mod_id")]
     public string ModId { get; set; }
 }
 
 [MessagePackObject]
 public class ModpkgAuthor
 {
-    [Key(0)]
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key("role")]
     public string? Role { get; set; }
 }
 
@@ -145,24 +145,26 @@ public class LicenseNone : ModpkgLicense
 [MessagePackObject]
 public class LicenseSpdx : ModpkgLicense
 {
-    [Key(0)]
+    [Key("spdx_id")]
     public string SpdxId { get; set; }
 }
 
 [MessagePackObject]
 public class LicenseCustom : ModpkgLicense
 {
-    [Key(0)]
+    [Key("name")]
     public string Name { get; set; }
     
-    [Key(1)]
+    [Key("url")]
     public string Url { get; set; }
 }
 
 // Usage:
 using (var stream = File.OpenRead("metadata.msgpack"))
 {
-    var metadata = MessagePackSerializer.Deserialize<ModpkgMetadata>(stream);
+    var options = MessagePackSerializerOptions.Standard.WithResolver(
+        MessagePack.Resolvers.ContractlessStandardResolver.Instance);
+    var metadata = MessagePackSerializer.Deserialize<ModpkgMetadata>(stream, options);
     Console.WriteLine($"Mod Name: {metadata.Name}");
 }
 ```
@@ -181,7 +183,7 @@ class ModpkgAuthor:
     
     @staticmethod
     def from_msgpack(data):
-        return ModpkgAuthor(name=data[0], role=data[1])
+        return ModpkgAuthor(name=data["name"], role=data.get("role"))
 
 @dataclass
 class ModpkgLicense:
@@ -220,14 +222,22 @@ class ModpkgMetadata:
     
     @staticmethod
     def from_msgpack(data):
-        # Note: Real implementation would access by name since we use named fields
-        # This simplified example assumes positional for brevity but production
-        # code should use named access.
-        
         return ModpkgMetadata(
             schema_version=data.get("schema_version", 1),
             name=data["name"],
+            display_name=data["display_name"],
+            description=data.get("description"),
+            version=data["version"],
             # ... etc
+            # For nested types, you'd instantiate them here using their from_msgpack methods
+            distributor=DistributorInfo(
+                site_id=data["distributor"]["site_id"],
+                site_name=data["distributor"]["site_name"],
+                site_url=data["distributor"]["site_url"],
+                mod_id=data["distributor"]["mod_id"]
+            ) if data.get("distributor") else None,
+            authors=[ModpkgAuthor.from_msgpack(a) for a in data.get("authors", [])],
+            license=LicenseNone() # Placeholder for license logic
         )
 
 # Usage:
