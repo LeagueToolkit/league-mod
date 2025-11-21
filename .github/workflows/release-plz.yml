@@ -88,16 +88,19 @@ jobs:
             $tag = $leagueModRelease.tag
             echo "version=$version" >> $env:GITHUB_OUTPUT
             echo "tag=$tag" >> $env:GITHUB_OUTPUT
+            echo "should_build=true" >> $env:GITHUB_OUTPUT
             echo "Found release: $tag with version $version"
           } else {
-            echo "No league-mod release found"
-            exit 1
+            echo "No league-mod release found, skipping build"
+            echo "should_build=false" >> $env:GITHUB_OUTPUT
           }
 
       - name: Build release binary
+        if: steps.release_info.outputs.should_build == 'true'
         run: cargo build --release --bin league-mod
 
       - name: Create release directory
+        if: steps.release_info.outputs.should_build == 'true'
         run: |
           mkdir release
           Copy-Item target/release/league-mod.exe release/
@@ -105,12 +108,14 @@ jobs:
           Copy-Item LICENSE release/
 
       - name: Create ZIP archive
+        if: steps.release_info.outputs.should_build == 'true'
         shell: powershell
         run: |
           $version = "${{ steps.release_info.outputs.version }}"
           Compress-Archive -Path release/* -DestinationPath "league-mod-$version-windows-x64.zip"
 
       - name: Generate SHA256 checksum
+        if: steps.release_info.outputs.should_build == 'true'
         shell: powershell
         run: |
           $version = "${{ steps.release_info.outputs.version }}"
@@ -119,6 +124,7 @@ jobs:
           echo "SHA256: $($hash.Hash)"
 
       - name: Upload assets to existing release
+        if: steps.release_info.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_info.outputs.tag }}
