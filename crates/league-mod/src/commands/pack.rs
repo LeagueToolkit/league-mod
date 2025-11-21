@@ -401,7 +401,7 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
     let base_from_config = mod_project.layers.iter().find(|l| l.name == "base");
     let base_description = base_from_config
         .and_then(|l| l.description.clone())
-        .or_else(|| Some("Base layer of the mod".to_string()));
+        .or(Some("Base layer of the mod".to_string()));
 
     layers.push(ModpkgLayerMetadata {
         name: "base".to_string(),

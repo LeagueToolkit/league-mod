@@ -627,7 +627,7 @@ impl ModpkgBuilder {
 
     /// Set the thumbnail for the builder.
     pub fn with_thumbnail(mut self, thumbnail: Vec<u8>) -> Result<Self, ModpkgBuilderError> {
-        self.thumbnail = Some(thumbnail.clone());
+        self.thumbnail = Some(thumbnail);
         let thumbnail_chunk = ModpkgChunkBuilder::new()
             .with_path(THUMBNAIL_CHUNK_PATH)?
             .with_compression(ModpkgCompression::None)
