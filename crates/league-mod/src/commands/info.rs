@@ -24,7 +24,7 @@ pub fn info_mod_package(args: InfoModPackageArgs) -> miette::Result<()> {
     println_pad!(
         "{} {}",
         "🏷️ Version:".bright_green(),
-        metadata.version.bright_white().bold()
+        metadata.version.to_string().bright_white().bold()
     );
     println_pad!(
         "{} {}",
