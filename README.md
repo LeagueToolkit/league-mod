@@ -53,6 +53,11 @@ league-mod extract --file-path ./my-mod.modpkg --output-dir ./extracted
 
 # Show mod package information
 league-mod info --file-path ./my-mod.modpkg
+
+# Configure League installation path
+league-mod config auto-detect
+league-mod config set-league-path "C:/Riot Games/League of Legends/Game/League of Legends.exe"
+league-mod config show
 ```
 
 ### `ltk_modpkg` - Binary Format Library
