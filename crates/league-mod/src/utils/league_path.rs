@@ -6,19 +6,19 @@ use std::process::Command;
 /// The path must exist and point to "League of Legends.exe"
 pub fn is_valid_league_path(path: &str) -> bool {
     let p = Path::new(path);
-    
+
     // Check if file exists
     if !p.exists() {
         return false;
     }
-    
+
     // Check if it's the correct executable name
     if let Some(file_name) = p.file_name() {
         if let Some(name_str) = file_name.to_str() {
             return name_str == "League of Legends.exe";
         }
     }
-    
+
     false
 }
 
@@ -32,12 +32,12 @@ fn get_available_drives() -> Vec<String> {
 
     // Try to detect drives using WMIC
     if let Ok(output) = Command::new("wmic")
-        .args(&["logicaldisk", "get", "caption"])
+        .args(["logicaldisk", "get", "caption"])
         .output()
     {
         if let Ok(stdout) = String::from_utf8(output.stdout) {
             let mut drives = Vec::new();
-            
+
             for line in stdout.lines() {
                 // Look for drive letters (e.g., "C:")
                 if let Some(first_char) = line.trim().chars().next() {
@@ -46,13 +46,13 @@ fn get_available_drives() -> Vec<String> {
                     }
                 }
             }
-            
+
             if !drives.is_empty() {
                 return drives;
             }
         }
     }
-    
+
     // Fallback to common drives if WMIC fails
     vec!["C", "D", "E", "F", "G", "H"]
         .into_iter()
@@ -66,36 +66,36 @@ fn get_available_drives() -> Vec<String> {
 fn detect_from_riot_client_installs() -> Option<String> {
     // Get system drive (usually C:)
     let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
-    
+
     // Build path to RiotClientInstalls.json
     let riot_installs_path = PathBuf::from(&system_drive)
         .join("ProgramData")
         .join("Riot Games")
         .join("RiotClientInstalls.json");
-    
+
     // Check if file exists
     if !riot_installs_path.exists() {
         return None;
     }
-    
+
     // Try to read and parse the JSON file
     let contents = fs::read_to_string(&riot_installs_path).ok()?;
     let data: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    
+
     // Look for associated_client field
     let associated_client = data.get("associated_client")?.as_object()?;
-    
+
     // Find League of Legends installation
     for (install_path, _) in associated_client {
         if install_path.to_lowercase().contains("league of legends") {
             // Normalize path (convert forward slashes to backslashes on Windows)
             let normalized = install_path.replace('/', "\\");
-            
+
             // Build path to the executable
             let exe_path = PathBuf::from(&normalized)
                 .join("Game")
                 .join("League of Legends.exe");
-            
+
             // Validate the path
             if let Some(path_str) = exe_path.to_str() {
                 if is_valid_league_path(path_str) {
@@ -104,7 +104,7 @@ fn detect_from_riot_client_installs() -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
@@ -120,12 +120,12 @@ fn detect_from_running_process() -> Option<String> {
     if let Some(path) = detect_process("LeagueClientUx.exe") {
         return Some(path);
     }
-    
+
     // Try LeagueClient.exe
     if let Some(path) = detect_process("LeagueClient.exe") {
         return Some(path);
     }
-    
+
     // Try League of Legends.exe directly
     detect_process("League of Legends.exe")
 }
@@ -133,7 +133,7 @@ fn detect_from_running_process() -> Option<String> {
 /// Helper function to detect a specific process and extract its path
 fn detect_process(process_name: &str) -> Option<String> {
     let output = Command::new("wmic")
-        .args(&[
+        .args([
             "process",
             "where",
             &format!("name='{}'", process_name),
@@ -143,9 +143,9 @@ fn detect_process(process_name: &str) -> Option<String> {
         ])
         .output()
         .ok()?;
-    
+
     let stdout = String::from_utf8(output.stdout).ok()?;
-    
+
     // Parse output to find ExecutablePath
     for line in stdout.lines() {
         if line.starts_with("ExecutablePath=") {
@@ -153,14 +153,14 @@ fn detect_process(process_name: &str) -> Option<String> {
                 .trim_start_matches("ExecutablePath=")
                 .trim()
                 .replace('\r', "");
-            
+
             if !path.is_empty() {
-                // If we found LeagueClient.exe or LeagueClientUx.exe, 
+                // If we found LeagueClient.exe or LeagueClientUx.exe,
                 // we need to find the Game folder
                 if process_name == "LeagueClient.exe" || process_name == "LeagueClientUx.exe" {
                     let root_path = Path::new(&path).parent()?;
                     let game_exe = root_path.join("Game").join("League of Legends.exe");
-                    
+
                     if let Some(game_path) = game_exe.to_str() {
                         if is_valid_league_path(game_path) {
                             return Some(game_path.to_string());
@@ -175,7 +175,7 @@ fn detect_process(process_name: &str) -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
@@ -183,7 +183,7 @@ fn detect_process(process_name: &str) -> Option<String> {
 fn detect_from_common_paths() -> Option<String> {
     let drives = get_available_drives();
     let mut paths_to_check = Vec::new();
-    
+
     // Build list of common installation paths for each drive
     for drive in drives {
         paths_to_check.push(format!(
@@ -199,14 +199,15 @@ fn detect_from_common_paths() -> Option<String> {
             drive
         ));
     }
-    
+
     // Check each path
-    for path in paths_to_check {
-        if is_valid_league_path(&path) {
-            return Some(path);
-        }
+    if let Some(path) = paths_to_check
+        .into_iter()
+        .find(|path| is_valid_league_path(path))
+    {
+        return Some(path);
     }
-    
+
     None
 }
 
@@ -219,7 +220,7 @@ fn detect_from_registry() -> Option<String> {
 
     // Try to query the registry for League installation path
     let output = Command::new("reg")
-        .args(&[
+        .args([
             "query",
             "HKLM\\SOFTWARE\\WOW6432Node\\Riot Games, Inc\\League of Legends",
             "/v",
@@ -227,9 +228,9 @@ fn detect_from_registry() -> Option<String> {
         ])
         .output()
         .ok()?;
-    
+
     let stdout = String::from_utf8(output.stdout).ok()?;
-    
+
     // Parse the output to find the Location value
     for line in stdout.lines() {
         if line.contains("Location") && line.contains("REG_SZ") {
@@ -240,7 +241,7 @@ fn detect_from_registry() -> Option<String> {
                 let game_exe = PathBuf::from(root_path)
                     .join("Game")
                     .join("League of Legends.exe");
-                
+
                 if let Some(path_str) = game_exe.to_str() {
                     if is_valid_league_path(path_str) {
                         return Some(path_str.to_string());
@@ -249,7 +250,7 @@ fn detect_from_registry() -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
@@ -266,31 +267,27 @@ pub fn auto_detect_league_path() -> Option<String> {
     if cfg!(not(target_os = "windows")) {
         return None;
     }
-    
+
     // Method 1: Try RiotClientInstalls.json first (most reliable)
     if let Some(path) = detect_from_riot_client_installs() {
         return Some(path);
     }
-    
+
     // Method 2: Try to detect from running process
     if let Some(path) = detect_from_running_process() {
         return Some(path);
     }
-    
+
     // Method 3: Check common installation paths
     if let Some(path) = detect_from_common_paths() {
         return Some(path);
     }
-    
+
     // Method 4: Try Windows Registry as last resort
     if let Some(path) = detect_from_registry() {
         return Some(path);
     }
-    
+
     // No League installation found
     None
 }
-
-
-
-

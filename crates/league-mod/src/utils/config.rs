@@ -1,21 +1,13 @@
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppConfig {
     pub league_path: Option<String>,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            league_path: None,
-        }
-    }
 }
 
 /// Returns the directory where the current executable resides.
@@ -48,19 +40,25 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(cfg: &AppConfig) -> io::Result<()> {
     if let Some(path) = default_config_path() {
-        let content = toml::to_string_pretty(cfg).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let content = toml::to_string_pretty(cfg).map_err(io::Error::other)?;
         fs::write(path, content)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "Could not determine config path"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Could not determine config path",
+        ))
     }
 }
 
 pub fn load_or_create_config() -> io::Result<(AppConfig, PathBuf)> {
-    let path = default_config_path().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Could not determine config path"))?;
-    
+    let path = default_config_path().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "Could not determine config path")
+    })?;
+
     if path.exists() {
         let content = fs::read_to_string(&path)?;
-        let cfg = toml::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let cfg =
+            toml::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok((cfg, path))
     } else {
         let cfg = AppConfig::default();
