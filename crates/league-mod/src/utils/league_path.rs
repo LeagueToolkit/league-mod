@@ -87,7 +87,9 @@ fn detect_from_riot_client_installs() -> Option<String> {
 
     // Find League of Legends installation
     for (install_path, _) in associated_client {
-        if install_path.to_lowercase().contains("league of legends") {
+        let lower_path = install_path.to_lowercase();
+        // Check if it contains "league of legends" AND NOT "pbe"
+        if lower_path.contains("league of legends") && !lower_path.contains("pbe") {
             // Normalize path (convert forward slashes to backslashes on Windows)
             let normalized = install_path.replace('/', "\\");
 
