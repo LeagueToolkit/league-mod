@@ -57,9 +57,9 @@ fn detect_from_riot_client_installs() -> Option<String> {
     let associated_client = data.get("associated_client")?.as_object()?;
 
     for (install_path, _) in associated_client {
-        // Normalize: remove trailing slash and convert to backslashes
-        let cleaned_path = install_path.trim_end_matches('/').replace('/', "\\");
-        let normalized_path = Utf8PathBuf::from(&cleaned_path);
+        // Remove trailing separator (file_name() returns None for paths ending in separator)
+        let cleaned_path = install_path.trim_end_matches(['/', '\\']);
+        let normalized_path = Utf8PathBuf::from(cleaned_path);
 
         // Check for exact "League of Legends" folder (excludes PBE)
         if let Some(folder_name) = normalized_path.file_name() {
