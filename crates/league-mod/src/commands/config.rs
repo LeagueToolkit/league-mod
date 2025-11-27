@@ -3,11 +3,16 @@ use crate::utils::league_path;
 use colored::Colorize;
 use miette::Result;
 
-/// Shows the current configuration
+fn update_league_path_in_config(path: String) -> Result<()> {
+    let mut cfg = config::load_config();
+    cfg.league_path = Some(path);
+    config::save_config(&cfg).map_err(|e| miette::miette!("Failed to save config: {}", e))
+}
+
 pub fn show_config() -> Result<()> {
     let cfg = config::load_config();
     let config_path = config::default_config_path()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| p.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
     println!("\n{}", "League Mod Configuration".bright_cyan().bold());
@@ -16,7 +21,6 @@ pub fn show_config() -> Result<()> {
     println!("  {} {}", "Config file:".bright_white().bold(), config_path);
     println!();
 
-    // Display league_path
     match &cfg.league_path {
         Some(path) => {
             println!(
@@ -25,7 +29,6 @@ pub fn show_config() -> Result<()> {
                 path.bright_green()
             );
 
-            // Validate the path
             if league_path::is_valid_league_path(path) {
                 println!(
                     "  {} {}",
@@ -61,19 +64,11 @@ pub fn show_config() -> Result<()> {
     }
 
     println!();
-
     Ok(())
 }
 
-/// Sets the League of Legends path manually with validation
 pub fn set_league_path(path: String) -> Result<()> {
-    // Validate the path first
     if !league_path::is_valid_league_path(&path) {
-        eprintln!(
-            "{}",
-            "Error: Invalid League of Legends path".bright_red().bold()
-        );
-        eprintln!();
         eprintln!(
             "  {}",
             "The path must point to 'League of Legends.exe' in the Game folder.".bright_yellow()
@@ -89,18 +84,11 @@ pub fn set_league_path(path: String) -> Result<()> {
             "  {} The file is not named 'League of Legends.exe'",
             "•".bright_red()
         );
-        eprintln!();
-        std::process::exit(1);
+
+        return Err(miette::miette!("Invalid League of Legends path"));
     }
 
-    // Load existing config
-    let mut cfg = config::load_config();
-
-    // Update league path
-    cfg.league_path = Some(path.clone());
-
-    // Save config
-    config::save_config(&cfg).map_err(|e| miette::miette!("Failed to save config: {}", e))?;
+    update_league_path_in_config(path.clone())?;
 
     println!(
         "{}",
@@ -116,7 +104,6 @@ pub fn set_league_path(path: String) -> Result<()> {
     Ok(())
 }
 
-/// Automatically detects the League of Legends installation path
 pub fn auto_detect_league_path() -> Result<()> {
     println!(
         "{}",
@@ -124,7 +111,6 @@ pub fn auto_detect_league_path() -> Result<()> {
     );
     println!();
 
-    // Run auto-detection
     match league_path::auto_detect_league_path() {
         Some(detected_path) => {
             println!("{}", "✓ Found League of Legends!".bright_green().bold());
@@ -136,15 +122,7 @@ pub fn auto_detect_league_path() -> Result<()> {
             );
             println!();
 
-            // Load existing config
-            let mut cfg = config::load_config();
-
-            // Update league path
-            cfg.league_path = Some(detected_path.clone());
-
-            // Save config
-            config::save_config(&cfg)
-                .map_err(|e| miette::miette!("Failed to save config: {}", e))?;
+            update_league_path_in_config(detected_path)?;
 
             println!(
                 "{}",
@@ -186,17 +164,12 @@ pub fn auto_detect_league_path() -> Result<()> {
     Ok(())
 }
 
-/// Resets the configuration to defaults
 pub fn reset_config() -> Result<()> {
-    // Get config path for display
     let config_path = config::default_config_path()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| p.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Create default config
     let default_cfg = AppConfig::default();
-
-    // Save default config (overwrites existing)
     config::save_config(&default_cfg)
         .map_err(|e| miette::miette!("Failed to reset config: {}", e))?;
 
@@ -215,17 +188,13 @@ pub fn reset_config() -> Result<()> {
     Ok(())
 }
 
-/// Ensures config.toml exists, creates it with defaults if not.
-/// Also attempts auto-detection on first run if league_path is not set.
+/// Ensures config.toml exists and attempts auto-detection if league_path is not set.
 pub fn ensure_config_exists() -> Result<()> {
-    // Try to load or create config
     let (cfg, _path) = config::load_or_create_config()
         .map_err(|e| miette::miette!("Failed to initialize config: {}", e))?;
 
-    // If league_path is not set, try auto-detection (first run behavior)
     if cfg.league_path.is_none() {
         if let Some(detected_path) = league_path::auto_detect_league_path() {
-            // Silently save the detected path
             let mut updated_cfg = cfg;
             updated_cfg.league_path = Some(detected_path);
             let _ = config::save_config(&updated_cfg);
