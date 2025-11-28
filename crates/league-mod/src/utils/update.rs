@@ -92,7 +92,9 @@ fn try_check_and_log_update() -> Result<(), Box<dyn std::error::Error + Send + S
 
 fn read_update_config() -> io::Result<UpdateConfig> {
     if let Some(path) = crate::utils::config::config_path("league-mod.config.json") {
-        if let Some(cfg) = crate::utils::config::read_json::<UpdateConfig>(&path)? {
+        // Convert Utf8PathBuf to std::path::Path for read_json
+        let std_path = std::path::Path::new(path.as_str());
+        if let Some(cfg) = crate::utils::config::read_json::<UpdateConfig>(std_path)? {
             return Ok(cfg);
         }
     }
@@ -101,8 +103,10 @@ fn read_update_config() -> io::Result<UpdateConfig> {
 
 fn write_update_config(cfg: &UpdateConfig) -> io::Result<()> {
     if let Some(path) = crate::utils::config::config_path("league-mod.config.json") {
+        // Convert Utf8PathBuf to std::path::Path for write_json_pretty
+        let std_path = std::path::Path::new(path.as_str());
         // Best-effort write; create or overwrite
-        let _ = crate::utils::config::write_json_pretty(&path, cfg);
+        let _ = crate::utils::config::write_json_pretty(std_path, cfg);
     }
     Ok(())
 }

@@ -1,3 +1,4 @@
+pub mod config;
 mod extract;
 mod info;
 mod init;

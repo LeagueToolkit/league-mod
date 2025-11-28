@@ -11,6 +11,9 @@ mod commands;
 mod errors;
 mod utils;
 
+// Import config command functions
+use commands::config as config_cmd;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -65,6 +68,26 @@ pub enum Commands {
         #[arg(short, long, default_value = "extracted")]
         output_dir: String,
     },
+    /// Manage application configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Show current configuration
+    Show,
+    /// Set League of Legends installation path
+    SetLeaguePath {
+        /// Path to League of Legends.exe
+        path: String,
+    },
+    /// Automatically detect League of Legends installation
+    AutoDetect,
+    /// Reset configuration to defaults
+    Reset,
 }
 
 fn parse_args() -> Args {
@@ -84,6 +107,10 @@ fn parse_args() -> Args {
 }
 
 fn main() -> Result<()> {
+    // Ensure config exists on startup (creates config.toml if missing)
+    // Also attempts auto-detection on first run
+    let _ = config_cmd::ensure_config_exists();
+
     utils::update::check_for_update_blocking();
 
     let args = parse_args();
@@ -119,5 +146,11 @@ fn main() -> Result<()> {
             file_path,
             output_dir,
         }),
+        Commands::Config { action } => match action {
+            ConfigAction::Show => config_cmd::show_config(),
+            ConfigAction::SetLeaguePath { path } => config_cmd::set_league_path(path),
+            ConfigAction::AutoDetect => config_cmd::auto_detect_league_path(),
+            ConfigAction::Reset => config_cmd::reset_config(),
+        },
     }
 }
