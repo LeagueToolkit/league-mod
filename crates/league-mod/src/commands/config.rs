@@ -1,9 +1,10 @@
 use crate::utils::config::{self, AppConfig};
 use crate::utils::league_path;
+use camino::Utf8PathBuf;
 use colored::Colorize;
 use miette::Result;
 
-fn update_league_path_in_config(path: String) -> Result<()> {
+fn update_league_path_in_config(path: Utf8PathBuf) -> Result<()> {
     let mut cfg = config::load_config();
     cfg.league_path = Some(path);
     config::save_config(&cfg).map_err(|e| miette::miette!("Failed to save config: {}", e))
@@ -26,10 +27,10 @@ pub fn show_config() -> Result<()> {
             println!(
                 "  {} {}",
                 "League Path:".bright_white().bold(),
-                path.bright_green()
+                path.as_str().bright_green()
             );
 
-            if league_path::is_valid_league_path(path) {
+            if league_path::is_valid_league_path(path.as_path()) {
                 println!(
                     "  {} {}",
                     "Status:".bright_white().bold(),
@@ -68,7 +69,8 @@ pub fn show_config() -> Result<()> {
 }
 
 pub fn set_league_path(path: String) -> Result<()> {
-    if !league_path::is_valid_league_path(&path) {
+    let path = Utf8PathBuf::from(&path);
+    if !league_path::is_valid_league_path(path.as_path()) {
         eprintln!(
             "  {}",
             "The path must point to 'League of Legends.exe' in the Game folder.".bright_yellow()
@@ -98,7 +100,7 @@ pub fn set_league_path(path: String) -> Result<()> {
     println!(
         "  {} {}",
         "Path:".bright_white().bold(),
-        path.bright_green()
+        path.as_str().bright_green()
     );
 
     Ok(())
@@ -118,11 +120,11 @@ pub fn auto_detect_league_path() -> Result<()> {
             println!(
                 "  {} {}",
                 "Path:".bright_white().bold(),
-                detected_path.bright_green()
+                detected_path.as_str().bright_green()
             );
             println!();
 
-            update_league_path_in_config(detected_path)?;
+            update_league_path_in_config(detected_path.clone())?;
 
             println!(
                 "{}",

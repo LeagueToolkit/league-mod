@@ -97,6 +97,20 @@ pub enum CliError {
         help("The 'base' layer must have priority 0")
     )]
     InvalidBaseLayerPriority { provided: i32 },
+
+    #[error("Fantome package contains unsupported RAW/ directory")]
+    #[diagnostic(
+        code(fantome::raw_unsupported),
+        help("RAW/ files without WAD association cannot be converted to mod project format. The mod author needs to restructure their mod to use WAD/ directories.")
+    )]
+    FantomeRawUnsupported,
+
+    #[error("Fantome package contains packed WAD file: {wad_name}")]
+    #[diagnostic(
+        code(fantome::packed_wad_unsupported),
+        help("This fantome contains a packed WAD file instead of extracted files. WAD extraction is not currently supported. The mod author needs to use extracted WAD directories (e.g., WAD/Aatrox.wad.client/assets/...) instead.")
+    )]
+    FantomePackedWadUnsupported { wad_name: String },
 }
 
 impl CliError {
