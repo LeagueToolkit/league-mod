@@ -1,7 +1,14 @@
 [workspace]
 resolver = "2"
 
-members = ["crates/*"]
+members = [
+    "crates/league-mod",
+    "crates/ltk_fantome",
+    "crates/ltk_modpkg",
+    "crates/ltk_mod_project",
+    "crates/ltk_pki",
+    "crates/ltk-manager/src-tauri",
+]
 
 [workspace.dependencies]
 camino = "1.1"
