@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 
+use crate::errors::CliError;
 use crate::println_pad;
 use camino::Utf8Path;
 use colored::Colorize;
@@ -60,6 +61,33 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
     );
 
     let output_path = Utf8Path::new(&args.output_dir);
+
+    // First pass: validate the archive structure
+    // Check for unsupported RAW/ directory and packed WAD files
+    for i in 0..archive.len() {
+        let file = archive.by_index(i).into_diagnostic()?;
+        let file_name = file.name();
+
+        // Check for RAW/ directory (unsupported)
+        if file_name.starts_with("RAW/") {
+            return Err(CliError::FantomeRawUnsupported.into());
+        }
+
+        // Check for packed WAD files in WAD/ directory
+        // A packed WAD file would be directly under WAD/ without subdirectories
+        // e.g., "WAD/Aatrox.wad.client" (file) vs "WAD/Aatrox.wad.client/" (directory)
+        if file_name.starts_with("WAD/") && !file.is_dir() {
+            let relative_path = file_name.strip_prefix("WAD/").unwrap();
+            // Check if this is a direct WAD file (no path separator after WAD/)
+            // e.g., "Aatrox.wad.client" with no further path components
+            if !relative_path.contains('/') && is_wad_file_name(relative_path) {
+                return Err(CliError::FantomePackedWadUnsupported {
+                    wad_name: relative_path.to_string(),
+                }
+                .into());
+            }
+        }
+    }
 
     // Read metadata
     let mut info_file = archive.by_name("META/info.json").into_diagnostic()?;
@@ -144,4 +172,9 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
     println_pad!("{}", "✅ Extraction complete!".bright_green().bold());
 
     Ok(())
+}
+
+/// Check if a filename looks like a WAD file (ends with .wad.client or similar WAD extensions)
+fn is_wad_file_name(name: &str) -> bool {
+    name.ends_with(".wad.client") || name.ends_with(".wad") || name.ends_with(".wad.mobile")
 }

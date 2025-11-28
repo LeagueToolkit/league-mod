@@ -9,9 +9,20 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Application-wide configuration stored in config.toml.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
-    pub league_path: Option<String>,
+    pub league_path: Option<Utf8PathBuf>,
+    /// Directory where WAD hashtables are stored.
+    pub hashtable_dir: Option<Utf8PathBuf>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            league_path: None,
+            hashtable_dir: default_hashtable_dir(),
+        }
+    }
 }
 
 /// Returns the directory where the current executable resides.
@@ -100,4 +111,15 @@ pub fn now_epoch_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Returns the default directory where wad hashtables should be looked up.
+/// Uses the user's Documents folder: Documents/LeagueToolkit/wad_hashtables
+pub fn default_hashtable_dir() -> Option<Utf8PathBuf> {
+    let user_dirs = directories_next::UserDirs::new()?;
+    let doc_dir = user_dirs.document_dir()?;
+    let mut path = doc_dir.to_path_buf();
+    path.push("LeagueToolkit");
+    path.push("wad_hashtables");
+    Utf8PathBuf::from_path_buf(path).ok()
 }

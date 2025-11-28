@@ -107,8 +107,6 @@ fn parse_args() -> Args {
 }
 
 fn main() -> Result<()> {
-    // Ensure config exists on startup (creates config.toml if missing)
-    // Also attempts auto-detection on first run
     let _ = config_cmd::ensure_config_exists();
 
     utils::update::check_for_update_blocking();
