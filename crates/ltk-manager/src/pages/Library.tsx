@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
+
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Grid3X3, List, Plus, Search, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+
 import { ModCard } from "../components/ModCard";
 
 interface InstalledMod {
@@ -87,57 +89,57 @@ export function Library() {
   );
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <header className="h-16 flex items-center justify-between px-6 border-b border-surface-800">
-        <h2 className="text-xl font-semibold text-surface-100">Mod Library</h2>
+      <header className="border-surface-800 flex h-16 items-center justify-between border-b px-6">
+        <h2 className="text-surface-100 text-xl font-semibold">Mod Library</h2>
         <button
           type="button"
           onClick={handleInstallMod}
-          className="flex items-center gap-2 px-4 py-2 bg-league-500 hover:bg-league-600 text-white rounded-lg font-medium transition-colors"
+          className="bg-league-500 hover:bg-league-600 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="h-4 w-4" />
           Add Mod
         </button>
       </header>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-4 px-6 py-4 border-b border-surface-800/50">
+      <div className="border-surface-800/50 flex items-center gap-4 border-b px-6 py-4">
         {/* Search */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500" />
+        <div className="relative max-w-md flex-1">
+          <Search className="text-surface-500 absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
           <input
             type="text"
             placeholder="Search mods..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-surface-100 placeholder:text-surface-500 focus:outline-none focus:ring-2 focus:ring-league-500 focus:border-transparent"
+            className="bg-surface-800 border-surface-700 text-surface-100 placeholder:text-surface-500 focus:ring-league-500 w-full rounded-lg border py-2 pr-4 pl-10 focus:border-transparent focus:ring-2 focus:outline-none"
           />
         </div>
 
         {/* View toggle */}
-        <div className="flex items-center gap-1 p-1 bg-surface-800 rounded-lg">
+        <div className="bg-surface-800 flex items-center gap-1 rounded-lg p-1">
           <button
             type="button"
             onClick={() => setViewMode("grid")}
-            className={`p-2 rounded-md transition-colors ${
+            className={`rounded-md p-2 transition-colors ${
               viewMode === "grid"
                 ? "bg-surface-700 text-surface-100"
                 : "text-surface-500 hover:text-surface-300"
             }`}
           >
-            <Grid3X3 className="w-4 h-4" />
+            <Grid3X3 className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={() => setViewMode("list")}
-            className={`p-2 rounded-md transition-colors ${
+            className={`rounded-md p-2 transition-colors ${
               viewMode === "list"
                 ? "bg-surface-700 text-surface-100"
                 : "text-surface-500 hover:text-surface-300"
             }`}
           >
-            <List className="w-4 h-4" />
+            <List className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -145,8 +147,8 @@ export function Library() {
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
         {isLoading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="animate-spin w-8 h-8 border-2 border-league-500 border-t-transparent rounded-full" />
+          <div className="flex h-64 items-center justify-center">
+            <div className="border-league-500 h-8 w-8 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : filteredMods.length === 0 ? (
           <EmptyState onInstall={handleInstallMod} hasSearch={!!searchQuery} />
@@ -154,7 +156,7 @@ export function Library() {
           <div
             className={
               viewMode === "grid"
-                ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+                ? "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                 : "space-y-2"
             }
           >
@@ -177,27 +179,27 @@ export function Library() {
 function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch: boolean }) {
   if (hasSearch) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
-        <Search className="w-12 h-12 text-surface-600 mb-4" />
-        <h3 className="text-lg font-medium text-surface-300 mb-1">No mods found</h3>
+      <div className="flex h-64 flex-col items-center justify-center text-center">
+        <Search className="text-surface-600 mb-4 h-12 w-12" />
+        <h3 className="text-surface-300 mb-1 text-lg font-medium">No mods found</h3>
         <p className="text-surface-500">Try adjusting your search query</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-64 text-center">
-      <div className="w-20 h-20 rounded-2xl bg-surface-800 flex items-center justify-center mb-4">
-        <Upload className="w-10 h-10 text-surface-600" />
+    <div className="flex h-64 flex-col items-center justify-center text-center">
+      <div className="bg-surface-800 mb-4 flex h-20 w-20 items-center justify-center rounded-2xl">
+        <Upload className="text-surface-600 h-10 w-10" />
       </div>
-      <h3 className="text-lg font-medium text-surface-300 mb-1">No mods installed</h3>
+      <h3 className="text-surface-300 mb-1 text-lg font-medium">No mods installed</h3>
       <p className="text-surface-500 mb-4">Get started by adding your first mod</p>
       <button
         type="button"
         onClick={onInstall}
-        className="flex items-center gap-2 px-4 py-2 bg-league-500 hover:bg-league-600 text-white rounded-lg font-medium transition-colors"
+        className="bg-league-500 hover:bg-league-600 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors"
       >
-        <Plus className="w-4 h-4" />
+        <Plus className="h-4 w-4" />
         Add Mod
       </button>
     </div>

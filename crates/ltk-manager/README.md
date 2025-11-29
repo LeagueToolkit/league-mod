@@ -84,15 +84,15 @@ ltk-manager/
 
 The following IPC commands are available from the frontend:
 
-| Command | Description |
-|---------|-------------|
-| `get_app_info` | Get app name and version |
-| `get_settings` | Get current settings |
-| `save_settings` | Save settings |
+| Command                   | Description                     |
+| ------------------------- | ------------------------------- |
+| `get_app_info`            | Get app name and version        |
+| `get_settings`            | Get current settings            |
+| `save_settings`           | Save settings                   |
 | `auto_detect_league_path` | Auto-detect League installation |
-| `validate_league_path` | Validate a League path |
-| `get_installed_mods` | List installed mods |
-| `install_mod` | Install a .modpkg file |
-| `uninstall_mod` | Uninstall a mod |
-| `toggle_mod` | Enable/disable a mod |
-| `inspect_modpkg` | Inspect a .modpkg file |
+| `validate_league_path`    | Validate a League path          |
+| `get_installed_mods`      | List installed mods             |
+| `install_mod`             | Install a .modpkg file          |
+| `uninstall_mod`           | Uninstall a mod                 |
+| `toggle_mod`              | Enable/disable a mod            |
+| `inspect_modpkg`          | Inspect a .modpkg file          |

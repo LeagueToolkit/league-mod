@@ -122,7 +122,7 @@ body {
 
 /* Focus styles */
 :focus-visible {
-  @apply outline-2 outline-offset-2 outline-league-500;
+  @apply outline-league-500 outline-2 outline-offset-2;
 }
 
 /* Drag region for Tauri window */

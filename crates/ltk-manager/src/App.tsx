@@ -1,5 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+
+import { invoke } from "@tauri-apps/api/core";
+
 import { Sidebar } from "./components/Sidebar";
 import { Library } from "./pages/Library";
 import { Settings } from "./pages/Settings";
@@ -20,7 +22,7 @@ function App() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-surface-950">
+    <div className="bg-surface-950 flex h-screen">
       <Sidebar
         currentPage={currentPage}
         onNavigate={setCurrentPage}
