@@ -20,7 +20,7 @@ function RootLayout() {
   }, []);
 
   return (
-    <div className="bg-night-700 flex h-screen flex-col">
+    <div className="flex h-screen flex-col bg-linear-to-br from-surface-900 via-night-600 to-surface-900">
       <TitleBar />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar appVersion={appInfo?.version} />
