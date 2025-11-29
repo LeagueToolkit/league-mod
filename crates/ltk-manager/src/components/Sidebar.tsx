@@ -15,7 +15,7 @@ export function Sidebar({ currentPage, onNavigate, appVersion }: SidebarProps) {
   ];
 
   return (
-    <aside className="bg-surface-900 border-surface-800 flex w-64 flex-col border-r">
+    <aside className="bg-night-500 border-surface-500 flex w-64 flex-col border-r">
       {/* Logo */}
       <div
         className="border-surface-800 flex h-16 items-center gap-3 border-b px-5"

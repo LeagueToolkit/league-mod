@@ -118,7 +118,7 @@ export function Library() {
         </div>
 
         {/* View toggle */}
-        <div className="bg-surface-800 flex items-center gap-1 rounded-lg p-1">
+        <div className="flex items-center gap-1 rounded-lg p-1">
           <button
             type="button"
             onClick={() => setViewMode("grid")}
@@ -189,7 +189,7 @@ function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch
 
   return (
     <div className="flex h-64 flex-col items-center justify-center text-center">
-      <div className="bg-surface-800 mb-4 flex h-20 w-20 items-center justify-center rounded-2xl">
+      <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl">
         <Upload className="text-surface-600 h-10 w-10" />
       </div>
       <h3 className="text-surface-300 mb-1 text-lg font-medium">No mods installed</h3>

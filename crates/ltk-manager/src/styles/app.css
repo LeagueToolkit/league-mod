@@ -98,7 +98,7 @@ html {
 }
 
 body {
-  @apply bg-surface-950 text-surface-100;
+  @apply bg-surface-900 text-surface-100;
   min-height: 100vh;
 }
 
@@ -122,7 +122,7 @@ body {
 
 /* Focus styles */
 :focus-visible {
-  @apply outline-league-500 outline-2 outline-offset-2;
+  @apply outline-brand-500 outline-2 outline-offset-2;
 }
 
 /* Drag region for Tauri window */

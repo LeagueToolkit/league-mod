@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Sidebar } from "./components/Sidebar";
+import { TitleBar } from "./components/TitleBar";
 import { Library } from "./pages/Library";
 import { Settings } from "./pages/Settings";
 
@@ -22,16 +23,19 @@ function App() {
   }, []);
 
   return (
-    <div className="bg-surface-950 flex h-screen">
-      <Sidebar
-        currentPage={currentPage}
-        onNavigate={setCurrentPage}
-        appVersion={appInfo?.version}
-      />
-      <main className="flex-1 overflow-hidden">
-        {currentPage === "library" && <Library />}
-        {currentPage === "settings" && <Settings />}
-      </main>
+    <div className="bg-night-700 flex h-screen flex-col">
+      <TitleBar />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar
+          currentPage={currentPage}
+          onNavigate={setCurrentPage}
+          appVersion={appInfo?.version}
+        />
+        <main className="flex-1 overflow-hidden">
+          {currentPage === "library" && <Library />}
+          {currentPage === "settings" && <Settings />}
+        </main>
+      </div>
     </div>
   );
 }
