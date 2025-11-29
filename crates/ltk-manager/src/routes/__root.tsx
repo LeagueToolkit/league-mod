@@ -5,7 +5,7 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { invoke } from "@tauri-apps/api/core";
 
 import { Sidebar } from "../components/Sidebar";
-import { TitleBar } from "../components/TitleBar";
+import { TitleBar } from "@/modules/shell";
 
 interface AppInfo {
   name: string;
