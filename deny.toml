@@ -17,6 +17,7 @@ yanked = "warn"
 ignore = [
     # Add any specific advisories you want to ignore here
     "RUSTSEC-2023-0071", # Marvin Attack: timing sidechannel (rsa crate)
+    "RUSTSEC-2024-0429", # glib VariantStrIter unsoundness (transitive dep from Tauri on Linux)
 ]
 
 [licenses]
