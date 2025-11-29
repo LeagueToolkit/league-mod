@@ -1,44 +1,53 @@
 @import "tailwindcss";
 
-/* League of Legends inspired theme */
 @theme {
-  /* Gold palette */
-  --color-gold-50: #fefce8;
-  --color-gold-100: #fef9c3;
-  --color-gold-200: #fef08a;
-  --color-gold-300: #fde047;
-  --color-gold-400: #f6c744;
-  --color-gold-500: #c9a227;
-  --color-gold-600: #a18321;
-  --color-gold-700: #7a631a;
-  --color-gold-800: #544414;
-  --color-gold-900: #2e250b;
+  /* Main purple-blue diamond */
+  --color-brand-50: #efecfc;
+  --color-brand-100: #d7d0f8;
+  --color-brand-200: #c0b5f4;
+  --color-brand-300: #a899f0;
+  --color-brand-400: #8974ea;
+  --color-brand-500: #6246e4; /* primary */
+  --color-brand-600: #5039ba;
+  --color-brand-700: #3f2d94;
+  --color-brand-800: #2c1f66;
+  --color-brand-900: #181139;
 
-  /* Blue/Teal palette (League accent) */
-  --color-league-50: #ecfeff;
-  --color-league-100: #cffafe;
-  --color-league-200: #a5f3fc;
-  --color-league-300: #67e8f9;
-  --color-league-400: #22d3ee;
-  --color-league-500: #0ac8b9;
-  --color-league-600: #0397ab;
-  --color-league-700: #0a6e8a;
-  --color-league-800: #0d4f63;
-  --color-league-900: #0a323d;
-  --color-league-950: #091428;
+  /* Inner circle blue */
+  --color-accent-50: #eaebf7;
+  --color-accent-100: #cbceed;
+  --color-accent-200: #acb1e2;
+  --color-accent-300: #8d93d7;
+  --color-accent-400: #636cc9;
+  --color-accent-500: #303cb8;
+  --color-accent-600: #273196;
+  --color-accent-700: #1f2777;
+  --color-accent-800: #151a52;
+  --color-accent-900: #0c0f2e;
 
-  /* Surface colors for dark theme */
-  --color-surface-50: #f8fafc;
-  --color-surface-100: #f1f5f9;
-  --color-surface-200: #e2e8f0;
-  --color-surface-300: #cbd5e1;
-  --color-surface-400: #94a3b8;
-  --color-surface-500: #64748b;
-  --color-surface-600: #475569;
-  --color-surface-700: #334155;
-  --color-surface-800: #1e293b;
-  --color-surface-900: #0f172a;
-  --color-surface-950: #020617;
+  /* Dark background */
+  --color-night-50: #dedee0;
+  --color-night-100: #bdbdc2;
+  --color-night-200: #9c9ca4;
+  --color-night-300: #7b7c85;
+  --color-night-400: #5a5b67;
+  --color-night-500: #232535; /* main bg */
+  --color-night-600: #1c1e2b;
+  --color-night-700: #161822;
+  --color-night-800: #0e0e15;
+  --color-night-900: #06070a;
+
+  /* Light diamond face / surfaces */
+  --color-surface-50: #e3f5fd;
+  --color-surface-100: #e2f5fd;
+  --color-surface-200: #c0d9e7;
+  --color-surface-300: #9ebdd3;
+  --color-surface-400: #7ca1be;
+  --color-surface-500: #5a85a9;
+  --color-surface-600: #43729b;
+  --color-surface-700: #31638f;
+  --color-surface-800: #1f5584;
+  --color-surface-900: #0f487a;
 
   /* Fonts */
   --font-sans: "Inter", system-ui, sans-serif;
