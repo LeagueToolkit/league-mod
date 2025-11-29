@@ -48,4 +48,3 @@ pub struct ModLayer {
     pub priority: i32,
     pub enabled: bool,
 }
-
