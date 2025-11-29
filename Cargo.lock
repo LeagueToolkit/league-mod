@@ -2709,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_fantome"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "eyre",
  "image",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_mod_project"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_modpkg"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "binrw",
  "byteorder",
@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_pki"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "binrw",
  "cms",
