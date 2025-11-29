@@ -22,6 +22,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build frontend
+        working-directory: crates/ltk-manager
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -43,6 +59,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build frontend
+        working-directory: crates/ltk-manager
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -63,6 +95,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build frontend
+        working-directory: crates/ltk-manager
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
