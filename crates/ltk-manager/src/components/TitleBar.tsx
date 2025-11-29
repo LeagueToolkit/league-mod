@@ -31,15 +31,12 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
 
   return (
     <header
-      className="title-bar bg-brand-500/20 border-brand-600 flex h-9 shrink-0 select-none items-center justify-between border-b"
+      className="title-bar bg-brand-500/20 border-brand-600 flex h-9 shrink-0 items-center justify-between border-b select-none"
       data-tauri-drag-region
     >
       {/* Left: App title */}
       <div className="flex items-center gap-2 pl-4" data-tauri-drag-region>
-        <span
-          className="text-surface-100 text-xs font-medium tracking-wide"
-          data-tauri-drag-region
-        >
+        <span className="text-surface-100 text-xs font-medium tracking-wide" data-tauri-drag-region>
           {title}
         </span>
       </div>
@@ -97,4 +94,3 @@ function OverlappingSquares({ className }: { className?: string }) {
     </svg>
   );
 }
-
