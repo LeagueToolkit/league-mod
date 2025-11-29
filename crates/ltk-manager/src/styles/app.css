@@ -1,4 +1,4 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 /* League of Legends inspired theme */
 @theme {
@@ -41,8 +41,8 @@
   --color-surface-950: #020617;
 
   /* Fonts */
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --font-display: 'Beaufort for LOL', 'Inter', system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-display: "Beaufort for LOL", "Inter", system-ui, sans-serif;
 
   /* Animations */
   --animate-fade-in: fade-in 0.2s ease-out;
@@ -125,4 +125,3 @@ body {
 [data-tauri-drag-region] a {
   -webkit-app-region: no-drag;
 }
-

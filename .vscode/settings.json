@@ -1,0 +1,22 @@
+{
+	"biome.lsp.bin": "./crates/ltk-manager/node_modules/.pnpm/@biomejs+cli-win32-x64@2.3.8/node_modules/@biomejs/cli-win32-x64/biome.exe",
+	"biome.searchInPath": true,
+	"[javascript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[javascriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	}
+}

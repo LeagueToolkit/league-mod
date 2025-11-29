@@ -1,6 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::state::{AppState, InstalledMod, Settings};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::PathBuf;
 use tauri::State;
 
@@ -23,14 +23,20 @@ pub fn get_app_info() -> AppInfo {
 /// Get current settings
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> AppResult<Settings> {
-    let settings = state.settings.lock().map_err(|e| AppError::Other(e.to_string()))?;
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|e| AppError::Other(e.to_string()))?;
     Ok(settings.clone())
 }
 
 /// Save settings
 #[tauri::command]
 pub fn save_settings(settings: Settings, state: State<AppState>) -> AppResult<()> {
-    let mut current = state.settings.lock().map_err(|e| AppError::Other(e.to_string()))?;
+    let mut current = state
+        .settings
+        .lock()
+        .map_err(|e| AppError::Other(e.to_string()))?;
     *current = settings;
     // TODO: Persist to disk
     Ok(())
@@ -79,7 +85,10 @@ pub fn get_installed_mods(state: State<AppState>) -> AppResult<Vec<InstalledMod>
 
 /// Install a mod from a .modpkg file
 #[tauri::command]
-pub async fn install_mod(file_path: PathBuf, state: State<'_, AppState>) -> AppResult<InstalledMod> {
+pub async fn install_mod(
+    file_path: PathBuf,
+    state: State<'_, AppState>,
+) -> AppResult<InstalledMod> {
     tracing::info!("Installing mod from: {:?}", file_path);
 
     if !file_path.exists() {
@@ -210,4 +219,3 @@ pub async fn inspect_modpkg(file_path: PathBuf) -> AppResult<ModpkgInfo> {
         total_size: 0,
     })
 }
-

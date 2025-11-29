@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from "@tauri-apps/api/core";
 
 // Types matching Rust structs
 export interface AppInfo {
@@ -9,7 +9,7 @@ export interface AppInfo {
 export interface Settings {
   leaguePath: string | null;
   modStoragePath: string | null;
-  theme: 'light' | 'dark' | 'system';
+  theme: "light" | "dark" | "system";
   firstRunComplete: boolean;
 }
 
@@ -52,21 +52,20 @@ export interface LayerInfo {
 
 // API functions
 export const api = {
-  getAppInfo: () => invoke<AppInfo>('get_app_info'),
-  
-  // Settings
-  getSettings: () => invoke<Settings>('get_settings'),
-  saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
-  autoDetectLeaguePath: () => invoke<string | null>('auto_detect_league_path'),
-  validateLeaguePath: (path: string) => invoke<boolean>('validate_league_path', { path }),
-  
-  // Mods
-  getInstalledMods: () => invoke<InstalledMod[]>('get_installed_mods'),
-  installMod: (filePath: string) => invoke<InstalledMod>('install_mod', { filePath }),
-  uninstallMod: (modId: string) => invoke<void>('uninstall_mod', { modId }),
-  toggleMod: (modId: string, enabled: boolean) => invoke<void>('toggle_mod', { modId, enabled }),
-  
-  // Inspector
-  inspectModpkg: (filePath: string) => invoke<ModpkgInfo>('inspect_modpkg', { filePath }),
-};
+  getAppInfo: () => invoke<AppInfo>("get_app_info"),
 
+  // Settings
+  getSettings: () => invoke<Settings>("get_settings"),
+  saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  autoDetectLeaguePath: () => invoke<string | null>("auto_detect_league_path"),
+  validateLeaguePath: (path: string) => invoke<boolean>("validate_league_path", { path }),
+
+  // Mods
+  getInstalledMods: () => invoke<InstalledMod[]>("get_installed_mods"),
+  installMod: (filePath: string) => invoke<InstalledMod>("install_mod", { filePath }),
+  uninstallMod: (modId: string) => invoke<void>("uninstall_mod", { modId }),
+  toggleMod: (modId: string, enabled: boolean) => invoke<void>("toggle_mod", { modId, enabled }),
+
+  // Inspector
+  inspectModpkg: (filePath: string) => invoke<ModpkgInfo>("inspect_modpkg", { filePath }),
+};
