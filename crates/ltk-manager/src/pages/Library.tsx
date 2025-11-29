@@ -91,7 +91,7 @@ export function Library() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <header className="border-surface-800 flex h-16 items-center justify-between border-b px-6">
+      <header className="border-brand-600 flex h-16 items-center justify-between border-b px-6">
         <h2 className="text-surface-100 text-xl font-semibold">Mod Library</h2>
         <button
           type="button"
@@ -104,7 +104,7 @@ export function Library() {
       </header>
 
       {/* Toolbar */}
-      <div className="border-surface-800/50 flex items-center gap-4 border-b px-6 py-4">
+      <div className="border-brand-600/50 flex items-center gap-4 border-b px-6 py-4">
         {/* Search */}
         <div className="relative max-w-md flex-1">
           <Search className="text-surface-500 absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
@@ -113,7 +113,7 @@ export function Library() {
             placeholder="Search mods..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-surface-800 border-surface-700 text-surface-100 placeholder:text-surface-500 focus:ring-league-500 w-full rounded-lg border py-2 pr-4 pl-10 focus:border-transparent focus:ring-2 focus:outline-none"
+            className="bg-night-500 border-brand-600 text-surface-100 placeholder:text-surface-500 focus:ring-league-500 w-full rounded-lg border py-2 pr-4 pl-10 focus:border-transparent focus:ring-2 focus:outline-none"
           />
         </div>
 

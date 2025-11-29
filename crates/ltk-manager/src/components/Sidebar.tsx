@@ -15,10 +15,10 @@ export function Sidebar({ currentPage, onNavigate, appVersion }: SidebarProps) {
   ];
 
   return (
-    <aside className="bg-night-500 border-surface-500 flex w-64 flex-col border-r">
+    <aside className="border-brand-600 flex w-64 flex-col border-r">
       {/* Logo */}
       <div
-        className="border-surface-800 flex h-16 items-center gap-3 border-b px-5"
+        className="border-brand-600 flex h-16 items-center gap-3 border-b px-5"
         data-tauri-drag-region
       >
         <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br">
