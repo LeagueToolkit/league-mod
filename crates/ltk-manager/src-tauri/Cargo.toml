@@ -3,7 +3,7 @@ name = "ltk-manager"
 version = "0.1.0"
 description = "LeagueToolkit Mod Manager - Desktop app for managing League of Legends mods"
 edition = "2021"
-license = "AGPL-3.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/LeagueToolkit/league-mod"
 
 [build-dependencies]

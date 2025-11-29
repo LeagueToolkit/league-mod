@@ -2,7 +2,7 @@
 name = "ltk_modpkg"
 version = "0.1.3"
 edition = "2021"
-license = "AGPL-3.0-only"
+license = "MIT OR Apache-2.0"
 description = "League Toolkit mod package (.modpkg) reader/writer and utilities"
 repository = "https://github.com/LeagueToolkit/league-mod"
 homepage = "https://github.com/LeagueToolkit/league-mod"

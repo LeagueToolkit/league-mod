@@ -2,7 +2,7 @@
 name = "ltk_pki"
 version = "0.1.1"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "Support code for verifying League Toolkit mod signatures"
 repository = "https://github.com/LeagueToolkit/league-mod"
 homepage = "https://github.com/LeagueToolkit/league-mod"
