@@ -28,6 +28,7 @@
     "@ianvs/prettier-plugin-sort-imports": "^4.4.0",
     "@tauri-apps/cli": "^2",
     "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
