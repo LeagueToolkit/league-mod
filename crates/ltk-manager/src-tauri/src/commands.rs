@@ -1,4 +1,4 @@
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, IpcResult};
 use crate::state::{AppState, InstalledMod, Settings};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -13,30 +13,38 @@ pub struct AppInfo {
 
 /// Get basic app information
 #[tauri::command]
-pub fn get_app_info() -> AppInfo {
-    AppInfo {
+pub fn get_app_info() -> IpcResult<AppInfo> {
+    IpcResult::ok(AppInfo {
         name: "LTK Manager".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-    }
+    })
 }
 
 /// Get current settings
 #[tauri::command]
-pub fn get_settings(state: State<AppState>) -> AppResult<Settings> {
+pub fn get_settings(state: State<AppState>) -> IpcResult<Settings> {
+    get_settings_inner(&state).into()
+}
+
+fn get_settings_inner(state: &State<AppState>) -> AppResult<Settings> {
     let settings = state
         .settings
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
     Ok(settings.clone())
 }
 
 /// Save settings
 #[tauri::command]
-pub fn save_settings(settings: Settings, state: State<AppState>) -> AppResult<()> {
+pub fn save_settings(settings: Settings, state: State<AppState>) -> IpcResult<()> {
+    save_settings_inner(settings, &state).into()
+}
+
+fn save_settings_inner(settings: Settings, state: &State<AppState>) -> AppResult<()> {
     let mut current = state
         .settings
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
     *current = settings;
     // TODO: Persist to disk
     Ok(())
@@ -44,7 +52,11 @@ pub fn save_settings(settings: Settings, state: State<AppState>) -> AppResult<()
 
 /// Auto-detect League of Legends installation path
 #[tauri::command]
-pub fn auto_detect_league_path() -> AppResult<Option<PathBuf>> {
+pub fn auto_detect_league_path() -> IpcResult<Option<PathBuf>> {
+    IpcResult::ok(auto_detect_league_path_inner())
+}
+
+fn auto_detect_league_path_inner() -> Option<PathBuf> {
     // Common installation paths on Windows
     let common_paths = [
         r"C:\Riot Games\League of Legends",
@@ -58,37 +70,42 @@ pub fn auto_detect_league_path() -> AppResult<Option<PathBuf>> {
         let exe_path = path.join("Game").join("League of Legends.exe");
         if exe_path.exists() {
             tracing::info!("Found League installation at: {:?}", path);
-            return Ok(Some(path));
+            return Some(path);
         }
     }
 
     tracing::warn!("Could not auto-detect League installation");
-    Ok(None)
+    None
 }
 
 /// Validate a League installation path
 #[tauri::command]
-pub fn validate_league_path(path: PathBuf) -> AppResult<bool> {
+pub fn validate_league_path(path: PathBuf) -> IpcResult<bool> {
     let exe_path = path.join("Game").join("League of Legends.exe");
-    Ok(exe_path.exists())
+    IpcResult::ok(exe_path.exists())
 }
 
 /// Get list of installed mods
 #[tauri::command]
-pub fn get_installed_mods(state: State<AppState>) -> AppResult<Vec<InstalledMod>> {
+pub fn get_installed_mods(state: State<AppState>) -> IpcResult<Vec<InstalledMod>> {
+    get_installed_mods_inner(&state).into()
+}
+
+fn get_installed_mods_inner(state: &State<AppState>) -> AppResult<Vec<InstalledMod>> {
     let mods = state
         .installed_mods
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
     Ok(mods.clone())
 }
 
 /// Install a mod from a .modpkg file
 #[tauri::command]
-pub async fn install_mod(
-    file_path: PathBuf,
-    state: State<'_, AppState>,
-) -> AppResult<InstalledMod> {
+pub fn install_mod(file_path: PathBuf, state: State<AppState>) -> IpcResult<InstalledMod> {
+    install_mod_inner(file_path, &state).into()
+}
+
+fn install_mod_inner(file_path: PathBuf, state: &State<AppState>) -> AppResult<InstalledMod> {
     tracing::info!("Installing mod from: {:?}", file_path);
 
     if !file_path.exists() {
@@ -121,7 +138,7 @@ pub async fn install_mod(
     let mut mods = state
         .installed_mods
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
     mods.push(installed_mod.clone());
 
     Ok(installed_mod)
@@ -129,13 +146,17 @@ pub async fn install_mod(
 
 /// Uninstall a mod
 #[tauri::command]
-pub fn uninstall_mod(mod_id: String, state: State<AppState>) -> AppResult<()> {
+pub fn uninstall_mod(mod_id: String, state: State<AppState>) -> IpcResult<()> {
+    uninstall_mod_inner(mod_id, &state).into()
+}
+
+fn uninstall_mod_inner(mod_id: String, state: &State<AppState>) -> AppResult<()> {
     tracing::info!("Uninstalling mod: {}", mod_id);
 
     let mut mods = state
         .installed_mods
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
 
     let initial_len = mods.len();
     mods.retain(|m| m.id != mod_id);
@@ -149,13 +170,17 @@ pub fn uninstall_mod(mod_id: String, state: State<AppState>) -> AppResult<()> {
 
 /// Toggle a mod's enabled state
 #[tauri::command]
-pub fn toggle_mod(mod_id: String, enabled: bool, state: State<AppState>) -> AppResult<()> {
+pub fn toggle_mod(mod_id: String, enabled: bool, state: State<AppState>) -> IpcResult<()> {
+    toggle_mod_inner(mod_id, enabled, &state).into()
+}
+
+fn toggle_mod_inner(mod_id: String, enabled: bool, state: &State<AppState>) -> AppResult<()> {
     tracing::info!("Toggling mod {} to enabled={}", mod_id, enabled);
 
     let mut mods = state
         .installed_mods
         .lock()
-        .map_err(|e| AppError::Other(e.to_string()))?;
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
 
     let mod_entry = mods
         .iter_mut()
@@ -190,7 +215,11 @@ pub struct LayerInfo {
 
 /// Inspect a .modpkg file without installing
 #[tauri::command]
-pub async fn inspect_modpkg(file_path: PathBuf) -> AppResult<ModpkgInfo> {
+pub fn inspect_modpkg(file_path: PathBuf) -> IpcResult<ModpkgInfo> {
+    inspect_modpkg_inner(file_path).into()
+}
+
+fn inspect_modpkg_inner(file_path: PathBuf) -> AppResult<ModpkgInfo> {
     tracing::info!("Inspecting modpkg: {:?}", file_path);
 
     if !file_path.exists() {

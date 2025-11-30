@@ -28,23 +28,23 @@ LTK Manager is a desktop application for managing League of Legends mods built o
 
 ### Goals
 
-| Goal | Description |
-|------|-------------|
+| Goal              | Description                                              |
+| ----------------- | -------------------------------------------------------- |
 | **Accessibility** | Make mod management approachable for non-technical users |
-| **Type Safety** | Leverage Rust and TypeScript for compile-time guarantees |
-| **Performance** | Fast startup, minimal memory footprint, responsive UI |
-| **Integration** | Seamlessly work with the LeagueToolkit ecosystem |
+| **Type Safety**   | Leverage Rust and TypeScript for compile-time guarantees |
+| **Performance**   | Fast startup, minimal memory footprint, responsive UI    |
+| **Integration**   | Seamlessly work with the LeagueToolkit ecosystem         |
 
 ### Tech Stack
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| Runtime | Tauri v2 | Native desktop application framework |
-| Backend | Rust | Core logic, file operations, mod processing |
-| Frontend | React 19 | User interface |
-| Routing | TanStack Router | Type-safe navigation |
-| Styling | Tailwind CSS v4 | Visual design system |
-| State | Zustand | Client-side state management |
+| Layer    | Technology      | Purpose                                     |
+| -------- | --------------- | ------------------------------------------- |
+| Runtime  | Tauri v2        | Native desktop application framework        |
+| Backend  | Rust            | Core logic, file operations, mod processing |
+| Frontend | React 19        | User interface                              |
+| Routing  | TanStack Router | Type-safe navigation                        |
+| Styling  | Tailwind CSS v4 | Visual design system                        |
+| State    | Zustand         | Client-side state management                |
 
 ---
 
@@ -55,6 +55,7 @@ The application follows a two-layer architecture with clear separation of concer
 ### Frontend Layer (WebView)
 
 The frontend is responsible for:
+
 - Rendering the user interface
 - Handling user interactions
 - Managing client-side UI state
@@ -63,6 +64,7 @@ The frontend is responsible for:
 ### Backend Layer (Rust)
 
 The backend is responsible for:
+
 - File system operations (reading/writing mods)
 - Mod package processing (using `ltk_modpkg` library)
 - Project configuration (using `ltk_mod_project` library)
@@ -82,6 +84,7 @@ Frontend and backend communicate through Tauri's IPC (Inter-Process Communicatio
 **Description**: A League of Legends player who wants to customize their game with community-made mods.
 
 **Needs**:
+
 - Easy mod installation (drag & drop)
 - Simple enable/disable toggles
 - Visual mod library management
@@ -94,6 +97,7 @@ Frontend and backend communicate through Tauri's IPC (Inter-Process Communicatio
 **Description**: A content creator who builds mods for the League community.
 
 **Needs**:
+
 - Project creation wizard
 - Metadata editing tools
 - Layer management
@@ -111,6 +115,7 @@ Frontend and backend communicate through Tauri's IPC (Inter-Process Communicatio
 The central hub for managing installed mods.
 
 **Capabilities**:
+
 - View all installed mods in grid or list layout
 - Search and filter mods by name, author, or tags
 - Enable/disable individual mods with a toggle
@@ -119,6 +124,7 @@ The central hub for managing installed mods.
 - Drag & drop installation of `.modpkg` files
 
 **Mod Card Information**:
+
 - Thumbnail image
 - Display name and version
 - Author(s)
@@ -133,13 +139,13 @@ Application configuration and preferences.
 
 **Settings Categories**:
 
-| Category | Options |
-|----------|---------|
-| **League Path** | Auto-detect or manually browse to League installation |
-| **Mod Storage** | Location where installed mods are stored |
-| **Workshop Path** | Directory where mod projects are stored and managed |
-| **Appearance** | Theme selection (Light, Dark, System) |
-| **About** | App version, links to documentation and support |
+| Category          | Options                                               |
+| ----------------- | ----------------------------------------------------- |
+| **League Path**   | Auto-detect or manually browse to League installation |
+| **Mod Storage**   | Location where installed mods are stored              |
+| **Workshop Path** | Directory where mod projects are stored and managed   |
+| **Appearance**    | Theme selection (Light, Dark, System)                 |
+| **About**         | App version, links to documentation and support       |
 
 ---
 
@@ -148,6 +154,7 @@ Application configuration and preferences.
 Preview and inspect `.modpkg` files before installation.
 
 **Information Displayed**:
+
 - Mod metadata (name, version, description)
 - Author information
 - Available layers with descriptions
@@ -155,6 +162,7 @@ Preview and inspect `.modpkg` files before installation.
 - Digital signature status (if signed)
 
 **Actions**:
+
 - Install the mod
 - Extract to folder for inspection
 
@@ -169,11 +177,13 @@ A comprehensive workspace for mod creators to build, manage, and package mods.
 The main view of the Creator Workshop, displaying all mod projects in the configured Workshop directory.
 
 **Project Discovery**:
+
 - Scans the Workshop directory for folders containing `mod.config.json` or `mod.config.toml`
 - Reads and parses project configuration using `ltk_mod_project`
 - Displays project metadata in a browsable list/grid
 
 **Project Card Information**:
+
 - Project name and display name
 - Version number
 - Last modified date
@@ -181,6 +191,7 @@ The main view of the Creator Workshop, displaying all mod projects in the config
 - Quick actions (Open, Pack, Delete)
 
 **Project Management**:
+
 - Create new project (opens wizard)
 - Import existing project (copy/move to Workshop directory)
 - Open project folder in file explorer
@@ -193,29 +204,30 @@ Step-by-step guided creation of a new mod project.
 
 **Wizard Steps**:
 
-| Step | Fields |
-|------|--------|
-| **1. Basics** | Project name, display name, initial version |
-| **2. Details** | Description, authors, license selection |
-| **3. Template** | Select from templates or start blank |
-| **4. Layers** | Configure initial layer structure |
-| **5. Confirm** | Review and create project |
+| Step            | Fields                                      |
+| --------------- | ------------------------------------------- |
+| **1. Basics**   | Project name, display name, initial version |
+| **2. Details**  | Description, authors, license selection     |
+| **3. Template** | Select from templates or start blank        |
+| **4. Layers**   | Configure initial layer structure           |
+| **5. Confirm**  | Review and create project                   |
 
 **Project Templates**:
 
-| Template | Description | Pre-configured For |
-|----------|-------------|-------------------|
-| **Blank** | Empty project structure | Any mod type |
+| Template          | Description             | Pre-configured For         |
+| ----------------- | ----------------------- | -------------------------- |
+| **Blank**         | Empty project structure | Any mod type               |
 | **Champion Skin** | Skin modification setup | Character textures, models |
-| **Map Mod** | Map modification setup | Summoner's Rift assets |
-| **UI Mod** | Interface modification | HUD elements, fonts |
-| **Sound Mod** | Audio replacement | SFX, music, voice |
+| **Map Mod**       | Map modification setup  | Summoner's Rift assets     |
+| **UI Mod**        | Interface modification  | HUD elements, fonts        |
+| **Sound Mod**     | Audio replacement       | SFX, music, voice          |
 
 #### 4.3 Project Editor
 
 Full-featured editor for modifying project configuration and content.
 
 **Metadata Panel**:
+
 - Edit name, display name, version
 - Manage description (supports markdown preview)
 - Author management (add, remove, edit roles)
@@ -223,6 +235,7 @@ Full-featured editor for modifying project configuration and content.
 - Thumbnail selection and preview
 
 **Layer Manager**:
+
 - View all layers in priority order
 - Add new layers with name and description
 - Remove layers (with content warning)
@@ -231,6 +244,7 @@ Full-featured editor for modifying project configuration and content.
 - Mark layers as optional or required
 
 **Content Browser**:
+
 - Tree view of project content directory
 - Organized by layer
 - File/folder operations (create, rename, delete)
@@ -238,6 +252,7 @@ Full-featured editor for modifying project configuration and content.
 - Show file sizes and counts per layer
 
 **Transformer Configuration**:
+
 - View configured file transformers
 - Add/remove transformer rules
 - Configure glob patterns for file matching
@@ -248,6 +263,7 @@ Full-featured editor for modifying project configuration and content.
 Tools for validating and packaging mod projects.
 
 **Pre-Build Validation**:
+
 - Check for missing required files
 - Validate configuration syntax
 - Warn about empty layers
@@ -255,18 +271,21 @@ Tools for validating and packaging mod projects.
 - Verify transformer configurations
 
 **Build Process**:
+
 - One-click pack to `.modpkg`
 - Progress indicator with current operation
 - Configurable output location
 - Option to auto-increment version on build
 
 **Build Output**:
+
 - Success/failure status with details
 - Output file location with "Open Folder" action
 - File size of generated package
 - Build duration
 
 **Build History**:
+
 - List of recent builds for each project
 - Timestamp and version for each build
 - Success/failure status
@@ -277,11 +296,13 @@ Tools for validating and packaging mod projects.
 Streamlined testing of mods during development.
 
 **Test Actions**:
+
 - Pack and install to library in one click
 - Launch League with mod enabled
 - Revert to clean state after testing
 
 **Test Configuration**:
+
 - Select which layers to include in test build
 - Option to skip validation for faster iteration
 - Auto-uninstall previous test builds
@@ -291,11 +312,13 @@ Streamlined testing of mods during development.
 Tools for sharing and backing up projects.
 
 **Import Sources**:
+
 - From existing folder (copy or link)
 - From `.modpkg` file (extract and create project)
 - From Git repository URL (clone)
 
 **Export Options**:
+
 - Export as ZIP archive
 - Export to different location
 - Include/exclude build outputs
@@ -307,6 +330,7 @@ Tools for sharing and backing up projects.
 Guided onboarding for new users.
 
 **Steps**:
+
 1. Welcome screen with app introduction
 2. League of Legends path detection/selection
 3. Workshop directory selection (for creators)
@@ -427,80 +451,80 @@ User Action                          System Response
 
 ### Settings
 
-| Field | Type | Description |
-|-------|------|-------------|
-| League Path | Path (optional) | Path to League of Legends installation |
-| Mod Storage Path | Path (optional) | Where installed mods are stored |
-| Workshop Path | Path (optional) | Directory for mod projects |
-| Theme | Enum | Light, Dark, or System |
-| First Run Complete | Boolean | Whether onboarding has been completed |
+| Field              | Type            | Description                            |
+| ------------------ | --------------- | -------------------------------------- |
+| League Path        | Path (optional) | Path to League of Legends installation |
+| Mod Storage Path   | Path (optional) | Where installed mods are stored        |
+| Workshop Path      | Path (optional) | Directory for mod projects             |
+| Theme              | Enum            | Light, Dark, or System                 |
+| First Run Complete | Boolean         | Whether onboarding has been completed  |
 
 ### Installed Mod
 
-| Field | Type | Description |
-|-------|------|-------------|
-| ID | UUID | Unique identifier |
-| Name | String | Internal name (slug format) |
-| Display Name | String | Human-readable name |
-| Version | String | Semantic version (e.g., "1.2.0") |
-| Description | String (optional) | Mod description |
-| Authors | List of strings | Creator names |
-| Enabled | Boolean | Whether mod is active |
-| Installed At | Timestamp | When mod was installed |
-| File Path | Path | Location of .modpkg file |
-| Layers | List | Available mod layers |
+| Field        | Type              | Description                      |
+| ------------ | ----------------- | -------------------------------- |
+| ID           | UUID              | Unique identifier                |
+| Name         | String            | Internal name (slug format)      |
+| Display Name | String            | Human-readable name              |
+| Version      | String            | Semantic version (e.g., "1.2.0") |
+| Description  | String (optional) | Mod description                  |
+| Authors      | List of strings   | Creator names                    |
+| Enabled      | Boolean           | Whether mod is active            |
+| Installed At | Timestamp         | When mod was installed           |
+| File Path    | Path              | Location of .modpkg file         |
+| Layers       | List              | Available mod layers             |
 
 ### Mod Layer
 
-| Field | Type | Description |
-|-------|------|-------------|
-| Name | String | Layer identifier |
-| Description | String | Layer description |
-| Priority | Integer | Load order priority |
-| Enabled | Boolean | Whether layer is active |
+| Field       | Type    | Description             |
+| ----------- | ------- | ----------------------- |
+| Name        | String  | Layer identifier        |
+| Description | String  | Layer description       |
+| Priority    | Integer | Load order priority     |
+| Enabled     | Boolean | Whether layer is active |
 
 ### Mod Project (Workshop)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| Path | Path | Absolute path to project directory |
-| Name | String | Internal project name |
-| Display Name | String | Human-readable name |
-| Version | String | Current version |
-| Description | String (optional) | Project description |
-| Authors | List | Author information with roles |
-| License | String (optional) | License identifier |
-| Layers | List | Configured layers |
-| Transformers | List | File transformer configurations |
-| Last Modified | Timestamp | When config was last changed |
+| Field         | Type              | Description                        |
+| ------------- | ----------------- | ---------------------------------- |
+| Path          | Path              | Absolute path to project directory |
+| Name          | String            | Internal project name              |
+| Display Name  | String            | Human-readable name                |
+| Version       | String            | Current version                    |
+| Description   | String (optional) | Project description                |
+| Authors       | List              | Author information with roles      |
+| License       | String (optional) | License identifier                 |
+| Layers        | List              | Configured layers                  |
+| Transformers  | List              | File transformer configurations    |
+| Last Modified | Timestamp         | When config was last changed       |
 
 ### Project Author
 
-| Field | Type | Description |
-|-------|------|-------------|
-| Name | String | Author's name |
-| Role | String (optional) | Role in project (e.g., "Lead", "Contributor") |
-| URL | String (optional) | Author's website or profile |
+| Field | Type              | Description                                   |
+| ----- | ----------------- | --------------------------------------------- |
+| Name  | String            | Author's name                                 |
+| Role  | String (optional) | Role in project (e.g., "Lead", "Contributor") |
+| URL   | String (optional) | Author's website or profile                   |
 
 ### Project Layer
 
-| Field | Type | Description |
-|-------|------|-------------|
-| Name | String | Layer identifier |
-| Description | String (optional) | What this layer contains |
-| Priority | Integer | Load order (higher = loaded later) |
+| Field       | Type              | Description                        |
+| ----------- | ----------------- | ---------------------------------- |
+| Name        | String            | Layer identifier                   |
+| Description | String (optional) | What this layer contains           |
+| Priority    | Integer           | Load order (higher = loaded later) |
 
 ### Build Record
 
-| Field | Type | Description |
-|-------|------|-------------|
-| Project Name | String | Which project was built |
-| Version | String | Version that was built |
-| Timestamp | Timestamp | When build occurred |
-| Success | Boolean | Whether build succeeded |
-| Output Path | Path (optional) | Location of output file |
-| Duration | Duration | How long build took |
-| Error | String (optional) | Error message if failed |
+| Field        | Type              | Description             |
+| ------------ | ----------------- | ----------------------- |
+| Project Name | String            | Which project was built |
+| Version      | String            | Version that was built  |
+| Timestamp    | Timestamp         | When build occurred     |
+| Success      | Boolean           | Whether build succeeded |
+| Output Path  | Path (optional)   | Location of output file |
+| Duration     | Duration          | How long build took     |
+| Error        | String (optional) | Error message if failed |
 
 ---
 
@@ -510,11 +534,11 @@ User Action                          System Response
 
 The application requests only necessary permissions:
 
-| Permission | Purpose |
-|------------|---------|
-| File System (Scoped) | Read/write mod files, projects, and settings |
-| Dialog | File picker and folder selection |
-| Shell (Limited) | Open URLs in browser, open folders in explorer |
+| Permission           | Purpose                                        |
+| -------------------- | ---------------------------------------------- |
+| File System (Scoped) | Read/write mod files, projects, and settings   |
+| Dialog               | File picker and folder selection               |
+| Shell (Limited)      | Open URLs in browser, open folders in explorer |
 
 ### Content Security
 
@@ -580,14 +604,14 @@ The application requests only necessary permissions:
 
 ### Glossary
 
-| Term | Definition |
-|------|------------|
-| **Modpkg** | The `.modpkg` file format for distributing League mods |
-| **Layer** | A subset of mod content that can be independently enabled |
-| **Workshop** | The directory where mod projects are stored and managed |
-| **Transformer** | A processing step applied to files during packaging |
-| **IPC** | Inter-Process Communication between frontend and backend |
-| **Tauri** | Framework for building native desktop apps with web UI |
+| Term            | Definition                                                |
+| --------------- | --------------------------------------------------------- |
+| **Modpkg**      | The `.modpkg` file format for distributing League mods    |
+| **Layer**       | A subset of mod content that can be independently enabled |
+| **Workshop**    | The directory where mod projects are stored and managed   |
+| **Transformer** | A processing step applied to files during packaging       |
+| **IPC**         | Inter-Process Communication between frontend and backend  |
+| **Tauri**       | Framework for building native desktop apps with web UI    |
 
 ### Related Documentation
 

@@ -21,10 +21,10 @@ export function Sidebar({ appVersion }: SidebarProps) {
   };
 
   return (
-    <aside className="border-brand-600 flex w-64 flex-col border-r">
+    <aside className="border-surface-600 flex w-64 flex-col border-r">
       {/* Logo */}
       <div
-        className="border-brand-600 flex h-16 items-center gap-3 border-b px-5"
+        className="border-surface-600 flex h-16 items-center gap-3 border-b px-5"
         data-tauri-drag-region
       >
         <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-linear-to-br">

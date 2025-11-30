@@ -67,7 +67,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
   }
 
   return (
-    <div className="group bg-night-500 border-brand-600 hover:border-brand-300 relative overflow-hidden rounded-xl border transition-colors">
+    <div className="group bg-night-500 border-surface-600 hover:border-surface-300 relative overflow-hidden rounded-xl border transition-colors">
       {/* Thumbnail */}
       <div className="from-night-600 to-night-700 flex aspect-video items-center justify-center bg-gradient-to-br">
         <span className="text-night-100 text-4xl font-bold">
