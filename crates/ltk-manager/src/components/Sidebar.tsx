@@ -1,27 +1,33 @@
+import { Link, useLocation } from "@tanstack/react-router";
 import { Hammer, Library, Package, Settings } from "lucide-react";
 
-type Page = "library" | "creator" | "settings";
-
 interface SidebarProps {
-  currentPage: Page;
-  onNavigate: (page: Page) => void;
   appVersion?: string;
 }
 
-export function Sidebar({ currentPage, onNavigate, appVersion }: SidebarProps) {
+export function Sidebar({ appVersion }: SidebarProps) {
+  const location = useLocation();
+
   const navItems = [
-    { id: "library" as const, label: "Library", icon: Library },
-    { id: "creator" as const, label: "Creator", icon: Hammer },
+    { to: "/", label: "Library", icon: Library },
+    { to: "/creator", label: "Creator", icon: Hammer },
   ];
 
+  const isActive = (path: string) => {
+    if (path === "/") {
+      return location.pathname === "/";
+    }
+    return location.pathname.startsWith(path);
+  };
+
   return (
-    <aside className="bg-surface-900 border-surface-800 flex w-64 flex-col border-r">
+    <aside className="border-brand-600 flex w-64 flex-col border-r">
       {/* Logo */}
       <div
-        className="border-surface-800 flex h-16 items-center gap-3 border-b px-5"
+        className="border-brand-600 flex h-16 items-center gap-3 border-b px-5"
         data-tauri-drag-region
       >
-        <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br">
+        <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-linear-to-br">
           <Package className="h-5 w-5 text-white" />
         </div>
         <div>
@@ -34,40 +40,38 @@ export function Sidebar({ currentPage, onNavigate, appVersion }: SidebarProps) {
       <nav className="flex-1 space-y-1 p-3">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = currentPage === item.id;
+          const active = isActive(item.to);
 
           return (
-            <button
-              type="button"
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
+            <Link
+              key={item.to}
+              to={item.to}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
+                active
                   ? "bg-league-500/10 text-league-400"
                   : "text-surface-400 hover:text-surface-200 hover:bg-surface-800"
               }`}
             >
               <Icon className="h-5 w-5" />
               {item.label}
-            </button>
+            </Link>
           );
         })}
       </nav>
 
       {/* Settings at bottom */}
       <div className="border-surface-800 border-t p-3">
-        <button
-          type="button"
-          onClick={() => onNavigate("settings")}
+        <Link
+          to="/settings"
           className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-            currentPage === "settings"
+            isActive("/settings")
               ? "bg-league-500/10 text-league-400"
               : "text-surface-400 hover:text-surface-200 hover:bg-surface-800"
           }`}
         >
           <Settings className="h-5 w-5" />
           Settings
-        </button>
+        </Link>
       </div>
     </aside>
   );

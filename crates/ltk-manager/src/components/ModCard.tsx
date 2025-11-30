@@ -67,10 +67,10 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
   }
 
   return (
-    <div className="group bg-surface-900 border-surface-800 hover:border-surface-700 relative overflow-hidden rounded-xl border transition-colors">
+    <div className="group bg-night-500 border-brand-600 hover:border-brand-300 relative overflow-hidden rounded-xl border transition-colors">
       {/* Thumbnail */}
-      <div className="from-surface-800 to-surface-900 flex aspect-video items-center justify-center bg-gradient-to-br">
-        <span className="text-surface-700 text-4xl font-bold">
+      <div className="from-night-600 to-night-700 flex aspect-video items-center justify-center bg-gradient-to-br">
+        <span className="text-night-100 text-4xl font-bold">
           {mod.displayName.charAt(0).toUpperCase()}
         </span>
       </div>
@@ -78,7 +78,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
       {/* Content */}
       <div className="p-4">
         <div className="mb-2 flex items-start justify-between gap-2">
-          <h3 className="text-surface-100 line-clamp-1 font-medium">{mod.displayName}</h3>
+          <h3 className="text-night-100 line-clamp-1 font-medium">{mod.displayName}</h3>
           <div className="relative">
             <button
               type="button"
