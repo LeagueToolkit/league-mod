@@ -10,6 +10,11 @@ This document provides a high-level overview of the LTK Manager application, its
 - [Architecture](#architecture)
 - [User Personas](#user-personas)
 - [Features](#features)
+  - [Mod Library](#1-mod-library)
+  - [Settings](#2-settings)
+  - [Mod Inspector](#3-mod-inspector)
+  - [Creator Workshop](#4-creator-workshop)
+  - [First-Run Experience](#5-first-run-experience)
 - [User Flows](#user-flows)
 - [Data Model](#data-model)
 - [Security Model](#security-model)
@@ -93,6 +98,7 @@ Frontend and backend communicate through Tauri's IPC (Inter-Process Communicatio
 - Metadata editing tools
 - Layer management
 - One-click packaging to `.modpkg`
+- Quick testing workflow
 
 **Technical Skill**: Medium to high
 
@@ -119,6 +125,8 @@ The central hub for managing installed mods.
 - Enable/disable toggle
 - Quick actions menu
 
+---
+
 ### 2. Settings
 
 Application configuration and preferences.
@@ -129,8 +137,11 @@ Application configuration and preferences.
 |----------|---------|
 | **League Path** | Auto-detect or manually browse to League installation |
 | **Mod Storage** | Location where installed mods are stored |
+| **Workshop Path** | Directory where mod projects are stored and managed |
 | **Appearance** | Theme selection (Light, Dark, System) |
 | **About** | App version, links to documentation and support |
+
+---
 
 ### 3. Mod Inspector
 
@@ -147,18 +158,149 @@ Preview and inspect `.modpkg` files before installation.
 - Install the mod
 - Extract to folder for inspection
 
+---
+
 ### 4. Creator Workshop
 
-Tools for mod creators to build and package mods.
+A comprehensive workspace for mod creators to build, manage, and package mods.
 
-**Planned Features**:
-- New project wizard with templates
-- Visual metadata editor
-- Layer manager (add, remove, reorder)
-- Content browser for mod files
-- Pre-pack validation
-- One-click packaging with progress indicator
-- Build history
+#### 4.1 Project Browser
+
+The main view of the Creator Workshop, displaying all mod projects in the configured Workshop directory.
+
+**Project Discovery**:
+- Scans the Workshop directory for folders containing `mod.config.json` or `mod.config.toml`
+- Reads and parses project configuration using `ltk_mod_project`
+- Displays project metadata in a browsable list/grid
+
+**Project Card Information**:
+- Project name and display name
+- Version number
+- Last modified date
+- Layer count
+- Quick actions (Open, Pack, Delete)
+
+**Project Management**:
+- Create new project (opens wizard)
+- Import existing project (copy/move to Workshop directory)
+- Open project folder in file explorer
+- Remove project from Workshop
+- Refresh project list
+
+#### 4.2 New Project Wizard
+
+Step-by-step guided creation of a new mod project.
+
+**Wizard Steps**:
+
+| Step | Fields |
+|------|--------|
+| **1. Basics** | Project name, display name, initial version |
+| **2. Details** | Description, authors, license selection |
+| **3. Template** | Select from templates or start blank |
+| **4. Layers** | Configure initial layer structure |
+| **5. Confirm** | Review and create project |
+
+**Project Templates**:
+
+| Template | Description | Pre-configured For |
+|----------|-------------|-------------------|
+| **Blank** | Empty project structure | Any mod type |
+| **Champion Skin** | Skin modification setup | Character textures, models |
+| **Map Mod** | Map modification setup | Summoner's Rift assets |
+| **UI Mod** | Interface modification | HUD elements, fonts |
+| **Sound Mod** | Audio replacement | SFX, music, voice |
+
+#### 4.3 Project Editor
+
+Full-featured editor for modifying project configuration and content.
+
+**Metadata Panel**:
+- Edit name, display name, version
+- Manage description (supports markdown preview)
+- Author management (add, remove, edit roles)
+- License selection from common options or custom
+- Thumbnail selection and preview
+
+**Layer Manager**:
+- View all layers in priority order
+- Add new layers with name and description
+- Remove layers (with content warning)
+- Reorder layers via drag & drop
+- Set layer priority values
+- Mark layers as optional or required
+
+**Content Browser**:
+- Tree view of project content directory
+- Organized by layer
+- File/folder operations (create, rename, delete)
+- Open files in external editor
+- Show file sizes and counts per layer
+
+**Transformer Configuration**:
+- View configured file transformers
+- Add/remove transformer rules
+- Configure glob patterns for file matching
+- Set transformer-specific options
+
+#### 4.4 Build System
+
+Tools for validating and packaging mod projects.
+
+**Pre-Build Validation**:
+- Check for missing required files
+- Validate configuration syntax
+- Warn about empty layers
+- Check for path conflicts between layers
+- Verify transformer configurations
+
+**Build Process**:
+- One-click pack to `.modpkg`
+- Progress indicator with current operation
+- Configurable output location
+- Option to auto-increment version on build
+
+**Build Output**:
+- Success/failure status with details
+- Output file location with "Open Folder" action
+- File size of generated package
+- Build duration
+
+**Build History**:
+- List of recent builds for each project
+- Timestamp and version for each build
+- Success/failure status
+- Quick access to output files
+
+#### 4.5 Quick Test Workflow
+
+Streamlined testing of mods during development.
+
+**Test Actions**:
+- Pack and install to library in one click
+- Launch League with mod enabled
+- Revert to clean state after testing
+
+**Test Configuration**:
+- Select which layers to include in test build
+- Option to skip validation for faster iteration
+- Auto-uninstall previous test builds
+
+#### 4.6 Project Import/Export
+
+Tools for sharing and backing up projects.
+
+**Import Sources**:
+- From existing folder (copy or link)
+- From `.modpkg` file (extract and create project)
+- From Git repository URL (clone)
+
+**Export Options**:
+- Export as ZIP archive
+- Export to different location
+- Include/exclude build outputs
+
+---
 
 ### 5. First-Run Experience
 
@@ -167,8 +309,9 @@ Guided onboarding for new users.
 **Steps**:
 1. Welcome screen with app introduction
 2. League of Legends path detection/selection
-3. Brief feature tour
-4. Ready to use confirmation
+3. Workshop directory selection (for creators)
+4. Brief feature tour
+5. Ready to use confirmation
 
 ---
 
@@ -219,10 +362,62 @@ User Action                          System Response
 User Action                          System Response
 ─────────────────────────────────────────────────────────────
 1. Click "New Project"         →    Open wizard dialog
-2. Enter project name          →    Validate name format
-3. Select project location     →    Verify write permissions
-4. Configure initial layers    →    Set up layer structure
-5. Click "Create"              →    Generate project files
+2. Enter basic info            →    Validate name (no conflicts)
+3. Select template             →    Preview template structure
+4. Configure layers            →    Validate layer names
+5. Click "Create"              →    Generate project in Workshop
+6. [Success]                   →    Open project in editor
+7. [Error]                     →    Show error, allow retry
+```
+
+### Opening an Existing Project
+
+```
+User Action                          System Response
+─────────────────────────────────────────────────────────────
+1. Navigate to Workshop        →    Scan Workshop directory
+2. [Projects found]            →    Display project cards
+3. Click on project            →    Load project configuration
+4. [Config valid]              →    Open project editor
+5. [Config invalid]            →    Show error with details
+```
+
+### Building a Mod Package
+
+```
+User Action                          System Response
+─────────────────────────────────────────────────────────────
+1. Click "Pack" in editor      →    Run pre-build validation
+2. [Validation passes]         →    Show build progress
+3. [During build]              →    Update progress indicator
+4. [Build complete]            →    Show success with file path
+5. [Build failed]              →    Show error details
+6. [Optional] Click "Open"     →    Open output folder
+```
+
+### Quick Test Workflow
+
+```
+User Action                          System Response
+─────────────────────────────────────────────────────────────
+1. Click "Quick Test"          →    Build mod (skip full validation)
+2. [Build success]             →    Install to library (test mode)
+3. [Auto]                      →    Enable mod, disable others
+4. Click "Launch League"       →    Start League of Legends
+5. [After testing]             →    Click "End Test"
+6. [Cleanup]                   →    Uninstall test build, restore state
+```
+
+### Importing a Project from .modpkg
+
+```
+User Action                          System Response
+─────────────────────────────────────────────────────────────
+1. Click "Import"              →    Show import options
+2. Select "From .modpkg"       →    Open file picker
+3. Select file                 →    Extract and analyze contents
+4. Enter project name          →    Validate name availability
+5. Click "Import"              →    Create project in Workshop
 6. [Success]                   →    Open project in editor
 ```
 
@@ -236,6 +431,7 @@ User Action                          System Response
 |-------|------|-------------|
 | League Path | Path (optional) | Path to League of Legends installation |
 | Mod Storage Path | Path (optional) | Where installed mods are stored |
+| Workshop Path | Path (optional) | Directory for mod projects |
 | Theme | Enum | Light, Dark, or System |
 | First Run Complete | Boolean | Whether onboarding has been completed |
 
@@ -263,6 +459,49 @@ User Action                          System Response
 | Priority | Integer | Load order priority |
 | Enabled | Boolean | Whether layer is active |
 
+### Mod Project (Workshop)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| Path | Path | Absolute path to project directory |
+| Name | String | Internal project name |
+| Display Name | String | Human-readable name |
+| Version | String | Current version |
+| Description | String (optional) | Project description |
+| Authors | List | Author information with roles |
+| License | String (optional) | License identifier |
+| Layers | List | Configured layers |
+| Transformers | List | File transformer configurations |
+| Last Modified | Timestamp | When config was last changed |
+
+### Project Author
+
+| Field | Type | Description |
+|-------|------|-------------|
+| Name | String | Author's name |
+| Role | String (optional) | Role in project (e.g., "Lead", "Contributor") |
+| URL | String (optional) | Author's website or profile |
+
+### Project Layer
+
+| Field | Type | Description |
+|-------|------|-------------|
+| Name | String | Layer identifier |
+| Description | String (optional) | What this layer contains |
+| Priority | Integer | Load order (higher = loaded later) |
+
+### Build Record
+
+| Field | Type | Description |
+|-------|------|-------------|
+| Project Name | String | Which project was built |
+| Version | String | Version that was built |
+| Timestamp | Timestamp | When build occurred |
+| Success | Boolean | Whether build succeeded |
+| Output Path | Path (optional) | Location of output file |
+| Duration | Duration | How long build took |
+| Error | String (optional) | Error message if failed |
+
 ---
 
 ## Security Model
@@ -273,9 +512,9 @@ The application requests only necessary permissions:
 
 | Permission | Purpose |
 |------------|---------|
-| File System (Scoped) | Read/write mod files and settings |
+| File System (Scoped) | Read/write mod files, projects, and settings |
 | Dialog | File picker and folder selection |
-| Shell (Limited) | Open URLs in browser |
+| Shell (Limited) | Open URLs in browser, open folders in explorer |
 
 ### Content Security
 
@@ -286,6 +525,7 @@ The application requests only necessary permissions:
 ### Mod Safety
 
 - Mods are sandboxed within the mod storage directory
+- Projects are sandboxed within the Workshop directory
 - Digital signatures can verify mod authenticity (when signed)
 - No automatic execution of mod contents
 
@@ -309,11 +549,22 @@ The application requests only necessary permissions:
 - [ ] Search and filtering
 - [ ] Layer selection per mod
 
-### Version 1.2
+### Version 1.2 (Creator Workshop)
 
-- [ ] Creator Workshop - New project wizard
-- [ ] Creator Workshop - Project editor
-- [ ] Creator Workshop - Pack to .modpkg
+- [ ] Workshop directory configuration
+- [ ] Project browser with auto-discovery
+- [ ] New project wizard with templates
+- [ ] Project metadata editor
+- [ ] Layer manager
+- [ ] Pack to .modpkg with validation
+
+### Version 1.3 (Workshop Enhanced)
+
+- [ ] Content browser for project files
+- [ ] Build history
+- [ ] Quick test workflow
+- [ ] Project import from .modpkg
+- [ ] Transformer configuration UI
 
 ### Version 2.0
 
@@ -333,6 +584,8 @@ The application requests only necessary permissions:
 |------|------------|
 | **Modpkg** | The `.modpkg` file format for distributing League mods |
 | **Layer** | A subset of mod content that can be independently enabled |
+| **Workshop** | The directory where mod projects are stored and managed |
+| **Transformer** | A processing step applied to files during packaging |
 | **IPC** | Inter-Process Communication between frontend and backend |
 | **Tauri** | Framework for building native desktop apps with web UI |
 
