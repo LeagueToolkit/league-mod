@@ -1,91 +1,64 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Grid3X3, List, Plus, Search, Upload } from "lucide-react";
 
-import { ModCard } from "../components/ModCard";
-
-interface InstalledMod {
-  id: string;
-  name: string;
-  displayName: string;
-  version: string;
-  description?: string;
-  authors: string[];
-  enabled: boolean;
-  installedAt: string;
-  filePath: string;
-  layers: ModLayer[];
-}
-
-interface ModLayer {
-  name: string;
-  priority: number;
-  enabled: boolean;
-}
+import { ModCard } from "@/components/ModCard";
+import {
+  useInstalledMods,
+  useInstallMod,
+  useToggleMod,
+  useUninstallMod,
+} from "@/modules/library/api";
+import type { AppError } from "@/lib/tauri";
 
 export function Library() {
-  const [mods, setMods] = useState<InstalledMod[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    loadMods();
-  }, []);
-
-  async function loadMods() {
-    try {
-      const installedMods = await invoke<InstalledMod[]>("get_installed_mods");
-      setMods(installedMods);
-    } catch (error) {
-      console.error("Failed to load mods:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }
+  const { data: mods = [], isLoading, error } = useInstalledMods();
+  const installMod = useInstallMod();
+  const toggleMod = useToggleMod();
+  const uninstallMod = useUninstallMod();
 
   async function handleInstallMod() {
-    try {
-      const file = await open({
-        multiple: false,
-        filters: [{ name: "Mod Package", extensions: ["modpkg"] }],
+    const file = await open({
+      multiple: false,
+      filters: [{ name: "Mod Package", extensions: ["modpkg"] }],
+    });
+
+    if (file) {
+      installMod.mutate(file, {
+        onError: (error) => {
+          console.error("Failed to install mod:", error.message);
+        },
       });
+    }
+  }
 
-      if (file) {
-        const newMod = await invoke<InstalledMod>("install_mod", {
-          filePath: file,
-        });
-        setMods((prev) => [...prev, newMod]);
+  function handleToggleMod(modId: string, enabled: boolean) {
+    toggleMod.mutate(
+      { modId, enabled },
+      {
+        onError: (error) => {
+          console.error("Failed to toggle mod:", error.message);
+        },
       }
-    } catch (error) {
-      console.error("Failed to install mod:", error);
-    }
+    );
   }
 
-  async function handleToggleMod(modId: string, enabled: boolean) {
-    try {
-      await invoke("toggle_mod", { modId, enabled });
-      setMods((prev) => prev.map((mod) => (mod.id === modId ? { ...mod, enabled } : mod)));
-    } catch (error) {
-      console.error("Failed to toggle mod:", error);
-    }
-  }
-
-  async function handleUninstallMod(modId: string) {
-    try {
-      await invoke("uninstall_mod", { modId });
-      setMods((prev) => prev.filter((mod) => mod.id !== modId));
-    } catch (error) {
-      console.error("Failed to uninstall mod:", error);
-    }
+  function handleUninstallMod(modId: string) {
+    uninstallMod.mutate(modId, {
+      onError: (error) => {
+        console.error("Failed to uninstall mod:", error.message);
+      },
+    });
   }
 
   const filteredMods = mods.filter(
     (mod) =>
       mod.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      mod.name.toLowerCase().includes(searchQuery.toLowerCase()),
+      mod.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -96,10 +69,11 @@ export function Library() {
         <button
           type="button"
           onClick={handleInstallMod}
-          className="bg-league-500 hover:bg-league-600 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors"
+          disabled={installMod.isPending}
+          className="bg-league-500 hover:bg-league-600 disabled:bg-league-500/50 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors disabled:cursor-not-allowed"
         >
           <Plus className="h-4 w-4" />
-          Add Mod
+          {installMod.isPending ? "Installing..." : "Add Mod"}
         </button>
       </header>
 
@@ -147,9 +121,9 @@ export function Library() {
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
         {isLoading ? (
-          <div className="flex h-64 items-center justify-center">
-            <div className="border-league-500 h-8 w-8 animate-spin rounded-full border-2 border-t-transparent" />
-          </div>
+          <LoadingState />
+        ) : error ? (
+          <ErrorState error={error} />
         ) : filteredMods.length === 0 ? (
           <EmptyState onInstall={handleInstallMod} hasSearch={!!searchQuery} />
         ) : (
@@ -176,7 +150,34 @@ export function Library() {
   );
 }
 
-function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch: boolean }) {
+function LoadingState() {
+  return (
+    <div className="flex h-64 items-center justify-center">
+      <div className="border-league-500 h-8 w-8 animate-spin rounded-full border-2 border-t-transparent" />
+    </div>
+  );
+}
+
+function ErrorState({ error }: { error: AppError }) {
+  return (
+    <div className="flex h-64 flex-col items-center justify-center text-center">
+      <div className="bg-red-500/10 mb-4 rounded-full p-4">
+        <span className="text-2xl">⚠️</span>
+      </div>
+      <h3 className="text-surface-300 mb-1 text-lg font-medium">Failed to load mods</h3>
+      <p className="text-surface-500 mb-2">{error.message}</p>
+      <p className="text-surface-600 text-sm">Error code: {error.code}</p>
+    </div>
+  );
+}
+
+function EmptyState({
+  onInstall,
+  hasSearch,
+}: {
+  onInstall: () => void;
+  hasSearch: boolean;
+}) {
   if (hasSearch) {
     return (
       <div className="flex h-64 flex-col items-center justify-center text-center">
