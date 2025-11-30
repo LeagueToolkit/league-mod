@@ -62,13 +62,13 @@ export interface LayerInfo {
  * Raw IPC result from Tauri commands.
  * This matches the Rust IpcResult<T> serialization format.
  */
-type IpcResponse<T> = { ok: "true"; value: T } | { ok: "false"; error: AppError };
+type IpcResponse<T> = { ok: true; value: T } | { ok: false; error: AppError };
 
 /**
  * Transform the raw IPC response to our Result type.
  */
 function toResult<T>(response: IpcResponse<T>): Result<T> {
-  if (response.ok === "true") {
+  if (response.ok) {
     return { ok: true, value: response.value };
   }
   return { ok: false, error: response.error };

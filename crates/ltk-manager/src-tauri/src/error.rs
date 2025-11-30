@@ -58,13 +58,36 @@ impl AppErrorResponse {
 /// Result type for IPC commands.
 /// This is always "successful" at the Tauri level - the actual success/failure
 /// is encoded in the response payload for type-safe error handling on the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "ok", rename_all = "camelCase")]
+///
+/// Serializes to `{ "ok": true, "value": T }` or `{ "ok": false, "error": AppErrorResponse }`.
+#[derive(Debug, Clone)]
 pub enum IpcResult<T> {
-    #[serde(rename = "true")]
     Ok { value: T },
-    #[serde(rename = "false")]
     Err { error: AppErrorResponse },
+}
+
+// Custom serialization to use actual boolean values for the `ok` field
+impl<T: Serialize> Serialize for IpcResult<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        match self {
+            IpcResult::Ok { value } => {
+                let mut state = serializer.serialize_struct("IpcResult", 2)?;
+                state.serialize_field("ok", &true)?;
+                state.serialize_field("value", value)?;
+                state.end()
+            }
+            IpcResult::Err { error } => {
+                let mut state = serializer.serialize_struct("IpcResult", 2)?;
+                state.serialize_field("ok", &false)?;
+                state.serialize_field("error", error)?;
+                state.end()
+            }
+        }
+    }
 }
 
 impl<T> IpcResult<T> {
