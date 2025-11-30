@@ -11,7 +11,17 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{js,json,css,html,md}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.11",
@@ -28,6 +38,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.4.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/router-plugin": "^1.139.11",
