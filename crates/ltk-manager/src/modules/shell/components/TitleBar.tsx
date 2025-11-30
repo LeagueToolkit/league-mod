@@ -36,13 +36,11 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
     >
       {/* Left: App icon and title */}
       <div className="flex items-center gap-2 pl-3" data-tauri-drag-region>
-        <img
-          src="/icon.svg"
-          alt="LTK"
-          className="h-6 w-6"
+        <img src="/icon.svg" alt="LTK" className="h-6 w-6" data-tauri-drag-region />
+        <span
+          className="text-surface-100 text-base font-medium tracking-wide"
           data-tauri-drag-region
-        />
-        <span className="text-surface-100 text-base font-medium tracking-wide" data-tauri-drag-region>
+        >
           {title}
         </span>
       </div>

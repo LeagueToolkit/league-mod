@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type InstalledMod, type AppError } from "@/lib/tauri";
+
+import { api, type AppError, type InstalledMod } from "@/lib/tauri";
 import { unwrapForQuery } from "@/utils/query";
 import { libraryKeys } from "./keys";
 
@@ -29,7 +30,7 @@ export function useToggleMod() {
 
       // Optimistically update
       queryClient.setQueryData<InstalledMod[]>(libraryKeys.mods(), (old) =>
-        old?.map((mod) => (mod.id === modId ? { ...mod, enabled } : mod))
+        old?.map((mod) => (mod.id === modId ? { ...mod, enabled } : mod)),
       );
 
       return { previous };
@@ -46,4 +47,3 @@ export function useToggleMod() {
     },
   });
 }
-

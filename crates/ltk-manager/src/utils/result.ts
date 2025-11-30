@@ -4,9 +4,7 @@ import type { AppError } from "./errors";
  * A discriminated union representing either a successful result or an error.
  * This mirrors the Rust IpcResult type for type-safe IPC communication.
  */
-export type Result<T, E = AppError> =
-  | { ok: true; value: T }
-  | { ok: false; error: E };
+export type Result<T, E = AppError> = { ok: true; value: T } | { ok: false; error: E };
 
 /**
  * Type guard to check if a Result is Ok (successful).
@@ -78,7 +76,7 @@ export function mapErr<T, E, F>(result: Result<T, E>, fn: (error: E) => F): Resu
  */
 export function andThen<T, U, E>(
   result: Result<T, E>,
-  fn: (value: T) => Result<U, E>
+  fn: (value: T) => Result<U, E>,
 ): Result<U, E> {
   if (isOk(result)) {
     return fn(result.value);
@@ -94,11 +92,10 @@ export function match<T, E, R>(
   handlers: {
     ok: (value: T) => R;
     err: (error: E) => R;
-  }
+  },
 ): R {
   if (isOk(result)) {
     return handlers.ok(result.value);
   }
   return handlers.err(result.error);
 }
-

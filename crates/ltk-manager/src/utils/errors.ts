@@ -31,7 +31,7 @@ export interface AppError {
  */
 export function hasErrorCode<T extends ErrorCode>(
   error: AppError,
-  code: T
+  code: T,
 ): error is AppError & { code: T } {
   return error.code === code;
 }
@@ -69,4 +69,3 @@ export function getModNotFoundContext(error: AppError): ModNotFoundContext | und
   }
   return undefined;
 }
-

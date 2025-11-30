@@ -4,8 +4,8 @@ import { createRootRoute, Outlet } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { invoke } from "@tauri-apps/api/core";
 
-import { Sidebar } from "../components/Sidebar";
 import { TitleBar } from "@/modules/shell";
+import { Sidebar } from "../components/Sidebar";
 
 interface AppInfo {
   name: string;
@@ -20,7 +20,7 @@ function RootLayout() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col bg-linear-to-br from-surface-900 via-night-600 to-surface-900">
+    <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">
       <TitleBar />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar appVersion={appInfo?.version} />

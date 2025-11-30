@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type InstalledMod, type AppError } from "@/lib/tauri";
+
+import { api, type AppError, type InstalledMod } from "@/lib/tauri";
 import { unwrapForQuery } from "@/utils/query";
 import { libraryKeys } from "./keys";
 
@@ -24,7 +25,7 @@ export function useUninstallMod() {
 
       // Optimistically remove
       queryClient.setQueryData<InstalledMod[]>(libraryKeys.mods(), (old) =>
-        old?.filter((mod) => mod.id !== modId)
+        old?.filter((mod) => mod.id !== modId),
       );
 
       return { previous };
@@ -41,4 +42,3 @@ export function useUninstallMod() {
     },
   });
 }
-

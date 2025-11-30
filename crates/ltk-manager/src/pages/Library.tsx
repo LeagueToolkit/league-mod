@@ -4,13 +4,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Grid3X3, List, Plus, Search, Upload } from "lucide-react";
 
 import { ModCard } from "@/components/ModCard";
+import type { AppError } from "@/lib/tauri";
 import {
   useInstalledMods,
   useInstallMod,
   useToggleMod,
   useUninstallMod,
 } from "@/modules/library/api";
-import type { AppError } from "@/lib/tauri";
 
 export function Library() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -43,7 +43,7 @@ export function Library() {
         onError: (error) => {
           console.error("Failed to toggle mod:", error.message);
         },
-      }
+      },
     );
   }
 
@@ -58,7 +58,7 @@ export function Library() {
   const filteredMods = mods.filter(
     (mod) =>
       mod.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      mod.name.toLowerCase().includes(searchQuery.toLowerCase())
+      mod.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   return (
@@ -161,7 +161,7 @@ function LoadingState() {
 function ErrorState({ error }: { error: AppError }) {
   return (
     <div className="flex h-64 flex-col items-center justify-center text-center">
-      <div className="bg-red-500/10 mb-4 rounded-full p-4">
+      <div className="mb-4 rounded-full bg-red-500/10 p-4">
         <span className="text-2xl">⚠️</span>
       </div>
       <h3 className="text-surface-300 mb-1 text-lg font-medium">Failed to load mods</h3>
@@ -171,13 +171,7 @@ function ErrorState({ error }: { error: AppError }) {
   );
 }
 
-function EmptyState({
-  onInstall,
-  hasSearch,
-}: {
-  onInstall: () => void;
-  hasSearch: boolean;
-}) {
+function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch: boolean }) {
   if (hasSearch) {
     return (
       <div className="flex h-64 flex-col items-center justify-center text-center">

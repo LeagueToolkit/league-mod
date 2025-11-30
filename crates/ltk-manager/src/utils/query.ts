@@ -1,5 +1,4 @@
-import type { Result } from "./result";
-import { isErr } from "./result";
+import { isErr, type Result } from "./result";
 
 /**
  * Unwrap a Result for use with TanStack Query.
@@ -69,11 +68,10 @@ export function queryFnWithArgs<T, E, Args extends unknown[]>(
  * ```
  */
 export function mutationFn<T, E, TVariables>(
-  fn: (variables: TVariables) => Promise<Result<T, E>>
+  fn: (variables: TVariables) => Promise<Result<T, E>>,
 ): (variables: TVariables) => Promise<T> {
   return async (variables) => {
     const result = await fn(variables);
     return unwrapForQuery(result);
   };
 }
-

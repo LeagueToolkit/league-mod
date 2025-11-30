@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type InstalledMod, type AppError } from "@/lib/tauri";
+
+import { api, type AppError, type InstalledMod } from "@/lib/tauri";
 import { unwrapForQuery } from "@/utils/query";
 import { libraryKeys } from "./keys";
 
@@ -17,9 +18,8 @@ export function useInstallMod() {
     onSuccess: (newMod) => {
       // Add the new mod to the cache
       queryClient.setQueryData<InstalledMod[]>(libraryKeys.mods(), (old) =>
-        old ? [...old, newMod] : [newMod]
+        old ? [...old, newMod] : [newMod],
       );
     },
   });
 }
-

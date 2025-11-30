@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type InstalledMod, type AppError } from "@/lib/tauri";
+
+import { api, type AppError, type InstalledMod } from "@/lib/tauri";
 import { queryFn } from "@/utils/query";
 import { libraryKeys } from "./keys";
 
@@ -12,4 +13,3 @@ export function useInstalledMods() {
     queryFn: queryFn(api.getInstalledMods),
   });
 }
-

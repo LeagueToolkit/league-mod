@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Result } from "@/utils/result";
+
 import type { AppError } from "@/utils/errors";
+import type { Result } from "@/utils/result";
 
 // Re-export Result utilities for convenience
 export { isOk, isErr, unwrap, unwrapOr, match } from "@/utils/result";
@@ -61,9 +62,7 @@ export interface LayerInfo {
  * Raw IPC result from Tauri commands.
  * This matches the Rust IpcResult<T> serialization format.
  */
-type IpcResponse<T> =
-  | { ok: "true"; value: T }
-  | { ok: "false"; error: AppError };
+type IpcResponse<T> = { ok: "true"; value: T } | { ok: "false"; error: AppError };
 
 /**
  * Transform the raw IPC response to our Result type.
@@ -78,10 +77,7 @@ function toResult<T>(response: IpcResponse<T>): Result<T> {
 /**
  * Invoke a Tauri command and return a typed Result.
  */
-async function invokeResult<T>(
-  cmd: string,
-  args?: Record<string, unknown>
-): Promise<Result<T>> {
+async function invokeResult<T>(cmd: string, args?: Record<string, unknown>): Promise<Result<T>> {
   const response = await invoke<IpcResponse<T>>(cmd, args);
   return toResult(response);
 }
@@ -92,23 +88,17 @@ export const api = {
 
   // Settings
   getSettings: () => invokeResult<Settings>("get_settings"),
-  saveSettings: (settings: Settings) =>
-    invokeResult<void>("save_settings", { settings }),
-  autoDetectLeaguePath: () =>
-    invokeResult<string | null>("auto_detect_league_path"),
-  validateLeaguePath: (path: string) =>
-    invokeResult<boolean>("validate_league_path", { path }),
+  saveSettings: (settings: Settings) => invokeResult<void>("save_settings", { settings }),
+  autoDetectLeaguePath: () => invokeResult<string | null>("auto_detect_league_path"),
+  validateLeaguePath: (path: string) => invokeResult<boolean>("validate_league_path", { path }),
 
   // Mods
   getInstalledMods: () => invokeResult<InstalledMod[]>("get_installed_mods"),
-  installMod: (filePath: string) =>
-    invokeResult<InstalledMod>("install_mod", { filePath }),
-  uninstallMod: (modId: string) =>
-    invokeResult<void>("uninstall_mod", { modId }),
+  installMod: (filePath: string) => invokeResult<InstalledMod>("install_mod", { filePath }),
+  uninstallMod: (modId: string) => invokeResult<void>("uninstall_mod", { modId }),
   toggleMod: (modId: string, enabled: boolean) =>
     invokeResult<void>("toggle_mod", { modId, enabled }),
 
   // Inspector
-  inspectModpkg: (filePath: string) =>
-    invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),
+  inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),
 };
