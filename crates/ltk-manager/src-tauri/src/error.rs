@@ -72,6 +72,7 @@ impl<T> IpcResult<T> {
         IpcResult::Ok { value }
     }
 
+    #[allow(dead_code)]
     pub fn err(error: impl Into<AppErrorResponse>) -> Self {
         IpcResult::Err {
             error: error.into(),
@@ -91,6 +92,7 @@ impl<T, E: Into<AppErrorResponse>> From<Result<T, E>> for IpcResult<T> {
 /// Internal application error type with rich error information.
 /// This is converted to `AppErrorResponse` when crossing the IPC boundary.
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum AppError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
