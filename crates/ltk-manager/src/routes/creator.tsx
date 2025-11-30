@@ -8,7 +8,7 @@ export const Route = createFileRoute("/creator")({
 function CreatorPage() {
   return (
     <div className="flex h-full flex-col">
-      <header className="border-brand-600 flex h-16 items-center border-b px-6">
+      <header className="border-surface-600 flex h-16 items-center border-b px-6">
         <h2 className="text-surface-100 text-xl font-semibold">Mod Creator</h2>
       </header>
       <div className="flex flex-1 items-center justify-center">

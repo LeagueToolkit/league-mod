@@ -31,7 +31,7 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
 
   return (
     <header
-      className="title-bar border-surface-400 flex h-10 shrink-0 items-center justify-between border-b select-none"
+      className="title-bar border-surface-600 flex h-10 shrink-0 items-center justify-between border-b select-none"
       data-tauri-drag-region
     >
       {/* Left: App icon and title */}
