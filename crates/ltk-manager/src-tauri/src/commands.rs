@@ -160,7 +160,7 @@ pub fn toggle_mod(mod_id: String, enabled: bool, state: State<AppState>) -> AppR
     let mod_entry = mods
         .iter_mut()
         .find(|m| m.id == mod_id)
-        .ok_or_else(|| AppError::ModNotFound(mod_id))?;
+        .ok_or(AppError::ModNotFound(mod_id))?;
 
     mod_entry.enabled = enabled;
     Ok(())
