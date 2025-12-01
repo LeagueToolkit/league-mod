@@ -3,6 +3,7 @@ use crate::{
     errors::CliError,
     utils::{validate_mod_name, validate_version_format},
 };
+use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use ltk_fantome::{get_unsupported_layers, pack_to_fantome};
 use ltk_mod_project::ModProject;
@@ -46,6 +47,9 @@ fn pack_to_modpkg(
     config_path: PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
+    let config_path = Utf8PathBuf::try_from(config_path)
+        .into_diagnostic()
+        .wrap_err("Config path is not valid UTF-8")?;
     let project_root = config_path.parent().unwrap();
 
     println_pad!(
@@ -57,7 +61,7 @@ fn pack_to_modpkg(
     let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
 
     if !output_dir.exists() {
-        println_pad!("Creating output directory: {}", output_dir.display());
+        println_pad!("Creating output directory: {}", output_dir);
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
@@ -83,24 +87,24 @@ fn pack_to_modpkg(
         "{}\n{} {}",
         "Mod package created successfully!".bright_green().bold(),
         "Path:".bright_green(),
-        output_path.display().to_string().bright_white().bold()
+        output_path.as_str().bright_white().bold()
     );
 
     Ok(())
 }
 
 /// Convert PackError to a miette diagnostic with CLI-friendly error messages.
-fn convert_pack_error(err: PackError, project_root: &Path) -> miette::Report {
+fn convert_pack_error(err: PackError, project_root: &Utf8Path) -> miette::Report {
     match err {
         PackError::LayerDirMissing { layer, path } => {
-            CliError::layer_directory_missing(layer, path).into()
+            CliError::layer_directory_missing(layer, path.into_std_path_buf()).into()
         }
         PackError::InvalidLayerName(name) => CliError::invalid_layer_name(name, None).into(),
         PackError::InvalidBaseLayerPriority(priority) => {
             CliError::invalid_base_layer_priority(priority).into()
         }
         PackError::ConfigNotFound(_) => {
-            CliError::config_not_found(project_root.to_path_buf()).into()
+            CliError::config_not_found(project_root.as_std_path().to_owned()).into()
         }
         other => miette!("Failed to pack mod: {}", other),
     }
@@ -111,6 +115,10 @@ fn pack_to_fantome_format(
     config_path: PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
+    let config_path = Utf8PathBuf::try_from(config_path)
+        .into_diagnostic()
+        .wrap_err("Config path is not valid UTF-8")?;
+
     println_pad!(
         "{} {}",
         "Packing mod project to Fantome format:"
@@ -128,7 +136,7 @@ fn pack_to_fantome_format(
         println_pad!(
             "{} {}",
             "📁 Creating output directory:".bright_yellow(),
-            output_dir.display().to_string().bright_white().bold()
+            output_dir.as_str().bright_white().bold()
         );
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
@@ -139,7 +147,7 @@ fn pack_to_fantome_format(
     let file = File::create(&output_path).into_diagnostic()?;
     let writer = BufWriter::new(file);
 
-    pack_to_fantome(writer, &mod_project, project_root)
+    pack_to_fantome(writer, &mod_project, project_root.as_std_path())
         .map_err(|e| miette!("Failed to pack to Fantome format: {}", e))?;
 
     println_pad!(
@@ -148,7 +156,7 @@ fn pack_to_fantome_format(
             .bright_green()
             .bold(),
         "Path:".bright_green(),
-        output_path.display().to_string().bright_white().bold()
+        output_path.as_str().bright_white().bold()
     );
 
     Ok(())
@@ -251,11 +259,11 @@ fn load_config(config_path: &Path) -> Result<ModProject> {
     }
 }
 
-fn resolve_output_dir(output_dir: &str, config_path: &Path) -> Result<PathBuf> {
-    let output_dir = PathBuf::from(output_dir);
+fn resolve_output_dir(output_dir: &str, config_path: &Utf8Path) -> Result<Utf8PathBuf> {
+    let output_dir = Utf8PathBuf::from(output_dir);
     let output_dir = match output_dir.is_absolute() {
         true => output_dir,
-        false => config_path.parent().unwrap().join(output_dir),
+        false => config_path.parent().unwrap().join(&output_dir),
     };
     Ok(output_dir)
 }

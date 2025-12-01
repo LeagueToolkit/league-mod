@@ -6,12 +6,12 @@
 //!
 //! ```ignore
 //! use ltk_modpkg::project::{pack_from_project, PackOptions};
-//! use std::path::Path;
+//! use camino::Utf8Path;
 //!
-//! let project_root = Path::new("my-mod");
-//! let output_path = Path::new("build/my-mod_1.0.0.modpkg");
+//! let project_root = Utf8Path::new("my-mod");
+//! let output_path = Utf8Path::new("build/my-mod_1.0.0.modpkg");
 //!
-//! pack_from_project(project_root, output_path, PackOptions::default())?;
+//! pack_from_project(project_root, output_path, &mod_project)?;
 //! ```
 
 use crate::{
@@ -19,13 +19,12 @@ use crate::{
     utils::hash_layer_name,
     ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
 };
+use camino::{Utf8Path, Utf8PathBuf};
 use image::ImageFormat;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Cursor, Read, Write};
-use std::path::{Path, PathBuf};
 
 /// Error type for project packing operations.
 #[derive(Debug, thiserror::Error)]
@@ -37,13 +36,10 @@ pub enum PackError {
     Builder(#[from] ModpkgBuilderError),
 
     #[error("Config file not found in project directory: {0}")]
-    ConfigNotFound(PathBuf),
-
-    #[error("Failed to parse config file: {0}")]
-    ConfigParse(String),
+    ConfigNotFound(Utf8PathBuf),
 
     #[error("Layer directory missing: {layer} at {path}")]
-    LayerDirMissing { layer: String, path: PathBuf },
+    LayerDirMissing { layer: String, path: Utf8PathBuf },
 
     #[error("Invalid layer name: {0}")]
     InvalidLayerName(String),
@@ -59,6 +55,9 @@ pub enum PackError {
 
     #[error("Glob pattern error: {0}")]
     GlobError(#[from] glob::PatternError),
+
+    #[error("Invalid UTF-8 path: {0}")]
+    InvalidUtf8Path(String),
 }
 
 /// Options for packing a mod project.
@@ -72,7 +71,7 @@ pub struct PackOptions {
 #[derive(Debug)]
 pub struct PackResult {
     /// The path to the created `.modpkg` file.
-    pub output_path: PathBuf,
+    pub output_path: Utf8PathBuf,
 }
 
 /// Create a standard modpkg file name from a mod project.
@@ -106,8 +105,8 @@ pub fn create_file_name(mod_project: &ModProject, custom_name: Option<String>) -
 ///
 /// Returns `PackResult` on success with the output path.
 pub fn pack_from_project(
-    project_root: &Path,
-    output_path: &Path,
+    project_root: &Utf8Path,
+    output_path: &Utf8Path,
     mod_project: &ModProject,
 ) -> Result<PackResult, PackError> {
     let content_dir = project_root.join("content");
@@ -117,7 +116,7 @@ pub fn pack_from_project(
 
     // Build the modpkg
     let mut builder = ModpkgBuilder::default().with_layer(ModpkgLayerBuilder::base());
-    let mut chunk_filepaths: HashMap<(u64, u64), PathBuf> = HashMap::new();
+    let mut chunk_filepaths: HashMap<(u64, u64), Utf8PathBuf> = HashMap::new();
 
     // Add metadata
     builder = build_metadata(builder, mod_project)?;
@@ -146,12 +145,12 @@ pub fn pack_from_project(
         .map_err(PackError::Builder)?;
 
     Ok(PackResult {
-        output_path: output_path.to_path_buf(),
+        output_path: output_path.to_owned(),
     })
 }
 
 /// Validate that all layers exist and have valid configuration.
-fn validate_layers(mod_project: &ModProject, project_root: &Path) -> Result<(), PackError> {
+fn validate_layers(mod_project: &ModProject, project_root: &Utf8Path) -> Result<(), PackError> {
     for layer in &mod_project.layers {
         // Validate layer name is a valid slug
         if !is_valid_slug(&layer.name) {
@@ -271,9 +270,9 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
 
 fn build_layers(
     mut builder: ModpkgBuilder,
-    content_dir: &Path,
+    content_dir: &Utf8Path,
     mod_project: &ModProject,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
+    chunk_filepaths: &mut HashMap<(u64, u64), Utf8PathBuf>,
 ) -> Result<ModpkgBuilder, PackError> {
     // Process base layer
     builder = build_layer_from_dir(
@@ -299,17 +298,19 @@ fn build_layers(
 
 fn build_layer_from_dir(
     mut builder: ModpkgBuilder,
-    content_dir: &Path,
+    content_dir: &Utf8Path,
     layer: &ModProjectLayer,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
+    chunk_filepaths: &mut HashMap<(u64, u64), Utf8PathBuf>,
 ) -> Result<ModpkgBuilder, PackError> {
     let layer_dir = content_dir.join(&layer.name);
+    let pattern = layer_dir.join("**/*");
 
-    let pattern = layer_dir.join("**/*").to_string_lossy().to_string();
-    for entry in glob::glob(&pattern)?.filter_map(Result::ok) {
-        if !entry.is_file() {
-            continue;
-        }
+    for entry in glob::glob(pattern.as_str())?
+        .filter_map(Result::ok)
+        .filter(|e| e.is_file())
+    {
+        let entry = Utf8PathBuf::from_path_buf(entry)
+            .map_err(|p| PackError::InvalidUtf8Path(p.display().to_string()))?;
 
         let layer_hash = hash_layer_name(&layer.name);
         let (new_builder, path_hash) = build_chunk_from_file(builder, layer, &entry, &layer_dir)?;
@@ -327,15 +328,15 @@ fn build_layer_from_dir(
 fn build_chunk_from_file(
     builder: ModpkgBuilder,
     layer: &ModProjectLayer,
-    file_path: &Path,
-    layer_dir: &Path,
+    file_path: &Utf8Path,
+    layer_dir: &Utf8Path,
 ) -> Result<(ModpkgBuilder, u64), PackError> {
     let relative_path = file_path
         .strip_prefix(layer_dir)
         .map_err(|e| PackError::Io(io::Error::other(e.to_string())))?;
 
     let chunk_builder = ModpkgChunkBuilder::new()
-        .with_path(relative_path.to_string_lossy().as_ref())
+        .with_path(relative_path.as_str())
         .map_err(PackError::Builder)?
         .with_compression(ModpkgCompression::Zstd)
         .with_layer(&layer.name);
@@ -346,7 +347,7 @@ fn build_chunk_from_file(
 
 fn add_meta_chunks(
     mut builder: ModpkgBuilder,
-    project_root: &Path,
+    project_root: &Utf8Path,
     mod_project: &ModProject,
 ) -> Result<ModpkgBuilder, PackError> {
     // README.md as meta chunk (optional)
@@ -375,10 +376,9 @@ fn add_meta_chunks(
     Ok(builder)
 }
 
-fn load_thumbnail(path: &Path) -> Result<Vec<u8>, PackError> {
+fn load_thumbnail(path: &Utf8Path) -> Result<Vec<u8>, PackError> {
     let is_webp = path
         .extension()
-        .and_then(OsStr::to_str)
         .map(|ext| ext.eq_ignore_ascii_case("webp"))
         .unwrap_or(false);
 
@@ -398,7 +398,7 @@ fn load_thumbnail(path: &Path) -> Result<Vec<u8>, PackError> {
 fn write_chunk_payload(
     chunk_builder: &ModpkgChunkBuilder,
     cursor: &mut Cursor<Vec<u8>>,
-    chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
+    chunk_filepaths: &HashMap<(u64, u64), Utf8PathBuf>,
 ) -> io::Result<()> {
     // Content chunks - look up file path from the map
     let key = (

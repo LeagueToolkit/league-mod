@@ -2759,6 +2759,7 @@ version = "0.1.4"
 dependencies = [
  "binrw",
  "byteorder",
+ "camino",
  "glob",
  "image",
  "itertools 0.14.0",

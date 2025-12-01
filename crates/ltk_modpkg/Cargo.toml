@@ -31,6 +31,8 @@ image = { version = "0.25", default-features = false, features = [
     "jpeg",
 ] }
 
+camino = { workspace = true }
+
 # Optional: for packing from mod projects
 ltk_mod_project = { version = "0.1.3", path = "../ltk_mod_project", optional = true }
 

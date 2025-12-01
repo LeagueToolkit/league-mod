@@ -446,7 +446,7 @@ impl ModpkgBuilder {
             if layer.is_empty() {
                 continue;
             }
-            if !defined_layers.iter().any(|l| l.name == layer.as_ref()) {
+            if !defined_layers.iter().any(|l| l.name == layer.as_str()) {
                 return Err(ModpkgBuilderError::LayerNotFound(layer.to_string()));
             }
         }
