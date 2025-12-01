@@ -2774,6 +2774,9 @@ dependencies = [
  "ltk_mod_project",
  "serde",
  "serde_json",
+ "slug",
+ "tempfile",
+ "thiserror 2.0.17",
  "walkdir",
  "zip",
 ]

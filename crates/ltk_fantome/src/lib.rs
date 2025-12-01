@@ -7,6 +7,12 @@ use std::io::Write;
 use std::path::Path;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
+pub mod error;
+mod extractor;
+
+pub use error::FantomeExtractError;
+pub use extractor::{FantomeExtractResult, FantomeExtractor};
+
 /// Fantome metadata structure that goes into info.json
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FantomeInfo {
