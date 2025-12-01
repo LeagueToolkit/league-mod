@@ -1,17 +1,15 @@
 //! League of Legends path detection and validation utilities.
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
-use std::path::Path;
 use sysinfo::{Disks, System};
 
 /// Validates if a path points to a valid League of Legends executable.
-pub fn is_valid_league_path(path: &str) -> bool {
-    let p = Path::new(path);
-    if !p.exists() {
+pub fn is_valid_league_path(path: &Utf8Path) -> bool {
+    if !path.exists() {
         return false;
     }
-    if let Some(file_name) = p.file_name() {
+    if let Some(file_name) = path.file_name() {
         return file_name == "League of Legends.exe";
     }
     false
@@ -38,7 +36,7 @@ fn get_available_drives() -> Vec<String> {
 }
 
 /// Detect League installation from RiotClientInstalls.json.
-fn detect_from_riot_client_installs() -> Option<String> {
+fn detect_from_riot_client_installs() -> Option<Utf8PathBuf> {
     // Build path: C:\ProgramData\Riot Games\RiotClientInstalls.json
     let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
     let system_root = format!("{}\\", system_drive);
@@ -48,7 +46,7 @@ fn detect_from_riot_client_installs() -> Option<String> {
         .join("Riot Games")
         .join("RiotClientInstalls.json");
 
-    if !Path::new(riot_installs_path.as_str()).exists() {
+    if !riot_installs_path.exists() {
         return None;
     }
 
@@ -65,8 +63,8 @@ fn detect_from_riot_client_installs() -> Option<String> {
         if let Some(folder_name) = normalized_path.file_name() {
             if folder_name == "League of Legends" {
                 let exe_path = normalized_path.join("Game").join("League of Legends.exe");
-                if is_valid_league_path(exe_path.as_str()) {
-                    return Some(exe_path.to_string());
+                if is_valid_league_path(&exe_path) {
+                    return Some(exe_path);
                 }
             }
         }
@@ -76,27 +74,28 @@ fn detect_from_riot_client_installs() -> Option<String> {
 }
 
 /// Detect League installation from running process using sysinfo.
-fn detect_from_running_process() -> Option<String> {
+fn detect_from_running_process() -> Option<Utf8PathBuf> {
     let system = System::new_all();
 
-    let check_process = |name: &str| -> Option<String> {
+    let check_process = |name: &str| -> Option<Utf8PathBuf> {
         for process in system.processes_by_name(name.as_ref()) {
-            let path = process.exe().and_then(|p| p.to_str())?;
+            let path = process
+                .exe()
+                .and_then(|p| Utf8PathBuf::from_path_buf(p.to_path_buf()).ok())?;
 
             // For client processes, navigate to Game folder
             if name == "LeagueClientUx.exe" || name == "LeagueClient.exe" {
-                let root_path = Path::new(path).parent()?;
+                let root_path = path.parent()?;
                 let game_exe = root_path.join("Game").join("League of Legends.exe");
-                let game_path = game_exe.to_str()?;
 
-                if is_valid_league_path(game_path) {
-                    return Some(game_path.to_string());
+                if is_valid_league_path(&game_exe) {
+                    return Some(game_exe);
                 }
                 continue;
             }
 
-            if is_valid_league_path(path) {
-                return Some(path.to_string());
+            if is_valid_league_path(&path) {
+                return Some(path);
             }
         }
         None
@@ -109,7 +108,7 @@ fn detect_from_running_process() -> Option<String> {
 }
 
 /// Check common installation paths on all available drives.
-fn detect_from_common_paths() -> Option<String> {
+fn detect_from_common_paths() -> Option<Utf8PathBuf> {
     let drives = get_available_drives();
     let mut paths_to_check = Vec::new();
 
@@ -143,12 +142,11 @@ fn detect_from_common_paths() -> Option<String> {
 
     paths_to_check
         .into_iter()
-        .map(|p| p.to_string())
         .find(|path| is_valid_league_path(path))
 }
 
 /// Detect League installation from Windows Registry.
-fn detect_from_registry() -> Option<String> {
+fn detect_from_registry() -> Option<Utf8PathBuf> {
     if cfg!(not(target_os = "windows")) {
         return None;
     }
@@ -174,8 +172,8 @@ fn detect_from_registry() -> Option<String> {
                     .join("Game")
                     .join("League of Legends.exe");
 
-                if is_valid_league_path(game_exe.as_str()) {
-                    return Some(game_exe.to_string());
+                if is_valid_league_path(&game_exe) {
+                    return Some(game_exe);
                 }
             }
         }
@@ -191,7 +189,7 @@ fn detect_from_registry() -> Option<String> {
 /// 2. Running League processes
 /// 3. Common installation paths
 /// 4. Windows Registry
-pub fn auto_detect_league_path() -> Option<String> {
+pub fn auto_detect_league_path() -> Option<Utf8PathBuf> {
     detect_from_riot_client_installs()
         .or_else(detect_from_running_process)
         .or_else(detect_from_common_paths)
