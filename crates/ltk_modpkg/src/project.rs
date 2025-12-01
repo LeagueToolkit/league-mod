@@ -332,7 +332,7 @@ fn build_chunk_from_file(
 ) -> Result<(ModpkgBuilder, u64), PackError> {
     let relative_path = file_path
         .strip_prefix(layer_dir)
-        .map_err(|e| PackError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| PackError::Io(io::Error::other(e.to_string())))?;
 
     let chunk_builder = ModpkgChunkBuilder::new()
         .with_path(relative_path.to_string_lossy().as_ref())
