@@ -2,11 +2,11 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 
-use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor};
+use ltk_mod_project::{ModProject, ModProjectAuthor, default_layers};
 use zip::ZipArchive;
 
-use crate::error::FantomeExtractError;
 use crate::FantomeInfo;
+use crate::error::FantomeExtractError;
 
 /// Result of extracting a Fantome package.
 pub struct FantomeExtractResult {
@@ -85,7 +85,10 @@ impl<R: Read + Seek> FantomeExtractor<R> {
     /// 5. Create a mod.config.json file
     ///
     /// Returns the mod project configuration that was created.
-    pub fn extract_to(&mut self, output_dir: &Path) -> Result<FantomeExtractResult, FantomeExtractError> {
+    pub fn extract_to(
+        &mut self,
+        output_dir: &Path,
+    ) -> Result<FantomeExtractResult, FantomeExtractError> {
         // Validate the archive structure
         self.validate()?;
 
@@ -171,8 +174,8 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use tempfile::tempdir;
-    use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
 
     fn create_test_fantome() -> Vec<u8> {
         let buffer = Vec::new();
@@ -216,10 +219,12 @@ mod tests {
         assert!(temp_dir.path().join("mod.config.json").exists());
 
         // Check that WAD content was extracted
-        assert!(temp_dir
-            .path()
-            .join("content/base/test.wad.client/assets/test.bin")
-            .exists());
+        assert!(
+            temp_dir
+                .path()
+                .join("content/base/test.wad.client/assets/test.bin")
+                .exists()
+        );
     }
 
     #[test]
@@ -231,7 +236,8 @@ mod tests {
 
         // Add META/info.json
         zip.start_file("META/info.json", options).unwrap();
-        let info = r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
+        let info =
+            r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
         zip.write_all(info.as_bytes()).unwrap();
 
         // Add RAW directory (unsupported)
@@ -257,7 +263,8 @@ mod tests {
 
         // Add META/info.json
         zip.start_file("META/info.json", options).unwrap();
-        let info = r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
+        let info =
+            r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
         zip.write_all(info.as_bytes()).unwrap();
 
         // Add a packed WAD file directly (unsupported)
@@ -276,4 +283,3 @@ mod tests {
         ));
     }
 }
-
