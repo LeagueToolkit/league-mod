@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/league-mod",
     "crates/ltk_fantome",
+    "crates/ltk_mod_core",
     "crates/ltk_modpkg",
     "crates/ltk_mod_project",
     "crates/ltk_pki",

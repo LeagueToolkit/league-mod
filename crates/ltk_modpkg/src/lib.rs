@@ -20,6 +20,9 @@ mod readme;
 mod thumbnail;
 pub mod utils;
 
+#[cfg(feature = "project")]
+pub mod project;
+
 pub use decoder::ModpkgDecoder;
 pub use extractor::ModpkgExtractor;
 pub use license::*;

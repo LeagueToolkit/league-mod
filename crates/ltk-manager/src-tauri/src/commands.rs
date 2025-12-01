@@ -57,25 +57,16 @@ pub fn auto_detect_league_path() -> IpcResult<Option<PathBuf>> {
 }
 
 fn auto_detect_league_path_inner() -> Option<PathBuf> {
-    // Common installation paths on Windows
-    let common_paths = [
-        r"C:\Riot Games\League of Legends",
-        r"D:\Riot Games\League of Legends",
-        r"C:\Program Files\Riot Games\League of Legends",
-        r"C:\Program Files (x86)\Riot Games\League of Legends",
-    ];
+    // Use shared detection logic from ltk_mod_core
+    // This returns the exe path, but we want the installation root
+    let exe_path = ltk_mod_core::auto_detect_league_path()?;
+    let path = std::path::Path::new(&exe_path);
 
-    for path in common_paths {
-        let path = PathBuf::from(path);
-        let exe_path = path.join("Game").join("League of Legends.exe");
-        if exe_path.exists() {
-            tracing::info!("Found League installation at: {:?}", path);
-            return Some(path);
-        }
-    }
+    // Navigate from "Game/League of Legends.exe" to installation root
+    let install_root = path.parent()?.parent()?;
 
-    tracing::warn!("Could not auto-detect League installation");
-    None
+    tracing::info!("Found League installation at: {:?}", install_root);
+    Some(install_root.to_path_buf())
 }
 
 /// Validate a League installation path

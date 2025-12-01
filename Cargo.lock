@@ -2546,6 +2546,7 @@ dependencies = [
  "image",
  "inquire",
  "ltk_fantome",
+ "ltk_mod_core",
  "ltk_mod_project",
  "ltk_modpkg",
  "miette",
@@ -2555,7 +2556,6 @@ dependencies = [
  "serde",
  "serde_json",
  "slug",
- "sysinfo",
  "thiserror 2.0.16",
  "toml 0.8.23",
 ]
@@ -2691,6 +2691,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "ltk_mod_core",
  "ltk_mod_project",
  "ltk_modpkg",
  "serde",
@@ -2733,6 +2734,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ltk_mod_core"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "ltk_mod_project"
 version = "0.1.3"
 dependencies = [
@@ -2747,8 +2759,12 @@ version = "0.1.4"
 dependencies = [
  "binrw",
  "byteorder",
+ "camino",
+ "glob",
+ "image",
  "itertools 0.14.0",
  "ltk_io_ext",
+ "ltk_mod_project",
  "proptest",
  "proptest-derive",
  "rmp-serde",

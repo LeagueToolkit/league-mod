@@ -1,6 +1,6 @@
 use eyre::Result;
 use image::ImageFormat;
-use ltk_mod_project::{ModProject, ModProjectAuthor};
+use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, read_dir};
 use std::io::Write;
@@ -18,6 +18,42 @@ pub struct FantomeInfo {
     pub version: String,
     #[serde(rename = "Description")]
     pub description: String,
+}
+
+/// Create a standard Fantome file name from a mod project.
+///
+/// If `custom_name` is provided, it will be used (with `.fantome` extension added if missing).
+/// Otherwise, generates `{name}_{version}.fantome`.
+pub fn create_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
+    match custom_name {
+        Some(name) => {
+            if name.ends_with(".fantome") {
+                name
+            } else {
+                format!("{}.fantome", name)
+            }
+        }
+        None => {
+            format!("{}_{}.fantome", mod_project.name, mod_project.version)
+        }
+    }
+}
+
+/// Get layers that are not supported by the Fantome format.
+///
+/// Fantome only supports the base layer. This returns all non-base layers
+/// from the project, which can be used to warn users about data loss.
+pub fn get_unsupported_layers(mod_project: &ModProject) -> Vec<&ModProjectLayer> {
+    mod_project
+        .layers
+        .iter()
+        .filter(|layer| layer.name != "base")
+        .collect()
+}
+
+/// Check if the mod project has layers that won't be included in Fantome format.
+pub fn has_unsupported_layers(mod_project: &ModProject) -> bool {
+    mod_project.layers.iter().any(|layer| layer.name != "base")
 }
 
 /// Pack a mod project into a Fantome .zip format

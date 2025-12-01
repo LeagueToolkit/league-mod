@@ -299,6 +299,17 @@ impl ModpkgBuilder {
             meta_chunks.push(thumbnail_chunk);
         }
 
+        // README
+        if let Some(readme_content) = self.readme.as_ref() {
+            let readme_chunk = Self::write_meta_chunk(
+                hash_chunk_name(README_CHUNK_PATH),
+                readme_content.as_bytes(),
+                writer,
+                chunk_path_indices,
+            )?;
+            meta_chunks.push(readme_chunk);
+        }
+
         Ok(meta_chunks)
     }
 
@@ -435,7 +446,7 @@ impl ModpkgBuilder {
             if layer.is_empty() {
                 continue;
             }
-            if !defined_layers.iter().any(|l| l.name == layer.as_ref()) {
+            if !defined_layers.iter().any(|l| l.name == layer.as_str()) {
                 return Err(ModpkgBuilderError::LayerNotFound(layer.to_string()));
             }
         }
