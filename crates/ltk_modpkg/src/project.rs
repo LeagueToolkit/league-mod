@@ -17,7 +17,7 @@
 use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     utils::hash_layer_name,
-    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata, README_CHUNK_PATH,
+    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
 };
 use image::ImageFormat;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
@@ -140,7 +140,7 @@ pub fn pack_from_project(
 
     builder
         .build_to_writer(&mut writer, |chunk_builder, cursor| {
-            write_chunk_payload(chunk_builder, cursor, project_root, &chunk_filepaths)
+            write_chunk_payload(chunk_builder, cursor, &chunk_filepaths)
                 .map_err(ModpkgBuilderError::from)
         })
         .map_err(PackError::Builder)?;
@@ -352,12 +352,10 @@ fn add_meta_chunks(
     // README.md as meta chunk (optional)
     let readme_path = project_root.join("README.md");
     if readme_path.exists() {
-        let readme_chunk = ModpkgChunkBuilder::new()
-            .with_path(README_CHUNK_PATH)
-            .map_err(PackError::Builder)?
-            .with_compression(ModpkgCompression::None)
-            .with_layer("");
-        builder = builder.with_chunk(readme_chunk);
+        let readme_content = fs::read_to_string(&readme_path)?;
+        builder = builder
+            .with_readme(&readme_content)
+            .map_err(PackError::Builder)?;
     }
 
     // Thumbnail as meta chunk (optional)
@@ -400,20 +398,9 @@ fn load_thumbnail(path: &Path) -> Result<Vec<u8>, PackError> {
 fn write_chunk_payload(
     chunk_builder: &ModpkgChunkBuilder,
     cursor: &mut Cursor<Vec<u8>>,
-    project_root: &Path,
     chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
 ) -> io::Result<()> {
-    // Handle README meta chunk
-    if chunk_builder.layer().is_empty() && chunk_builder.path.as_str() == README_CHUNK_PATH {
-        let readme_path = project_root.join("README.md");
-        if readme_path.exists() {
-            let data = fs::read(readme_path)?;
-            cursor.write_all(&data)?;
-        }
-        return Ok(());
-    }
-
-    // Regular content chunks
+    // Content chunks - look up file path from the map
     let key = (
         chunk_builder.path_hash(),
         hash_layer_name(chunk_builder.layer()),
