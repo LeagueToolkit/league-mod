@@ -1,28 +1,16 @@
 use crate::println_pad;
 use crate::{
     errors::CliError,
-    utils::{self, validate_mod_name, validate_version_format},
+    utils::{validate_mod_name, validate_version_format},
 };
 use colored::Colorize;
-use image::ImageFormat;
-use ltk_fantome::pack_to_fantome;
-use ltk_mod_project::{ModProject, ModProjectLayer};
-use ltk_modpkg::{
-    builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
-    utils::hash_layer_name,
-    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata, README_CHUNK_PATH,
-};
+use ltk_fantome::{get_unsupported_layers, pack_to_fantome};
+use ltk_mod_project::ModProject;
+use ltk_modpkg::project::{self as modpkg_project, PackError};
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
-use std::ffi::OsStr;
-use std::fs;
-use std::io;
-use std::io::Cursor;
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufWriter, Read, Write},
-    path::{Path, PathBuf},
-};
+use std::fs::File;
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum PackFormat {
@@ -58,10 +46,7 @@ fn pack_to_modpkg(
     config_path: PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
-    let content_dir = resolve_content_dir(&config_path)?;
-    let project_root = config_path.parent().unwrap().to_path_buf();
-
-    validate_layer_presence(&mod_project, config_path.parent().unwrap())?;
+    let project_root = config_path.parent().unwrap();
 
     println_pad!(
         "{} {}",
@@ -76,100 +61,49 @@ fn pack_to_modpkg(
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
-    let mut modpkg_builder = ModpkgBuilder::default().with_layer(ModpkgLayerBuilder::base());
-    let mut chunk_filepaths = HashMap::new();
+    // Print layer info
+    for layer in &mod_project.layers {
+        if layer.name != "base" {
+            println_pad!(
+                "{} {}",
+                "🏗️  Building layer:".bright_yellow(),
+                layer.name.bright_cyan().bold()
+            );
+        }
+    }
 
-    modpkg_builder = build_metadata(modpkg_builder, &mod_project)?;
-    modpkg_builder = build_layers(
-        modpkg_builder,
-        &content_dir,
-        &mod_project,
-        &mut chunk_filepaths,
-    )?;
+    let modpkg_file_name = modpkg_project::create_file_name(&mod_project, args.file_name);
+    let output_path = output_dir.join(&modpkg_file_name);
 
-    modpkg_builder = add_meta_chunks(modpkg_builder, &project_root, &mod_project)?;
-
-    let modpkg_file_name = create_modpkg_file_name(&mod_project, args.file_name);
-    let mut writer =
-        BufWriter::new(File::create(output_dir.join(&modpkg_file_name)).into_diagnostic()?);
-
-    modpkg_builder
-        .build_to_writer(&mut writer, |chunk_builder, cursor| {
-            write_chunk_payload(chunk_builder, cursor, &project_root, &chunk_filepaths)
-                .map_err(ModpkgBuilderError::from)
-        })
-        .into_diagnostic()?;
+    // Use the shared packing logic from ltk_modpkg
+    modpkg_project::pack_from_project(project_root, &output_path, &mod_project)
+        .map_err(|e| convert_pack_error(e, project_root))?;
 
     println_pad!(
         "{}\n{} {}",
         "Mod package created successfully!".bright_green().bold(),
         "Path:".bright_green(),
-        output_dir
-            .join(modpkg_file_name)
-            .display()
-            .to_string()
-            .bright_white()
-            .bold()
+        output_path.display().to_string().bright_white().bold()
     );
 
     Ok(())
 }
 
-fn add_meta_chunks(
-    mut builder: ModpkgBuilder,
-    project_root: &Path,
-    mod_project: &ModProject,
-) -> Result<ModpkgBuilder> {
-    // README.md as meta chunk (no layer/wad) - optional
-    let readme_path = project_root.join("README.md");
-    if readme_path.exists() {
-        let readme_chunk = ModpkgChunkBuilder::new()
-            .with_path(README_CHUNK_PATH)
-            .into_diagnostic()?
-            .with_compression(ModpkgCompression::None)
-            .with_layer("");
-        builder = builder.with_chunk(readme_chunk);
+/// Convert PackError to a miette diagnostic with CLI-friendly error messages.
+fn convert_pack_error(err: PackError, project_root: &Path) -> miette::Report {
+    match err {
+        PackError::LayerDirMissing { layer, path } => {
+            CliError::layer_directory_missing(layer, path).into()
+        }
+        PackError::InvalidLayerName(name) => CliError::invalid_layer_name(name, None).into(),
+        PackError::InvalidBaseLayerPriority(priority) => {
+            CliError::invalid_base_layer_priority(priority).into()
+        }
+        PackError::ConfigNotFound(_) => {
+            CliError::config_not_found(project_root.to_path_buf()).into()
+        }
+        other => miette!("Failed to pack mod: {}", other),
     }
-
-    // Thumbnail as meta chunk (no layer/wad). Include only if configured/default file exists.
-    let thumbnail_path = mod_project
-        .thumbnail
-        .as_ref()
-        .map(|p| project_root.join(p))
-        .unwrap_or_else(|| project_root.join("thumbnail.webp"));
-
-    if thumbnail_path.exists() {
-        let thumbnail_data = if thumbnail_path
-            .extension()
-            .and_then(OsStr::to_str)
-            .map(|ext| ext.eq_ignore_ascii_case("webp"))
-            .unwrap_or(false)
-        {
-            fs::read(&thumbnail_path).into_diagnostic()?
-        } else {
-            let img = image::open(&thumbnail_path)
-                .into_diagnostic()
-                .wrap_err("Failed to open thumbnail image")?;
-            let mut tmp = Cursor::new(Vec::new());
-            img.write_to(&mut tmp, ImageFormat::WebP)
-                .into_diagnostic()
-                .wrap_err("Failed to convert thumbnail to WebP")?;
-            tmp.into_inner()
-        };
-
-        builder = builder.with_thumbnail(thumbnail_data).into_diagnostic()?;
-    }
-
-    Ok(builder)
-}
-
-fn write_meta_chunk_readme(cursor: &mut Cursor<Vec<u8>>, project_root: &Path) -> io::Result<()> {
-    let readme_path = project_root.join("README.md");
-    if readme_path.exists() {
-        let data = fs::read(readme_path)?;
-        cursor.write_all(&data)?;
-    }
-    Ok(())
 }
 
 fn pack_to_fantome_format(
@@ -185,7 +119,6 @@ fn pack_to_fantome_format(
         mod_project.name.bright_cyan().bold()
     );
 
-    // Warn about non-base layers not being supported
     warn_about_unsupported_layers(&mod_project);
 
     let project_root = config_path.parent().unwrap();
@@ -200,7 +133,7 @@ fn pack_to_fantome_format(
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
-    let fantome_file_name = create_fantome_file_name(&mod_project, args.file_name);
+    let fantome_file_name = ltk_fantome::create_file_name(&mod_project, args.file_name);
     let output_path = output_dir.join(&fantome_file_name);
 
     let file = File::create(&output_path).into_diagnostic()?;
@@ -222,11 +155,7 @@ fn pack_to_fantome_format(
 }
 
 fn warn_about_unsupported_layers(mod_project: &ModProject) {
-    let non_base_layers: Vec<_> = mod_project
-        .layers
-        .iter()
-        .filter(|layer| layer.name != "base")
-        .collect();
+    let non_base_layers = get_unsupported_layers(mod_project);
 
     if !non_base_layers.is_empty() {
         println_pad!(
@@ -256,7 +185,7 @@ fn warn_about_unsupported_layers(mod_project: &ModProject) {
                 .bright_yellow()
                 .dimmed()
         );
-        println!(); // Empty line for spacing (no padding needed for blank line)
+        println!(); // Empty line for spacing
     }
 }
 
@@ -322,10 +251,6 @@ fn load_config(config_path: &Path) -> Result<ModProject> {
     }
 }
 
-fn resolve_content_dir(config_path: &Path) -> Result<PathBuf> {
-    Ok(config_path.parent().unwrap().join("content"))
-}
-
 fn resolve_output_dir(output_dir: &str, config_path: &Path) -> Result<PathBuf> {
     let output_dir = PathBuf::from(output_dir);
     let output_dir = match output_dir.is_absolute() {
@@ -333,238 +258,4 @@ fn resolve_output_dir(output_dir: &str, config_path: &Path) -> Result<PathBuf> {
         false => config_path.parent().unwrap().join(output_dir),
     };
     Ok(output_dir)
-}
-
-// Layer utils
-
-fn validate_layer_presence(mod_project: &ModProject, mod_project_dir: &Path) -> Result<()> {
-    for layer in &mod_project.layers {
-        if !utils::is_valid_slug(&layer.name) {
-            return Err(CliError::invalid_layer_name(layer.name.clone(), None).into());
-        }
-
-        // If the user explicitly defines the base layer, ensure its priority is 0
-        if layer.name == "base" && layer.priority != 0 {
-            return Err(CliError::invalid_base_layer_priority(layer.priority).into());
-        }
-
-        validate_layer_dir_presence(mod_project_dir, &layer.name)?;
-    }
-
-    Ok(())
-}
-
-fn validate_layer_dir_presence(mod_project_dir: &Path, layer_name: &str) -> Result<()> {
-    let layer_dir = mod_project_dir.join("content").join(layer_name);
-    if !layer_dir.exists() {
-        return Err(CliError::layer_directory_missing(layer_name.to_string(), layer_dir).into());
-    }
-
-    Ok(())
-}
-
-fn build_metadata(builder: ModpkgBuilder, mod_project: &ModProject) -> Result<ModpkgBuilder> {
-    let builder = builder
-        .with_metadata(ModpkgMetadata {
-            schema_version: 1,
-            name: mod_project.name.clone(),
-            display_name: mod_project.display_name.clone(),
-            description: Some(mod_project.description.clone()),
-            version: semver::Version::parse(&mod_project.version).into_diagnostic()?,
-            distributor: None,
-            authors: mod_project
-                .authors
-                .iter()
-                .map(utils::modpkg::convert_project_author)
-                .collect(),
-            license: utils::modpkg::convert_project_license(&mod_project.license),
-            layers: build_metadata_layers(mod_project),
-        })
-        .into_diagnostic()
-        .with_context(|| {
-            format!(
-                "Failed to build metadata for mod project: {}",
-                mod_project.name
-            )
-        })?;
-
-    Ok(builder)
-}
-
-/// Build the per-layer metadata section that will be embedded into the
-/// `_meta_/info.msgpack` metadata chunk.
-fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
-    let mut layers = Vec::new();
-
-    // Base layer: always present in the packed modpkg, even if the project
-    // config omits it from the `layers` list.
-    let base_from_config = mod_project.layers.iter().find(|l| l.name == "base");
-    let base_description = base_from_config
-        .and_then(|l| l.description.clone())
-        .or(Some("Base layer of the mod".to_string()));
-
-    layers.push(ModpkgLayerMetadata {
-        name: "base".to_string(),
-        priority: 0,
-        description: base_description,
-    });
-
-    // All non-base layers from the project config are mirrored as-is.
-    for layer in mod_project.layers.iter().filter(|l| l.name != "base") {
-        layers.push(ModpkgLayerMetadata {
-            name: layer.name.clone(),
-            priority: layer.priority,
-            description: layer.description.clone(),
-        });
-    }
-
-    layers
-}
-
-fn build_layers(
-    mut modpkg_builder: ModpkgBuilder,
-    content_dir: &Path,
-    mod_project: &ModProject,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
-) -> Result<ModpkgBuilder> {
-    // Process base layer
-    modpkg_builder = build_layer_from_dir(
-        modpkg_builder,
-        content_dir,
-        &ModProjectLayer::base(),
-        chunk_filepaths,
-    )?;
-
-    // Process layers
-    for layer in &mod_project.layers {
-        if layer.name == "base" {
-            continue;
-        }
-
-        println_pad!(
-            "{} {}",
-            "🏗️  Building layer:".bright_yellow(),
-            layer.name.bright_cyan().bold()
-        );
-        modpkg_builder = modpkg_builder
-            .with_layer(ModpkgLayerBuilder::new(layer.name.as_str()).with_priority(layer.priority));
-        modpkg_builder = build_layer_from_dir(modpkg_builder, content_dir, layer, chunk_filepaths)?;
-    }
-
-    Ok(modpkg_builder)
-}
-
-fn build_layer_from_dir(
-    mut modpkg_builder: ModpkgBuilder,
-    content_dir: &Path,
-    layer: &ModProjectLayer,
-    chunk_filepaths: &mut HashMap<(u64, u64), PathBuf>,
-) -> Result<ModpkgBuilder> {
-    let layer_dir = content_dir.join(layer.name.as_str());
-
-    for entry in glob::glob(layer_dir.join("**/*").to_str().unwrap())
-        .into_diagnostic()?
-        .filter_map(Result::ok)
-    {
-        if !entry.is_file() {
-            continue;
-        }
-
-        let layer_hash = hash_layer_name(layer.name.as_str());
-        let (modpkg_builder_new, path_hash) =
-            build_chunk_from_file(modpkg_builder, layer, &entry, &layer_dir)?;
-
-        chunk_filepaths
-            .entry((path_hash, layer_hash))
-            .or_insert(entry);
-
-        modpkg_builder = modpkg_builder_new;
-    }
-
-    Ok(modpkg_builder)
-}
-
-fn build_chunk_from_file(
-    modpkg_builder: ModpkgBuilder,
-    layer: &ModProjectLayer,
-    file_path: &Path,
-    layer_dir: &Path,
-) -> Result<(ModpkgBuilder, u64)> {
-    let relative_path = file_path.strip_prefix(layer_dir).into_diagnostic()?;
-    let chunk_builder = ModpkgChunkBuilder::new()
-        .with_path(relative_path.to_str().unwrap())
-        .into_diagnostic()?
-        .with_compression(ModpkgCompression::Zstd)
-        .with_layer(layer.name.as_str());
-
-    let path_hash = chunk_builder.path_hash();
-    Ok((modpkg_builder.with_chunk(chunk_builder), path_hash))
-}
-
-fn create_modpkg_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
-    match custom_name {
-        Some(name) => {
-            if name.ends_with(".modpkg") {
-                name
-            } else {
-                format!("{}.modpkg", name)
-            }
-        }
-        None => {
-            let version = semver::Version::parse(&mod_project.version).unwrap();
-            format!("{}_{}.modpkg", mod_project.name, version)
-        }
-    }
-}
-
-fn create_fantome_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
-    match custom_name {
-        Some(name) => {
-            if name.ends_with(".fantome") {
-                name
-            } else {
-                format!("{}.fantome", name)
-            }
-        }
-        None => {
-            let version = semver::Version::parse(&mod_project.version).unwrap();
-            format!("{}_{}.fantome", mod_project.name, version)
-        }
-    }
-}
-
-fn write_chunk_payload(
-    chunk_builder: &ModpkgChunkBuilder,
-    cursor: &mut Cursor<Vec<u8>>,
-    project_root: &Path,
-    chunk_filepaths: &HashMap<(u64, u64), PathBuf>,
-) -> io::Result<()> {
-    // Handle meta chunks specially (no layer/wad)
-    if chunk_builder.layer().is_empty() && chunk_builder.path.as_str() == README_CHUNK_PATH {
-        write_meta_chunk_readme(cursor, project_root)?;
-        return Ok(());
-    }
-
-    // Default: layer-bound content chunk from filepaths map
-    if let Some(file_path) = chunk_filepaths.get(&(
-        chunk_builder.path_hash(),
-        hash_layer_name(chunk_builder.layer()),
-    )) {
-        let mut file = File::open(file_path)?;
-        let mut buffer = Vec::new();
-
-        file.read_to_end(&mut buffer)?;
-        cursor.write_all(&buffer)?;
-
-        return Ok(());
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!(
-            "Missing file path for chunk: {} (layer: '{}')",
-            chunk_builder.path,
-            chunk_builder.layer()
-        ),
-    ))
 }

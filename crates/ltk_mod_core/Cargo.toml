@@ -1,0 +1,22 @@
+[package]
+name = "ltk_mod_core"
+version = "0.1.0"
+edition = "2021"
+description = "Core shared logic for LeagueToolkit mod management"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/LeagueToolkit/league-mod"
+
+[dependencies]
+# Path handling
+camino = { workspace = true }
+
+# System information (for process detection, disk enumeration)
+sysinfo = { workspace = true }
+
+# Serialization (for RiotClientInstalls.json parsing)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+

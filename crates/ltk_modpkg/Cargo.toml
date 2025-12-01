@@ -24,6 +24,19 @@ proptest = "1.6.0"
 zstd = "0.13"
 tempfile = "3.17.1"
 semver = { version = "1.0.27", features = ["serde"] }
+glob = "0.3"
+image = { version = "0.25", default-features = false, features = [
+    "webp",
+    "png",
+    "jpeg",
+] }
+
+# Optional: for packing from mod projects
+ltk_mod_project = { version = "0.1.3", path = "../ltk_mod_project", optional = true }
+
+[features]
+default = []
+project = ["ltk_mod_project"]
 
 [dependencies.xxhash-rust]
 version = "0.8.15"

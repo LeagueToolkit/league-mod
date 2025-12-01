@@ -4,7 +4,6 @@ use regex::Regex;
 
 pub mod config;
 pub mod league_path;
-pub mod modpkg;
 pub mod update;
 
 #[macro_export]

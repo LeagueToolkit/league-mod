@@ -19,6 +19,7 @@ tauri-plugin-fs = "2"
 # Workspace crates
 ltk_modpkg = { path = "../../ltk_modpkg" }
 ltk_mod_project = { path = "../../ltk_mod_project" }
+ltk_mod_core = { path = "../../ltk_mod_core" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
