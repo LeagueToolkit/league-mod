@@ -28,7 +28,7 @@ This downloads the latest release, installs it to `%LOCALAPPDATA%\LeagueToolkit\
 
 ## 📦 Packages
 
-This workspace contains three main crates:
+This workspace contains the following crates:
 
 ### `league-mod` - CLI Tool
 
@@ -69,6 +69,15 @@ Library for reading, writing, and manipulating the modpkg binary format.
 - Zstd compression
 - Layer-based file organization
 - Chunk-based data storage with metadata
+- High-level project packing (with `project` feature)
+
+### `ltk_mod_core` - Shared Core Library
+
+Shared utilities used by both the CLI and GUI applications.
+
+**Features:**
+- League of Legends installation detection (registry, running processes, common paths)
+- Cross-platform path utilities
 
 ### `ltk_mod_project` - Configuration Library
 
@@ -79,6 +88,19 @@ Handles mod project configuration files and metadata structures.
 - Layer system
 - Author, license, readme and distribution metadata
 - File transformer configuration
+
+### `ltk-manager` - Desktop GUI Application
+
+A graphical desktop application for managing League of Legends mods, built with [Tauri](https://tauri.app/).
+
+**Features:**
+- Visual mod library management
+- Drag & drop mod installation
+- Enable/disable mods with toggles
+- Automatic League of Legends detection
+- Creator Workshop for building mods (coming soon)
+
+**Status:** In active development. See the [design document](crates/ltk-manager/DESIGN.md) for the full roadmap.
 
 **Configuration Example:**
 ```json
