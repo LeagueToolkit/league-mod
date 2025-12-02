@@ -57,10 +57,21 @@ pub fn load_config() -> AppConfig {
     AppConfig::default()
 }
 
+/// Normalizes a path to use forward slashes
+fn normalize_path(path: &Utf8PathBuf) -> Utf8PathBuf {
+    Utf8PathBuf::from(path.as_str().replace('\\', "/"))
+}
+
 /// Saves the application configuration to config.toml.
+/// Paths are normalized to use forward slashes for consistency.
 pub fn save_config(cfg: &AppConfig) -> io::Result<()> {
     if let Some(path) = default_config_path() {
-        let content = toml::to_string_pretty(cfg).map_err(io::Error::other)?;
+        let normalized_cfg = AppConfig {
+            league_path: cfg.league_path.as_ref().map(normalize_path),
+            hashtable_dir: cfg.hashtable_dir.as_ref().map(normalize_path),
+        };
+
+        let content = toml::to_string_pretty(&normalized_cfg).map_err(io::Error::other)?;
         fs::write(path.as_str(), content)
     } else {
         Err(io::Error::new(
