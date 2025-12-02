@@ -55,18 +55,16 @@ pub enum Commands {
     /// Show information about a mod package
     Info {
         /// The path to the mod package file
-        #[arg(short, long)]
         file_path: String,
     },
     /// Extract a mod package to a directory
     Extract {
         /// The path to the mod package file
-        #[arg(short, long)]
         file_path: String,
 
-        /// The directory to extract the mod package to
-        #[arg(short, long, default_value = "extracted")]
-        output_dir: String,
+        /// The directory to extract the mod package to (defaults to file name without extension)
+        #[arg(short, long)]
+        output_dir: Option<String>,
     },
     /// Manage application configuration
     Config {
@@ -107,8 +105,6 @@ fn parse_args() -> Args {
 }
 
 fn main() -> Result<()> {
-    // Ensure config exists on startup (creates config.toml if missing)
-    // Also attempts auto-detection on first run
     let _ = config_cmd::ensure_config_exists();
 
     utils::update::check_for_update_blocking();

@@ -1,74 +1,81 @@
 use crate::utils::config::{self, AppConfig};
 use crate::utils::league_path;
+use camino::Utf8PathBuf;
 use colored::Colorize;
 use miette::Result;
 
-fn update_league_path_in_config(path: String) -> Result<()> {
+fn update_league_path_in_config(path: Utf8PathBuf) -> Result<()> {
     let mut cfg = config::load_config();
     cfg.league_path = Some(path);
     config::save_config(&cfg).map_err(|e| miette::miette!("Failed to save config: {}", e))
 }
 
-pub fn show_config() -> Result<()> {
-    let cfg = config::load_config();
-    let config_path = config::default_config_path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
+/// Format a path as a clickable hyperlink using OSC 8 escape sequence.
+/// Falls back to underlined text if terminal doesn't support hyperlinks.
+fn clickable_path(path: &Utf8PathBuf) -> String {
+    let file_url = format!("file:///{}", path.as_str().replace('\\', "/"));
+    let display = path.as_str().underline();
+    // OSC 8 hyperlink: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
+    format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", file_url, display)
+}
 
-    println!("\n{}", "League Mod Configuration".bright_cyan().bold());
-    println!("{}", "========================".bright_cyan());
-    println!();
-    println!("  {} {}", "Config file:".bright_white().bold(), config_path);
-    println!();
-
-    match &cfg.league_path {
-        Some(path) => {
-            println!(
-                "  {} {}",
-                "League Path:".bright_white().bold(),
-                path.bright_green()
-            );
-
-            if league_path::is_valid_league_path(path) {
-                println!(
-                    "  {} {}",
-                    "Status:".bright_white().bold(),
-                    "Valid ✓".bright_green()
-                );
+/// Print a config path entry with status indicator
+fn print_path_config(
+    name: &str,
+    path: Option<&Utf8PathBuf>,
+    validator: impl Fn(&Utf8PathBuf) -> bool,
+) {
+    match path {
+        Some(p) => {
+            let status = if validator(p) {
+                "✓".bright_green()
             } else {
-                println!(
-                    "  {} {}",
-                    "Status:".bright_white().bold(),
-                    "Invalid (file not found or incorrect) ✗".bright_red()
-                );
-            }
+                "✗".bright_red()
+            };
+            println!(
+                "  {} {} {}",
+                format!("{}:", name).bright_white(),
+                clickable_path(p),
+                status
+            );
         }
         None => {
             println!(
                 "  {} {}",
-                "League Path:".bright_white().bold(),
-                "Not set".bright_yellow()
-            );
-            println!();
-            println!(
-                "  {}",
-                "Run 'league-mod config auto-detect' to automatically find League installation"
-                    .bright_yellow()
-            );
-            println!(
-                "  {}",
-                "Or use 'league-mod config set-league-path <path>' to set it manually"
-                    .bright_yellow()
+                format!("{}:", name).bright_white(),
+                "(not set)".bright_yellow()
             );
         }
     }
+}
+
+pub fn show_config() -> Result<()> {
+    let cfg = config::load_config();
+    let config_path = config::default_config_path();
+
+    println!();
+    match &config_path {
+        Some(p) => println!("  {} {}", "config_file:".bright_white(), clickable_path(p)),
+        None => println!(
+            "  {} {}",
+            "config_file:".bright_white(),
+            "Unknown".bright_yellow()
+        ),
+    }
+
+    print_path_config("league_path", cfg.league_path.as_ref(), |p| {
+        league_path::is_valid_league_path(p.as_path())
+    });
+
+    print_path_config("hashtable_dir", cfg.hashtable_dir.as_ref(), |p| p.exists());
 
     println!();
     Ok(())
 }
 
 pub fn set_league_path(path: String) -> Result<()> {
-    if !league_path::is_valid_league_path(&path) {
+    let path = Utf8PathBuf::from(&path);
+    if !league_path::is_valid_league_path(path.as_path()) {
         eprintln!(
             "  {}",
             "The path must point to 'League of Legends.exe' in the Game folder.".bright_yellow()
@@ -98,7 +105,7 @@ pub fn set_league_path(path: String) -> Result<()> {
     println!(
         "  {} {}",
         "Path:".bright_white().bold(),
-        path.bright_green()
+        path.as_str().bright_green()
     );
 
     Ok(())
@@ -118,11 +125,11 @@ pub fn auto_detect_league_path() -> Result<()> {
             println!(
                 "  {} {}",
                 "Path:".bright_white().bold(),
-                detected_path.bright_green()
+                detected_path.as_str().bright_green()
             );
             println!();
 
-            update_league_path_in_config(detected_path)?;
+            update_league_path_in_config(detected_path.clone())?;
 
             println!(
                 "{}",
