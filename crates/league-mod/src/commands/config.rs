@@ -10,6 +10,15 @@ fn update_league_path_in_config(path: Utf8PathBuf) -> Result<()> {
     config::save_config(&cfg).map_err(|e| miette::miette!("Failed to save config: {}", e))
 }
 
+/// Format a path as a clickable hyperlink using OSC 8 escape sequence.
+/// Falls back to underlined text if terminal doesn't support hyperlinks.
+fn clickable_path(path: &Utf8PathBuf) -> String {
+    let file_url = format!("file:///{}", path.as_str().replace('\\', "/"));
+    let display = path.as_str().underline();
+    // OSC 8 hyperlink: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
+    format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", file_url, display)
+}
+
 /// Print a config path entry with status indicator
 fn print_path_config(
     name: &str,
@@ -23,7 +32,12 @@ fn print_path_config(
             } else {
                 "✗".bright_red()
             };
-            println!("  {} {} {}", format!("{}:", name).bright_white(), p, status);
+            println!(
+                "  {} {} {}",
+                format!("{}:", name).bright_white(),
+                clickable_path(p),
+                status
+            );
         }
         None => {
             println!(
@@ -37,12 +51,17 @@ fn print_path_config(
 
 pub fn show_config() -> Result<()> {
     let cfg = config::load_config();
-    let config_path = config::default_config_path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
+    let config_path = config::default_config_path();
 
     println!();
-    println!("  {} {}", "config_file:".bright_white(), config_path);
+    match &config_path {
+        Some(p) => println!("  {} {}", "config_file:".bright_white(), clickable_path(p)),
+        None => println!(
+            "  {} {}",
+            "config_file:".bright_white(),
+            "Unknown".bright_yellow()
+        ),
+    }
 
     print_path_config("league_path", cfg.league_path.as_ref(), |p| {
         league_path::is_valid_league_path(p.as_path())
