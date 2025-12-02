@@ -1,0 +1,79 @@
+# Project Guidelines
+
+This repository contains the League Mod Toolkit - a collection of Rust crates for League of Legends modding, along with a Tauri-based GUI application.
+
+## Code Comments & Documentation
+
+### Comments
+
+- **Avoid trivially descriptive comments** - Do not add comments that simply restate what the code does when it's obvious from the code itself.
+- **Write comments for complexity** - Add comments when explaining:
+  - Non-obvious business logic or domain-specific behavior
+  - Complex algorithms or data transformations
+  - Workarounds, edge cases, or "why" something is done a certain way
+  - Performance considerations or trade-offs
+
+```rust
+// ❌ Bad - trivially descriptive
+// Create a new vector
+let items = Vec::new();
+
+// ❌ Bad - just restates the code
+// Loop through all files
+for file in files {
+
+// ✅ Good - explains non-obvious behavior
+// WAD files can be either packed (single .wad.client file) or unpacked (directory structure).
+// Packed WADs need extraction via WadExtractor, while unpacked can be copied directly.
+if is_wad_file_name(relative_path) {
+```
+
+### Documentation
+
+- **Document all public APIs** - Use `///` doc comments for public structs, enums, functions, and traits.
+- **Include examples when helpful** - Doc comments support code examples with ```` ```rust ```` blocks.
+- **Document error conditions** - Explain when functions can fail and what errors they return.
+- **Keep doc comments concise but complete** - First line should be a summary, followed by details if needed.
+
+```rust
+/// Extractor for Fantome packages.
+///
+/// This struct provides functionality to extract a Fantome (.fantome) archive
+/// to a mod project directory structure.
+pub struct FantomeExtractor<R: Read + Seek> {
+
+/// Extract the Fantome package to the specified output directory.
+///
+/// This will:
+/// 1. Validate the archive structure
+/// 2. Extract WAD contents to content/base/
+/// 3. Extract README.md if present
+/// 4. Extract thumbnail image if present
+/// 5. Create a mod.config.json file
+///
+/// Returns the mod project configuration that was created.
+pub fn extract_to(&mut self, output_dir: &Path) -> Result<FantomeExtractResult, FantomeExtractError> {
+```
+
+## Project Structure
+
+- **Workspace crates** are in `crates/`
+- **CLI tool**: `crates/league-mod/`
+- **Library crates**: `crates/ltk_*`
+- **GUI app**: `crates/ltk-manager/` (Tauri + React/TypeScript)
+
+## Rust Conventions
+
+- Use `miette` for user-facing error handling in the CLI
+- Use `thiserror` for library error types
+- Prefer the builder pattern for complex struct construction
+- Write tests in a `#[cfg(test)]` module at the bottom of the file
+- Use `camino` for UTF-8 path handling where appropriate
+
+## TypeScript/React Conventions (ltk-manager)
+
+- Use TypeScript strict mode
+- Follow existing component patterns in `src/components/`
+- Use TanStack Router for routing
+- Use TanStack Query for data fetching
+
