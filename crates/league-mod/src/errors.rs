@@ -105,12 +105,12 @@ pub enum CliError {
     )]
     FantomeRawUnsupported,
 
-    #[error("Fantome package contains packed WAD file: {wad_name}")]
+    #[error("WAD extraction failed: {message}")]
     #[diagnostic(
-        code(fantome::packed_wad_unsupported),
-        help("This fantome contains a packed WAD file instead of extracted files. WAD extraction is not currently supported. The mod author needs to use extracted WAD directories (e.g., WAD/Aatrox.wad.client/assets/...) instead.")
+        code(fantome::wad_extraction_failed),
+        help("The packed WAD file could not be extracted. The file may be corrupted or in an unsupported format.")
     )]
-    FantomePackedWadUnsupported { wad_name: String },
+    WadExtractionFailed { message: String },
 }
 
 impl CliError {

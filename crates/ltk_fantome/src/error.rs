@@ -14,11 +14,11 @@ pub enum FantomeExtractError {
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("WAD error: {0}")]
+    Wad(#[from] ltk_wad::WadError),
+
     #[error("Fantome package contains unsupported RAW/ directory")]
     RawUnsupported,
-
-    #[error("Fantome package contains packed WAD file: {wad_name}")]
-    PackedWadUnsupported { wad_name: String },
 
     #[error("Missing info.json metadata file")]
     MissingMetadata,

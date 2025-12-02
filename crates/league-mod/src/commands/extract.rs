@@ -2,9 +2,10 @@ use std::fs::File;
 
 use crate::errors::CliError;
 use crate::println_pad;
+use crate::utils::config::load_config;
 use camino::Utf8Path;
 use colored::Colorize;
-use ltk_fantome::{FantomeExtractError, FantomeExtractor};
+use ltk_fantome::{FantomeExtractError, FantomeExtractor, WadHashtable};
 use ltk_modpkg::{Modpkg, ModpkgExtractor};
 use miette::{IntoDiagnostic, Result};
 
@@ -56,8 +57,42 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
         args.file_path.bright_cyan().bold()
     );
 
+    // Load hashtable from config if available
+    let config = load_config();
+    let hashtable = config.hashtable_dir.and_then(|dir| {
+        if dir.exists() {
+            println_pad!(
+                "{} {}",
+                "📖 Loading WAD hashtable from:".bright_cyan(),
+                dir.as_str().bright_white()
+            );
+            match WadHashtable::from_directory(&dir) {
+                Ok(ht) => {
+                    println_pad!(
+                        "{} {} entries",
+                        "   Loaded".bright_green(),
+                        ht.len().to_string().bright_white().bold()
+                    );
+                    Some(ht)
+                }
+                Err(e) => {
+                    println_pad!(
+                        "{} {}",
+                        "   Warning: Failed to load hashtable:".bright_yellow(),
+                        e.to_string().bright_red()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    });
+
     let output_path = Utf8Path::new(&args.output_dir);
-    let mut extractor = FantomeExtractor::new(file).map_err(map_fantome_error)?;
+    let mut extractor = FantomeExtractor::new(file)
+        .map_err(map_fantome_error)?
+        .with_hashtable_opt(hashtable);
 
     extractor
         .extract_to(output_path.as_std_path())
@@ -78,9 +113,9 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
 fn map_fantome_error(err: FantomeExtractError) -> CliError {
     match err {
         FantomeExtractError::RawUnsupported => CliError::FantomeRawUnsupported,
-        FantomeExtractError::PackedWadUnsupported { wad_name } => {
-            CliError::FantomePackedWadUnsupported { wad_name }
-        }
+        FantomeExtractError::Wad(e) => CliError::WadExtractionFailed {
+            message: e.to_string(),
+        },
         FantomeExtractError::Io(e) => CliError::IoError { source: e },
         FantomeExtractError::Zip(e) => CliError::IoError {
             source: std::io::Error::other(e),
