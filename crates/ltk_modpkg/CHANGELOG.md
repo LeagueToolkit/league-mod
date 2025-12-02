@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.4...ltk_modpkg-v0.1.5) - 2025-12-02
+
+### Added
+
+- use camino in modpkg crate
+- add README.md support as a meta chunk in ModpkgBuilder
+- add mod core crate
+
+### Fixed
+
+- improve error handling in build_chunk_from_file by using io::Error::other
+
+### Other
+
+- update README.md to clarify crate descriptions and add ltk-manager details
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.3...ltk_modpkg-v0.1.4) - 2025-11-30
 
 ### Added

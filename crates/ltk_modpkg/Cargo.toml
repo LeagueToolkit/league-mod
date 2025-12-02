@@ -1,6 +1,6 @@
 [package]
 name = "ltk_modpkg"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "League Toolkit mod package (.modpkg) reader/writer and utilities"
@@ -34,7 +34,7 @@ image = { version = "0.25", default-features = false, features = [
 camino = { workspace = true }
 
 # Optional: for packing from mod projects
-ltk_mod_project = { version = "0.1.3", path = "../ltk_mod_project", optional = true }
+ltk_mod_project = { version = "0.1.4", path = "../ltk_mod_project", optional = true }
 
 [features]
 default = []
