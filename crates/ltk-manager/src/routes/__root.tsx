@@ -5,6 +5,7 @@ import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { invoke } from "@tauri-apps/api/core";
 
 import { TitleBar } from "@/modules/shell";
+import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
 import { Sidebar } from "../components/Sidebar";
 
 interface AppInfo {
@@ -14,6 +15,7 @@ interface AppInfo {
 
 function RootLayout() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const updateState = useUpdateCheck({ checkOnMount: true, delayMs: 3000 });
 
   useEffect(() => {
     invoke<AppInfo>("get_app_info").then(setAppInfo);
@@ -22,6 +24,7 @@ function RootLayout() {
   return (
     <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">
       <TitleBar />
+      <UpdateNotification updateState={updateState} />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar appVersion={appInfo?.version} />
         <main className="flex-1 overflow-hidden">
