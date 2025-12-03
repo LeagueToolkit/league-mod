@@ -106,7 +106,7 @@ export function useUpdateCheck(
   }, [state.update]);
 
   const dismiss = useCallback(() => {
-    setState((prev) => ({ ...prev, update: null }));
+    setState((prev) => ({ ...prev, update: null, error: null }));
   }, []);
 
   // Check for updates on mount with a delay to not block startup
