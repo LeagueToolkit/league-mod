@@ -35,7 +35,7 @@ changelog_update = true
 [[package]]
 name = "ltk-manager"
 publish = false
-changelog_update = true
+git_release_enable = false
 
 [changelog]
 header = """
