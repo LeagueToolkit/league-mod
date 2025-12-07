@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
-import { createRootRoute, Outlet } from "@tanstack/react-router";
+import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { invoke } from "@tauri-apps/api/core";
 
+import { useCheckSetupRequired } from "@/modules/settings";
 import { TitleBar } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
 import { Sidebar } from "../components/Sidebar";
@@ -16,10 +17,30 @@ interface AppInfo {
 function RootLayout() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const updateState = useUpdateCheck({ checkOnMount: true, delayMs: 3000 });
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const { data: setupRequired, isLoading: isCheckingSetup } = useCheckSetupRequired();
 
   useEffect(() => {
     invoke<AppInfo>("get_app_info").then(setAppInfo);
   }, []);
+
+  // Redirect to settings if setup is required
+  useEffect(() => {
+    if (setupRequired && location.pathname !== "/settings") {
+      navigate({ to: "/settings", search: { firstRun: true } });
+    }
+  }, [setupRequired, navigate, location.pathname]);
+
+  // Show loading state while checking setup
+  if (isCheckingSetup) {
+    return (
+      <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen items-center justify-center bg-linear-to-br">
+        <div className="text-surface-400">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">

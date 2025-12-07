@@ -1,64 +1,62 @@
 import { useEffect, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { getRouteApi } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, CheckCircle, FolderOpen, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle, FolderOpen, Info, Loader2 } from "lucide-react";
 
-interface Settings {
-  leaguePath: string | null;
-  modStoragePath: string | null;
-  theme: "light" | "dark" | "system";
-  firstRunComplete: boolean;
-}
+import { api, type AppInfo, type Settings as SettingsType } from "@/lib/tauri";
+import { useSaveSettings, useSettings } from "@/modules/settings";
+import { unwrapForQuery } from "@/utils/query";
+
+const routeApi = getRouteApi("/settings");
 
 export function Settings() {
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const { firstRun } = routeApi.useSearch();
+  const { data: settings, isLoading } = useSettings();
+  const saveSettingsMutation = useSaveSettings();
+
   const [isDetecting, setIsDetecting] = useState(false);
   const [leaguePathValid, setLeaguePathValid] = useState<boolean | null>(null);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
 
   useEffect(() => {
-    loadSettings();
+    api.getAppInfo().then((result) => {
+      if (result.ok) {
+        setAppInfo(result.value);
+      }
+    });
   }, []);
 
   useEffect(() => {
     if (settings?.leaguePath) {
       validatePath(settings.leaguePath);
+    } else {
+      setLeaguePathValid(null);
     }
   }, [settings?.leaguePath]);
 
-  async function loadSettings() {
-    try {
-      const loadedSettings = await invoke<Settings>("get_settings");
-      setSettings(loadedSettings);
-    } catch (error) {
-      console.error("Failed to load settings:", error);
-    }
-  }
-
-  async function saveSettings(newSettings: Settings) {
-    try {
-      await invoke("save_settings", { settings: newSettings });
-      setSettings(newSettings);
-    } catch (error) {
-      console.error("Failed to save settings:", error);
-    }
-  }
-
   async function validatePath(path: string) {
     try {
-      const valid = await invoke<boolean>("validate_league_path", { path });
-      setLeaguePathValid(valid);
+      const result = await api.validateLeaguePath(path);
+      setLeaguePathValid(unwrapForQuery(result));
     } catch {
       setLeaguePathValid(false);
     }
   }
 
+  function saveSettings(newSettings: SettingsType) {
+    saveSettingsMutation.mutate(newSettings);
+  }
+
   async function handleAutoDetect() {
+    if (!settings) return;
+
     setIsDetecting(true);
     try {
-      const path = await invoke<string | null>("auto_detect_league_path");
-      if (path && settings) {
-        saveSettings({ ...settings, leaguePath: path });
+      const result = await api.autoDetectLeaguePath();
+      const path = unwrapForQuery(result);
+      if (path) {
+        saveSettings({ ...settings, leaguePath: path, firstRunComplete: true });
       }
     } catch (error) {
       console.error("Failed to auto-detect:", error);
@@ -67,22 +65,41 @@ export function Settings() {
     }
   }
 
-  async function handleBrowse() {
+  async function handleBrowseLeaguePath() {
+    if (!settings) return;
+
     try {
       const selected = await open({
         directory: true,
         title: "Select League of Legends Installation",
       });
 
-      if (selected && settings) {
-        saveSettings({ ...settings, leaguePath: selected as string });
+      if (selected) {
+        saveSettings({ ...settings, leaguePath: selected as string, firstRunComplete: true });
       }
     } catch (error) {
       console.error("Failed to browse:", error);
     }
   }
 
-  if (!settings) {
+  async function handleBrowseModStorage() {
+    if (!settings) return;
+
+    try {
+      const selected = await open({
+        directory: true,
+        title: "Select Mod Storage Location",
+      });
+
+      if (selected) {
+        saveSettings({ ...settings, modStoragePath: selected as string });
+      }
+    } catch (error) {
+      console.error("Failed to browse:", error);
+    }
+  }
+
+  if (isLoading || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="text-league-500 h-8 w-8 animate-spin" />
@@ -98,6 +115,20 @@ export function Settings() {
       </header>
 
       <div className="mx-auto max-w-2xl space-y-8 p-6">
+        {/* First Run Banner */}
+        {firstRun && !settings.leaguePath && (
+          <div className="bg-league-500/10 border-league-500/30 flex items-start gap-3 rounded-lg border p-4">
+            <Info className="text-league-400 mt-0.5 h-5 w-5 shrink-0" />
+            <div>
+              <h3 className="text-league-300 font-medium">Welcome to LTK Manager!</h3>
+              <p className="text-surface-400 mt-1 text-sm">
+                To get started, please configure your League of Legends installation path below. You
+                can use auto-detection or browse to the folder manually.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* League Path */}
         <section>
           <h3 className="text-surface-100 mb-4 text-lg font-medium">League of Legends</h3>
@@ -121,7 +152,7 @@ export function Settings() {
               </div>
               <button
                 type="button"
-                onClick={handleBrowse}
+                onClick={handleBrowseLeaguePath}
                 className="bg-surface-800 hover:bg-surface-700 border-surface-700 text-surface-300 rounded-lg border px-4 py-2.5 transition-colors"
               >
                 <FolderOpen className="h-5 w-5" />
@@ -139,9 +170,37 @@ export function Settings() {
             {leaguePathValid === false && settings.leaguePath && (
               <p className="text-sm text-red-400">
                 Could not find League of Legends at this path. Make sure it points to the folder
-                containing the "Game" directory.
+                containing the <code className="bg-surface-700 rounded px-1">Game</code> directory.
               </p>
             )}
+          </div>
+        </section>
+
+        {/* Mod Storage Path */}
+        <section>
+          <h3 className="text-surface-100 mb-4 text-lg font-medium">Mod Storage</h3>
+          <div className="space-y-3">
+            <span className="text-surface-400 block text-sm font-medium">Storage Location</span>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={settings.modStoragePath || ""}
+                readOnly
+                placeholder="Default (app data directory)"
+                className="bg-surface-800 border-surface-700 text-surface-100 placeholder:text-surface-500 flex-1 rounded-lg border px-4 py-2.5"
+              />
+              <button
+                type="button"
+                onClick={handleBrowseModStorage}
+                className="bg-surface-800 hover:bg-surface-700 border-surface-700 text-surface-300 rounded-lg border px-4 py-2.5 transition-colors"
+              >
+                <FolderOpen className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="text-surface-500 text-sm">
+              Choose where your installed mods will be stored. Leave empty to use the default
+              location.
+            </p>
           </div>
         </section>
 
@@ -173,11 +232,17 @@ export function Settings() {
         <section>
           <h3 className="text-surface-100 mb-4 text-lg font-medium">About</h3>
           <div className="bg-surface-900 border-surface-800 rounded-lg border p-4">
-            <p className="text-surface-400 text-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-surface-100 font-medium">LTK Manager</h4>
+                {appInfo && <p className="text-surface-500 text-sm">Version {appInfo.version}</p>}
+              </div>
+            </div>
+            <p className="text-surface-400 mt-3 text-sm">
               LTK Manager is part of the LeagueToolkit project. It provides a graphical interface
               for managing League of Legends mods using the modpkg format.
             </p>
-            <div className="border-surface-800 mt-4 border-t pt-4">
+            <div className="border-surface-800 mt-4 flex gap-4 border-t pt-4">
               <a
                 href="https://github.com/LeagueToolkit/league-mod"
                 target="_blank"
@@ -185,6 +250,14 @@ export function Settings() {
                 className="text-league-400 hover:text-league-300 text-sm transition-colors"
               >
                 View on GitHub →
+              </a>
+              <a
+                href="https://github.com/LeagueToolkit/league-mod/wiki"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-league-400 hover:text-league-300 text-sm transition-colors"
+              >
+                Documentation →
               </a>
             </div>
           </div>
