@@ -1,8 +1,9 @@
 import { getRouteApi } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, CheckCircle, FolderOpen, Info, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { LuCircleAlert, LuCircleCheck, LuFolderOpen, LuInfo, LuLoader } from "react-icons/lu";
 
+import { Button, IconButton } from "@/components/Button";
 import { api, type Settings as SettingsType } from "@/lib/tauri";
 import { useAppInfo, useSaveSettings, useSettings } from "@/modules/settings";
 import { unwrapForQuery } from "@/utils/query";
@@ -93,7 +94,7 @@ export function Settings() {
   if (isLoading || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Loader2 className="text-league-500 h-8 w-8 animate-spin" />
+        <LuLoader className="text-league-500 h-8 w-8 animate-spin" />
       </div>
     );
   }
@@ -109,10 +110,10 @@ export function Settings() {
         {/* First Run Banner */}
         {firstRun && !settings.leaguePath && (
           <div className="bg-league-500/10 border-league-500/30 flex items-start gap-3 rounded-lg border p-4">
-            <Info className="text-league-400 mt-0.5 h-5 w-5 shrink-0" />
+            <LuInfo className="text-league-400 mt-0.5 h-5 w-5 shrink-0" />
             <div>
               <h3 className="text-league-300 font-medium">Welcome to LTK Manager!</h3>
-              <p className="text-surface-400 mt-1 text-sm">
+              <p className="mt-1 text-sm text-surface-400">
                 To get started, please configure your League of Legends installation path below. You
                 can use auto-detection or browse to the folder manually.
               </p>
@@ -136,32 +137,36 @@ export function Settings() {
                 />
                 {settings.leaguePath && (
                   <div className="absolute top-1/2 right-3 -translate-y-1/2">
-                    {leaguePathValid === true && <CheckCircle className="h-5 w-5 text-green-500" />}
-                    {leaguePathValid === false && <AlertCircle className="h-5 w-5 text-red-500" />}
+                    {leaguePathValid === true && (
+                      <LuCircleCheck className="h-5 w-5 text-green-500" />
+                    )}
+                    {leaguePathValid === false && (
+                      <LuCircleAlert className="h-5 w-5 text-red-500" />
+                    )}
                   </div>
                 )}
               </div>
-              <button
-                type="button"
+              <IconButton
+                icon={<LuFolderOpen className="h-5 w-5" />}
+                variant="outline"
+                size="lg"
                 onClick={handleBrowseLeaguePath}
-                className="bg-surface-800 hover:bg-surface-700 border-surface-700 text-surface-300 rounded-lg border px-4 py-2.5 transition-colors"
-              >
-                <FolderOpen className="h-5 w-5" />
-              </button>
+              />
             </div>
-            <button
-              type="button"
+            <Button
+              variant="transparent"
+              size="sm"
               onClick={handleAutoDetect}
-              disabled={isDetecting}
-              className="text-league-400 hover:text-league-300 flex items-center gap-2 text-sm transition-colors disabled:opacity-50"
+              loading={isDetecting}
+              left={isDetecting ? undefined : <LuLoader className="h-4 w-4" />}
+              className="text-brand-400 hover:text-brand-300"
             >
-              {isDetecting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Auto-detect installation
-            </button>
+            </Button>
             {leaguePathValid === false && settings.leaguePath && (
               <p className="text-sm text-red-400">
                 Could not find League of Legends at this path. Make sure it points to the folder
-                containing the <code className="bg-surface-700 rounded px-1">Game</code> directory.
+                containing the <code className="rounded bg-surface-700 px-1">Game</code> directory.
               </p>
             )}
           </div>
@@ -169,26 +174,25 @@ export function Settings() {
 
         {/* Mod Storage Path */}
         <section>
-          <h3 className="text-surface-100 mb-4 text-lg font-medium">Mod Storage</h3>
+          <h3 className="mb-4 text-lg font-medium text-surface-100">Mod Storage</h3>
           <div className="space-y-3">
-            <span className="text-surface-400 block text-sm font-medium">Storage Location</span>
+            <span className="block text-sm font-medium text-surface-400">Storage Location</span>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={settings.modStoragePath || ""}
                 readOnly
                 placeholder="Default (app data directory)"
-                className="bg-surface-800 border-surface-700 text-surface-100 placeholder:text-surface-500 flex-1 rounded-lg border px-4 py-2.5"
+                className="flex-1 rounded-lg border border-surface-700 bg-surface-800 px-4 py-2.5 text-surface-100 placeholder:text-surface-500"
               />
-              <button
-                type="button"
+              <IconButton
+                icon={<LuFolderOpen className="h-5 w-5" />}
+                variant="outline"
+                size="lg"
                 onClick={handleBrowseModStorage}
-                className="bg-surface-800 hover:bg-surface-700 border-surface-700 text-surface-300 rounded-lg border px-4 py-2.5 transition-colors"
-              >
-                <FolderOpen className="h-5 w-5" />
-              </button>
+              />
             </div>
-            <p className="text-surface-500 text-sm">
+            <p className="text-sm text-surface-500">
               Choose where your installed mods will be stored. Leave empty to use the default
               location.
             </p>
@@ -202,18 +206,15 @@ export function Settings() {
             <span className="block text-sm font-medium text-surface-400">Theme</span>
             <div className="flex gap-2">
               {(["system", "dark", "light"] as const).map((theme) => (
-                <button
-                  type="button"
+                <Button
                   key={theme}
+                  variant={settings.theme === theme ? "filled" : "default"}
+                  size="sm"
                   onClick={() => saveSettings({ ...settings, theme })}
-                  className={`rounded-lg px-4 py-2 text-sm font-medium capitalize transition-colors ${
-                    settings.theme === theme
-                      ? "bg-league-500 text-white"
-                      : "bg-surface-800 text-surface-400 hover:bg-surface-700 hover:text-surface-200"
-                  }`}
+                  className="capitalize"
                 >
                   {theme}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -221,24 +222,24 @@ export function Settings() {
 
         {/* About */}
         <section>
-          <h3 className="text-surface-100 mb-4 text-lg font-medium">About</h3>
-          <div className="bg-surface-900 border-surface-800 rounded-lg border p-4">
+          <h3 className="mb-4 text-lg font-medium text-surface-100">About</h3>
+          <div className="rounded-lg border border-surface-800 bg-surface-900 p-4">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-surface-100 font-medium">LTK Manager</h4>
-                {appInfo && <p className="text-surface-500 text-sm">Version {appInfo.version}</p>}
+                <h4 className="font-medium text-surface-100">LTK Manager</h4>
+                {appInfo && <p className="text-sm text-surface-500">Version {appInfo.version}</p>}
               </div>
             </div>
-            <p className="text-surface-400 mt-3 text-sm">
+            <p className="mt-3 text-sm text-surface-400">
               LTK Manager is part of the LeagueToolkit project. It provides a graphical interface
               for managing League of Legends mods using the modpkg format.
             </p>
-            <div className="border-surface-800 mt-4 flex gap-4 border-t pt-4">
+            <div className="mt-4 flex gap-4 border-t border-surface-800 pt-4">
               <a
                 href="https://github.com/LeagueToolkit/league-mod"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-league-400 hover:text-league-300 text-sm transition-colors"
+                className="text-sm text-brand-400 transition-colors hover:text-brand-300"
               >
                 View on GitHub →
               </a>
@@ -246,7 +247,7 @@ export function Settings() {
                 href="https://github.com/LeagueToolkit/league-mod/wiki"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-league-400 hover:text-league-300 text-sm transition-colors"
+                className="text-sm text-brand-400 transition-colors hover:text-brand-300"
               >
                 Documentation →
               </a>

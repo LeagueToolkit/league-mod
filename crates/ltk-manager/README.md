@@ -78,7 +78,6 @@ ltk-manager/
 - **Frontend**: React 19, TypeScript, Vite
 - **Styling**: Tailwind CSS v4
 - **State**: Zustand
-- **Icons**: Lucide React
 
 ## Tauri Commands
 

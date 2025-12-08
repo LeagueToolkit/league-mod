@@ -1,5 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Hammer, Library, Package, Settings } from "lucide-react";
+import { LuHammer, LuLibrary, LuPackage, LuSettings } from "react-icons/lu";
 
 interface SidebarProps {
   appVersion?: string;
@@ -9,8 +9,8 @@ export function Sidebar({ appVersion }: SidebarProps) {
   const location = useLocation();
 
   const navItems = [
-    { to: "/", label: "Library", icon: Library },
-    { to: "/creator", label: "Creator", icon: Hammer },
+    { to: "/", label: "Library", icon: LuLibrary },
+    { to: "/creator", label: "Creator", icon: LuHammer },
   ];
 
   const isActive = (path: string) => {
@@ -28,7 +28,7 @@ export function Sidebar({ appVersion }: SidebarProps) {
         data-tauri-drag-region
       >
         <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-linear-to-br">
-          <Package className="h-5 w-5 text-white" />
+          <LuPackage className="h-5 w-5 text-white" />
         </div>
         <div>
           <h1 className="font-semibold text-surface-100">LTK Manager</h1>
@@ -69,7 +69,7 @@ export function Sidebar({ appVersion }: SidebarProps) {
               : "text-surface-400 hover:bg-surface-800 hover:text-surface-200"
           }`}
         >
-          <Settings className="h-5 w-5" />
+          <LuSettings className="h-5 w-5" />
           Settings
         </Link>
       </div>

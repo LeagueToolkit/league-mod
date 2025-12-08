@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Hammer } from "lucide-react";
+import { LuHammer } from "react-icons/lu";
 
 export const Route = createFileRoute("/creator")({
   component: CreatorPage,
@@ -14,7 +14,7 @@ function CreatorPage() {
       <div className="flex flex-1 items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-2xl">
-            <Hammer className="h-10 w-10 text-surface-600" />
+            <LuHammer className="h-10 w-10 text-surface-600" />
           </div>
           <h3 className="mb-1 text-lg font-medium text-surface-300">Coming Soon</h3>
           <p className="text-surface-500">The mod creator is under development</p>

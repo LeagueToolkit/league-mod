@@ -1,6 +1,8 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { LuMinus, LuSquare, LuX } from "react-icons/lu";
+
+import { IconButton } from "@/components/Button";
 
 interface TitleBarProps {
   title?: string;
@@ -46,34 +48,36 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
 
       {/* Right: Window controls */}
       <div className="flex h-full">
-        <button
-          type="button"
+        <IconButton
+          icon={<LuMinus className="h-4 w-4" />}
+          variant="ghost"
+          size="md"
           onClick={handleMinimize}
-          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-surface-700 hover:text-surface-200"
           aria-label="Minimize"
-        >
-          <Minus className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
+          className="h-full w-12 rounded-none text-surface-400 hover:bg-surface-700 hover:text-surface-200"
+        />
+        <IconButton
+          icon={
+            isMaximized ? (
+              <OverlappingSquares className="h-3.5 w-3.5" />
+            ) : (
+              <LuSquare className="h-3.5 w-3.5" />
+            )
+          }
+          variant="ghost"
+          size="md"
           onClick={handleMaximize}
-          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-surface-700 hover:text-surface-200"
           aria-label={isMaximized ? "Restore" : "Maximize"}
-        >
-          {isMaximized ? (
-            <OverlappingSquares className="h-3.5 w-3.5" />
-          ) : (
-            <Square className="h-3.5 w-3.5" />
-          )}
-        </button>
-        <button
-          type="button"
+          className="h-full w-12 rounded-none text-surface-400 hover:bg-surface-700 hover:text-surface-200"
+        />
+        <IconButton
+          icon={<LuX className="h-4 w-4" />}
+          variant="ghost"
+          size="md"
           onClick={handleClose}
-          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-red-600 hover:text-white"
           aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
+          className="h-full w-12 rounded-none text-surface-400 hover:bg-red-600 hover:text-white"
+        />
       </div>
     </header>
   );
