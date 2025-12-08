@@ -1,2 +1,3 @@
-export { initializeTheme, type ResolvedTheme,type Theme, useThemeStore } from "./themeStore";
+// Stores barrel export
+// Add store exports here as they are created
 

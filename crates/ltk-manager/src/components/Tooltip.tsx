@@ -2,20 +2,6 @@ import { Tooltip as BaseTooltip } from "@base-ui-components/react/tooltip";
 import { forwardRef, type ReactNode } from "react";
 import { twMerge } from "tailwind-merge";
 
-export type TooltipPlacement =
-  | "top"
-  | "top-start"
-  | "top-end"
-  | "right"
-  | "right-start"
-  | "right-end"
-  | "bottom"
-  | "bottom-start"
-  | "bottom-end"
-  | "left"
-  | "left-start"
-  | "left-end";
-
 // Root/Provider
 export interface TooltipProviderProps extends BaseTooltip.Provider.Props {
   children?: ReactNode;
