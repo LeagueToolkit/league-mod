@@ -33,7 +33,7 @@ function RootLayout() {
   }
 
   return (
-    <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">
+    <div className="root from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">
       <TitleBar />
       <UpdateNotification updateState={updateState} />
       <div className="flex flex-1 overflow-hidden">

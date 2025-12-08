@@ -102,6 +102,10 @@ body {
   min-height: 100vh;
 }
 
+.root {
+  isolation: isolate;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
