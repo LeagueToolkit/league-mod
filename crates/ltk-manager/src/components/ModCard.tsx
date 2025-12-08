@@ -1,6 +1,5 @@
-import { useState } from "react";
-
 import { FolderOpen, Info, MoreVertical, Trash2 } from "lucide-react";
+import { useState } from "react";
 
 interface InstalledMod {
   id: string;
@@ -27,18 +26,18 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
 
   if (viewMode === "list") {
     return (
-      <div className="bg-surface-900 border-surface-800 hover:border-surface-700 flex items-center gap-4 rounded-lg border p-4 transition-colors">
+      <div className="flex items-center gap-4 rounded-lg border border-surface-800 bg-surface-900 p-4 transition-colors hover:border-surface-700">
         {/* Thumbnail placeholder */}
-        <div className="from-surface-700 to-surface-800 flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br">
-          <span className="text-surface-500 text-lg font-bold">
+        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-surface-700 to-surface-800">
+          <span className="text-lg font-bold text-surface-500">
             {mod.displayName.charAt(0).toUpperCase()}
           </span>
         </div>
 
         {/* Info */}
         <div className="min-w-0 flex-1">
-          <h3 className="text-surface-100 truncate font-medium">{mod.displayName}</h3>
-          <p className="text-surface-500 truncate text-sm">
+          <h3 className="truncate font-medium text-surface-100">{mod.displayName}</h3>
+          <p className="truncate text-sm text-surface-500">
             v{mod.version} • {mod.authors.join(", ") || "Unknown author"}
           </p>
         </div>
@@ -51,7 +50,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
           <button
             type="button"
             onClick={() => setShowMenu(!showMenu)}
-            className="text-surface-500 hover:text-surface-300 hover:bg-surface-800 rounded-lg p-2 transition-colors"
+            className="rounded-lg p-2 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
           >
             <MoreVertical className="h-4 w-4" />
           </button>
@@ -67,10 +66,10 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
   }
 
   return (
-    <div className="group bg-night-500 border-surface-600 hover:border-surface-300 relative overflow-hidden rounded-xl border transition-colors">
+    <div className="group relative overflow-hidden rounded-xl border border-surface-600 bg-night-500 transition-colors hover:border-surface-300">
       {/* Thumbnail */}
-      <div className="from-night-600 to-night-700 flex aspect-video items-center justify-center bg-gradient-to-br">
-        <span className="text-night-100 text-4xl font-bold">
+      <div className="flex aspect-video items-center justify-center bg-gradient-to-br from-night-600 to-night-700">
+        <span className="text-4xl font-bold text-night-100">
           {mod.displayName.charAt(0).toUpperCase()}
         </span>
       </div>
@@ -78,12 +77,12 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
       {/* Content */}
       <div className="p-4">
         <div className="mb-2 flex items-start justify-between gap-2">
-          <h3 className="text-night-100 line-clamp-1 font-medium">{mod.displayName}</h3>
+          <h3 className="line-clamp-1 font-medium text-night-100">{mod.displayName}</h3>
           <div className="relative">
             <button
               type="button"
               onClick={() => setShowMenu(!showMenu)}
-              className="text-surface-500 hover:text-surface-300 hover:bg-surface-800 rounded p-1 transition-colors"
+              className="rounded p-1 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
             >
               <MoreVertical className="h-4 w-4" />
             </button>
@@ -96,15 +95,15 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
           </div>
         </div>
 
-        <p className="text-surface-500 mb-3 text-sm">v{mod.version}</p>
+        <p className="mb-3 text-sm text-surface-500">v{mod.version}</p>
 
         {mod.description && (
-          <p className="text-surface-400 mb-3 line-clamp-2 text-sm">{mod.description}</p>
+          <p className="mb-3 line-clamp-2 text-sm text-surface-400">{mod.description}</p>
         )}
 
         {/* Footer */}
         <div className="flex items-center justify-between">
-          <span className="text-surface-500 text-xs">
+          <span className="text-xs text-surface-500">
             {mod.authors.length > 0 ? mod.authors[0] : "Unknown"}
           </span>
           <Toggle enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
@@ -143,29 +142,29 @@ function ContextMenu({ onClose, onUninstall }: { onClose: () => void; onUninstal
         tabIndex={0}
         aria-label="Close menu"
       />
-      <div className="bg-surface-800 border-surface-700 animate-fade-in absolute top-full right-0 z-20 mt-1 w-48 rounded-lg border py-1 shadow-xl">
+      <div className="absolute top-full right-0 z-20 mt-1 w-48 animate-fade-in rounded-lg border border-surface-700 bg-surface-800 py-1 shadow-xl">
         <button
           type="button"
-          className="text-surface-300 hover:bg-surface-700 flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-surface-300 transition-colors hover:bg-surface-700"
         >
           <Info className="h-4 w-4" />
           View Details
         </button>
         <button
           type="button"
-          className="text-surface-300 hover:bg-surface-700 flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-surface-300 transition-colors hover:bg-surface-700"
         >
           <FolderOpen className="h-4 w-4" />
           Open Location
         </button>
-        <hr className="border-surface-700 my-1" />
+        <hr className="my-1 border-surface-700" />
         <button
           type="button"
           onClick={() => {
             onUninstall();
             onClose();
           }}
-          className="hover:bg-surface-700 flex w-full items-center gap-2 px-3 py-2 text-sm text-red-400 transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-400 transition-colors hover:bg-surface-700"
         >
           <Trash2 className="h-4 w-4" />
           Uninstall

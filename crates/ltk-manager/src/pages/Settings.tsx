@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
-
 import { getRouteApi } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, CheckCircle, FolderOpen, Info, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { api, type Settings as SettingsType } from "@/lib/tauri";
 import { useAppInfo, useSaveSettings, useSettings } from "@/modules/settings";
@@ -102,8 +101,8 @@ export function Settings() {
   return (
     <div className="h-full overflow-auto">
       {/* Header */}
-      <header className="border-surface-800 flex h-16 items-center border-b px-6">
-        <h2 className="text-surface-100 text-xl font-semibold">Settings</h2>
+      <header className="flex h-16 items-center border-b border-surface-800 px-6">
+        <h2 className="text-xl font-semibold text-surface-100">Settings</h2>
       </header>
 
       <div className="mx-auto max-w-2xl space-y-8 p-6">
@@ -123,9 +122,9 @@ export function Settings() {
 
         {/* League Path */}
         <section>
-          <h3 className="text-surface-100 mb-4 text-lg font-medium">League of Legends</h3>
+          <h3 className="mb-4 text-lg font-medium text-surface-100">League of Legends</h3>
           <div className="space-y-3">
-            <span className="text-surface-400 block text-sm font-medium">Installation Path</span>
+            <span className="block text-sm font-medium text-surface-400">Installation Path</span>
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <input
@@ -133,7 +132,7 @@ export function Settings() {
                   value={settings.leaguePath || ""}
                   readOnly
                   placeholder="Not configured"
-                  className="bg-surface-800 border-surface-700 text-surface-100 placeholder:text-surface-500 w-full rounded-lg border px-4 py-2.5"
+                  className="w-full rounded-lg border border-surface-700 bg-surface-800 px-4 py-2.5 text-surface-100 placeholder:text-surface-500"
                 />
                 {settings.leaguePath && (
                   <div className="absolute top-1/2 right-3 -translate-y-1/2">
@@ -198,9 +197,9 @@ export function Settings() {
 
         {/* Theme */}
         <section>
-          <h3 className="text-surface-100 mb-4 text-lg font-medium">Appearance</h3>
+          <h3 className="mb-4 text-lg font-medium text-surface-100">Appearance</h3>
           <div className="space-y-3">
-            <span className="text-surface-400 block text-sm font-medium">Theme</span>
+            <span className="block text-sm font-medium text-surface-400">Theme</span>
             <div className="flex gap-2">
               {(["system", "dark", "light"] as const).map((theme) => (
                 <button
@@ -210,7 +209,7 @@ export function Settings() {
                   className={`rounded-lg px-4 py-2 text-sm font-medium capitalize transition-colors ${
                     settings.theme === theme
                       ? "bg-league-500 text-white"
-                      : "bg-surface-800 text-surface-400 hover:text-surface-200 hover:bg-surface-700"
+                      : "bg-surface-800 text-surface-400 hover:bg-surface-700 hover:text-surface-200"
                   }`}
                 >
                   {theme}

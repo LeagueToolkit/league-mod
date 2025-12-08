@@ -1,6 +1,8 @@
 import js from "@eslint/js";
+import eslintConfigPrettier from "eslint-config-prettier/flat";
 import reactPlugin from "eslint-plugin-react";
 import reactHooksPlugin from "eslint-plugin-react-hooks";
+import simpleImportSort from "eslint-plugin-simple-import-sort";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -12,6 +14,7 @@ export default tseslint.config(
     plugins: {
       react: reactPlugin,
       "react-hooks": reactHooksPlugin,
+      "simple-import-sort": simpleImportSort,
     },
     languageOptions: {
       globals: {
@@ -39,9 +42,12 @@ export default tseslint.config(
       ],
       "@typescript-eslint/no-explicit-any": "warn",
       "react/prop-types": "off",
+      "simple-import-sort/imports": "error",
+      "simple-import-sort/exports": "error",
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "src-tauri/", "gen/"],
+    ignores: ["dist/", "node_modules/", "src-tauri/", "gen/", "prettier.config.js"],
   },
+  eslintConfigPrettier,
 );

@@ -1,11 +1,11 @@
-import { useEffect } from "react";
-
 import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
+import { useEffect } from "react";
 
 import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
 import { TitleBar } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
+
 import { Sidebar } from "../components/Sidebar";
 
 function RootLayout() {
@@ -33,7 +33,7 @@ function RootLayout() {
   }
 
   return (
-    <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen flex-col bg-linear-to-br">
+    <div className="root flex h-screen flex-col bg-linear-to-br from-surface-900 via-night-600 to-surface-900">
       <TitleBar />
       <UpdateNotification updateState={updateState} />
       <div className="flex flex-1 overflow-hidden">

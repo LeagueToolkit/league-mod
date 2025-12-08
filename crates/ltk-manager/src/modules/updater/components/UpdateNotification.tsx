@@ -39,19 +39,19 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Downloading/Installing state
   if (updating) {
     return (
-      <div className="from-accent-600/20 to-accent-700/20 border-accent-500/30 mx-4 mt-2 rounded-lg border bg-gradient-to-r px-4 py-3 backdrop-blur-sm">
+      <div className="mx-4 mt-2 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <RefreshCw className="text-accent-400 h-5 w-5 shrink-0 animate-spin" />
+          <RefreshCw className="h-5 w-5 shrink-0 animate-spin text-accent-400" />
           <div className="flex-1">
-            <p className="text-accent-100 text-sm font-medium">Installing update...</p>
-            <p className="text-accent-300 text-xs">
+            <p className="text-sm font-medium text-accent-100">Installing update...</p>
+            <p className="text-xs text-accent-300">
               {progress}% complete - App will restart automatically
             </p>
           </div>
         </div>
-        <div className="bg-surface-700 mt-2 h-1.5 overflow-hidden rounded-full">
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-700">
           <div
-            className="bg-accent-500 h-full rounded-full transition-all duration-300"
+            className="h-full rounded-full bg-accent-500 transition-all duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -62,22 +62,22 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Update available state
   if (update) {
     return (
-      <div className="from-accent-600/20 to-accent-700/20 border-accent-500/30 mx-4 mt-2 flex items-center gap-3 rounded-lg border bg-gradient-to-r px-4 py-3 backdrop-blur-sm">
-        <Download className="text-accent-400 h-5 w-5 shrink-0" />
+      <div className="mx-4 mt-2 flex items-center gap-3 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
+        <Download className="h-5 w-5 shrink-0 text-accent-400" />
         <div className="flex-1">
-          <p className="text-accent-100 text-sm font-medium">Update Available: v{update.version}</p>
-          <p className="text-accent-300 text-xs">A new version is ready to install</p>
+          <p className="text-sm font-medium text-accent-100">Update Available: v{update.version}</p>
+          <p className="text-xs text-accent-300">A new version is ready to install</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={downloadAndInstall}
-            className="bg-accent-600 hover:bg-accent-500 rounded-md px-3 py-1.5 text-sm font-medium text-white transition-colors"
+            className="rounded-md bg-accent-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-500"
           >
             Update Now
           </button>
           <button
             onClick={dismiss}
-            className="text-accent-300 hover:text-accent-100 rounded p-1 transition-colors"
+            className="rounded p-1 text-accent-300 transition-colors hover:text-accent-100"
             aria-label="Dismiss"
           >
             <X className="h-4 w-4" />
