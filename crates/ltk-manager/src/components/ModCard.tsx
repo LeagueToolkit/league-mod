@@ -1,5 +1,7 @@
-import { FolderOpen, Info, MoreVertical, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
+
+import { Button, IconButton } from "@/components/Button";
 
 interface InstalledMod {
   id: string;
@@ -28,7 +30,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
     return (
       <div className="flex items-center gap-4 rounded-lg border border-surface-800 bg-surface-900 p-4 transition-colors hover:border-surface-700">
         {/* Thumbnail placeholder */}
-        <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-surface-700 to-surface-800">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-surface-700 to-surface-800">
           <span className="text-lg font-bold text-surface-500">
             {mod.displayName.charAt(0).toUpperCase()}
           </span>
@@ -47,13 +49,12 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
 
         {/* Menu */}
         <div className="relative">
-          <button
-            type="button"
+          <IconButton
+            icon={<LuEllipsisVertical className="h-4 w-4" />}
+            variant="ghost"
+            size="sm"
             onClick={() => setShowMenu(!showMenu)}
-            className="rounded-lg p-2 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
+          />
           {showMenu && (
             <ContextMenu
               onClose={() => setShowMenu(false)}
@@ -68,7 +69,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
   return (
     <div className="group relative overflow-hidden rounded-xl border border-surface-600 bg-night-500 transition-colors hover:border-surface-300">
       {/* Thumbnail */}
-      <div className="flex aspect-video items-center justify-center bg-gradient-to-br from-night-600 to-night-700">
+      <div className="flex aspect-video items-center justify-center bg-linear-to-br from-night-600 to-night-700">
         <span className="text-4xl font-bold text-night-100">
           {mod.displayName.charAt(0).toUpperCase()}
         </span>
@@ -79,13 +80,12 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
         <div className="mb-2 flex items-start justify-between gap-2">
           <h3 className="line-clamp-1 font-medium text-night-100">{mod.displayName}</h3>
           <div className="relative">
-            <button
-              type="button"
+            <IconButton
+              icon={<LuEllipsisVertical className="h-4 w-4" />}
+              variant="ghost"
+              size="xs"
               onClick={() => setShowMenu(!showMenu)}
-              className="rounded p-1 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
-            >
-              <MoreVertical className="h-4 w-4" />
-            </button>
+            />
             {showMenu && (
               <ContextMenu
                 onClose={() => setShowMenu(false)}
@@ -119,7 +119,7 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (enabled: b
       type="button"
       onClick={() => onChange(!enabled)}
       className={`relative h-6 w-11 rounded-full transition-colors ${
-        enabled ? "bg-league-500" : "bg-surface-700"
+        enabled ? "bg-brand-500" : "bg-surface-700"
       }`}
     >
       <span
@@ -143,32 +143,35 @@ function ContextMenu({ onClose, onUninstall }: { onClose: () => void; onUninstal
         aria-label="Close menu"
       />
       <div className="absolute top-full right-0 z-20 mt-1 w-48 animate-fade-in rounded-lg border border-surface-700 bg-surface-800 py-1 shadow-xl">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-surface-300 transition-colors hover:bg-surface-700"
+        <Button
+          variant="ghost"
+          size="sm"
+          left={<LuInfo className="h-4 w-4" />}
+          className="w-full justify-start rounded-none px-3"
         >
-          <Info className="h-4 w-4" />
           View Details
-        </button>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-surface-300 transition-colors hover:bg-surface-700"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          left={<LuFolderOpen className="h-4 w-4" />}
+          className="w-full justify-start rounded-none px-3"
         >
-          <FolderOpen className="h-4 w-4" />
           Open Location
-        </button>
+        </Button>
         <hr className="my-1 border-surface-700" />
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
+          left={<LuTrash2 className="h-4 w-4" />}
           onClick={() => {
             onUninstall();
             onClose();
           }}
-          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-400 transition-colors hover:bg-surface-700"
+          className="w-full justify-start rounded-none px-3 text-red-400 hover:text-red-300"
         >
-          <Trash2 className="h-4 w-4" />
           Uninstall
-        </button>
+        </Button>
       </div>
     </>
   );

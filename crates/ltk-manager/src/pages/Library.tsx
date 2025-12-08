@@ -1,7 +1,8 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Grid3X3, List, Plus, Search, Upload } from "lucide-react";
 import { useState } from "react";
+import { LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 
+import { Button, IconButton } from "@/components/Button";
 import { ModCard } from "@/components/ModCard";
 import type { AppError } from "@/lib/tauri";
 import {
@@ -65,55 +66,44 @@ export function Library() {
       {/* Header */}
       <header className="flex h-16 items-center justify-between border-b border-surface-600 px-6">
         <h2 className="text-xl font-semibold text-surface-100">Mod Library</h2>
-        <button
-          type="button"
+        <Button
+          variant="filled"
           onClick={handleInstallMod}
-          disabled={installMod.isPending}
-          className="bg-league-500 hover:bg-league-600 disabled:bg-league-500/50 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors disabled:cursor-not-allowed"
+          loading={installMod.isPending}
+          left={<LuPlus className="h-4 w-4" />}
         >
-          <Plus className="h-4 w-4" />
           {installMod.isPending ? "Installing..." : "Add Mod"}
-        </button>
+        </Button>
       </header>
 
       {/* Toolbar */}
       <div className="flex items-center gap-4 border-b border-surface-600/50 px-6 py-4">
         {/* Search */}
         <div className="relative max-w-md flex-1">
-          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-surface-500" />
+          <LuSearch className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-surface-500" />
           <input
             type="text"
             placeholder="Search mods..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="focus:ring-league-500 w-full rounded-lg border border-surface-600 bg-night-500 py-2 pr-4 pl-10 text-surface-100 placeholder:text-surface-500 focus:border-transparent focus:ring-2 focus:outline-none"
+            className="w-full rounded-lg border border-surface-600 bg-night-500 py-2 pr-4 pl-10 text-surface-100 placeholder:text-surface-500 focus:border-transparent focus:ring-2 focus:ring-brand-500 focus:outline-none"
           />
         </div>
 
         {/* View toggle */}
         <div className="flex items-center gap-1 rounded-lg p-1">
-          <button
-            type="button"
+          <IconButton
+            icon={<LuGrid3X3 className="h-4 w-4" />}
+            variant={viewMode === "grid" ? "default" : "ghost"}
+            size="sm"
             onClick={() => setViewMode("grid")}
-            className={`rounded-md p-2 transition-colors ${
-              viewMode === "grid"
-                ? "bg-surface-700 text-surface-100"
-                : "text-surface-500 hover:text-surface-300"
-            }`}
-          >
-            <Grid3X3 className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
+          />
+          <IconButton
+            icon={<LuList className="h-4 w-4" />}
+            variant={viewMode === "list" ? "default" : "ghost"}
+            size="sm"
             onClick={() => setViewMode("list")}
-            className={`rounded-md p-2 transition-colors ${
-              viewMode === "list"
-                ? "bg-surface-700 text-surface-100"
-                : "text-surface-500 hover:text-surface-300"
-            }`}
-          >
-            <List className="h-4 w-4" />
-          </button>
+          />
         </div>
       </div>
 
@@ -152,7 +142,7 @@ export function Library() {
 function LoadingState() {
   return (
     <div className="flex h-64 items-center justify-center">
-      <div className="border-league-500 h-8 w-8 animate-spin rounded-full border-2 border-t-transparent" />
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
     </div>
   );
 }
@@ -174,7 +164,7 @@ function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch
   if (hasSearch) {
     return (
       <div className="flex h-64 flex-col items-center justify-center text-center">
-        <Search className="mb-4 h-12 w-12 text-surface-600" />
+        <LuSearch className="mb-4 h-12 w-12 text-surface-600" />
         <h3 className="mb-1 text-lg font-medium text-surface-300">No mods found</h3>
         <p className="text-surface-500">Try adjusting your search query</p>
       </div>
@@ -184,18 +174,13 @@ function EmptyState({ onInstall, hasSearch }: { onInstall: () => void; hasSearch
   return (
     <div className="flex h-64 flex-col items-center justify-center text-center">
       <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl">
-        <Upload className="h-10 w-10 text-surface-600" />
+        <LuUpload className="h-10 w-10 text-surface-600" />
       </div>
       <h3 className="mb-1 text-lg font-medium text-surface-300">No mods installed</h3>
       <p className="mb-4 text-surface-500">Get started by adding your first mod</p>
-      <button
-        type="button"
-        onClick={onInstall}
-        className="bg-league-500 hover:bg-league-600 flex items-center gap-2 rounded-lg px-4 py-2 font-medium text-white transition-colors"
-      >
-        <Plus className="h-4 w-4" />
+      <Button variant="filled" onClick={onInstall} left={<LuPlus className="h-4 w-4" />}>
         Add Mod
-      </button>
+      </Button>
     </div>
   );
 }
