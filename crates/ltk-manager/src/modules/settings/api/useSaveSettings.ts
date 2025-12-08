@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type AppError, type Settings } from "@/lib/tauri";
 import { mutationFn } from "@/utils/query";
+
 import { settingsKeys } from "./keys";
 
 /**

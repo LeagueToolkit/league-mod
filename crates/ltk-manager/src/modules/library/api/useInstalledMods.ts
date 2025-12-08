@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api, type AppError, type InstalledMod } from "@/lib/tauri";
 import { queryFn } from "@/utils/query";
+
 import { libraryKeys } from "./keys";
 
 /**
