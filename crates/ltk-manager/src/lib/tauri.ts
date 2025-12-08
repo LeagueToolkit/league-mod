@@ -17,6 +17,8 @@ export interface AppInfo {
 export interface Settings {
   leaguePath: string | null;
   modStoragePath: string | null;
+  /** Directory where mod projects are stored (for Creator Workshop) */
+  workshopPath: string | null;
   theme: "light" | "dark" | "system";
   firstRunComplete: boolean;
 }
@@ -91,6 +93,7 @@ export const api = {
   saveSettings: (settings: Settings) => invokeResult<void>("save_settings", { settings }),
   autoDetectLeaguePath: () => invokeResult<string | null>("auto_detect_league_path"),
   validateLeaguePath: (path: string) => invokeResult<boolean>("validate_league_path", { path }),
+  checkSetupRequired: () => invokeResult<boolean>("check_setup_required"),
 
   // Mods
   getInstalledMods: () => invokeResult<InstalledMod[]>("get_installed_mods"),

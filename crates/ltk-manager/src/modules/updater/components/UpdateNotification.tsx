@@ -1,4 +1,4 @@
-import { Download, RefreshCw, X, AlertCircle } from "lucide-react";
+import { AlertCircle, Download, RefreshCw, X } from "lucide-react";
 
 import type { UseUpdateCheckReturn } from "../hooks/useUpdateCheck";
 
@@ -11,14 +11,7 @@ interface UpdateNotificationProps {
  * Shows download progress during update installation.
  */
 export function UpdateNotification({ updateState }: UpdateNotificationProps) {
-  const {
-    update,
-    updating,
-    progress,
-    error,
-    downloadAndInstall,
-    dismiss,
-  } = updateState;
+  const { update, updating, progress, error, downloadAndInstall, dismiss } = updateState;
 
   // Don't render if no update available and not in error state
   if (!update && !error) return null;
@@ -26,15 +19,15 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Error state
   if (error) {
     return (
-      <div className="bg-red-900/80 border-red-500/50 mx-4 mt-2 flex items-center gap-3 rounded-lg border px-4 py-3 backdrop-blur-sm">
-        <AlertCircle className="text-red-400 h-5 w-5 shrink-0" />
+      <div className="mx-4 mt-2 flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/80 px-4 py-3 backdrop-blur-sm">
+        <AlertCircle className="h-5 w-5 shrink-0 text-red-400" />
         <div className="flex-1">
-          <p className="text-red-100 text-sm font-medium">Update Error</p>
-          <p className="text-red-300 text-xs">{error}</p>
+          <p className="text-sm font-medium text-red-100">Update Error</p>
+          <p className="text-xs text-red-300">{error}</p>
         </div>
         <button
           onClick={dismiss}
-          className="text-red-300 hover:text-red-100 rounded p-1 transition-colors"
+          className="rounded p-1 text-red-300 transition-colors hover:text-red-100"
           aria-label="Dismiss error"
         >
           <X className="h-4 w-4" />
@@ -50,9 +43,7 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
         <div className="flex items-center gap-3">
           <RefreshCw className="text-accent-400 h-5 w-5 shrink-0 animate-spin" />
           <div className="flex-1">
-            <p className="text-accent-100 text-sm font-medium">
-              Installing update...
-            </p>
+            <p className="text-accent-100 text-sm font-medium">Installing update...</p>
             <p className="text-accent-300 text-xs">
               {progress}% complete - App will restart automatically
             </p>
@@ -74,12 +65,8 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
       <div className="from-accent-600/20 to-accent-700/20 border-accent-500/30 mx-4 mt-2 flex items-center gap-3 rounded-lg border bg-gradient-to-r px-4 py-3 backdrop-blur-sm">
         <Download className="text-accent-400 h-5 w-5 shrink-0" />
         <div className="flex-1">
-          <p className="text-accent-100 text-sm font-medium">
-            Update Available: v{update.version}
-          </p>
-          <p className="text-accent-300 text-xs">
-            A new version is ready to install
-          </p>
+          <p className="text-accent-100 text-sm font-medium">Update Available: v{update.version}</p>
+          <p className="text-accent-300 text-xs">A new version is ready to install</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -102,5 +89,3 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
 
   return null;
 }
-
-

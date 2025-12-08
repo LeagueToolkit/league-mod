@@ -1,8 +1,8 @@
 use crate::error::{AppError, AppResult, IpcResult};
-use crate::state::{AppState, InstalledMod, Settings};
+use crate::state::{save_settings_to_disk, AppState, InstalledMod, Settings};
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,17 +36,29 @@ fn get_settings_inner(state: &State<AppState>) -> AppResult<Settings> {
 
 /// Save settings
 #[tauri::command]
-pub fn save_settings(settings: Settings, state: State<AppState>) -> IpcResult<()> {
-    save_settings_inner(settings, &state).into()
+pub fn save_settings(
+    settings: Settings,
+    app_handle: AppHandle,
+    state: State<AppState>,
+) -> IpcResult<()> {
+    save_settings_inner(settings, &app_handle, &state).into()
 }
 
-fn save_settings_inner(settings: Settings, state: &State<AppState>) -> AppResult<()> {
+fn save_settings_inner(
+    settings: Settings,
+    app_handle: &AppHandle,
+    state: &State<AppState>,
+) -> AppResult<()> {
+    // Persist to disk first
+    save_settings_to_disk(app_handle, &settings)?;
+
+    // Update in-memory state
     let mut current = state
         .settings
         .lock()
         .map_err(|e| AppError::InternalState(e.to_string()))?;
     *current = settings;
-    // TODO: Persist to disk
+
     Ok(())
 }
 
@@ -74,6 +86,22 @@ fn auto_detect_league_path_inner() -> Option<PathBuf> {
 pub fn validate_league_path(path: PathBuf) -> IpcResult<bool> {
     let exe_path = path.join("Game").join("League of Legends.exe");
     IpcResult::ok(exe_path.exists())
+}
+
+/// Check if initial setup is required (league path not configured)
+#[tauri::command]
+pub fn check_setup_required(state: State<AppState>) -> IpcResult<bool> {
+    check_setup_required_inner(&state).into()
+}
+
+fn check_setup_required_inner(state: &State<AppState>) -> AppResult<bool> {
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|e| AppError::InternalState(e.to_string()))?;
+
+    // Setup is required if league path is not configured
+    Ok(settings.league_path.is_none())
 }
 
 /// Get list of installed mods

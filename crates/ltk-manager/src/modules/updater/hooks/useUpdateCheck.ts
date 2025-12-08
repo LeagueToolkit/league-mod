@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 
 export interface UpdateState {
   /** Whether an update check is in progress */
@@ -127,5 +127,3 @@ export function useUpdateCheck(
     dismiss,
   };
 }
-
-
