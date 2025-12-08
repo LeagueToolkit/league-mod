@@ -1,6 +1,6 @@
 import { Toast as BaseToast } from "@base-ui-components/react/toast";
-import { AlertCircle, CheckCircle, Info, X, XCircle } from "lucide-react";
 import { type ReactNode } from "react";
+import { LuCircleAlert, LuCircleCheck, LuCircleX, LuInfo, LuX } from "react-icons/lu";
 import { twMerge } from "tailwind-merge";
 
 export type ToastType = "success" | "error" | "warning" | "info";
@@ -10,10 +10,10 @@ export interface ToastData {
 }
 
 const typeIcons: Record<ToastType, ReactNode> = {
-  success: <CheckCircle className="h-5 w-5 text-green-500" />,
-  error: <XCircle className="h-5 w-5 text-red-500" />,
-  warning: <AlertCircle className="h-5 w-5 text-amber-500" />,
-  info: <Info className="h-5 w-5 text-blue-500" />,
+  success: <LuCircleCheck className="h-5 w-5 text-green-500" />,
+  error: <LuCircleX className="h-5 w-5 text-red-500" />,
+  warning: <LuCircleAlert className="h-5 w-5 text-amber-500" />,
+  info: <LuInfo className="h-5 w-5 text-blue-500" />,
 };
 
 const typeClasses: Record<ToastType, string> = {
@@ -57,7 +57,7 @@ export function ToastItem({ toast }: ToastItemProps) {
           className="shrink-0 rounded-md p-1 text-surface-400 transition-colors hover:bg-surface-700 hover:text-surface-200"
           aria-label="Close"
         >
-          <X className="h-4 w-4" />
+          <LuX className="h-4 w-4" />
         </BaseToast.Close>
       </BaseToast.Content>
     </BaseToast.Root>

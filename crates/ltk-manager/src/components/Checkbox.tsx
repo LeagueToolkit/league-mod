@@ -1,6 +1,6 @@
 import { Checkbox as BaseCheckbox } from "@base-ui-components/react/checkbox";
-import { Check, Minus } from "lucide-react";
 import { forwardRef, type ReactNode } from "react";
+import { LuCheck, LuMinus } from "react-icons/lu";
 import { twMerge } from "tailwind-merge";
 
 export type CheckboxSize = "sm" | "md" | "lg";
@@ -33,11 +33,11 @@ const labelSizeClasses: Record<CheckboxSize, string> = {
 function CheckboxIcon({ size }: { size: CheckboxSize }) {
   return (
     <>
-      <Check
+      <LuCheck
         className={twMerge(iconSizeClasses[size], "hidden group-data-[checked]:block")}
         strokeWidth={3}
       />
-      <Minus
+      <LuMinus
         className={twMerge(iconSizeClasses[size], "hidden group-data-[indeterminate]:block")}
         strokeWidth={3}
       />
