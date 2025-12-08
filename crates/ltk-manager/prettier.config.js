@@ -1,13 +1,11 @@
-/** @type {import("prettier").Config} */
+/** @type {import('prettier').Config & import('prettier-plugin-tailwindcss').PluginOptions} */
 export default {
+  plugins: ["prettier-plugin-tailwindcss"],
   semi: true,
   singleQuote: false,
   tabWidth: 2,
   trailingComma: "all",
   printWidth: 100,
-  plugins: ["@ianvs/prettier-plugin-sort-imports", "prettier-plugin-tailwindcss"],
-  importOrder: ["^react", "", "<THIRD_PARTY_MODULES>", "", "^@/(.*)$", "^[./]"],
-  importOrderParserPlugins: ["typescript", "jsx"],
-  importOrderTypeScriptVersion: "5.0.0",
   tailwindFunctions: ["clsx", "cn", "twMerge", "twJoin"],
+  tailwindStylesheet: "./src/styles/app.css",
 };

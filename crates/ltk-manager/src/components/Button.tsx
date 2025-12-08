@@ -1,7 +1,6 @@
+import { Button as BaseButton } from "@base-ui-components/react";
 import { forwardRef, type ReactNode } from "react";
 import { CgSpinner } from "react-icons/cg";
-
-import { Button as BaseButton } from "@base-ui-components/react";
 import { twMerge } from "tailwind-merge";
 import { match } from "ts-pattern";
 
