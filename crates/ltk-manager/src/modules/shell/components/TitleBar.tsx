@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
-
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
 interface TitleBarProps {
   title?: string;
@@ -31,14 +30,14 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
 
   return (
     <header
-      className="title-bar border-surface-600 flex h-10 shrink-0 items-center justify-between border-b select-none"
+      className="title-bar flex h-10 shrink-0 items-center justify-between border-b border-surface-600 select-none"
       data-tauri-drag-region
     >
       {/* Left: App icon and title */}
       <div className="flex items-center gap-2 pl-3" data-tauri-drag-region>
         <img src="/icon.svg" alt="LTK" className="h-6 w-6" data-tauri-drag-region />
         <span
-          className="text-surface-100 text-base font-medium tracking-wide"
+          className="text-base font-medium tracking-wide text-surface-100"
           data-tauri-drag-region
         >
           {title}
@@ -50,7 +49,7 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
         <button
           type="button"
           onClick={handleMinimize}
-          className="hover:bg-surface-700 text-surface-400 hover:text-surface-200 flex h-full w-12 items-center justify-center transition-colors"
+          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-surface-700 hover:text-surface-200"
           aria-label="Minimize"
         >
           <Minus className="h-4 w-4" />
@@ -58,7 +57,7 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
         <button
           type="button"
           onClick={handleMaximize}
-          className="hover:bg-surface-700 text-surface-400 hover:text-surface-200 flex h-full w-12 items-center justify-center transition-colors"
+          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-surface-700 hover:text-surface-200"
           aria-label={isMaximized ? "Restore" : "Maximize"}
         >
           {isMaximized ? (
@@ -70,7 +69,7 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
         <button
           type="button"
           onClick={handleClose}
-          className="text-surface-400 flex h-full w-12 items-center justify-center transition-colors hover:bg-red-600 hover:text-white"
+          className="flex h-full w-12 items-center justify-center text-surface-400 transition-colors hover:bg-red-600 hover:text-white"
           aria-label="Close"
         >
           <X className="h-4 w-4" />

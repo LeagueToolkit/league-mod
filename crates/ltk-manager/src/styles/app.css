@@ -117,7 +117,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-surface-700 rounded-full;
+  @apply rounded-full bg-surface-700;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -126,7 +126,7 @@ body {
 
 /* Focus styles */
 :focus-visible {
-  @apply outline-brand-500 outline-2 outline-offset-2;
+  @apply outline-2 outline-offset-2 outline-brand-500;
 }
 
 /* Drag region for Tauri window */
