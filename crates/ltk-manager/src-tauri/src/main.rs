@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
@@ -12,7 +13,7 @@ mod state;
 /// Perform first-run initialization:
 /// - If league_path is not set, attempt auto-detection
 /// - If auto-detection succeeds, save the path
-fn initialize_first_run(app_state: &state::AppState) {
+fn initialize_first_run(app_handle: &tauri::AppHandle, app_state: &state::AppState) {
     let mut settings = match app_state.settings.lock() {
         Ok(s) => s,
         Err(e) => {
@@ -40,7 +41,7 @@ fn initialize_first_run(app_state: &state::AppState) {
             settings.first_run_complete = true;
 
             // Persist the detected path
-            if let Err(e) = state::save_settings_to_disk(&settings) {
+            if let Err(e) = state::save_settings_to_disk(app_handle, &settings) {
                 tracing::error!("Failed to save auto-detected settings: {}", e);
             }
         }
@@ -61,17 +62,25 @@ fn main() {
 
     tracing::info!("Starting LTK Manager");
 
-    // Create app state and run first-run initialization
-    let app_state = state::AppState::default();
-    initialize_first_run(&app_state);
-
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(app_state)
+        .setup(|app| {
+            // Create app state with settings loaded using Tauri's path resolver
+            let app_handle = app.handle();
+            let app_state = state::AppState::new(app_handle);
+
+            // Run first-run initialization (auto-detect League path)
+            initialize_first_run(app_handle, &app_state);
+
+            // Manage the state
+            app.manage(app_state);
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::get_settings,

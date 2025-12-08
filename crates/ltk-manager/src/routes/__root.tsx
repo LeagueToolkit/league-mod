@@ -1,30 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-import { invoke } from "@tauri-apps/api/core";
 
-import { useCheckSetupRequired } from "@/modules/settings";
+import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
 import { TitleBar } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
 import { Sidebar } from "../components/Sidebar";
 
-interface AppInfo {
-  name: string;
-  version: string;
-}
-
 function RootLayout() {
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const { data: appInfo } = useAppInfo();
   const updateState = useUpdateCheck({ checkOnMount: true, delayMs: 3000 });
   const navigate = useNavigate();
   const location = useLocation();
 
   const { data: setupRequired, isLoading: isCheckingSetup } = useCheckSetupRequired();
-
-  useEffect(() => {
-    invoke<AppInfo>("get_app_info").then(setAppInfo);
-  }, []);
 
   // Redirect to settings if setup is required
   useEffect(() => {

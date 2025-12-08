@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult, IpcResult};
 use crate::state::{save_settings_to_disk, AppState, InstalledMod, Settings};
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,13 +36,21 @@ fn get_settings_inner(state: &State<AppState>) -> AppResult<Settings> {
 
 /// Save settings
 #[tauri::command]
-pub fn save_settings(settings: Settings, state: State<AppState>) -> IpcResult<()> {
-    save_settings_inner(settings, &state).into()
+pub fn save_settings(
+    settings: Settings,
+    app_handle: AppHandle,
+    state: State<AppState>,
+) -> IpcResult<()> {
+    save_settings_inner(settings, &app_handle, &state).into()
 }
 
-fn save_settings_inner(settings: Settings, state: &State<AppState>) -> AppResult<()> {
+fn save_settings_inner(
+    settings: Settings,
+    app_handle: &AppHandle,
+    state: &State<AppState>,
+) -> AppResult<()> {
     // Persist to disk first
-    save_settings_to_disk(&settings)?;
+    save_settings_to_disk(app_handle, &settings)?;
 
     // Update in-memory state
     let mut current = state

@@ -4,8 +4,8 @@ import { getRouteApi } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, CheckCircle, FolderOpen, Info, Loader2 } from "lucide-react";
 
-import { api, type AppInfo, type Settings as SettingsType } from "@/lib/tauri";
-import { useSaveSettings, useSettings } from "@/modules/settings";
+import { api, type Settings as SettingsType } from "@/lib/tauri";
+import { useAppInfo, useSaveSettings, useSettings } from "@/modules/settings";
 import { unwrapForQuery } from "@/utils/query";
 
 const routeApi = getRouteApi("/settings");
@@ -13,19 +13,11 @@ const routeApi = getRouteApi("/settings");
 export function Settings() {
   const { firstRun } = routeApi.useSearch();
   const { data: settings, isLoading } = useSettings();
+  const { data: appInfo } = useAppInfo();
   const saveSettingsMutation = useSaveSettings();
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [leaguePathValid, setLeaguePathValid] = useState<boolean | null>(null);
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-
-  useEffect(() => {
-    api.getAppInfo().then((result) => {
-      if (result.ok) {
-        setAppInfo(result.value);
-      }
-    });
-  }, []);
 
   useEffect(() => {
     if (settings?.leaguePath) {

@@ -2,20 +2,21 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 
-/// Get the application data directory for storing settings
-pub fn get_app_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|p| p.join("ltk-manager"))
+/// Get the application data directory for storing settings using Tauri's path resolver
+pub fn get_app_data_dir(app_handle: &AppHandle) -> Option<PathBuf> {
+    app_handle.path().app_data_dir().ok()
 }
 
 /// Get the path to the settings file
-pub fn get_settings_file_path() -> Option<PathBuf> {
-    get_app_data_dir().map(|p| p.join("settings.json"))
+pub fn get_settings_file_path(app_handle: &AppHandle) -> Option<PathBuf> {
+    get_app_data_dir(app_handle).map(|p| p.join("settings.json"))
 }
 
 /// Load settings from disk, returning defaults if file doesn't exist
-pub fn load_settings() -> Settings {
-    let Some(settings_path) = get_settings_file_path() else {
+pub fn load_settings(app_handle: &AppHandle) -> Settings {
+    let Some(settings_path) = get_settings_file_path(app_handle) else {
         tracing::warn!("Could not determine settings file path, using defaults");
         return Settings::default();
     };
@@ -44,8 +45,11 @@ pub fn load_settings() -> Settings {
 }
 
 /// Save settings to disk
-pub fn save_settings_to_disk(settings: &Settings) -> Result<(), std::io::Error> {
-    let Some(settings_path) = get_settings_file_path() else {
+pub fn save_settings_to_disk(
+    app_handle: &AppHandle,
+    settings: &Settings,
+) -> Result<(), std::io::Error> {
+    let Some(settings_path) = get_settings_file_path(app_handle) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Could not determine settings file path",
@@ -72,10 +76,20 @@ pub struct AppState {
     pub installed_mods: Mutex<Vec<InstalledMod>>,
 }
 
+impl AppState {
+    /// Create AppState with settings loaded from disk
+    pub fn new(app_handle: &AppHandle) -> Self {
+        Self {
+            settings: Mutex::new(load_settings(app_handle)),
+            installed_mods: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            settings: Mutex::new(load_settings()),
+            settings: Mutex::new(Settings::default()),
             installed_mods: Mutex::new(Vec::new()),
         }
     }
