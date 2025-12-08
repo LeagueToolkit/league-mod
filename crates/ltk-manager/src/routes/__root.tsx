@@ -1,20 +1,33 @@
 import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
-import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
+import { useAppInfo, useCheckSetupRequired, useSettings } from "@/modules/settings";
 import { TitleBar } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
+import { initializeTheme } from "@/stores";
 
 import { Sidebar } from "../components/Sidebar";
 
 function RootLayout() {
   const { data: appInfo } = useAppInfo();
+  const { data: settings } = useSettings();
   const updateState = useUpdateCheck({ checkOnMount: true, delayMs: 3000 });
   const navigate = useNavigate();
   const location = useLocation();
+  const themeCleanupRef = useRef<(() => void) | null>(null);
 
   const { data: setupRequired, isLoading: isCheckingSetup } = useCheckSetupRequired();
+
+  // Initialize theme from settings
+  useEffect(() => {
+    if (settings?.theme) {
+      themeCleanupRef.current = initializeTheme(settings.theme);
+    }
+    return () => {
+      themeCleanupRef.current?.();
+    };
+  }, [settings?.theme]);
 
   // Redirect to settings if setup is required
   useEffect(() => {

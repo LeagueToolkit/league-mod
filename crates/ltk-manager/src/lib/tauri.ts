@@ -4,9 +4,9 @@ import type { AppError } from "@/utils/errors";
 import type { Result } from "@/utils/result";
 
 // Re-export Result utilities for convenience
-export { isOk, isErr, unwrap, unwrapOr, match } from "@/utils/result";
-export type { Result } from "@/utils/result";
 export type { AppError, ErrorCode } from "@/utils/errors";
+export type { Result } from "@/utils/result";
+export { isErr, isOk, match,unwrap, unwrapOr } from "@/utils/result";
 
 // Types matching Rust structs
 export interface AppInfo {
