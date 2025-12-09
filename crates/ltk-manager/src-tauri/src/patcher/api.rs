@@ -1,8 +1,11 @@
-use std::{num::NonZeroU32};
+use std::num::NonZeroU32;
+use std::path::Path;
 
 use libloading::Library;
 
 use crate::utils::native::{cstr_to_str, str_to_cstr_utf16};
+
+pub const PATCHER_DLL_NAME: &str = "cslol-dll.dll";
 
 #[repr(u64)]
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,6 +19,8 @@ pub enum CSLogLevel {
 
 #[derive(thiserror::Error, Debug)]
 pub enum PatcherError {
+    #[error("Failed to load patcher DLL: {0}")]
+    LoadFailed(#[from] libloading::Error),
     #[error("Failed to initialize cslol: {0}")]
     InitFailed(String),
     #[error("Failed to set patcher config: {0}")]
@@ -43,24 +48,24 @@ pub struct PatcherApi {
 }
 
 impl PatcherApi {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        let lib = unsafe { Library::new("cslol-dll.dll").unwrap() };
+    /// Load the patcher DLL from the given path.
+    pub fn load(dll_path: &Path) -> Result<Self, PatcherError> {
+        let lib = unsafe { Library::new(dll_path)? };
 
         unsafe {
-            Self {
-                cslol_init: *lib.get(b"cslol_init").unwrap(),
-                cslol_set_config: *lib.get(b"cslol_set_config").unwrap(),
-                cslol_set_log_level: *lib.get(b"cslol_set_log_level").unwrap(),
-                cslol_set_log_file: *lib.get(b"cslol_set_log_file").unwrap(),
-                cslol_find: *lib.get(b"cslol_find").unwrap(),
-                cslol_sleep: *lib.get(b"cslol_sleep").unwrap(),
-                cslol_hook_count: *lib.get(b"cslol_hook_count").unwrap(),
-                cslol_hook_begin: *lib.get(b"cslol_hook_begin").unwrap(),
-                cslol_hook_continue: *lib.get(b"cslol_hook_continue").unwrap(),
-                cslol_hook_end: *lib.get(b"cslol_hook_end").unwrap(),
+            Ok(Self {
+                cslol_init: *lib.get(b"cslol_init")?,
+                cslol_set_config: *lib.get(b"cslol_set_config")?,
+                cslol_set_log_level: *lib.get(b"cslol_set_log_level")?,
+                cslol_set_log_file: *lib.get(b"cslol_set_log_file")?,
+                cslol_find: *lib.get(b"cslol_find")?,
+                cslol_sleep: *lib.get(b"cslol_sleep")?,
+                cslol_hook_count: *lib.get(b"cslol_hook_count")?,
+                cslol_hook_begin: *lib.get(b"cslol_hook_begin")?,
+                cslol_hook_continue: *lib.get(b"cslol_hook_continue")?,
+                cslol_hook_end: *lib.get(b"cslol_hook_end")?,
                 library: lib,
-            }
+            })
         }
     }
 
@@ -103,18 +108,23 @@ impl PatcherApi {
     pub fn find(&self) -> Option<NonZeroU32> {
         unsafe { NonZeroU32::new((self.cslol_find)()) }
     }
+
     pub fn sleep(&self, milliseconds: u32) {
         unsafe { (self.cslol_sleep)(milliseconds) }
     }
+
     pub fn hook_count(&self) -> usize {
         unsafe { (self.cslol_hook_count)() }
     }
+
     pub fn hook_begin(&self, tid: u32) -> usize {
         unsafe { (self.cslol_hook_begin)(tid) }
     }
+
     pub fn hook_continue(&self, tid: u32, hook: usize) -> usize {
         unsafe { (self.cslol_hook_continue)(tid, hook) }
     }
+
     pub fn hook_end(&self, tid: u32, hook: usize) -> usize {
         unsafe { (self.cslol_hook_end)(tid, hook) }
     }

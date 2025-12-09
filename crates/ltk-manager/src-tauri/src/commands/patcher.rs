@@ -1,11 +1,12 @@
 use crate::error::{AppError, AppResult, IpcResult};
-use crate::patcher::api::{CSLogLevel, PatcherApi};
+use crate::patcher::api::{CSLogLevel, PatcherApi, PatcherError, PATCHER_DLL_NAME};
 use crate::patcher::PatcherState;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 /// Default timeout for hook initialization (5 minutes in milliseconds).
 const DEFAULT_HOOK_TIMEOUT_MS: u32 = 300_000;
@@ -34,10 +35,10 @@ pub struct PatcherStatus {
     pub config_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 enum PatcherLoopError {
-    #[error("Failed to initialize patcher")]
-    InitFailed,
+    #[error(transparent)]
+    Patcher(#[from] PatcherError),
     #[error("Failed to begin hook")]
     HookFailed,
     #[error("Hook initialization timed out")]
@@ -46,16 +47,54 @@ enum PatcherLoopError {
     Stopped,
 }
 
+/// Resolve the path to the patcher DLL from bundled resources.
+fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
+    let resource_path = app_handle
+        .path()
+        .resource_dir()
+        .map_err(|e| AppError::Other(format!("Failed to get resource directory: {}", e)))?
+        .join(PATCHER_DLL_NAME);
+
+    if resource_path.exists() {
+        return Ok(resource_path);
+    }
+
+    // Fallback for development: check next to executable
+    let dev_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .map(|p| p.join(PATCHER_DLL_NAME));
+
+    if let Some(path) = dev_path {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err(AppError::Other(format!(
+        "Patcher DLL not found. Expected at: {}",
+        resource_path.display()
+    )))
+}
+
 /// Start the patcher with the given configuration.
 ///
 /// The patcher runs in a background thread, continuously monitoring for the
 /// League of Legends process and applying hooks when found.
 #[tauri::command]
-pub fn start_patcher(config: PatcherConfig, state: State<PatcherState>) -> IpcResult<()> {
-    start_patcher_inner(config, &state).into()
+pub fn start_patcher(
+    config: PatcherConfig,
+    app_handle: AppHandle,
+    state: State<PatcherState>,
+) -> IpcResult<()> {
+    start_patcher_inner(config, &app_handle, &state).into()
 }
 
-fn start_patcher_inner(config: PatcherConfig, state: &State<PatcherState>) -> AppResult<()> {
+fn start_patcher_inner(
+    config: PatcherConfig,
+    app_handle: &AppHandle,
+    state: &State<PatcherState>,
+) -> AppResult<()> {
     let mut patcher_state = state
         .0
         .lock()
@@ -65,9 +104,10 @@ fn start_patcher_inner(config: PatcherConfig, state: &State<PatcherState>) -> Ap
         return Err(AppError::Other("Patcher is already running".to_string()));
     }
 
+    let dll_path = resolve_patcher_dll_path(app_handle)?;
+    tracing::info!("Using patcher DLL: {}", dll_path.display());
     tracing::info!("Starting patcher with config path: {}", config.config_path);
 
-    // Reset the stop flag
     patcher_state.stop_flag.store(false, Ordering::SeqCst);
     let stop_flag = Arc::clone(&patcher_state.stop_flag);
     let config_path = config.config_path.clone();
@@ -75,7 +115,8 @@ fn start_patcher_inner(config: PatcherConfig, state: &State<PatcherState>) -> Ap
     let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
 
     let handle = thread::spawn(move || {
-        match run_patcher_loop(&config_path, log_file.as_deref(), timeout_ms, &stop_flag) {
+        match run_patcher_loop(&dll_path, &config_path, log_file.as_deref(), timeout_ms, &stop_flag)
+        {
             Ok(()) => tracing::info!("Patcher loop completed successfully"),
             Err(PatcherLoopError::Stopped) => tracing::info!("Patcher stopped by request"),
             Err(e) => tracing::error!("Patcher loop error: {}", e),
@@ -89,38 +130,25 @@ fn start_patcher_inner(config: PatcherConfig, state: &State<PatcherState>) -> Ap
     Ok(())
 }
 
-/// The main patcher loop that runs in a background thread.
 fn run_patcher_loop(
+    dll_path: &PathBuf,
     config_path: &str,
     log_file: Option<&str>,
     timeout_ms: u32,
     stop_flag: &AtomicBool,
 ) -> Result<(), PatcherLoopError> {
-    let api = PatcherApi::new();
+    let api = PatcherApi::load(dll_path)?;
 
-    api.init().map_err(|e| {
-        tracing::error!("Patcher init failed: {}", e);
-        PatcherLoopError::InitFailed
-    })?;
-    api.set_config(config_path).map_err(|e| {
-        tracing::error!("Failed to set config: {}", e);
-        PatcherLoopError::InitFailed
-    })?;
-    api.set_log_level(CSLogLevel::Debug).map_err(|e| {
-        tracing::error!("Failed to set log level: {}", e);
-        PatcherLoopError::InitFailed
-    })?;
+    api.init()?;
+    api.set_config(config_path)?;
+    api.set_log_level(CSLogLevel::Debug)?;
 
     if let Some(log_path) = log_file {
-        api.set_log_file(log_path).map_err(|e| {
-            tracing::error!("Failed to set log file: {}", e);
-            PatcherLoopError::InitFailed
-        })?;
+        api.set_log_file(log_path)?;
     }
 
     tracing::info!("Patcher initialized, waiting for League process...");
 
-    // Wait for League process
     let tid = loop {
         if stop_flag.load(Ordering::SeqCst) {
             return Err(PatcherLoopError::Stopped);
@@ -185,11 +213,9 @@ fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
 
     tracing::info!("Stopping patcher...");
 
-    // Signal the thread to stop
     patcher_state.stop_flag.store(true, Ordering::SeqCst);
 
     if let Some(handle) = patcher_state.thread_handle.take() {
-        // Drop the lock before joining to avoid deadlock
         drop(patcher_state);
 
         match handle.join() {
