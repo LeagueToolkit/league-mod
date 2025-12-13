@@ -8,13 +8,18 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
 mod error;
+pub mod patcher;
 mod state;
+mod utils;
+
+use patcher::PatcherState;
+use state::SettingsState;
 
 /// Perform first-run initialization:
 /// - If league_path is not set, attempt auto-detection
 /// - If auto-detection succeeds, save the path
-fn initialize_first_run(app_handle: &tauri::AppHandle, app_state: &state::AppState) {
-    let mut settings = match app_state.settings.lock() {
+fn initialize_first_run(app_handle: &tauri::AppHandle, settings_state: &SettingsState) {
+    let mut settings = match settings_state.0.lock() {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("Failed to lock settings: {}", e);
@@ -69,30 +74,34 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // Create app state with settings loaded using Tauri's path resolver
             let app_handle = app.handle();
-            let app_state = state::AppState::new(app_handle);
+
+            // Create individual states
+            let settings_state = SettingsState::new(app_handle);
+            let patcher_state = PatcherState::new();
 
             // Run first-run initialization (auto-detect League path)
-            initialize_first_run(app_handle, &app_state);
+            initialize_first_run(app_handle, &settings_state);
 
-            // Manage the state
-            app.manage(app_state);
+            // Manage each state separately
+            app.manage(settings_state);
+            app.manage(patcher_state);
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // App
             commands::get_app_info,
+            // Settings
             commands::get_settings,
             commands::save_settings,
             commands::auto_detect_league_path,
             commands::validate_league_path,
             commands::check_setup_required,
-            commands::get_installed_mods,
-            commands::install_mod,
-            commands::uninstall_mod,
-            commands::toggle_mod,
-            commands::inspect_modpkg,
+            // Patcher
+            commands::start_patcher,
+            commands::stop_patcher,
+            commands::get_patcher_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,17 +4,17 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-/// Get the application data directory for storing settings using Tauri's path resolver
+/// Get the application data directory for storing settings using Tauri's path resolver.
 pub fn get_app_data_dir(app_handle: &AppHandle) -> Option<PathBuf> {
     app_handle.path().app_data_dir().ok()
 }
 
-/// Get the path to the settings file
+/// Get the path to the settings file.
 pub fn get_settings_file_path(app_handle: &AppHandle) -> Option<PathBuf> {
     get_app_data_dir(app_handle).map(|p| p.join("settings.json"))
 }
 
-/// Load settings from disk, returning defaults if file doesn't exist
+/// Load settings from disk, returning defaults if file doesn't exist.
 pub fn load_settings(app_handle: &AppHandle) -> Settings {
     let Some(settings_path) = get_settings_file_path(app_handle) else {
         tracing::warn!("Could not determine settings file path, using defaults");
@@ -44,7 +44,7 @@ pub fn load_settings(app_handle: &AppHandle) -> Settings {
     }
 }
 
-/// Save settings to disk
+/// Save settings to disk.
 pub fn save_settings_to_disk(
     app_handle: &AppHandle,
     settings: &Settings,
@@ -56,7 +56,6 @@ pub fn save_settings_to_disk(
         ));
     };
 
-    // Ensure the directory exists
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -70,28 +69,18 @@ pub fn save_settings_to_disk(
     Ok(())
 }
 
-#[derive(Debug)]
-pub struct AppState {
-    pub settings: Mutex<Settings>,
-    pub installed_mods: Mutex<Vec<InstalledMod>>,
-}
+/// Application settings state.
+pub struct SettingsState(pub Mutex<Settings>);
 
-impl AppState {
-    /// Create AppState with settings loaded from disk
+impl SettingsState {
     pub fn new(app_handle: &AppHandle) -> Self {
-        Self {
-            settings: Mutex::new(load_settings(app_handle)),
-            installed_mods: Mutex::new(Vec::new()),
-        }
+        Self(Mutex::new(load_settings(app_handle)))
     }
 }
 
-impl Default for AppState {
+impl Default for SettingsState {
     fn default() -> Self {
-        Self {
-            settings: Mutex::new(Settings::default()),
-            installed_mods: Mutex::new(Vec::new()),
-        }
+        Self(Mutex::new(Settings::default()))
     }
 }
 
@@ -100,40 +89,7 @@ impl Default for AppState {
 pub struct Settings {
     pub league_path: Option<PathBuf>,
     pub mod_storage_path: Option<PathBuf>,
-    /// Directory where mod projects are stored (for Creator Workshop)
+    /// Directory where mod projects are stored (for Creator Workshop).
     pub workshop_path: Option<PathBuf>,
-    pub theme: Theme,
     pub first_run_complete: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Theme {
-    Light,
-    Dark,
-    #[default]
-    System,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstalledMod {
-    pub id: String,
-    pub name: String,
-    pub display_name: String,
-    pub version: String,
-    pub description: Option<String>,
-    pub authors: Vec<String>,
-    pub enabled: bool,
-    pub installed_at: String,
-    pub file_path: PathBuf,
-    pub layers: Vec<ModLayer>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModLayer {
-    pub name: String,
-    pub priority: i32,
-    pub enabled: bool,
 }
