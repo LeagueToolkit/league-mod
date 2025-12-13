@@ -98,7 +98,9 @@ impl PatcherApi {
 
     pub fn set_log_file(&self, log_path: &str) -> Result<(), PatcherError> {
         unsafe {
-            match cstr_to_str((self.cslol_set_log_file)(str_to_cstr_utf16(log_path).as_ptr())) {
+            match cstr_to_str((self.cslol_set_log_file)(
+                str_to_cstr_utf16(log_path).as_ptr(),
+            )) {
                 Some(err) => Err(PatcherError::SetLogFileFailed(err)),
                 None => Ok(()),
             }

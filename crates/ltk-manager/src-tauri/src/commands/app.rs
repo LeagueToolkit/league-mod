@@ -16,4 +16,3 @@ pub fn get_app_info() -> IpcResult<AppInfo> {
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
 }
-

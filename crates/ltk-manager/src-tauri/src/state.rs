@@ -93,4 +93,3 @@ pub struct Settings {
     pub workshop_path: Option<PathBuf>,
     pub first_run_complete: bool,
 }
-

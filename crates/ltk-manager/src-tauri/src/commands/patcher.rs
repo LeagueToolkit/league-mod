@@ -115,8 +115,13 @@ fn start_patcher_inner(
     let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
 
     let handle = thread::spawn(move || {
-        match run_patcher_loop(&dll_path, &config_path, log_file.as_deref(), timeout_ms, &stop_flag)
-        {
+        match run_patcher_loop(
+            &dll_path,
+            &config_path,
+            log_file.as_deref(),
+            timeout_ms,
+            &stop_flag,
+        ) {
             Ok(()) => tracing::info!("Patcher loop completed successfully"),
             Err(PatcherLoopError::Stopped) => tracing::info!("Patcher stopped by request"),
             Err(e) => tracing::error!("Patcher loop error: {}", e),
