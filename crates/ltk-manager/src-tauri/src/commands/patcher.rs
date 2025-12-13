@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult, IpcResult};
 use crate::patcher::api::{CSLogLevel, PatcherApi, PatcherError, PATCHER_DLL_NAME};
 use crate::patcher::PatcherState;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -136,7 +136,7 @@ fn start_patcher_inner(
 }
 
 fn run_patcher_loop(
-    dll_path: &PathBuf,
+    dll_path: &Path,
     config_path: &str,
     log_file: Option<&str>,
     timeout_ms: u32,

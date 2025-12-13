@@ -1,10 +1,12 @@
+#![allow(unused_assignments)]
+
 use miette::{Diagnostic, SourceSpan};
 use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum CliError {
-    #[error("Configuration file not found")]
+    #[error("Configuration file not found in {search_path}")]
     #[diagnostic(
         code(config::not_found),
         help("Create a mod.config.json or mod.config.toml file in your project directory")
@@ -22,7 +24,7 @@ pub enum CliError {
         span: Option<SourceSpan>,
     },
 
-    #[error("Layer directory not found: {layer_name}")]
+    #[error("Layer directory not found at {expected_path}")]
     #[diagnostic(
         code(layer::directory_missing),
         help("Create the directory content/{layer_name}/ and add your mod files there")
@@ -73,7 +75,7 @@ pub enum CliError {
     )]
     FileNotFound { path: PathBuf },
 
-    #[error("Directory creation failed")]
+    #[error("Directory creation failed at {path}")]
     #[diagnostic(
         code(fs::create_dir_failed),
         help("Check file permissions and available disk space")
@@ -91,7 +93,7 @@ pub enum CliError {
         source: std::io::Error,
     },
 
-    #[error("Invalid base layer priority: {provided}")]
+    #[error("Invalid base layer priority: {provided} (expected 0)")]
     #[diagnostic(
         code(layer::invalid_base_priority),
         help("The 'base' layer must have priority 0")
