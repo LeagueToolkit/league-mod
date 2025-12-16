@@ -1,10 +1,13 @@
 use crate::error::{AppError, AppResult, IpcResult};
-use crate::patcher::api::{CSLogLevel, PatcherApi, PatcherError, PATCHER_DLL_NAME};
+use crate::legacy_patcher::api::{CSLogLevel, PatcherApi, PatcherError, PATCHER_DLL_NAME};
 use crate::patcher::PatcherState;
+use crate::state::SettingsState;
+use crate::overlay;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use std::thread;
 use tauri::{AppHandle, Manager, State};
 
@@ -17,12 +20,14 @@ const HOOK_STEP_MS: u32 = 100;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatcherConfig {
-    /// Path prefix for the patcher configuration (where overlay files are located).
-    pub config_path: String,
     /// Optional log file path.
     pub log_file: Option<String>,
     /// Timeout in milliseconds for hook initialization. Defaults to 5 minutes.
     pub timeout_ms: Option<u32>,
+    /// Optional legacy patcher flags (matches `cslol_set_flags`).
+    ///
+    /// If not provided, defaults to 0 (equivalent to `--opts:none` in cslol-tools).
+    pub flags: Option<u64>,
 }
 
 /// Current status of the patcher.
@@ -39,10 +44,6 @@ pub struct PatcherStatus {
 enum PatcherLoopError {
     #[error(transparent)]
     Patcher(#[from] PatcherError),
-    #[error("Failed to begin hook")]
-    HookFailed,
-    #[error("Hook initialization timed out")]
-    HookTimeout,
     #[error("Patcher stopped by request")]
     Stopped,
 }
@@ -56,6 +57,7 @@ fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
         .join(PATCHER_DLL_NAME);
 
     if resource_path.exists() {
+        tracing::info!("Resolved patcher DLL from resource_dir: {}", resource_path.display());
         return Ok(resource_path);
     }
 
@@ -65,15 +67,34 @@ fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .map(|p| p.join(PATCHER_DLL_NAME));
 
-    if let Some(path) = dev_path {
+    if let Some(ref path) = dev_path {
         if path.exists() {
-            return Ok(path);
+            tracing::info!("Resolved patcher DLL next to executable: {}", path.display());
+            return Ok(path.clone());
         }
     }
 
+    // Fallback for `tauri dev`: use the checked-in resources folder from the crate.
+    // (`resource_dir()` during dev often points at `target/debug/`, but resources may not be copied there.)
+    let manifest_resource_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(PATCHER_DLL_NAME);
+    if manifest_resource_path.exists() {
+        tracing::info!(
+            "Resolved patcher DLL from CARGO_MANIFEST_DIR resources: {}",
+            manifest_resource_path.display()
+        );
+        return Ok(manifest_resource_path);
+    }
+
     Err(AppError::Other(format!(
-        "Patcher DLL not found. Expected at: {}",
-        resource_path.display()
+        "Patcher DLL not found. Tried:\n - {}\n - {}\n - {}",
+        resource_path.display(),
+        dev_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unavailable>".to_string()),
+        manifest_resource_path.display(),
     )))
 }
 
@@ -86,14 +107,20 @@ pub fn start_patcher(
     config: PatcherConfig,
     app_handle: AppHandle,
     state: State<PatcherState>,
+    settings: State<SettingsState>,
 ) -> IpcResult<()> {
-    start_patcher_inner(config, &app_handle, &state).into()
+    let result = start_patcher_inner(config, &app_handle, &state, &settings);
+    if let Err(ref e) = result {
+        tracing::error!(error = ?e, "Start patcher failed");
+    }
+    result.into()
 }
 
 fn start_patcher_inner(
     config: PatcherConfig,
     app_handle: &AppHandle,
     state: &State<PatcherState>,
+    settings: &State<SettingsState>,
 ) -> AppResult<()> {
     let mut patcher_state = state
         .0
@@ -104,22 +131,56 @@ fn start_patcher_inner(
         return Err(AppError::Other("Patcher is already running".to_string()));
     }
 
+    tracing::info!("Start patcher requested (legacy DLL mode)");
     let dll_path = resolve_patcher_dll_path(app_handle)?;
     tracing::info!("Using patcher DLL: {}", dll_path.display());
-    tracing::info!("Starting patcher with config path: {}", config.config_path);
 
     patcher_state.stop_flag.store(false, Ordering::SeqCst);
     let stop_flag = Arc::clone(&patcher_state.stop_flag);
-    let config_path = config.config_path.clone();
     let log_file = config.log_file.clone();
     let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
+    let flags = config.flags.unwrap_or(0);
+    let settings_snapshot = settings
+        .0
+        .lock()
+        .map_err(|e| AppError::InternalState(e.to_string()))?
+        .clone();
+
+    tracing::info!(
+        "Settings snapshot: league_path={} mod_storage_path={}",
+        settings_snapshot
+            .league_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unset>".to_string()),
+        settings_snapshot
+            .mod_storage_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unset>".to_string())
+    );
+
+    // Build/reuse overlay before starting the patcher thread.
+    // The returned directory is used as the legacy patcher prefix, so paths like
+    // `DATA/FINAL/.../*.wad.client` resolve to `<overlayRoot>/DATA/FINAL/.../*.wad.client`.
+    let overlay_root = overlay::ensure_overlay(app_handle, &settings_snapshot)?;
+    tracing::info!("Using overlay root: {}", overlay_root.display());
+
+    // Legacy patcher (cslol-dll.dll) concatenates the prefix directly with filenames
+    // like "DATA/FINAL/..." without adding a separator. Ensure trailing backslash.
+    let mut overlay_root_str = overlay_root.display().to_string();
+    if !overlay_root_str.ends_with('\\') && !overlay_root_str.ends_with('/') {
+        overlay_root_str.push('\\');
+    }
+    let overlay_root_for_thread = overlay_root_str.clone();
 
     let handle = thread::spawn(move || {
         match run_patcher_loop(
             &dll_path,
-            &config_path,
+            &overlay_root_for_thread,
             log_file.as_deref(),
             timeout_ms,
+            flags,
             &stop_flag,
         ) {
             Ok(()) => tracing::info!("Patcher loop completed successfully"),
@@ -130,74 +191,83 @@ fn start_patcher_inner(
     });
 
     patcher_state.thread_handle = Some(handle);
-    patcher_state.config_path = Some(config.config_path);
+    patcher_state.config_path = Some(overlay_root_str);
 
     Ok(())
 }
 
 fn run_patcher_loop(
     dll_path: &Path,
-    config_path: &str,
+    overlay_root: &str,
     log_file: Option<&str>,
     timeout_ms: u32,
+    flags: u64,
     stop_flag: &AtomicBool,
 ) -> Result<(), PatcherLoopError> {
     let api = PatcherApi::load(dll_path)?;
 
+    tracing::info!("Legacy patcher: set_flags({})", flags);
+    api.set_flags(flags)?;
+    tracing::info!("Legacy patcher: init()");
     api.init()?;
-    api.set_config(config_path)?;
-    api.set_log_level(CSLogLevel::Debug)?;
+    tracing::info!("Legacy patcher: set_config(prefix='{}')", overlay_root);
+    api.set_config(overlay_root)?;
+    api.set_log_level(CSLogLevel::Trace)?;
 
     if let Some(log_path) = log_file {
+        tracing::info!("Legacy patcher: set_log_file('{}')", log_path);
         api.set_log_file(log_path)?;
     }
 
-    tracing::info!("Patcher initialized, waiting for League process...");
+    tracing::info!("Legacy patcher initialized, waiting for game...");
 
-    let tid = loop {
-        if stop_flag.load(Ordering::SeqCst) {
-            return Err(PatcherLoopError::Stopped);
-        }
-        match api.find() {
-            Some(tid) => break tid.get(),
-            None => api.sleep(100),
-        }
-    };
-
-    tracing::info!("Found League process, thread id: {}", tid);
-
-    let count_before = api.hook_count();
-    let hook = api.hook_begin(tid);
-    if hook == 0 {
-        return Err(PatcherLoopError::HookFailed);
-    }
-
-    let mut time_remaining = timeout_ms as i64;
     loop {
         if stop_flag.load(Ordering::SeqCst) {
-            api.hook_end(tid, hook);
             return Err(PatcherLoopError::Stopped);
         }
 
-        if time_remaining <= 0 {
-            api.hook_end(tid, hook);
-            return Err(PatcherLoopError::HookTimeout);
+        tracing::info!("Waiting for game to start (polling cslol_find)...");
+        let mut last_wait_log = Instant::now();
+        let tid = loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                return Err(PatcherLoopError::Stopped);
+            }
+            match api.find() {
+                Some(tid) => break tid.get(),
+                None => {
+                    if last_wait_log.elapsed() >= Duration::from_secs(5) {
+                        tracing::info!("Still waiting for game process...");
+                        last_wait_log = Instant::now();
+                    }
+                    api.sleep(100);
+                }
+            }
+        };
+
+        tracing::info!("Game found (thread id: {})", tid);
+
+        tracing::info!(
+            "Applying hook (timeout_ms={}, step_ms={})...",
+            timeout_ms,
+            HOOK_STEP_MS
+        );
+        api.hook(tid, timeout_ms, HOOK_STEP_MS)?;
+        tracing::info!("Hook applied, waiting for game to exit...");
+
+        while !stop_flag.load(Ordering::SeqCst) {
+            match api.find() {
+                Some(current) if current.get() == tid => {
+                    while let Some(msg) = api.log_pull() {
+                        tracing::info!("[cslol] {}", msg);
+                    }
+                    api.sleep(1000);
+                }
+                _ => break,
+            }
         }
 
-        api.hook_continue(tid, hook);
-        api.sleep(HOOK_STEP_MS);
-
-        if api.hook_count() != count_before {
-            tracing::info!("Hooks applied successfully");
-            api.hook_end(tid, hook);
-            break;
-        }
-
-        time_remaining -= HOOK_STEP_MS as i64;
+        tracing::info!("Game exited, returning to wait loop");
     }
-
-    tracing::info!("Hook session completed");
-    Ok(())
 }
 
 /// Stop the running patcher.

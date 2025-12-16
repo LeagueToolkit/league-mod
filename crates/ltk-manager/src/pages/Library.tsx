@@ -11,6 +11,7 @@ import {
   useToggleMod,
   useUninstallMod,
 } from "@/modules/library/api";
+import { usePatcherStatus, useStartPatcher, useStopPatcher } from "@/modules/patcher";
 
 export function Library() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -20,11 +21,17 @@ export function Library() {
   const installMod = useInstallMod();
   const toggleMod = useToggleMod();
   const uninstallMod = useUninstallMod();
+  const { data: patcherStatus } = usePatcherStatus();
+  const startPatcher = useStartPatcher();
+  const stopPatcher = useStopPatcher();
+
+  const enabledModsCount = mods.filter((m) => m.enabled).length;
+  const hasEnabledMods = enabledModsCount > 0;
 
   async function handleInstallMod() {
     const file = await open({
       multiple: false,
-      filters: [{ name: "Mod Package", extensions: ["modpkg"] }],
+      filters: [{ name: "Mod Package", extensions: ["modpkg", "fantome"] }],
     });
 
     if (file) {
@@ -55,6 +62,28 @@ export function Library() {
     });
   }
 
+  function handleStartPatcher() {
+    startPatcher.mutate(
+      {
+        timeoutMs: null,
+        logFile: null,
+      },
+      {
+        onError: (error) => {
+          console.error("Failed to start patcher:", error.message);
+        },
+      },
+    );
+  }
+
+  function handleStopPatcher() {
+    stopPatcher.mutate(undefined, {
+      onError: (error) => {
+        console.error("Failed to stop patcher:", error.message);
+      },
+    });
+  }
+
   const filteredMods = mods.filter(
     (mod) =>
       mod.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -66,14 +95,46 @@ export function Library() {
       {/* Header */}
       <header className="flex h-16 items-center justify-between border-b border-surface-600 px-6">
         <h2 className="text-xl font-semibold text-surface-100">Mod Library</h2>
-        <Button
-          variant="filled"
-          onClick={handleInstallMod}
-          loading={installMod.isPending}
-          left={<LuPlus className="h-4 w-4" />}
-        >
-          {installMod.isPending ? "Installing..." : "Add Mod"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="filled"
+            onClick={handleInstallMod}
+            loading={installMod.isPending}
+            left={<LuPlus className="h-4 w-4" />}
+          >
+            {installMod.isPending ? "Installing..." : "Add Mod"}
+          </Button>
+
+          {patcherStatus?.running ? (
+            <Button
+              variant="outline"
+              onClick={handleStopPatcher}
+              loading={stopPatcher.isPending}
+              disabled={installMod.isPending || startPatcher.isPending}
+            >
+              {stopPatcher.isPending ? "Stopping..." : "Stop Patcher"}
+            </Button>
+          ) : (
+            <Button
+              variant={hasEnabledMods ? "filled" : "default"}
+              onClick={handleStartPatcher}
+              loading={startPatcher.isPending}
+              disabled={
+                isLoading ||
+                !hasEnabledMods ||
+                installMod.isPending ||
+                stopPatcher.isPending ||
+                startPatcher.isPending
+              }
+            >
+              {startPatcher.isPending
+                ? "Starting..."
+                : hasEnabledMods
+                  ? "Start Patcher"
+                  : "Start Patcher (enable a mod)"}
+            </Button>
+          )}
+        </div>
       </header>
 
       {/* Toolbar */}
