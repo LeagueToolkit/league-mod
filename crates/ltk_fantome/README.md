@@ -12,17 +12,23 @@ The library creates ZIP files with this structure, following the [official Fanto
 
 ```
 my_mod_1.0.0.fantome
-├── WAD/
-│   ├── Aatrox.wad.client/
-│   │   ├── data/
-│   │   └── assets/
-│   └── Map11.wad.client/
-│       ├── data/
-│       └── assets/
-└── META/
-    ├── info.json          # Mod metadata
-    ├── README.md          # Project documentation (optional)
-    └── image.png          # Mod thumbnail (optional)
+├── META/
+│   ├── info.json          # Mod metadata
+│   ├── README.md          # Project documentation (optional)
+│   └── image.png          # Mod thumbnail (optional)
+│                                                                    
+├── WAD/                                                                                      
+│    ├── Aatrox.wad.client/                                                                                     
+│    │   ├── data/                                                                                     
+│    │   └── assets/
+│ 	 └── Map11.wad.client/
+│	     ├── data/
+│	     └── assets/       
+│																									 
+└── WAD_pink/                                                                                                                    
+	 └── Aatrox.wad.client/                                                                                                 
+		 ├── data/                                                                                                          
+		 └── assets/
 ```
 
 ## Usage
@@ -58,13 +64,22 @@ The `info.json` file contains metadata in the format expected by Fantome:
   "Author": "Author Name",
   "Version": "1.0.0",
   "Description": "Mod description"
+  "Layers":{
+	"pink": {
+		"Name": "Pink Chroma"
+		"Priority": 0
+		"isActive": false
+		"group": 1
+	}
+  }
+  "StringOverrides":{
+	"field": "new string"
+	}
 }
 ```
 
 ## Limitations
 
-- **Base layer only**: Only content from the `content/base/` directory is included
-- **No layer support**: Additional layers defined in the project are ignored
 - **Fixed structure**: Must follow the exact WAD folder structure expected by League of Legends
 
 ## Integration with League Mod Toolkit
