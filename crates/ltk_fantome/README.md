@@ -13,11 +13,11 @@ The library creates ZIP files with this structure, following the [official Fanto
 ```
 my_mod_1.0.0.fantome
 ├── META/
-│   ├── info.json          # Mod metadata
-│   ├── README.md          # Project documentation (optional)
-│   └── image.png          # Mod thumbnail (optional)
+│   ├── info.json            # Mod metadata
+│   ├── README.md            # Project documentation (optional)
+│   └── image.png            # Mod thumbnail (optional)
 │                                                                    
-├── WAD/                                                                                      
+├── WAD/                     # Base Layer (required)                                                            
 │    ├── Aatrox.wad.client/                                                                                     
 │    │   ├── data/                                                                                     
 │    │   └── assets/
@@ -25,7 +25,7 @@ my_mod_1.0.0.fantome
 │	     ├── data/
 │	     └── assets/       
 │																									 
-└── WAD_pink/                                                                                                                    
+└── WAD_pink/                # Pink Chroma Layer                                                                                                    
 	 └── Aatrox.wad.client/                                                                                                 
 		 ├── data/                                                                                                          
 		 └── assets/
@@ -63,18 +63,34 @@ The `info.json` file contains metadata in the format expected by Fantome:
   "Name": "Display Name",
   "Author": "Author Name",
   "Version": "1.0.0",
-  "Description": "Mod description"
-  "Layers":{
-	"pink": {
-		"Name": "Pink Chroma"
-		"Priority": 0
-		"isActive": false
-		"group": 1
+  "Description": "Mod description",
+  "Layers": {                        
+	"base": {                     # "WAD" folder (required)
+	  "Name": "base",
+	  "Priority": 0,
+      "StringOverrides": {        # Unimplemented yet
+ 	    "field1": "New String",   # Unimplemented yet
+ 	    "field2": "New String"    # Unimplemented yet
+      } 
+	}
+	"Pink": {
+	  "Name": "Pink Chroma",
+	  "Priority"
+      "StringOverrides": {        # Unimplemented yet
+ 	    "field3": "New String"    # Unimplemented yet
+      } 
 	}
   }
-  "StringOverrides":{
-	"field": "new string"
+  "Groups": {                        
+	"base": {
+	  "Kind": "Inclusive",
+	  "Members": []
 	}
+	"Group": {
+	  "Kind": "Inclusive",
+	  "Members": ["Layer"]
+	}
+  }
 }
 ```
 
