@@ -6,31 +6,6 @@ A Rust library for creating League of Legends mods in the legacy Fantome format.
 
 The `fantome` crate provides functionality to pack mod projects into the legacy `.fantome` format (renamed ZIP files) that are compatible with any current (future legacy) mod managers. This format was widely used in the League of Legends modding community before the introduction of the newer `.modpkg` format.
 
-## Fantome Format Structure
-
-The library creates ZIP files with this structure, following the [official Fantome specification](https://github.com/LeagueToolkit/Fantome/wiki/Mod-File-Format):
-
-```
-my_mod_1.0.0.fantome
-├── META/
-│   ├── info.json            # Mod metadata
-│   ├── README.md            # Project documentation (optional)
-│   └── image.png            # Mod thumbnail (optional)
-│                                                                    
-├── WAD/                     # Base Layer (required)                                                            
-│    ├── Aatrox.wad.client/                                                                                     
-│    │   ├── data/                                                                                     
-│    │   └── assets/
-│ 	 └── Map11.wad.client/
-│	     ├── data/
-│	     └── assets/       
-│																									 
-└── WAD_pink/                # Pink Chroma Layer                                                                                                    
-	 └── Aatrox.wad.client/                                                                                                 
-		 ├── data/                                                                                                          
-		 └── assets/
-```
-
 ## Usage
 
 ### Basic Example
@@ -54,49 +29,6 @@ let writer = BufWriter::new(file);
 pack_to_fantome(writer, &mod_project, project_root)?;
 ```
 
-### Metadata Structure
-
-The `info.json` file contains metadata in the format expected by Fantome:
-
-```json
-{
-  "Name": "Display Name",
-  "Author": "Author Name",
-  "Version": "1.0.0",
-  "Description": "Mod description",
-  "Layers": {                        
-	"base": {                     # "WAD" folder (required)
-	  "Name": "base",
-	  "Priority": 0,
-      "StringOverrides": {        # Unimplemented yet
- 	    "field1": "New String",   # Unimplemented yet
- 	    "field2": "New String"    # Unimplemented yet
-      } 
-	}
-	"Pink": {
-	  "Name": "Pink Chroma",
-	  "Priority"
-      "StringOverrides": {        # Unimplemented yet
- 	    "field3": "New String"    # Unimplemented yet
-      } 
-	}
-  }
-  "Groups": {                        
-	"base": {
-	  "Kind": "Inclusive",
-	  "Members": []
-	}
-	"Group": {
-	  "Kind": "Inclusive",
-	  "Members": ["Layer"]
-	}
-  }
-}
-```
-
-## Limitations
-
-- **Fixed structure**: Must follow the exact WAD folder structure expected by League of Legends
 
 ## Integration with League Mod Toolkit
 
