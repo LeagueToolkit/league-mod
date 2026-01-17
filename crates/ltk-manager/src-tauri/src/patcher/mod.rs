@@ -1,5 +1,3 @@
-pub mod api;
-
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
