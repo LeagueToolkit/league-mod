@@ -6,25 +6,6 @@ A Rust library for creating League of Legends mods in the legacy Fantome format.
 
 The `fantome` crate provides functionality to pack mod projects into the legacy `.fantome` format (renamed ZIP files) that are compatible with any current (future legacy) mod managers. This format was widely used in the League of Legends modding community before the introduction of the newer `.modpkg` format.
 
-## Fantome Format Structure
-
-The library creates ZIP files with this structure, following the [official Fantome specification](https://github.com/LeagueToolkit/Fantome/wiki/Mod-File-Format):
-
-```
-my_mod_1.0.0.fantome
-├── WAD/
-│   ├── Aatrox.wad.client/
-│   │   ├── data/
-│   │   └── assets/
-│   └── Map11.wad.client/
-│       ├── data/
-│       └── assets/
-└── META/
-    ├── info.json          # Mod metadata
-    ├── README.md          # Project documentation (optional)
-    └── image.png          # Mod thumbnail (optional)
-```
-
 ## Usage
 
 ### Basic Example
@@ -48,24 +29,6 @@ let writer = BufWriter::new(file);
 pack_to_fantome(writer, &mod_project, project_root)?;
 ```
 
-### Metadata Structure
-
-The `info.json` file contains metadata in the format expected by Fantome:
-
-```json
-{
-  "Name": "Display Name",
-  "Author": "Author Name",
-  "Version": "1.0.0",
-  "Description": "Mod description"
-}
-```
-
-## Limitations
-
-- **Base layer only**: Only content from the `content/base/` directory is included
-- **No layer support**: Additional layers defined in the project are ignored
-- **Fixed structure**: Must follow the exact WAD folder structure expected by League of Legends
 
 ## Integration with League Mod Toolkit
 
