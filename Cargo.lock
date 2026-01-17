@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_fantome"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "camino",
  "eyre",
