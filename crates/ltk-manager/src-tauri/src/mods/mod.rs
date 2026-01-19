@@ -92,12 +92,17 @@ pub struct LayerInfo {
     pub file_count: u64,
 }
 
-pub fn get_installed_mods(app_handle: &AppHandle, settings: &Settings) -> AppResult<Vec<InstalledMod>> {
+pub fn get_installed_mods(
+    app_handle: &AppHandle,
+    settings: &Settings,
+) -> AppResult<Vec<InstalledMod>> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
     // Deterministic ordering: by installed_at then id.
-    index.mods.sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
+    index
+        .mods
+        .sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
 
     let mut result = Vec::new();
     for entry in &index.mods {
@@ -112,7 +117,11 @@ pub fn get_installed_mods(app_handle: &AppHandle, settings: &Settings) -> AppRes
     Ok(result)
 }
 
-pub fn install_mod_from_package(app_handle: &AppHandle, settings: &Settings, file_path: &str) -> AppResult<InstalledMod> {
+pub fn install_mod_from_package(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    file_path: &str,
+) -> AppResult<InstalledMod> {
     let file_path = PathBuf::from(file_path);
     if !file_path.exists() {
         return Err(AppError::InvalidPath(file_path.display().to_string()));
@@ -161,7 +170,12 @@ pub fn install_mod_from_package(app_handle: &AppHandle, settings: &Settings, fil
     })
 }
 
-pub fn toggle_mod_enabled(app_handle: &AppHandle, settings: &Settings, mod_id: &str, enabled: bool) -> AppResult<()> {
+pub fn toggle_mod_enabled(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    mod_id: &str,
+    enabled: bool,
+) -> AppResult<()> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
@@ -173,7 +187,11 @@ pub fn toggle_mod_enabled(app_handle: &AppHandle, settings: &Settings, mod_id: &
     Ok(())
 }
 
-pub fn uninstall_mod_by_id(app_handle: &AppHandle, settings: &Settings, mod_id: &str) -> AppResult<()> {
+pub fn uninstall_mod_by_id(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    mod_id: &str,
+) -> AppResult<()> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
@@ -192,28 +210,43 @@ pub fn uninstall_mod_by_id(app_handle: &AppHandle, settings: &Settings, mod_id: 
 pub fn inspect_modpkg_file(file_path: &str) -> AppResult<ModpkgInfo> {
     let file_path = Path::new(file_path);
     let file = std::fs::File::open(file_path)?;
-    let mut modpkg = Modpkg::mount_from_reader(file).map_err(|e| AppError::Modpkg(e.to_string()))?;
+    let mut modpkg =
+        Modpkg::mount_from_reader(file).map_err(|e| AppError::Modpkg(e.to_string()))?;
 
-    let metadata = modpkg.load_metadata().map_err(|e| AppError::Modpkg(e.to_string()))?;
+    let metadata = modpkg
+        .load_metadata()
+        .map_err(|e| AppError::Modpkg(e.to_string()))?;
 
-    let authors = metadata.authors.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    let authors = metadata
+        .authors
+        .iter()
+        .map(|a| a.name.clone())
+        .collect::<Vec<_>>();
     let mut file_count: u64 = 0;
     let mut total_size: u64 = 0;
 
     // Count content chunks (exclude meta folder paths for file_count/size)
     for ((path_hash, _layer_hash), chunk) in &modpkg.chunks {
-        let path = modpkg.chunk_paths.get(path_hash).map(String::as_str).unwrap_or("");
+        let path = modpkg
+            .chunk_paths
+            .get(path_hash)
+            .map(String::as_str)
+            .unwrap_or("");
         if path.starts_with("_meta_/") {
             continue;
         }
         file_count += 1;
-        total_size += chunk.uncompressed_size as u64;
+        total_size += chunk.uncompressed_size;
     }
 
     // Layer counts: derive from header layer list.
     let mut layer_counts: BTreeMap<String, u64> = BTreeMap::new();
-    for ((path_hash, layer_hash), _chunk) in &modpkg.chunks {
-        let path = modpkg.chunk_paths.get(path_hash).map(String::as_str).unwrap_or("");
+    for (path_hash, layer_hash) in modpkg.chunks.keys() {
+        let path = modpkg
+            .chunk_paths
+            .get(path_hash)
+            .map(String::as_str)
+            .unwrap_or("");
         if path.starts_with("_meta_/") {
             continue;
         }
@@ -223,7 +256,7 @@ pub fn inspect_modpkg_file(file_path: &str) -> AppResult<ModpkgInfo> {
     }
 
     let mut layers = Vec::new();
-    for (_hash, layer) in &modpkg.layers {
+    for layer in modpkg.layers.values() {
         let count = layer_counts.get(&layer.name).copied().unwrap_or(0);
         let desc = metadata
             .layers
@@ -251,7 +284,10 @@ pub fn inspect_modpkg_file(file_path: &str) -> AppResult<ModpkgInfo> {
     })
 }
 
-fn resolve_storage_dirs(app_handle: &AppHandle, settings: &Settings) -> AppResult<(PathBuf, PathBuf)> {
+fn resolve_storage_dirs(
+    app_handle: &AppHandle,
+    settings: &Settings,
+) -> AppResult<(PathBuf, PathBuf)> {
     let storage_dir = settings
         .mod_storage_path
         .clone()
@@ -292,7 +328,9 @@ pub(crate) fn get_enabled_mods_for_overlay(
     let mut index = load_library_index(&storage_dir)?;
 
     // Deterministic ordering: by installed_at then id.
-    index.mods.sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
+    index
+        .mods
+        .sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
 
     Ok(index
         .mods
@@ -363,7 +401,8 @@ fn install_fantome_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
 
 fn install_modpkg_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
     let file = std::fs::File::open(file_path)?;
-    let mut modpkg = Modpkg::mount_from_reader(file).map_err(|e| AppError::Modpkg(e.to_string()))?;
+    let mut modpkg =
+        Modpkg::mount_from_reader(file).map_err(|e| AppError::Modpkg(e.to_string()))?;
 
     // Extract content into content/<layer>/...
     let content_dir = mod_dir.join("content");
@@ -374,7 +413,9 @@ fn install_modpkg_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
         .map_err(|e| AppError::Modpkg(e.to_string()))?;
 
     // Build a mod project config from metadata/header layers.
-    let metadata = modpkg.load_metadata().map_err(|e| AppError::Modpkg(e.to_string()))?;
+    let metadata = modpkg
+        .load_metadata()
+        .map_err(|e| AppError::Modpkg(e.to_string()))?;
 
     // Use header layers as source of truth (they always exist for modpkg content).
     let mut layers: Vec<ModProjectLayer> = modpkg
@@ -426,5 +467,3 @@ fn install_modpkg_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
 
     Ok(())
 }
-
-

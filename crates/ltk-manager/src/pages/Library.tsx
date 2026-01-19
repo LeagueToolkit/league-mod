@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useState } from "react";
 import { LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
@@ -11,11 +12,24 @@ import {
   useToggleMod,
   useUninstallMod,
 } from "@/modules/library/api";
-import { usePatcherStatus, useStartPatcher, useStopPatcher } from "@/modules/patcher";
+import {
+  useOverlayProgress,
+  usePatcherStatus,
+  useStartPatcher,
+  useStopPatcher,
+} from "@/modules/patcher";
+
+const VALID_EXTENSIONS = [".modpkg", ".fantome"];
+
+function isValidModFile(path: string): boolean {
+  const lowerPath = path.toLowerCase();
+  return VALID_EXTENSIONS.some((ext) => lowerPath.endsWith(ext));
+}
 
 export function Library() {
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const { data: mods = [], isLoading, error } = useInstalledMods();
   const installMod = useInstallMod();
@@ -24,9 +38,40 @@ export function Library() {
   const { data: patcherStatus } = usePatcherStatus();
   const startPatcher = useStartPatcher();
   const stopPatcher = useStopPatcher();
+  const overlayProgress = useOverlayProgress();
 
   const enabledModsCount = mods.filter((m) => m.enabled).length;
   const hasEnabledMods = enabledModsCount > 0;
+
+  // Handle drag and drop
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+    const unlisten = currentWindow.onDragDropEvent((event) => {
+      const eventType = event.payload.type;
+      if (eventType === "enter" || eventType === "over") {
+        setIsDragOver(true);
+      } else if (eventType === "drop") {
+        setIsDragOver(false);
+        const paths = event.payload.paths as string[];
+        const validPaths = paths.filter(isValidModFile);
+
+        // Install each valid mod file
+        for (const path of validPaths) {
+          installMod.mutate(path, {
+            onError: (error) => {
+              console.error("Failed to install mod:", error.message);
+            },
+          });
+        }
+      } else if (eventType === "leave" || eventType === "cancel") {
+        setIsDragOver(false);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [installMod]);
 
   async function handleInstallMod() {
     const file = await open({
@@ -91,7 +136,20 @@ export function Library() {
   );
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      {/* Drag overlay */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-night-500/90 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-brand-500 bg-night-400/50 p-12">
+            <LuUpload className="h-16 w-16 text-brand-500" />
+            <div className="text-center">
+              <p className="text-lg font-medium text-surface-100">Drop to install</p>
+              <p className="text-sm text-surface-400">.modpkg or .fantome files</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="flex h-16 items-center justify-between border-b border-surface-600 px-6">
         <h2 className="text-xl font-semibold text-surface-100">Mod Library</h2>
@@ -118,7 +176,7 @@ export function Library() {
             <Button
               variant={hasEnabledMods ? "filled" : "default"}
               onClick={handleStartPatcher}
-              loading={startPatcher.isPending}
+              loading={startPatcher.isPending && !overlayProgress}
               disabled={
                 isLoading ||
                 !hasEnabledMods ||
@@ -127,11 +185,17 @@ export function Library() {
                 startPatcher.isPending
               }
             >
-              {startPatcher.isPending
-                ? "Starting..."
-                : hasEnabledMods
-                  ? "Start Patcher"
-                  : "Start Patcher (enable a mod)"}
+              {overlayProgress
+                ? overlayProgress.stage === "indexing"
+                  ? "Indexing mods..."
+                  : overlayProgress.stage === "patching"
+                    ? `Patching ${overlayProgress.currentFile ?? "..."} (${overlayProgress.current}/${overlayProgress.total})`
+                    : "Starting..."
+                : startPatcher.isPending
+                  ? "Starting..."
+                  : hasEnabledMods
+                    ? "Start Patcher"
+                    : "Start Patcher (enable a mod)"}
             </Button>
           )}
         </div>

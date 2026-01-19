@@ -64,7 +64,18 @@ impl PatcherApi {
     pub fn load(dll_path: &Path) -> Result<Self, PatcherError> {
         let lib = unsafe { Library::new(dll_path)? };
 
+        // Helper to get required symbols with proper error context.
+        macro_rules! get_symbol {
+            ($lib:expr, $name:literal) => {
+                *$lib.get($name).map_err(|e| PatcherError::MissingSymbol {
+                    symbol: std::str::from_utf8($name).unwrap_or("<invalid>"),
+                    source: e,
+                })?
+            };
+        }
+
         unsafe {
+            // Optional symbols - these may not be present in all versions.
             let cslol_set_log_file = lib
                 .get::<unsafe extern "C" fn(*const u16) -> *const u8>(b"cslol_set_log_file")
                 .ok()
@@ -79,44 +90,14 @@ impl PatcherApi {
                 .map(|s| *s);
 
             Ok(Self {
-                cslol_init: *lib
-                    .get(b"cslol_init")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_init",
-                        source: e,
-                    })?,
-                cslol_set_config: *lib
-                    .get(b"cslol_set_config")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_set_config",
-                        source: e,
-                    })?,
-                cslol_set_flags: *lib
-                    .get(b"cslol_set_flags")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_set_flags",
-                        source: e,
-                    })?,
-                cslol_set_log_level: *lib
-                    .get(b"cslol_set_log_level")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_set_log_level",
-                        source: e,
-                    })?,
+                cslol_init: get_symbol!(lib, b"cslol_init"),
+                cslol_set_config: get_symbol!(lib, b"cslol_set_config"),
+                cslol_set_flags: get_symbol!(lib, b"cslol_set_flags"),
+                cslol_set_log_level: get_symbol!(lib, b"cslol_set_log_level"),
                 cslol_set_log_file,
-                cslol_find: *lib
-                    .get(b"cslol_find")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_find",
-                        source: e,
-                    })?,
+                cslol_find: get_symbol!(lib, b"cslol_find"),
                 cslol_sleep,
-                cslol_hook: *lib
-                    .get(b"cslol_hook")
-                    .map_err(|e| PatcherError::MissingSymbol {
-                        symbol: "cslol_hook",
-                        source: e,
-                    })?,
+                cslol_hook: get_symbol!(lib, b"cslol_hook"),
                 cslol_log_pull,
                 library: lib,
             })
@@ -193,11 +174,7 @@ impl PatcherApi {
     }
 
     pub fn log_pull(&self) -> Option<String> {
-        let Some(pull) = self.cslol_log_pull else {
-            return None;
-        };
+        let pull = self.cslol_log_pull?;
         unsafe { cstr_to_str(pull()) }
     }
 }
-
-

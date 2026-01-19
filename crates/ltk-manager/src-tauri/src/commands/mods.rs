@@ -1,4 +1,4 @@
-use crate::error::{AppError, AppResult, IpcResult};
+use crate::error::{AppResult, IpcResult, MutexResultExt};
 use crate::mods::{
     inspect_modpkg_file, install_mod_from_package, toggle_mod_enabled, uninstall_mod_by_id,
     InstalledMod, ModpkgInfo,
@@ -8,16 +8,18 @@ use tauri::{AppHandle, State};
 
 /// Get all installed mods from the mod library.
 #[tauri::command]
-pub fn get_installed_mods(app_handle: AppHandle, settings: State<SettingsState>) -> IpcResult<Vec<InstalledMod>> {
+pub fn get_installed_mods(
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<Vec<InstalledMod>> {
     get_installed_mods_inner(&app_handle, &settings).into()
 }
 
-fn get_installed_mods_inner(app_handle: &AppHandle, settings: &State<SettingsState>) -> AppResult<Vec<InstalledMod>> {
-    let settings = settings
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?
-        .clone();
+fn get_installed_mods_inner(
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<Vec<InstalledMod>> {
+    let settings = settings.0.lock().mutex_err()?.clone();
 
     crate::mods::get_installed_mods(app_handle, &settings)
 }
@@ -37,26 +39,26 @@ fn install_mod_inner(
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
 ) -> AppResult<InstalledMod> {
-    let settings = settings
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?
-        .clone();
+    let settings = settings.0.lock().mutex_err()?.clone();
     install_mod_from_package(app_handle, &settings, &file_path)
 }
 
 /// Uninstall a mod by id.
 #[tauri::command]
-pub fn uninstall_mod(mod_id: String, app_handle: AppHandle, settings: State<SettingsState>) -> IpcResult<()> {
+pub fn uninstall_mod(
+    mod_id: String,
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<()> {
     uninstall_mod_inner(mod_id, &app_handle, &settings).into()
 }
 
-fn uninstall_mod_inner(mod_id: String, app_handle: &AppHandle, settings: &State<SettingsState>) -> AppResult<()> {
-    let settings = settings
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?
-        .clone();
+fn uninstall_mod_inner(
+    mod_id: String,
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<()> {
+    let settings = settings.0.lock().mutex_err()?.clone();
     uninstall_mod_by_id(app_handle, &settings, &mod_id)
 }
 
@@ -77,11 +79,7 @@ fn toggle_mod_inner(
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
 ) -> AppResult<()> {
-    let settings = settings
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?
-        .clone();
+    let settings = settings.0.lock().mutex_err()?.clone();
     toggle_mod_enabled(app_handle, &settings, &mod_id, enabled)
 }
 
@@ -90,5 +88,3 @@ fn toggle_mod_inner(
 pub fn inspect_modpkg(file_path: String) -> IpcResult<ModpkgInfo> {
     inspect_modpkg_file(&file_path).into()
 }
-
-

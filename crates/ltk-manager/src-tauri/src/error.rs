@@ -22,6 +22,8 @@ pub enum ErrorCode {
     ValidationFailed,
     /// Internal state error (e.g., mutex poisoned)
     InternalState,
+    /// Mutex lock failed (poisoned)
+    MutexLockFailed,
     /// Unknown/unclassified error
     Unknown,
 }
@@ -141,6 +143,9 @@ pub enum AppError {
     #[error("Internal state error: {0}")]
     InternalState(String),
 
+    #[error("Failed to acquire mutex lock")]
+    MutexLockFailed,
+
     #[error("{0}")]
     Other(String),
 }
@@ -176,6 +181,10 @@ impl From<AppError> for AppErrorResponse {
 
             AppError::InternalState(msg) => AppErrorResponse::new(ErrorCode::InternalState, msg),
 
+            AppError::MutexLockFailed => {
+                AppErrorResponse::new(ErrorCode::MutexLockFailed, "Failed to acquire mutex lock")
+            }
+
             AppError::Other(msg) => AppErrorResponse::new(ErrorCode::Unknown, msg),
         }
     }
@@ -183,3 +192,14 @@ impl From<AppError> for AppErrorResponse {
 
 /// Convenience type alias for internal Result usage
 pub type AppResult<T> = Result<T, AppError>;
+
+/// Extension trait for converting `Result<T, PoisonError>` to `AppResult<T>`.
+pub trait MutexResultExt<T> {
+    fn mutex_err(self) -> AppResult<T>;
+}
+
+impl<T, E> MutexResultExt<T> for Result<T, std::sync::PoisonError<E>> {
+    fn mutex_err(self) -> AppResult<T> {
+        self.map_err(|_| AppError::MutexLockFailed)
+    }
+}

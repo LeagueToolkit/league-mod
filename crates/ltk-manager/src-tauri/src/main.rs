@@ -129,19 +129,29 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
     let (file_guard, file_layer, log_path) = match default_log_dir() {
         Some(log_dir) => {
             if let Err(e) = std::fs::create_dir_all(&log_dir) {
-                eprintln!("Failed to create log directory {}: {}", log_dir.display(), e);
+                eprintln!(
+                    "Failed to create log directory {}: {}",
+                    log_dir.display(),
+                    e
+                );
                 (None, None, None)
             } else {
                 let file_appender = tracing_appender::rolling::never(&log_dir, "ltk-manager.log");
-            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-            let layer = tracing_subscriber::fmt::layer().with_writer(non_blocking);
-                (Some(guard), Some(layer), Some(log_dir.join("ltk-manager.log")))
+                let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+                let layer = tracing_subscriber::fmt::layer().with_writer(non_blocking);
+                (
+                    Some(guard),
+                    Some(layer),
+                    Some(log_dir.join("ltk-manager.log")),
+                )
             }
         }
         None => (None, None, None),
     };
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(stdout_layer);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer);
     if let Some(layer) = file_layer {
         registry.with(layer).init();
     } else {
@@ -156,7 +166,11 @@ fn default_log_dir() -> Option<std::path::PathBuf> {
     const IDENTIFIER: &str = "dev.leaguetoolkit.manager";
 
     if let Ok(appdata) = std::env::var("APPDATA") {
-        return Some(std::path::PathBuf::from(appdata).join(IDENTIFIER).join("logs"));
+        return Some(
+            std::path::PathBuf::from(appdata)
+                .join(IDENTIFIER)
+                .join("logs"),
+        );
     }
 
     // Best-effort fallback for non-Windows environments.

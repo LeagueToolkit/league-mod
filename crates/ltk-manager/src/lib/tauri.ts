@@ -71,6 +71,13 @@ export interface PatcherStatus {
   configPath: string | null;
 }
 
+export interface OverlayProgress {
+  stage: "indexing" | "patching" | "complete";
+  currentFile: string | null;
+  current: number;
+  total: number;
+}
+
 /**
  * Raw IPC result from Tauri commands.
  * This matches the Rust IpcResult<T> serialization format.

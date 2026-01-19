@@ -7,8 +7,18 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use xxhash_rust::xxh3::xxh3_64;
+
+/// Progress event emitted during overlay building.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayProgress {
+    pub stage: String,
+    pub current_file: Option<String>,
+    pub current: u32,
+    pub total: u32,
+}
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
@@ -40,7 +50,10 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
     tracing::info!("Overlay: overlay_root={}", overlay_root.display());
 
     let enabled_mods = get_enabled_mods_for_overlay(app_handle, settings)?;
-    let enabled_ids = enabled_mods.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+    let enabled_ids = enabled_mods
+        .iter()
+        .map(|m| m.id.clone())
+        .collect::<Vec<_>>();
     tracing::info!(
         "Overlay: enabled_mods={} ids=[{}]",
         enabled_ids.len(),
@@ -55,7 +68,9 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
                     // Only reuse if there are actually overlay outputs present and they look valid.
                     match overlay_outputs_valid(&overlay_root) {
                         Ok(true) => {
-                            tracing::info!("Overlay: reusing existing overlay (enabled mods unchanged)");
+                            tracing::info!(
+                                "Overlay: reusing existing overlay (enabled mods unchanged)"
+                            );
                             should_rebuild = false;
                         }
                         Ok(false) => {
@@ -85,6 +100,17 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
     }
 
     tracing::info!("Overlay: rebuilding overlay...");
+
+    // Emit start event
+    let _ = app_handle.emit(
+        "overlay-progress",
+        OverlayProgress {
+            stage: "indexing".to_string(),
+            current_file: None,
+            current: 0,
+            total: 0,
+        },
+    );
 
     // Clean overlay and rebuild.
     if overlay_root.exists() {
@@ -159,7 +185,12 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
                 let original_wad_path = resolve_original_wad_path(&wad_index, wad_name)?;
                 let relative_game_path = original_wad_path
                     .strip_prefix(&game_dir)
-                    .map_err(|_| AppError::Other(format!("WAD path is not under Game/: {}", original_wad_path.display())))?
+                    .map_err(|_| {
+                        AppError::Other(format!(
+                            "WAD path is not under Game/: {}",
+                            original_wad_path.display()
+                        ))
+                    })?
                     .to_path_buf();
 
                 tracing::info!(
@@ -181,7 +212,9 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
                         after
                     );
                 } else if wad_path.is_file() {
-                    if let Some(prev) = wad_replacements.insert(relative_game_path.clone(), wad_path.clone()) {
+                    if let Some(prev) =
+                        wad_replacements.insert(relative_game_path.clone(), wad_path.clone())
+                    {
                         tracing::warn!(
                             "Overlay: wad='{}' replacement overridden by later mod/layer: prev={} new={}",
                             wad_name,
@@ -239,7 +272,24 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
     );
 
     // Build patched WADs for all affected game WADs.
-    for (relative_game_path, overrides) in wad_overrides {
+    let total_wads = wad_overrides.len() as u32;
+    for (idx, (relative_game_path, overrides)) in wad_overrides.into_iter().enumerate() {
+        let current_wad = (idx + 1) as u32;
+        let wad_name = relative_game_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+
+        // Emit progress event
+        let _ = app_handle.emit(
+            "overlay-progress",
+            OverlayProgress {
+                stage: "patching".to_string(),
+                current_file: Some(wad_name.to_string()),
+                current: current_wad,
+                total: total_wads,
+            },
+        );
         if wad_replacements.contains_key(&relative_game_path) {
             tracing::info!(
                 "Overlay: skipping patch build for {} (covered by full replacement)",
@@ -270,6 +320,17 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
         &overlay_state_path,
         serde_json::to_string_pretty(&state).map_err(AppError::from)?,
     )?;
+
+    // Emit completion event
+    let _ = app_handle.emit(
+        "overlay-progress",
+        OverlayProgress {
+            stage: "complete".to_string(),
+            current_file: None,
+            current: total_wads,
+            total: total_wads,
+        },
+    );
 
     Ok(overlay_root)
 }
@@ -307,7 +368,11 @@ fn overlay_outputs_valid(overlay_root: &Path) -> AppResult<bool> {
     for wad_path in wad_files {
         let file = fs::File::open(&wad_path)?;
         Wad::mount(file).map_err(|e| {
-            AppError::Other(format!("Overlay WAD is not mountable '{}': {}", wad_path.display(), e))
+            AppError::Other(format!(
+                "Overlay WAD is not mountable '{}': {}",
+                wad_path.display(),
+                e
+            ))
         })?;
     }
 
@@ -379,7 +444,7 @@ fn build_game_hash_index(
     let mut hash_to_wads: HashMap<u64, Vec<PathBuf>> = HashMap::new();
     let mut wad_count = 0;
     let mut chunk_count = 0;
-    
+
     let mut stack = vec![data_final_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir)? {
@@ -395,13 +460,13 @@ fn build_game_hash_index(
             if !name.to_ascii_lowercase().ends_with(".wad.client") {
                 continue;
             }
-            
+
             // Get relative path from game_dir
             let relative_path = match path.strip_prefix(game_dir) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => continue,
             };
-            
+
             // Mount WAD and index all chunk hashes
             let file = match fs::File::open(&path) {
                 Ok(f) => f,
@@ -417,7 +482,7 @@ fn build_game_hash_index(
                     continue;
                 }
             };
-            
+
             wad_count += 1;
             for path_hash in wad.chunks().keys() {
                 hash_to_wads
@@ -428,14 +493,14 @@ fn build_game_hash_index(
             }
         }
     }
-    
+
     tracing::info!(
         "Overlay: built game hash index - {} WADs, {} total chunk entries, {} unique hashes",
         wad_count,
         chunk_count,
         hash_to_wads.len()
     );
-    
+
     Ok(hash_to_wads)
 }
 
@@ -485,7 +550,10 @@ fn ingest_wad_dir_overrides(wad_dir: &Path, out: &mut HashMap<u64, Vec<u8>>) -> 
 
 fn resolve_chunk_hash(rel_path: &Path, bytes: &[u8]) -> AppResult<u64> {
     let file_name = rel_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    let file_stem = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let file_stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
 
     // If this is a hex-hash filename (as emitted by HexPathResolver), use it directly.
     if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -540,10 +608,20 @@ fn load_mod_project(mod_dir: &Path) -> AppResult<ltk_mod_project::ModProject> {
     serde_json::from_str(&contents).map_err(AppError::from)
 }
 
-fn build_patched_wad(src_wad_path: &Path, dst_wad_path: &Path, overrides: &HashMap<u64, Vec<u8>>) -> AppResult<()> {
+fn build_patched_wad(
+    src_wad_path: &Path,
+    dst_wad_path: &Path,
+    overrides: &HashMap<u64, Vec<u8>>,
+) -> AppResult<()> {
     let start = std::time::Instant::now();
     let file = fs::File::open(src_wad_path)?;
-    let mut wad = Wad::mount(file).map_err(|e| AppError::Other(format!("Failed to mount WAD '{}': {}", src_wad_path.display(), e)))?;
+    let mut wad = Wad::mount(file).map_err(|e| {
+        AppError::Other(format!(
+            "Failed to mount WAD '{}': {}",
+            src_wad_path.display(),
+            e
+        ))
+    })?;
     let (mut decoder, chunks) = wad.decode();
 
     // Only write chunks that already exist in the base WAD.
@@ -604,7 +682,14 @@ fn build_patched_wad(src_wad_path: &Path, dst_wad_path: &Path, overrides: &HashM
                 match orig.compression_type {
                     WadChunkCompression::None => {
                         let checksum = xxh3_64(bytes);
-                        (bytes.clone(), bytes.len(), WadChunkCompression::None, 0, 0, checksum)
+                        (
+                            bytes.clone(),
+                            bytes.len(),
+                            WadChunkCompression::None,
+                            0,
+                            0,
+                            checksum,
+                        )
                     }
                     WadChunkCompression::Zstd => {
                         let compressed = compress_zstd(bytes)?;
@@ -682,7 +767,10 @@ fn build_patched_wad(src_wad_path: &Path, dst_wad_path: &Path, overrides: &HashM
                 let raw = decoder
                     .load_chunk_raw(&orig)
                     .map_err(|e| {
-                        AppError::Other(format!("Failed to read raw chunk {:016x}: {}", path_hash, e))
+                        AppError::Other(format!(
+                            "Failed to read raw chunk {:016x}: {}",
+                            path_hash, e
+                        ))
                     })?
                     .into_vec();
                 // Raw bytes already match the stored checksum in the TOC.
@@ -733,8 +821,7 @@ fn build_patched_wad(src_wad_path: &Path, dst_wad_path: &Path, overrides: &HashM
 }
 
 fn find_zstd_magic_offset(raw: &[u8]) -> Option<usize> {
-    raw.windows(ZSTD_MAGIC.len())
-        .position(|w| w == ZSTD_MAGIC)
+    raw.windows(ZSTD_MAGIC.len()).position(|w| w == ZSTD_MAGIC)
 }
 
 fn compress_zstd(data: &[u8]) -> AppResult<Vec<u8>> {
@@ -745,5 +832,3 @@ fn compress_zstd(data: &[u8]) -> AppResult<Vec<u8>> {
     encoder.finish().map_err(AppError::from)?;
     Ok(out)
 }
-
-

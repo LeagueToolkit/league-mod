@@ -1,4 +1,4 @@
-use crate::error::{AppError, AppResult, IpcResult};
+use crate::error::{AppResult, IpcResult, MutexResultExt};
 use crate::state::{save_settings_to_disk, Settings, SettingsState};
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
@@ -10,10 +10,7 @@ pub fn get_settings(state: State<SettingsState>) -> IpcResult<Settings> {
 }
 
 fn get_settings_inner(state: &State<SettingsState>) -> AppResult<Settings> {
-    let settings = state
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?;
+    let settings = state.0.lock().mutex_err()?;
     Ok(settings.clone())
 }
 
@@ -34,10 +31,7 @@ fn save_settings_inner(
 ) -> AppResult<()> {
     save_settings_to_disk(app_handle, &settings)?;
 
-    let mut current = state
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?;
+    let mut current = state.0.lock().mutex_err()?;
     *current = settings;
 
     Ok(())
@@ -74,10 +68,7 @@ pub fn check_setup_required(state: State<SettingsState>) -> IpcResult<bool> {
 }
 
 fn check_setup_required_inner(state: &State<SettingsState>) -> AppResult<bool> {
-    let settings = state
-        .0
-        .lock()
-        .map_err(|e| AppError::InternalState(e.to_string()))?;
+    let settings = state.0.lock().mutex_err()?;
 
     Ok(settings.league_path.is_none())
 }
