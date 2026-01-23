@@ -70,16 +70,47 @@ impl<R: Read + Seek> FantomeExtractor<R> {
 
     /// Read the metadata from the Fantome package.
     pub fn read_metadata(&mut self) -> Result<FantomeInfo, FantomeExtractError> {
-        let mut info_file = self
-            .archive
-            .by_name("META/info.json")
-            .map_err(|_| FantomeExtractError::MissingMetadata)?;
+        // Try common variations of the metadata path (case-insensitive search)
+        let metadata_paths = ["META/info.json", "meta/info.json", "Meta/info.json"];
 
         let mut info_content = String::new();
-        info_file.read_to_string(&mut info_content)?;
-        drop(info_file);
+        let mut found = false;
 
-        let info: FantomeInfo = serde_json::from_str(&info_content)?;
+        for path in &metadata_paths {
+            if let Ok(mut info_file) = self.archive.by_name(path) {
+                info_file.read_to_string(&mut info_content)?;
+                found = true;
+                break;
+            }
+        }
+
+        // If not found by exact path, search case-insensitively
+        if !found {
+            for i in 0..self.archive.len() {
+                let file = self.archive.by_index(i)?;
+                let name = file.name().to_lowercase();
+                if name == "meta/info.json" {
+                    drop(file);
+                    let mut info_file = self.archive.by_index(i)?;
+                    info_file.read_to_string(&mut info_content)?;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            return Err(FantomeExtractError::MissingMetadata);
+        }
+
+        // Strip UTF-8 BOM if present
+        let info_content = info_content.trim_start_matches('\u{feff}').trim();
+
+        if info_content.is_empty() {
+            return Err(FantomeExtractError::MissingMetadata);
+        }
+
+        let info: FantomeInfo = serde_json::from_str(info_content)?;
         Ok(info)
     }
 

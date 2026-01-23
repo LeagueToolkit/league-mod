@@ -60,6 +60,24 @@ export interface LayerInfo {
   fileCount: number;
 }
 
+export interface PatcherConfig {
+  logFile?: string | null;
+  timeoutMs?: number | null;
+  flags?: number | null;
+}
+
+export interface PatcherStatus {
+  running: boolean;
+  configPath: string | null;
+}
+
+export interface OverlayProgress {
+  stage: "indexing" | "patching" | "complete";
+  currentFile: string | null;
+  current: number;
+  total: number;
+}
+
 /**
  * Raw IPC result from Tauri commands.
  * This matches the Rust IpcResult<T> serialization format.
@@ -104,4 +122,9 @@ export const api = {
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),
+
+  // Patcher
+  startPatcher: (config: PatcherConfig) => invokeResult<void>("start_patcher", { config }),
+  stopPatcher: () => invokeResult<void>("stop_patcher"),
+  getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
 };
