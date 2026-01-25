@@ -150,9 +150,14 @@ impl<R: Read + Seek> FantomeExtractor<R> {
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
+            let file_name_lower = file_name.to_lowercase();
 
-            if file_name.starts_with("WAD/") {
-                let relative_path = file_name.strip_prefix("WAD/").unwrap();
+            if file_name.starts_with("WAD/") || file_name_lower.starts_with("wad/") {
+                let relative_path = if file_name.starts_with("WAD/") {
+                    file_name.strip_prefix("WAD/").unwrap()
+                } else {
+                    file_name.strip_prefix("wad/").unwrap_or(&file_name)
+                };
 
                 // Check if this is a packed WAD file (directly under WAD/, ends with .wad.client etc.)
                 if !file.is_dir() && !relative_path.contains('/') && is_wad_file_name(relative_path)
@@ -176,13 +181,13 @@ impl<R: Read + Seek> FantomeExtractor<R> {
                         std::io::copy(&mut file, &mut outfile)?;
                     }
                 }
-            } else if file_name == "META/README.md" {
-                // Extract README
+            } else if file_name_lower == "meta/readme.md" {
+                // Extract README (case-insensitive)
                 let output_file_path = output_dir.join("README.md");
                 let mut outfile = File::create(&output_file_path)?;
                 std::io::copy(&mut file, &mut outfile)?;
-            } else if file_name == "META/image.png" {
-                // Extract and convert thumbnail to WebP
+            } else if file_name_lower == "meta/image.png" {
+                // Extract and convert thumbnail to WebP (case-insensitive)
                 let output_file_path = output_dir.join("thumbnail.webp");
                 extract_thumbnail(&mut file, &output_file_path)?;
             }

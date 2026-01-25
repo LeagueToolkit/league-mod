@@ -84,6 +84,26 @@ impl Default for SettingsState {
     }
 }
 
+/// Theme selection for the application.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+/// Accent color configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccentColor {
+    /// Preset color name: "blue", "purple", "green", "orange", "pink", "red", "teal"
+    pub preset: Option<String>,
+    /// Custom hue value (0-360) for custom colors
+    pub custom_hue: Option<f32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -92,4 +112,8 @@ pub struct Settings {
     /// Directory where mod projects are stored (for Creator Workshop).
     pub workshop_path: Option<PathBuf>,
     pub first_run_complete: bool,
+    /// Application theme (system, dark, or light).
+    pub theme: Theme,
+    /// Accent color configuration.
+    pub accent_color: AccentColor,
 }

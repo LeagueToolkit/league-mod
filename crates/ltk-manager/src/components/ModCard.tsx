@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
@@ -14,6 +15,15 @@ interface InstalledMod {
   installedAt: string;
   filePath: string;
   layers: { name: string; priority: number; enabled: boolean }[];
+  thumbnailPath?: string;
+  modDir: string;
+}
+
+// IPC response structure from Rust
+interface IpcResponse<T> {
+  ok: boolean;
+  value?: T;
+  error?: unknown;
 }
 
 interface ModCardProps {
@@ -21,19 +31,70 @@ interface ModCardProps {
   viewMode: "grid" | "list";
   onToggle: (modId: string, enabled: boolean) => void;
   onUninstall: (modId: string) => void;
+  onViewDetails?: (mod: InstalledMod) => void;
 }
 
-export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) {
+export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
   const [showMenu, setShowMenu] = useState(false);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  // Load thumbnail on mount
+  useEffect(() => {
+    if (mod.thumbnailPath) {
+      invoke<IpcResponse<string>>("get_mod_thumbnail", { thumbnailPath: mod.thumbnailPath })
+        .then((response) => {
+          if (response.ok && response.value) {
+            setThumbnailUrl(response.value);
+          } else {
+            setThumbnailUrl(null);
+          }
+        })
+        .catch(() => setThumbnailUrl(null));
+    }
+  }, [mod.thumbnailPath]);
+
+  async function handleOpenLocation() {
+    try {
+      // Use modDir (installed location) instead of filePath (source file)
+      await invoke("reveal_in_explorer", { path: mod.modDir });
+    } catch (error) {
+      console.error("Failed to open location:", error);
+    }
+    setShowMenu(false);
+  }
+
+  function handleViewDetails() {
+    onViewDetails?.(mod);
+    setShowMenu(false);
+  }
+
+  function handleCardClick(e: React.MouseEvent) {
+    // Don't toggle if clicking on menu button or toggle
+    if ((e.target as HTMLElement).closest("[data-no-toggle]")) {
+      return;
+    }
+    onToggle(mod.id, !mod.enabled);
+  }
 
   if (viewMode === "list") {
     return (
-      <div className="flex items-center gap-4 rounded-lg border border-surface-800 bg-surface-900 p-4 transition-colors hover:border-surface-700">
-        {/* Thumbnail placeholder */}
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-surface-700 to-surface-800">
-          <span className="text-lg font-bold text-surface-500">
-            {mod.displayName.charAt(0).toUpperCase()}
-          </span>
+      <div
+        onClick={handleCardClick}
+        className={`flex cursor-pointer items-center gap-4 rounded-lg border p-4 transition-all ${
+          mod.enabled
+            ? "border-brand-500/40 bg-surface-800 shadow-[0_0_15px_-3px] shadow-brand-500/30"
+            : "border-surface-700 bg-surface-900 hover:border-surface-600"
+        }`}
+      >
+        {/* Thumbnail */}
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-linear-to-br from-surface-700 to-surface-800">
+          {thumbnailUrl ? (
+            <img src={thumbnailUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <span className="text-lg font-bold text-surface-500">
+              {mod.displayName.charAt(0).toUpperCase()}
+            </span>
+          )}
         </div>
 
         {/* Info */}
@@ -45,10 +106,12 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
         </div>
 
         {/* Toggle */}
-        <Toggle enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
+        <div data-no-toggle>
+          <Toggle enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
+        </div>
 
         {/* Menu */}
-        <div className="relative">
+        <div className="relative" data-no-toggle>
           <IconButton
             icon={<LuEllipsisVertical className="h-4 w-4" />}
             variant="ghost"
@@ -59,6 +122,8 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
             <ContextMenu
               onClose={() => setShowMenu(false)}
               onUninstall={() => onUninstall(mod.id)}
+              onOpenLocation={handleOpenLocation}
+              onViewDetails={handleViewDetails}
             />
           )}
         </div>
@@ -67,46 +132,59 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall }: ModCardProps) 
   }
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-surface-600 bg-night-500 transition-colors hover:border-surface-300">
+    <div
+      onClick={handleCardClick}
+      className={`group relative cursor-pointer rounded-xl border transition-all ${
+        mod.enabled
+          ? "border-brand-500/40 bg-surface-800 shadow-[0_0_20px_-5px] shadow-brand-500/40"
+          : "border-surface-600 bg-surface-800 hover:border-surface-400"
+      }`}
+    >
+      {/* Toggle in top-right corner */}
+      <div className="absolute top-2 right-2 z-10" data-no-toggle>
+        <ToggleSmall enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
+      </div>
+
       {/* Thumbnail */}
-      <div className="flex aspect-video items-center justify-center bg-linear-to-br from-night-600 to-night-700">
-        <span className="text-4xl font-bold text-night-100">
-          {mod.displayName.charAt(0).toUpperCase()}
-        </span>
+      <div className="flex aspect-video items-center justify-center overflow-hidden rounded-t-xl bg-linear-to-br from-surface-700 to-surface-800">
+        {thumbnailUrl ? (
+          <img src={thumbnailUrl} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <span className="text-4xl font-bold text-surface-400">
+            {mod.displayName.charAt(0).toUpperCase()}
+          </span>
+        )}
       </div>
 
       {/* Content */}
-      <div className="p-4">
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <h3 className="line-clamp-1 font-medium text-night-100">{mod.displayName}</h3>
-          <div className="relative">
+      <div className="p-3">
+        {/* Title */}
+        <h3 className="line-clamp-1 text-sm font-medium text-surface-100 mb-1">{mod.displayName}</h3>
+
+        {/* Version, author, and menu on same row */}
+        <div className="flex items-center text-xs text-surface-500">
+          <span>v{mod.version}</span>
+          <span className="mx-1">•</span>
+          <span className="truncate flex-1">
+            {mod.authors.length > 0 ? mod.authors[0] : "Unknown"}
+          </span>
+          <div className="relative shrink-0 ml-1" data-no-toggle>
             <IconButton
-              icon={<LuEllipsisVertical className="h-4 w-4" />}
+              icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
               variant="ghost"
               size="xs"
               onClick={() => setShowMenu(!showMenu)}
+              className="h-5 w-5"
             />
             {showMenu && (
               <ContextMenu
                 onClose={() => setShowMenu(false)}
                 onUninstall={() => onUninstall(mod.id)}
+                onOpenLocation={handleOpenLocation}
+                onViewDetails={handleViewDetails}
               />
             )}
           </div>
-        </div>
-
-        <p className="mb-3 text-sm text-surface-500">v{mod.version}</p>
-
-        {mod.description && (
-          <p className="mb-3 line-clamp-2 text-sm text-surface-400">{mod.description}</p>
-        )}
-
-        {/* Footer */}
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-surface-500">
-            {mod.authors.length > 0 ? mod.authors[0] : "Unknown"}
-          </span>
-          <Toggle enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
         </div>
       </div>
     </div>
@@ -131,7 +209,36 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (enabled: b
   );
 }
 
-function ContextMenu({ onClose, onUninstall }: { onClose: () => void; onUninstall: () => void }) {
+// Smaller toggle for overlay on thumbnail
+function ToggleSmall({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!enabled);
+      }}
+      className={`relative h-5 w-9 rounded-full transition-colors shadow-lg ${
+        enabled ? "bg-brand-500" : "bg-surface-600/80 backdrop-blur-sm"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          enabled ? "translate-x-4" : "translate-x-0"
+        }`}
+      />
+    </button>
+  );
+}
+
+interface ContextMenuProps {
+  onClose: () => void;
+  onUninstall: () => void;
+  onOpenLocation: () => void;
+  onViewDetails: () => void;
+}
+
+function ContextMenu({ onClose, onUninstall, onOpenLocation, onViewDetails }: ContextMenuProps) {
   return (
     <>
       <div
@@ -142,11 +249,12 @@ function ContextMenu({ onClose, onUninstall }: { onClose: () => void; onUninstal
         tabIndex={0}
         aria-label="Close menu"
       />
-      <div className="absolute top-full right-0 z-20 mt-1 w-48 animate-fade-in rounded-lg border border-surface-700 bg-surface-800 py-1 shadow-xl">
+      <div className="absolute top-full right-0 z-20 mt-1 w-44 animate-fade-in rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl">
         <Button
           variant="ghost"
           size="sm"
           left={<LuInfo className="h-4 w-4" />}
+          onClick={onViewDetails}
           className="w-full justify-start rounded-none px-3"
         >
           View Details
@@ -155,11 +263,12 @@ function ContextMenu({ onClose, onUninstall }: { onClose: () => void; onUninstal
           variant="ghost"
           size="sm"
           left={<LuFolderOpen className="h-4 w-4" />}
+          onClick={onOpenLocation}
           className="w-full justify-start rounded-none px-3"
         >
           Open Location
         </Button>
-        <hr className="my-1 border-surface-700" />
+        <hr className="my-1 border-surface-600" />
         <Button
           variant="ghost"
           size="sm"

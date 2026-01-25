@@ -6,9 +6,10 @@ import { IconButton } from "@/components/Button";
 
 interface TitleBarProps {
   title?: string;
+  version?: string;
 }
 
-export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
+export function TitleBar({ title = "LTK Manager", version }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const appWindow = getCurrentWindow();
 
@@ -37,13 +38,18 @@ export function TitleBar({ title = "LTK Manager" }: TitleBarProps) {
     >
       {/* Left: App icon and title */}
       <div className="flex items-center gap-2 pl-3" data-tauri-drag-region>
-        <img src="/icon.svg" alt="LTK" className="h-6 w-6" data-tauri-drag-region />
+        <img src="/icon.svg" alt="LTK" className="h-5 w-5" data-tauri-drag-region />
         <span
-          className="text-base font-medium tracking-wide text-surface-100"
+          className="text-sm font-medium text-surface-100"
           data-tauri-drag-region
         >
           {title}
         </span>
+        {version && (
+          <span className="text-xs text-surface-500" data-tauri-drag-region>
+            v{version}
+          </span>
+        )}
       </div>
 
       {/* Right: Window controls */}

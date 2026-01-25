@@ -33,6 +33,10 @@ pub struct InstalledMod {
     pub installed_at: DateTime<Utc>,
     pub file_path: String,
     pub layers: Vec<ModLayer>,
+    /// Path to thumbnail image if exists (thumbnail.webp in mod dir)
+    pub thumbnail_path: Option<String>,
+    /// Directory where the mod is installed
+    pub mod_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,6 +368,14 @@ fn read_installed_mod(entry: &LibraryModEntry) -> AppResult<InstalledMod> {
         })
         .collect::<Vec<_>>();
 
+    // Check for thumbnail.webp
+    let thumbnail_path = entry.mod_dir.join("thumbnail.webp");
+    let thumbnail_path = if thumbnail_path.exists() {
+        Some(thumbnail_path.display().to_string())
+    } else {
+        None
+    };
+
     Ok(InstalledMod {
         id: entry.id.clone(),
         name: project.name,
@@ -375,6 +387,8 @@ fn read_installed_mod(entry: &LibraryModEntry) -> AppResult<InstalledMod> {
         installed_at: entry.installed_at,
         file_path: entry.file_path.clone(),
         layers,
+        thumbnail_path,
+        mod_dir: entry.mod_dir.display().to_string(),
     })
 }
 
