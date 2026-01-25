@@ -88,3 +88,34 @@ fn toggle_mod_inner(
 pub fn inspect_modpkg(file_path: String) -> IpcResult<ModpkgInfo> {
     inspect_modpkg_file(&file_path).into()
 }
+
+/// Get a mod's thumbnail as a base64 data URL.
+#[tauri::command]
+pub fn get_mod_thumbnail(thumbnail_path: String) -> IpcResult<String> {
+    get_mod_thumbnail_inner(&thumbnail_path).into()
+}
+
+fn get_mod_thumbnail_inner(thumbnail_path: &str) -> crate::error::AppResult<String> {
+    use base64::Engine;
+    use std::fs;
+    
+    let path = std::path::Path::new(thumbnail_path);
+    if !path.exists() {
+        return Err(crate::error::AppError::InvalidPath(thumbnail_path.to_string()));
+    }
+    
+    let data = fs::read(path)?;
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+    
+    // Determine content type
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("webp");
+    let content_type = match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "image/webp",
+    };
+    
+    Ok(format!("data:{};base64,{}", content_type, base64_data))
+}
+
+

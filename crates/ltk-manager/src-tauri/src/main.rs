@@ -109,10 +109,13 @@ fn main() {
             commands::uninstall_mod,
             commands::toggle_mod,
             commands::inspect_modpkg,
+            commands::get_mod_thumbnail,
             // Patcher
             commands::start_patcher,
             commands::stop_patcher,
             commands::get_patcher_status,
+            // Shell
+            commands::reveal_in_explorer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
