@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[tauri::command]
 pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
     let path = PathBuf::from(&path);
-    
+
     // Get the parent directory if it's a file
     let dir = if path.is_file() {
         path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
