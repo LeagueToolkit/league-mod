@@ -1,0 +1,20 @@
+import { useQuery } from "@tanstack/react-query";
+import { convertFileSrc } from "@tauri-apps/api/core";
+
+import { api, type AppError } from "@/lib/tauri";
+import { queryFn } from "@/utils/query";
+
+import { libraryKeys } from "./keys";
+
+/**
+ * Hook to fetch and cache mod thumbnail absolute path, returning a Tauri asset URL.
+ */
+export function useModThumbnail(thumbnailPath?: string) {
+  return useQuery<string, AppError, string>({
+    queryKey: thumbnailPath ? libraryKeys.thumbnail(thumbnailPath) : ["thumbnail", "none"],
+    queryFn: thumbnailPath ? queryFn(() => api.getModThumbnail(thumbnailPath)) : async () => "",
+    enabled: !!thumbnailPath,
+    select: (path) => (path ? convertFileSrc(path) : ""),
+    staleTime: Infinity, // Thumbnails don't change often
+  });
+}

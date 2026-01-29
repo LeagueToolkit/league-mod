@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
@@ -36,22 +37,7 @@ interface ModCardProps {
 
 export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
   const [showMenu, setShowMenu] = useState(false);
-  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
-
-  // Load thumbnail on mount
-  useEffect(() => {
-    if (mod.thumbnailPath) {
-      invoke<IpcResponse<string>>("get_mod_thumbnail", { thumbnailPath: mod.thumbnailPath })
-        .then((response) => {
-          if (response.ok && response.value) {
-            setThumbnailUrl(response.value);
-          } else {
-            setThumbnailUrl(null);
-          }
-        })
-        .catch(() => setThumbnailUrl(null));
-    }
-  }, [mod.thumbnailPath]);
+  const { data: thumbnailUrl } = useModThumbnail(mod.thumbnailPath);
 
   async function handleOpenLocation() {
     try {

@@ -127,6 +127,8 @@ export const api = {
   uninstallMod: (modId: string) => invokeResult<void>("uninstall_mod", { modId }),
   toggleMod: (modId: string, enabled: boolean) =>
     invokeResult<void>("toggle_mod", { modId, enabled }),
+  getModThumbnail: (thumbnailPath: string) =>
+    invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),
