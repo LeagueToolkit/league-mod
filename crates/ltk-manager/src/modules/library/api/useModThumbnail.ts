@@ -9,9 +9,9 @@ import { libraryKeys } from "./keys";
 /**
  * Hook to fetch and cache mod thumbnail absolute path, returning a Tauri asset URL.
  */
-export function useModThumbnail(thumbnailPath?: string) {
+export function useModThumbnail(modId: string, thumbnailPath?: string) {
   return useQuery<string, AppError, string>({
-    queryKey: thumbnailPath ? libraryKeys.thumbnail(thumbnailPath) : ["thumbnail", "none"],
+    queryKey: thumbnailPath ? libraryKeys.thumbnail(modId, thumbnailPath) : ["thumbnail", "none"],
     queryFn: thumbnailPath ? queryFn(() => api.getModThumbnail(thumbnailPath)) : async () => "",
     enabled: !!thumbnailPath,
     select: (path) => (path ? convertFileSrc(path) : ""),

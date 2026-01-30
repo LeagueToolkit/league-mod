@@ -37,7 +37,7 @@ interface ModCardProps {
 
 export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
   const [showMenu, setShowMenu] = useState(false);
-  const { data: thumbnailUrl } = useModThumbnail(mod.thumbnailPath);
+  const { data: thumbnailUrl } = useModThumbnail(mod.id, mod.thumbnailPath);
 
   async function handleOpenLocation() {
     try {
