@@ -11,7 +11,7 @@ import { libraryKeys } from "./keys";
  */
 export function useModThumbnail(modId: string, thumbnailPath?: string) {
   return useQuery<string, AppError, string>({
-    queryKey: thumbnailPath ? libraryKeys.thumbnail(modId, thumbnailPath) : ["thumbnail", "none"],
+    queryKey: libraryKeys.thumbnail(modId, thumbnailPath),
     queryFn: thumbnailPath ? queryFn(() => api.getModThumbnail(thumbnailPath)) : async () => "",
     enabled: !!thumbnailPath,
     select: (path) => (path ? convertFileSrc(path) : ""),
