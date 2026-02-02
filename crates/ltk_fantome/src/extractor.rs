@@ -150,7 +150,6 @@ impl<R: Read + Seek> FantomeExtractor<R> {
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
-            let file_name_lower = file_name.to_lowercase();
 
             if file_name.starts_with("WAD/") {
                 let relative_path = file_name.strip_prefix("WAD/").unwrap();

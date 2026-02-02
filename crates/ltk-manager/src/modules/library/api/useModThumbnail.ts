@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api, type AppError } from "@/lib/tauri";
@@ -12,8 +12,7 @@ import { libraryKeys } from "./keys";
 export function useModThumbnail(modId: string, thumbnailPath?: string) {
   return useQuery<string, AppError, string>({
     queryKey: libraryKeys.thumbnail(modId, thumbnailPath),
-    queryFn: thumbnailPath ? queryFn(() => api.getModThumbnail(thumbnailPath)) : async () => "",
-    enabled: !!thumbnailPath,
+    queryFn: thumbnailPath ? queryFn(() => api.getModThumbnail(thumbnailPath)) : skipToken,
     select: (path) => (path ? convertFileSrc(path) : ""),
     staleTime: Infinity, // Thumbnails don't change often
   });
