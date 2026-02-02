@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 
@@ -150,73 +150,25 @@ export function Library() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="flex h-16 items-center justify-between border-b border-surface-600 px-6">
-        <h2 className="text-xl font-semibold text-surface-100">Mod Library</h2>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="filled"
-            onClick={handleInstallMod}
-            loading={installMod.isPending}
-            left={<LuPlus className="h-4 w-4" />}
-          >
-            {installMod.isPending ? "Installing..." : "Add Mod"}
-          </Button>
-
-          {patcherStatus?.running ? (
-            <Button
-              variant="outline"
-              onClick={handleStopPatcher}
-              loading={stopPatcher.isPending}
-              disabled={installMod.isPending || startPatcher.isPending}
-            >
-              {stopPatcher.isPending ? "Stopping..." : "Stop Patcher"}
-            </Button>
-          ) : (
-            <Button
-              variant={hasEnabledMods ? "filled" : "default"}
-              onClick={handleStartPatcher}
-              loading={startPatcher.isPending && !overlayProgress}
-              disabled={
-                isLoading ||
-                !hasEnabledMods ||
-                installMod.isPending ||
-                stopPatcher.isPending ||
-                startPatcher.isPending
-              }
-            >
-              {overlayProgress
-                ? overlayProgress.stage === "indexing"
-                  ? "Indexing mods..."
-                  : overlayProgress.stage === "patching"
-                    ? `Patching ${overlayProgress.currentFile ?? "..."} (${overlayProgress.current}/${overlayProgress.total})`
-                    : "Starting..."
-                : startPatcher.isPending
-                  ? "Starting..."
-                  : hasEnabledMods
-                    ? "Start Patcher"
-                    : "Start Patcher (enable a mod)"}
-            </Button>
-          )}
-        </div>
-      </header>
-
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 border-b border-surface-600/50 px-6 py-4">
+      {/* Toolbar with search and actions */}
+      <div
+        className="flex items-center gap-4 border-b border-surface-600 px-4 py-3"
+        data-tauri-drag-region
+      >
         {/* Search */}
-        <div className="relative max-w-md flex-1">
+        <div className="relative flex-1">
           <LuSearch className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-surface-500" />
           <input
             type="text"
             placeholder="Search mods..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-lg border border-surface-600 bg-night-500 py-2 pr-4 pl-10 text-surface-100 placeholder:text-surface-500 focus:border-transparent focus:ring-2 focus:ring-brand-500 focus:outline-none"
+            className="w-full rounded-lg border border-surface-600 bg-surface-800 py-2 pr-4 pl-10 text-surface-100 placeholder:text-surface-500 focus:border-transparent focus:ring-2 focus:ring-brand-500 focus:outline-none"
           />
         </div>
 
         {/* View toggle */}
-        <div className="flex items-center gap-1 rounded-lg p-1">
+        <div className="flex items-center gap-1">
           <IconButton
             icon={<LuGrid3X3 className="h-4 w-4" />}
             variant={viewMode === "grid" ? "default" : "ghost"}
@@ -230,6 +182,53 @@ export function Library() {
             onClick={() => setViewMode("list")}
           />
         </div>
+
+        {/* Actions */}
+        <Button
+          variant="filled"
+          size="sm"
+          onClick={handleInstallMod}
+          loading={installMod.isPending}
+          left={<LuPlus className="h-4 w-4" />}
+        >
+          {installMod.isPending ? "Installing..." : "Add Mod"}
+        </Button>
+
+        {patcherStatus?.running ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleStopPatcher}
+            loading={stopPatcher.isPending}
+            disabled={installMod.isPending || startPatcher.isPending}
+          >
+            {stopPatcher.isPending ? "Stopping..." : "Stop Patcher"}
+          </Button>
+        ) : (
+          <Button
+            variant={hasEnabledMods ? "filled" : "default"}
+            size="sm"
+            onClick={handleStartPatcher}
+            loading={startPatcher.isPending && !overlayProgress}
+            disabled={
+              isLoading ||
+              !hasEnabledMods ||
+              installMod.isPending ||
+              stopPatcher.isPending ||
+              startPatcher.isPending
+            }
+          >
+            {overlayProgress
+              ? overlayProgress.stage === "indexing"
+                ? "Indexing..."
+                : overlayProgress.stage === "patching"
+                  ? `Patching...`
+                  : "Starting..."
+              : startPatcher.isPending
+                ? "Starting..."
+                : "Start Patcher"}
+          </Button>
+        )}
       </div>
 
       {/* Content */}

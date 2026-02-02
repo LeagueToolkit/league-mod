@@ -14,12 +14,18 @@ export interface AppInfo {
   version: string;
 }
 
+export interface AccentColor {
+  preset: string | null; // "blue", "purple", "green", "orange", "pink", "red", "teal"
+  customHue: number | null; // 0-360 for custom color
+}
+
 export interface Settings {
   leaguePath: string | null;
   modStoragePath: string | null;
   /** Directory where mod projects are stored (for Creator Workshop) */
   workshopPath: string | null;
   theme: "light" | "dark" | "system";
+  accentColor: AccentColor;
   firstRunComplete: boolean;
 }
 
@@ -34,6 +40,8 @@ export interface InstalledMod {
   installedAt: string;
   filePath: string;
   layers: ModLayer[];
+  thumbnailPath?: string;
+  modDir: string;
 }
 
 export interface ModLayer {
@@ -119,6 +127,8 @@ export const api = {
   uninstallMod: (modId: string) => invokeResult<void>("uninstall_mod", { modId }),
   toggleMod: (modId: string, enabled: boolean) =>
     invokeResult<void>("toggle_mod", { modId, enabled }),
+  getModThumbnail: (thumbnailPath: string) =>
+    invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),

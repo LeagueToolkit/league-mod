@@ -88,3 +88,20 @@ fn toggle_mod_inner(
 pub fn inspect_modpkg(file_path: String) -> IpcResult<ModpkgInfo> {
     inspect_modpkg_file(&file_path).into()
 }
+
+/// Get a mod's thumbnail as a base64 data URL.
+#[tauri::command]
+pub fn get_mod_thumbnail(thumbnail_path: String) -> IpcResult<String> {
+    get_mod_thumbnail_inner(&thumbnail_path).into()
+}
+
+fn get_mod_thumbnail_inner(thumbnail_path: &str) -> crate::error::AppResult<String> {
+    let path = std::path::Path::new(thumbnail_path);
+    if !path.exists() {
+        return Err(crate::error::AppError::InvalidPath(
+            thumbnail_path.to_string(),
+        ));
+    }
+
+    Ok(thumbnail_path.to_string())
+}

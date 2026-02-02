@@ -10,7 +10,7 @@ repository = "https://github.com/LeagueToolkit/league-mod"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -37,6 +37,7 @@ chrono = { version = "0.4", features = ["serde"] }
 byteorder = "1.5.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3", "xxh64"] }
 zstd = { version = "0.13", default-features = false }
+base64 = "0.22"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

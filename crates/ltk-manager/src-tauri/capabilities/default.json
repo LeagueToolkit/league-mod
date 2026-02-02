@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
   "identifier": "default",
   "description": "Default capabilities for LTK Manager",
   "windows": ["main"],
@@ -17,6 +16,11 @@
     "dialog:allow-ask",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
+    "fs:allow-read-file",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
     "fs:allow-exists",
     "fs:allow-mkdir",
     "fs:allow-remove",

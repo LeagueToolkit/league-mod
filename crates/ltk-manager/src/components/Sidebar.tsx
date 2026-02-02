@@ -1,11 +1,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { LuHammer, LuLibrary, LuPackage, LuSettings } from "react-icons/lu";
+import { LuHammer, LuLibrary, LuSettings } from "react-icons/lu";
 
-interface SidebarProps {
-  appVersion?: string;
-}
-
-export function Sidebar({ appVersion }: SidebarProps) {
+export function Sidebar() {
   const location = useLocation();
 
   const navItems = [
@@ -21,23 +17,9 @@ export function Sidebar({ appVersion }: SidebarProps) {
   };
 
   return (
-    <aside className="flex w-64 flex-col border-r border-surface-600">
-      {/* Logo */}
-      <div
-        className="flex h-16 items-center gap-3 border-b border-surface-600 px-5"
-        data-tauri-drag-region
-      >
-        <div className="from-league-500 to-league-600 flex h-9 w-9 items-center justify-center rounded-lg bg-linear-to-br">
-          <LuPackage className="h-5 w-5 text-white" />
-        </div>
-        <div>
-          <h1 className="font-semibold text-surface-100">LTK Manager</h1>
-          {appVersion && <span className="text-xs text-surface-500">v{appVersion}</span>}
-        </div>
-      </div>
-
+    <aside className="flex w-44 flex-col border-r border-surface-600">
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 p-3">
+      <nav className="flex-1 space-y-1 px-2 pt-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.to);
@@ -46,13 +28,13 @@ export function Sidebar({ appVersion }: SidebarProps) {
             <Link
               key={item.to}
               to={item.to}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 active
-                  ? "bg-league-500/10 text-league-400"
+                  ? "bg-brand-500/10 text-brand-400"
                   : "text-surface-400 hover:bg-surface-800 hover:text-surface-200"
               }`}
             >
-              <Icon className="h-5 w-5" />
+              <Icon className="h-4 w-4" />
               {item.label}
             </Link>
           );
@@ -60,16 +42,16 @@ export function Sidebar({ appVersion }: SidebarProps) {
       </nav>
 
       {/* Settings at bottom */}
-      <div className="border-t border-surface-800 p-3">
+      <div className="border-t border-surface-700 px-2 py-2">
         <Link
           to="/settings"
-          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
             isActive("/settings")
-              ? "bg-league-500/10 text-league-400"
+              ? "bg-brand-500/10 text-brand-400"
               : "text-surface-400 hover:bg-surface-800 hover:text-surface-200"
           }`}
         >
-          <LuSettings className="h-5 w-5" />
+          <LuSettings className="h-4 w-4" />
           Settings
         </Link>
       </div>
