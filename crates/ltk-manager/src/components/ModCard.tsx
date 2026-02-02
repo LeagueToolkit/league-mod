@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
-import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
+import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 
 interface InstalledMod {
   id: string;
@@ -18,13 +18,6 @@ interface InstalledMod {
   layers: { name: string; priority: number; enabled: boolean }[];
   thumbnailPath?: string;
   modDir: string;
-}
-
-// IPC response structure from Rust
-interface IpcResponse<T> {
-  ok: boolean;
-  value?: T;
-  error?: unknown;
 }
 
 interface ModCardProps {
