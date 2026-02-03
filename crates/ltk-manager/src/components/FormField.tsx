@@ -72,11 +72,7 @@ export interface FieldErrorProps extends Omit<BaseField.Error.Props, "className"
 export const FieldError = forwardRef<HTMLParagraphElement, FieldErrorProps>(
   ({ className, children, ...props }, ref) => {
     return (
-      <BaseField.Error
-        ref={ref}
-        className={twMerge("text-xs text-red-500", className)}
-        {...props}
-      >
+      <BaseField.Error ref={ref} className={twMerge("text-xs text-red-500", className)} {...props}>
         {children}
       </BaseField.Error>
     );
@@ -85,8 +81,10 @@ export const FieldError = forwardRef<HTMLParagraphElement, FieldErrorProps>(
 FieldError.displayName = "Field.Error";
 
 // Field Control (input wrapper)
-export interface FieldControlProps
-  extends Omit<InputHTMLAttributes<HTMLInputElement>, "className"> {
+export interface FieldControlProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "className"
+> {
   className?: string;
   hasError?: boolean;
 }
@@ -100,7 +98,7 @@ export const FieldControl = forwardRef<HTMLInputElement, FieldControlProps>(
           "w-full rounded-lg border px-4 py-2.5 text-sm transition-colors",
           "bg-surface-800 text-surface-100 placeholder:text-surface-500",
           "border-surface-700 hover:border-surface-600",
-          "focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500",
+          "focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none",
           "disabled:cursor-not-allowed disabled:opacity-50",
           hasError && "border-red-500 focus:border-red-500 focus:ring-red-500",
           className,
@@ -122,8 +120,10 @@ export const Field = {
 };
 
 // Simplified FormField component for common use cases
-export interface FormFieldProps
-  extends Omit<InputHTMLAttributes<HTMLInputElement>, "className" | "children"> {
+export interface FormFieldProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "className" | "children"
+> {
   label?: string;
   description?: string;
   error?: string;
@@ -163,11 +163,10 @@ export const FormField = forwardRef<HTMLInputElement, FormFieldProps>(
 FormField.displayName = "FormField";
 
 // Textarea variant
-export interface TextareaFieldProps
-  extends Omit<
-    React.TextareaHTMLAttributes<HTMLTextAreaElement>,
-    "className" | "children"
-  > {
+export interface TextareaFieldProps extends Omit<
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>,
+  "className" | "children"
+> {
   label?: string;
   description?: string;
   error?: string;
@@ -199,7 +198,7 @@ export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>
             "w-full rounded-lg border px-4 py-2.5 text-sm transition-colors",
             "bg-surface-800 text-surface-100 placeholder:text-surface-500",
             "border-surface-700 hover:border-surface-600",
-            "focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500",
+            "focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
             "min-h-[80px] resize-y",
             error && "border-red-500 focus:border-red-500 focus:ring-red-500",
@@ -213,4 +212,3 @@ export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>
   },
 );
 TextareaField.displayName = "TextareaField";
-

@@ -22,4 +22,3 @@ export function ToastProvider({ children }: ToastProviderProps) {
     </BaseToast.Provider>
   );
 }
-

@@ -12,5 +12,3 @@ export function usePatcherStatus() {
     refetchInterval: 1000,
   });
 }
-
-

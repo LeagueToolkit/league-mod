@@ -92,24 +92,24 @@ ltk-manager/
 
 The following IPC commands are available from the frontend:
 
-| Command | Description |
-|---------|-------------|
-| `get_app_info` | Get app name and version |
-| `get_settings` | Get current settings |
-| `save_settings` | Save settings (theme, accent, paths) |
-| `auto_detect_league_path` | Auto-detect League installation |
-| `validate_league_path` | Validate a League path |
-| `check_setup_required` | Check if first-run setup is needed |
-| `get_installed_mods` | List installed mods with thumbnails |
-| `install_mod` | Install a .modpkg or .fantome file |
-| `uninstall_mod` | Uninstall a mod |
-| `toggle_mod` | Enable/disable a mod |
-| `inspect_modpkg` | Inspect a .modpkg file |
-| `get_mod_thumbnail` | Get mod thumbnail as base64 data URL |
-| `reveal_in_explorer` | Open file location in explorer |
-| `start_patcher` | Start the overlay patcher |
-| `stop_patcher` | Stop the overlay patcher |
-| `get_patcher_status` | Get patcher running status |
+| Command                   | Description                          |
+| ------------------------- | ------------------------------------ |
+| `get_app_info`            | Get app name and version             |
+| `get_settings`            | Get current settings                 |
+| `save_settings`           | Save settings (theme, accent, paths) |
+| `auto_detect_league_path` | Auto-detect League installation      |
+| `validate_league_path`    | Validate a League path               |
+| `check_setup_required`    | Check if first-run setup is needed   |
+| `get_installed_mods`      | List installed mods with thumbnails  |
+| `install_mod`             | Install a .modpkg or .fantome file   |
+| `uninstall_mod`           | Uninstall a mod                      |
+| `toggle_mod`              | Enable/disable a mod                 |
+| `inspect_modpkg`          | Inspect a .modpkg file               |
+| `get_mod_thumbnail`       | Get mod thumbnail as base64 data URL |
+| `reveal_in_explorer`      | Open file location in explorer       |
+| `start_patcher`           | Start the overlay patcher            |
+| `stop_patcher`            | Stop the overlay patcher             |
+| `get_patcher_status`      | Get patcher running status           |
 
 ## Supported Mod Formats
 
@@ -117,7 +117,7 @@ The following IPC commands are available from the frontend:
 - **`.fantome`** - Legacy Fantome mod format (auto-converted)
 
 Both formats support:
+
 - Mod metadata (name, version, author, description)
 - Thumbnail images (displayed in mod library)
 - Multiple layers/variants
-

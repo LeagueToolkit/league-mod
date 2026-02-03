@@ -288,6 +288,38 @@ git commit -m "feat!: change configuration file format"
 git commit -m "docs: update installation instructions"
 ```
 
+### Claude Code Setup
+
+This project includes MCP (Model Context Protocol) configuration for Claude Code. The `.mcp.json` file is gitignored since it requires OS-specific configuration.
+
+Create a `.mcp.json` file in the project root:
+
+**macOS / Linux:**
+```json
+{
+  "mcpServers": {
+    "tanstack": {
+      "command": "npx",
+      "args": ["@tanstack/cli", "mcp"]
+    }
+  }
+}
+```
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "tanstack": {
+      "command": "cmd",
+      "args": ["/c", "npx", "@tanstack/cli", "mcp"]
+    }
+  }
+}
+```
+
+After creating the file, restart Claude Code for the MCP server to connect.
+
 ### Development Workflow
 
 All contributions go through our CI pipeline:

@@ -139,8 +139,8 @@ export function Library() {
     <div className="relative flex h-full flex-col">
       {/* Drag overlay */}
       {isDragOver && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-night-500/90 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-brand-500 bg-night-400/50 p-12">
+        <div className="bg-night-500/90 absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
+          <div className="bg-night-400/50 flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-brand-500 p-12">
             <LuUpload className="h-16 w-16 text-brand-500" />
             <div className="text-center">
               <p className="text-lg font-medium text-surface-100">Drop to install</p>

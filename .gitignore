@@ -17,3 +17,4 @@ bin
 
 # AI local settings
 .claude/settings.local.json
+.mcp.json

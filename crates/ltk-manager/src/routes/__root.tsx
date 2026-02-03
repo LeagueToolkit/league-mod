@@ -6,8 +6,6 @@ import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
 import { TitleBar } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
 
-import { Sidebar } from "../components/Sidebar";
-
 function RootLayout() {
   const { data: appInfo } = useAppInfo();
   const updateState = useUpdateCheck({ checkOnMount: true, delayMs: 3000 });
@@ -26,7 +24,7 @@ function RootLayout() {
   // Show loading state while checking setup
   if (isCheckingSetup) {
     return (
-      <div className="from-surface-900 via-night-600 to-surface-900 flex h-screen items-center justify-center bg-linear-to-br">
+      <div className="via-night-600 flex h-screen items-center justify-center bg-linear-to-br from-surface-900 to-surface-900">
         <div className="text-surface-400">Loading...</div>
       </div>
     );
@@ -36,13 +34,10 @@ function RootLayout() {
     <div className="root flex h-screen flex-col bg-surface-900">
       <TitleBar version={appInfo?.version} />
       <UpdateNotification updateState={updateState} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 overflow-hidden">
-          <Outlet />
-          <TanStackRouterDevtools />
-        </main>
-      </div>
+      <main className="flex-1 overflow-hidden">
+        <Outlet />
+        <TanStackRouterDevtools />
+      </main>
     </div>
   );
 }
