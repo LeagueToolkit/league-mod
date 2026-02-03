@@ -36,7 +36,7 @@ export function ToastItem({ toast }: ToastItemProps) {
       toast={toast}
       className={twMerge(
         "relative flex w-full items-start gap-3 rounded-lg border border-l-4 p-4 shadow-lg backdrop-blur-sm transition-all",
-        "bg-surface-800/95 border-surface-700",
+        "border-surface-700 bg-surface-800/95",
         typeClasses[type],
         "data-[swipe=move]:transition-none",
         "data-[swipe=cancel]:translate-x-0",
@@ -135,4 +135,3 @@ export function useToast() {
     promise: toastManager.promise,
   };
 }
-

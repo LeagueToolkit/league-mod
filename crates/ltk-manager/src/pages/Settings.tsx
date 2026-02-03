@@ -121,7 +121,7 @@ export function Settings() {
   if (isLoading || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
-        <LuLoader className="text-brand-500 h-8 w-8 animate-spin" />
+        <LuLoader className="h-8 w-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -131,7 +131,7 @@ export function Settings() {
   const currentHue = isCustomHue
     ? settings.accentColor.customHue!
     : settings.accentColor?.preset
-      ? ACCENT_PRESETS[settings.accentColor.preset] ?? 207
+      ? (ACCENT_PRESETS[settings.accentColor.preset] ?? 207)
       : 207;
 
   return (

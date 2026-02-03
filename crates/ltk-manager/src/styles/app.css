@@ -8,7 +8,7 @@
 :root {
   --accent-hue: 207; /* Default: Blue */
   --accent-saturation: 100%;
-  
+
   /* Accent color preset hues */
   --hue-blue: 207;
   --hue-purple: 271;
@@ -32,8 +32,8 @@
   --surface-300: #9d9d9d; /* Secondary text */
   --surface-200: #cccccc; /* Primary text */
   --surface-100: #e5e5e5; /* Bright text */
-  --surface-50: #f5f5f5;  /* White text */
-  
+  --surface-50: #f5f5f5; /* White text */
+
   /* Accent/brand colors (generated from hue) */
   --accent-50: hsl(var(--accent-hue), var(--accent-saturation), 95%);
   --accent-100: hsl(var(--accent-hue), var(--accent-saturation), 90%);
@@ -60,7 +60,7 @@
   --surface-300: #616161; /* Secondary text */
   --surface-200: #3c3c3c; /* Primary text */
   --surface-100: #1e1e1e; /* Bright text */
-  --surface-50: #0e0e0e;  /* Black text */
+  --surface-50: #0e0e0e; /* Black text */
 }
 
 @theme {

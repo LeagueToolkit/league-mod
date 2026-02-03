@@ -56,7 +56,7 @@ export const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
           sizeClasses[size],
           "border-surface-600 bg-surface-800",
           "hover:border-surface-500 hover:bg-surface-700",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900",
+          "focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900 focus-visible:outline-none",
           "data-[checked]:border-brand-600 data-[checked]:bg-brand-600",
           "data-[checked]:hover:border-brand-500 data-[checked]:hover:bg-brand-500",
           "data-[indeterminate]:border-brand-600 data-[indeterminate]:bg-brand-600",
@@ -119,4 +119,3 @@ export function CheckboxGroup({
     </div>
   );
 }
-

@@ -18,11 +18,7 @@ export interface TooltipRootProps extends BaseTooltip.Root.Props {
 }
 
 export const TooltipRoot = ({ children, ...props }: TooltipRootProps) => {
-  return (
-    <BaseTooltip.Root {...props}>
-      {children}
-    </BaseTooltip.Root>
-  );
+  return <BaseTooltip.Root {...props}>{children}</BaseTooltip.Root>;
 };
 TooltipRoot.displayName = "Tooltip.Root";
 
@@ -95,7 +91,7 @@ export const TooltipPopup = forwardRef<HTMLDivElement, TooltipPopupProps>(
           "rounded-md bg-surface-800 px-3 py-1.5 text-sm text-surface-100 shadow-lg",
           "border border-surface-700",
           "animate-fade-in",
-          "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0",
+          "data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
           className,
         )}
         {...props}
@@ -168,7 +164,7 @@ export function SimpleTooltip({
               "rounded-md bg-surface-800 px-3 py-1.5 text-sm text-surface-100 shadow-lg",
               "border border-surface-700",
               "animate-fade-in",
-              "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0",
+              "data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
             )}
           >
             {showArrow && (
@@ -181,4 +177,3 @@ export function SimpleTooltip({
     </BaseTooltip.Root>
   );
 }
-

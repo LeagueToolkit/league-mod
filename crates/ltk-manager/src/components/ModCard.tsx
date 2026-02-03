@@ -138,16 +138,18 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
       {/* Content */}
       <div className="p-3">
         {/* Title */}
-        <h3 className="line-clamp-1 text-sm font-medium text-surface-100 mb-1">{mod.displayName}</h3>
+        <h3 className="mb-1 line-clamp-1 text-sm font-medium text-surface-100">
+          {mod.displayName}
+        </h3>
 
         {/* Version, author, and menu on same row */}
         <div className="flex items-center text-xs text-surface-500">
           <span>v{mod.version}</span>
           <span className="mx-1">•</span>
-          <span className="truncate flex-1">
+          <span className="flex-1 truncate">
             {mod.authors.length > 0 ? mod.authors[0] : "Unknown"}
           </span>
-          <div className="relative shrink-0 ml-1" data-no-toggle>
+          <div className="relative ml-1 shrink-0" data-no-toggle>
             <IconButton
               icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
               variant="ghost"
@@ -189,7 +191,13 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (enabled: b
 }
 
 // Smaller toggle for overlay on thumbnail
-function ToggleSmall({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
+function ToggleSmall({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
   return (
     <button
       type="button"
@@ -197,7 +205,7 @@ function ToggleSmall({ enabled, onChange }: { enabled: boolean; onChange: (enabl
         e.stopPropagation();
         onChange(!enabled);
       }}
-      className={`relative h-5 w-9 rounded-full transition-colors shadow-lg ${
+      className={`relative h-5 w-9 rounded-full shadow-lg transition-colors ${
         enabled ? "bg-brand-500" : "bg-surface-600/80 backdrop-blur-sm"
       }`}
     >

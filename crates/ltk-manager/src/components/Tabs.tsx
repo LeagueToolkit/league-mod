@@ -70,7 +70,11 @@ export const TabsTab = forwardRef<HTMLButtonElement, TabsTabProps>(
       .exhaustive();
 
     return (
-      <BaseTabs.Tab ref={ref} className={twMerge(baseClasses, variantClasses, className)} {...props}>
+      <BaseTabs.Tab
+        ref={ref}
+        className={twMerge(baseClasses, variantClasses, className)}
+        {...props}
+      >
         {children}
       </BaseTabs.Tab>
     );
@@ -128,4 +132,3 @@ export const Tabs = {
   Panel: TabsPanel,
   Indicator: TabsIndicator,
 };
-

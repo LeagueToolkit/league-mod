@@ -6,7 +6,7 @@ import type { Result } from "@/utils/result";
 // Re-export Result utilities for convenience
 export type { AppError, ErrorCode } from "@/utils/errors";
 export type { Result } from "@/utils/result";
-export { isErr, isOk, match,unwrap, unwrapOr } from "@/utils/result";
+export { isErr, isOk, match, unwrap, unwrapOr } from "@/utils/result";
 
 // Types matching Rust structs
 export interface AppInfo {
