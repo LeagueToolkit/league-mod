@@ -17,7 +17,6 @@ yanked = "warn"
 ignore = [
     # Add any specific advisories you want to ignore here
     "RUSTSEC-2023-0071", # Marvin Attack: timing sidechannel (rsa crate)
-    "RUSTSEC-2024-0429", # glib VariantStrIter unsoundness (transitive dep from Tauri on Linux)
 ]
 
 [licenses]
@@ -63,4 +62,3 @@ skip-tree = [
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/LeagueToolkit/league-toolkit.git"]
