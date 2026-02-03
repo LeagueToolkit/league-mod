@@ -116,6 +116,17 @@ fn main() {
             commands::get_patcher_status,
             // Shell
             commands::reveal_in_explorer,
+            // Workshop
+            commands::get_workshop_projects,
+            commands::create_workshop_project,
+            commands::get_workshop_project,
+            commands::save_project_config,
+            commands::delete_workshop_project,
+            commands::pack_workshop_project,
+            commands::import_from_modpkg,
+            commands::validate_project,
+            commands::set_project_thumbnail,
+            commands::get_project_thumbnail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -86,6 +86,55 @@ export interface OverlayProgress {
   total: number;
 }
 
+// Workshop types
+export interface WorkshopProject {
+  path: string;
+  name: string;
+  displayName: string;
+  version: string;
+  description: string;
+  authors: WorkshopAuthor[];
+  layers: WorkshopLayer[];
+  thumbnailPath?: string;
+  lastModified: string;
+}
+
+export interface WorkshopAuthor {
+  name: string;
+  role?: string;
+}
+
+export interface WorkshopLayer {
+  name: string;
+  priority: number;
+  description?: string;
+}
+
+export interface CreateProjectArgs {
+  name: string;
+  displayName: string;
+  description: string;
+  authors: string[];
+}
+
+export interface PackProjectArgs {
+  projectPath: string;
+  outputDir?: string;
+  format: "modpkg" | "fantome";
+}
+
+export interface PackResult {
+  outputPath: string;
+  fileName: string;
+  format: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
 /**
  * Raw IPC result from Tauri commands.
  * This matches the Rust IpcResult<T> serialization format.
@@ -137,4 +186,37 @@ export const api = {
   startPatcher: (config: PatcherConfig) => invokeResult<void>("start_patcher", { config }),
   stopPatcher: () => invokeResult<void>("stop_patcher"),
   getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
+
+  // Workshop
+  getWorkshopProjects: () => invokeResult<WorkshopProject[]>("get_workshop_projects"),
+  createWorkshopProject: (args: CreateProjectArgs) =>
+    invokeResult<WorkshopProject>("create_workshop_project", { args }),
+  getWorkshopProject: (projectPath: string) =>
+    invokeResult<WorkshopProject>("get_workshop_project", { projectPath }),
+  saveProjectConfig: (
+    projectPath: string,
+    displayName: string,
+    version: string,
+    description: string,
+    authors: WorkshopAuthor[],
+  ) =>
+    invokeResult<WorkshopProject>("save_project_config", {
+      projectPath,
+      displayName,
+      version,
+      description,
+      authors,
+    }),
+  deleteWorkshopProject: (projectPath: string) =>
+    invokeResult<void>("delete_workshop_project", { projectPath }),
+  packWorkshopProject: (args: PackProjectArgs) =>
+    invokeResult<PackResult>("pack_workshop_project", { args }),
+  importFromModpkg: (filePath: string) =>
+    invokeResult<WorkshopProject>("import_from_modpkg", { filePath }),
+  validateProject: (projectPath: string) =>
+    invokeResult<ValidationResult>("validate_project", { projectPath }),
+  setProjectThumbnail: (projectPath: string, imagePath: string) =>
+    invokeResult<WorkshopProject>("set_project_thumbnail", { projectPath, imagePath }),
+  getProjectThumbnail: (thumbnailPath: string) =>
+    invokeResult<string>("get_project_thumbnail", { thumbnailPath }),
 };

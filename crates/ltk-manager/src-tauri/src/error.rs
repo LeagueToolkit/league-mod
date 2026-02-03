@@ -26,6 +26,14 @@ pub enum ErrorCode {
     MutexLockFailed,
     /// Unknown/unclassified error
     Unknown,
+    /// Workshop directory not configured
+    WorkshopNotConfigured,
+    /// Workshop project not found
+    ProjectNotFound,
+    /// Workshop project already exists
+    ProjectAlreadyExists,
+    /// Failed to pack workshop project
+    PackFailed,
 }
 
 /// Structured error response sent over IPC.
@@ -148,6 +156,18 @@ pub enum AppError {
 
     #[error("{0}")]
     Other(String),
+
+    #[error("Workshop directory not configured")]
+    WorkshopNotConfigured,
+
+    #[error("Project not found: {0}")]
+    ProjectNotFound(String),
+
+    #[error("Project already exists: {0}")]
+    ProjectAlreadyExists(String),
+
+    #[error("Failed to pack project: {0}")]
+    PackFailed(String),
 }
 
 impl From<AppError> for AppErrorResponse {
@@ -186,6 +206,25 @@ impl From<AppError> for AppErrorResponse {
             }
 
             AppError::Other(msg) => AppErrorResponse::new(ErrorCode::Unknown, msg),
+
+            AppError::WorkshopNotConfigured => AppErrorResponse::new(
+                ErrorCode::WorkshopNotConfigured,
+                "Workshop directory not configured",
+            ),
+
+            AppError::ProjectNotFound(name) => AppErrorResponse::new(
+                ErrorCode::ProjectNotFound,
+                format!("Project not found: {}", name),
+            )
+            .with_context(serde_json::json!({ "projectName": name })),
+
+            AppError::ProjectAlreadyExists(name) => AppErrorResponse::new(
+                ErrorCode::ProjectAlreadyExists,
+                format!("Project already exists: {}", name),
+            )
+            .with_context(serde_json::json!({ "projectName": name })),
+
+            AppError::PackFailed(msg) => AppErrorResponse::new(ErrorCode::PackFailed, msg),
         }
     }
 }

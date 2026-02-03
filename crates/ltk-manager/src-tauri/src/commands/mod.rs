@@ -3,9 +3,11 @@ mod mods;
 mod patcher;
 mod settings;
 mod shell;
+mod workshop;
 
 pub use app::*;
 pub use mods::*;
 pub use patcher::*;
 pub use settings::*;
 pub use shell::*;
+pub use workshop::*;

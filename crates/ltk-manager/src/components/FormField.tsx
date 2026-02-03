@@ -31,11 +31,11 @@ export const FieldLabel = forwardRef<HTMLLabelElement, FieldLabelProps>(
     return (
       <BaseField.Label
         ref={ref}
-        className={twMerge("text-sm font-medium text-surface-300", className)}
+        className={twMerge("text-sm font-medium text-surface-200", className)}
         {...props}
       >
         {children}
-        {required && <span className="ml-1 text-red-500">*</span>}
+        {required && <span className="ml-1 text-red-400">*</span>}
       </BaseField.Label>
     );
   },
@@ -53,7 +53,7 @@ export const FieldDescription = forwardRef<HTMLParagraphElement, FieldDescriptio
     return (
       <BaseField.Description
         ref={ref}
-        className={twMerge("text-xs text-surface-500", className)}
+        className={twMerge("text-xs text-surface-400", className)}
         {...props}
       >
         {children}
@@ -96,8 +96,8 @@ export const FieldControl = forwardRef<HTMLInputElement, FieldControlProps>(
         ref={ref}
         className={twMerge(
           "w-full rounded-lg border px-4 py-2.5 text-sm transition-colors",
-          "bg-surface-800 text-surface-100 placeholder:text-surface-500",
-          "border-surface-700 hover:border-surface-600",
+          "bg-surface-700 text-surface-50 placeholder:text-surface-400",
+          "border-surface-500 hover:border-surface-400",
           "focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none",
           "disabled:cursor-not-allowed disabled:opacity-50",
           hasError && "border-red-500 focus:border-red-500 focus:ring-red-500",
@@ -196,8 +196,8 @@ export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>
           name={name}
           className={twMerge(
             "w-full rounded-lg border px-4 py-2.5 text-sm transition-colors",
-            "bg-surface-800 text-surface-100 placeholder:text-surface-500",
-            "border-surface-700 hover:border-surface-600",
+            "bg-surface-700 text-surface-50 placeholder:text-surface-400",
+            "border-surface-500 hover:border-surface-400",
             "focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
             "min-h-[80px] resize-y",

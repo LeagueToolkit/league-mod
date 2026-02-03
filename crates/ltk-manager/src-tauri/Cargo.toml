@@ -17,11 +17,15 @@ tauri-plugin-fs = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
-ltk_modpkg = { path = "../../ltk_modpkg" }
+ltk_modpkg = { path = "../../ltk_modpkg", features = ["project"] }
 ltk_mod_project = { path = "../../ltk_mod_project" }
 ltk_mod_core = { path = "../../ltk_mod_core" }
 ltk_fantome = { path = "../../ltk_fantome" }
 ltk_wad = "0.2.6"
+
+camino = "1.2"
+semver = "1.0"
+toml = "0.8"
 
 tokio = { version = "1", features = ["full"] }
 libloading = "0.9.0"
