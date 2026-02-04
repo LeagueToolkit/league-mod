@@ -487,31 +487,35 @@ fn set_project_thumbnail_inner(project_path: &str, image_path: &str) -> AppResul
         return Err(AppError::InvalidPath(image_path.to_string()));
     }
 
-    // Determine output format based on source extension
     let extension = source_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
 
-    let target_name = match extension.as_str() {
-        "webp" => "thumbnail.webp",
-        "png" => "thumbnail.png",
-        "jpg" | "jpeg" => "thumbnail.png", // We'll keep it as-is but name it .png
-        _ => {
-            return Err(AppError::ValidationFailed(
-                "Thumbnail must be a .webp, .png, or .jpg image".to_string(),
-            ))
-        }
-    };
+    let supported_formats = [
+        "webp", "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "ico",
+    ];
+    if !supported_formats.contains(&extension.as_str()) {
+        return Err(AppError::ValidationFailed(format!(
+            "Unsupported image format: {}. Supported formats: {}",
+            extension,
+            supported_formats.join(", ")
+        )));
+    }
 
-    // Remove existing thumbnails
+    let source_utf8_path = camino::Utf8Path::from_path(&source_path)
+        .ok_or_else(|| AppError::ValidationFailed("Invalid UTF-8 path".to_string()))?;
+
+    let webp_data = ltk_modpkg::project::load_thumbnail(source_utf8_path)
+        .map_err(|e| AppError::ValidationFailed(format!("Thumbnail processing failed: {}", e)))?;
+
+    // Remove existing thumbnails for backwards compatibility
     let _ = fs::remove_file(project_dir.join("thumbnail.webp"));
     let _ = fs::remove_file(project_dir.join("thumbnail.png"));
 
-    // Copy the new thumbnail
-    let target_path = project_dir.join(target_name);
-    fs::copy(&source_path, &target_path)?;
+    let target_path = project_dir.join("thumbnail.webp");
+    fs::write(&target_path, webp_data)?;
 
     load_workshop_project(&project_dir)
 }

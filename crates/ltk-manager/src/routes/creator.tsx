@@ -134,7 +134,12 @@ function CreatorPage() {
   async function handleSetThumbnail(project: WorkshopProject) {
     const file = await open({
       multiple: false,
-      filters: [{ name: "Images", extensions: ["webp", "png", "jpg", "jpeg"] }],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["webp", "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "ico"],
+        },
+      ],
     });
     if (file) {
       setProjectThumbnail.mutate(
