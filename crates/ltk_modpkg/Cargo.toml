@@ -29,7 +29,13 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
     "png",
     "jpeg",
+    "gif",
+    "bmp",
+    "tiff",
+    "ico",
 ] }
+webp = "0.3"
+webp-animation = "0.9"
 
 camino = { workspace = true }
 
