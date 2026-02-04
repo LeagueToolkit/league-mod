@@ -118,6 +118,23 @@ export function Settings() {
     }
   }
 
+  async function handleBrowseWorkshopPath() {
+    if (!settings) return;
+
+    try {
+      const selected = await open({
+        directory: true,
+        title: "Select Workshop Directory",
+      });
+
+      if (selected) {
+        saveSettings({ ...settings, workshopPath: selected as string });
+      }
+    } catch (error) {
+      console.error("Failed to browse:", error);
+    }
+  }
+
   if (isLoading || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -230,6 +247,33 @@ export function Settings() {
             <p className="text-sm text-surface-500">
               Choose where your installed mods will be stored. Leave empty to use the default
               location.
+            </p>
+          </div>
+        </section>
+
+        {/* Workshop Directory */}
+        <section>
+          <h3 className="mb-4 text-lg font-medium text-surface-100">Workshop</h3>
+          <div className="space-y-3">
+            <span className="block text-sm font-medium text-surface-400">Workshop Directory</span>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={settings.workshopPath || ""}
+                readOnly
+                placeholder="Not configured"
+                className="flex-1 rounded-lg border border-surface-600 bg-surface-700 px-4 py-2.5 text-surface-200 placeholder:text-surface-500"
+              />
+              <IconButton
+                icon={<LuFolderOpen className="h-5 w-5" />}
+                variant="outline"
+                size="lg"
+                onClick={handleBrowseWorkshopPath}
+              />
+            </div>
+            <p className="text-sm text-surface-500">
+              Choose where your mod projects will be stored for the Creator Workshop. This directory
+              will contain all your project folders.
             </p>
           </div>
         </section>
