@@ -2928,6 +2928,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ltk_overlay"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "camino",
+ "ltk_mod_project",
+ "ltk_modpkg",
+ "ltk_wad",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
+ "tracing-subscriber",
+ "xxhash-rust",
+ "zstd",
+]
+
+[[package]]
 name = "ltk_pki"
 version = "0.1.3"
 dependencies = [

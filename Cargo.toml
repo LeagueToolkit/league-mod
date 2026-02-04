@@ -7,6 +7,7 @@ members = [
     "crates/ltk_mod_core",
     "crates/ltk_modpkg",
     "crates/ltk_mod_project",
+    "crates/ltk_overlay",
     "crates/ltk_pki",
     "crates/ltk-manager/src-tauri",
 ]

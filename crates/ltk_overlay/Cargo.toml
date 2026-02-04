@@ -1,0 +1,51 @@
+[package]
+name = "ltk_overlay"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "WAD overlay/profile builder for League of Legends mods"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
+
+[dependencies]
+# LeagueToolkit crates
+ltk_wad = "0.2.6"
+ltk_mod_project = { version = "0.1.0", path = "../ltk_mod_project" }
+ltk_modpkg = { version = "0.1.0", path = "../ltk_modpkg" }
+
+# Error handling
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Compression
+zstd = "0.13"
+
+# Hashing
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# IO
+byteorder = "1.5"
+camino = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = []
+# Enable parallel WAD building
+parallel = ["rayon"]
+
+[dependencies.rayon]
+version = "1.10"
+optional = true
