@@ -1,9 +1,15 @@
 use std::path::PathBuf;
 
+use crate::error::{AppError, AppResult, IpcResult};
+
 /// Opens a file location in the system file explorer.
 #[tauri::command]
-pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
-    let path = PathBuf::from(&path);
+pub async fn reveal_in_explorer(path: String) -> IpcResult<()> {
+    reveal_in_explorer_inner(&path).into()
+}
+
+fn reveal_in_explorer_inner(path: &str) -> AppResult<()> {
+    let path = PathBuf::from(path);
 
     // Get the parent directory if it's a file
     let dir = if path.is_file() {
@@ -17,7 +23,7 @@ pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
         std::process::Command::new("explorer")
             .arg(dir)
             .spawn()
-            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+            .map_err(|e| AppError::Other(format!("Failed to open explorer: {}", e)))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -25,7 +31,7 @@ pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
         std::process::Command::new("open")
             .arg(dir)
             .spawn()
-            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+            .map_err(|e| AppError::Other(format!("Failed to open Finder: {}", e)))?;
     }
 
     #[cfg(target_os = "linux")]
@@ -33,7 +39,7 @@ pub async fn reveal_in_explorer(path: String) -> Result<(), String> {
         std::process::Command::new("xdg-open")
             .arg(dir)
             .spawn()
-            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+            .map_err(|e| AppError::Other(format!("Failed to open file manager: {}", e)))?;
     }
 
     Ok(())

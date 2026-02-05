@@ -68,10 +68,19 @@ impl AppErrorResponse {
 }
 
 /// Result type for IPC commands.
-/// This is always "successful" at the Tauri level - the actual success/failure
-/// is encoded in the response payload for type-safe error handling on the frontend.
 ///
-/// Serializes to `{ "ok": true, "value": T }` or `{ "ok": false, "error": AppErrorResponse }`.
+/// ```rust
+/// #[tauri::command]
+/// pub fn my_command() -> IpcResult<String> {
+///     my_command_inner().into()
+/// }
+///
+/// fn my_command_inner() -> AppResult<String> {
+///     Ok("value".to_string())
+/// }
+/// ```
+///
+/// Serializes to: `{ "ok": true, "value": T }` or `{ "ok": false, "error": ... }`
 #[derive(Debug, Clone)]
 pub enum IpcResult<T> {
     Ok { value: T },
