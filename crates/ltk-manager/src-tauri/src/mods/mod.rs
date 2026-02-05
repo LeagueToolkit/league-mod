@@ -10,6 +10,22 @@ use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use uuid::Uuid;
 
+/// A mod profile for organizing different mod configurations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    /// Unique identifier (UUID)
+    pub id: String,
+    /// User-friendly name
+    pub name: String,
+    /// List of mod IDs enabled in this profile
+    pub enabled_mods: Vec<String>,
+    /// Creation timestamp
+    pub created_at: DateTime<Utc>,
+    /// Last time this profile was used/switched to
+    pub last_used: DateTime<Utc>,
+}
+
 /// A mod layer shown in the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,16 +57,38 @@ pub struct InstalledMod {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
 struct LibraryIndex {
+    /// Installed mods (shared across all profiles)
     mods: Vec<LibraryModEntry>,
+    /// All profiles
+    profiles: Vec<Profile>,
+    /// Currently active profile ID
+    active_profile_id: String,
+}
+
+impl Default for LibraryIndex {
+    fn default() -> Self {
+        let default_profile = Profile {
+            id: Uuid::new_v4().to_string(),
+            name: "Default".to_string(),
+            enabled_mods: Vec::new(),
+            created_at: Utc::now(),
+            last_used: Utc::now(),
+        };
+        let active_profile_id = default_profile.id.clone();
+
+        Self {
+            mods: Vec::new(),
+            profiles: vec![default_profile],
+            active_profile_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LibraryModEntry {
     id: String,
-    enabled: bool,
     installed_at: DateTime<Utc>,
     /// Original file path the mod was installed from.
     file_path: String,
@@ -66,7 +104,6 @@ pub(crate) struct EnabledMod {
     pub id: String,
     pub mod_dir: PathBuf,
 }
-
 
 /// Information returned by `inspect_modpkg`.
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +135,14 @@ pub fn get_installed_mods(
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
+    // Get active profile to check enabled mods
+    let active_profile_id = index.active_profile_id.clone();
+    let active_profile = index
+        .profiles
+        .iter()
+        .find(|p| p.id == active_profile_id)
+        .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
+
     // Deterministic ordering: by installed_at then id.
     index
         .mods
@@ -105,7 +150,8 @@ pub fn get_installed_mods(
 
     let mut result = Vec::new();
     for entry in &index.mods {
-        match read_installed_mod(entry) {
+        let enabled = active_profile.enabled_mods.contains(&entry.id);
+        match read_installed_mod(entry, enabled) {
             Ok(m) => result.push(m),
             Err(e) => {
                 tracing::warn!("Skipping broken mod entry {}: {}", entry.id, e);
@@ -167,25 +213,31 @@ pub fn install_mod_from_package(
 
     // Add to index and persist.
     let mut index = load_library_index(&storage_dir)?;
-    index.mods.push(LibraryModEntry {
+
+    // Add mod entry to shared mods list
+    let entry = LibraryModEntry {
         id: id.clone(),
-        enabled: true,
         installed_at,
         file_path: file_path.display().to_string(),
         mod_dir: mod_metadata_dir.clone(),
         archive_path: Some(archive_path.clone()),
-    });
+    };
+    index.mods.push(entry.clone());
+
+    // Enable in active profile
+    let active_profile_id = index.active_profile_id.clone();
+    if let Some(profile) = index
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == active_profile_id)
+    {
+        profile.enabled_mods.push(id.clone());
+    }
+
     save_library_index(&storage_dir, &index)?;
 
-    // Return materialized InstalledMod
-    read_installed_mod(&LibraryModEntry {
-        id,
-        enabled: true,
-        installed_at,
-        file_path: file_path.display().to_string(),
-        mod_dir: mod_metadata_dir,
-        archive_path: Some(archive_path),
-    })
+    // Return materialized InstalledMod (enabled = true since we just enabled it)
+    read_installed_mod(&entry, true)
 }
 
 pub fn toggle_mod_enabled(
@@ -197,10 +249,27 @@ pub fn toggle_mod_enabled(
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
-    let Some(entry) = index.mods.iter_mut().find(|m| m.id == mod_id) else {
+    // Validate mod exists
+    if !index.mods.iter().any(|m| m.id == mod_id) {
         return Err(AppError::ModNotFound(mod_id.to_string()));
-    };
-    entry.enabled = enabled;
+    }
+
+    // Update active profile's enabled mods
+    let active_profile_id = index.active_profile_id.clone();
+    let profile = index
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == active_profile_id)
+        .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
+
+    if enabled {
+        if !profile.enabled_mods.contains(&mod_id.to_string()) {
+            profile.enabled_mods.push(mod_id.to_string());
+        }
+    } else {
+        profile.enabled_mods.retain(|id| id != mod_id);
+    }
+
     save_library_index(&storage_dir, &index)?;
     Ok(())
 }
@@ -313,7 +382,7 @@ pub fn inspect_modpkg_file(file_path: &str) -> AppResult<ModpkgInfo> {
     })
 }
 
-fn resolve_storage_dirs(
+pub(crate) fn resolve_storage_dirs(
     app_handle: &AppHandle,
     settings: &Settings,
 ) -> AppResult<(PathBuf, PathBuf)> {
@@ -349,20 +418,236 @@ fn save_library_index(storage_dir: &Path, index: &LibraryIndex) -> AppResult<()>
     Ok(())
 }
 
-pub(crate) fn get_enabled_mods_for_overlay(
+// ============================================================================
+// Profile Helper Functions
+// ============================================================================
+
+fn get_active_profile(index: &LibraryIndex) -> AppResult<&Profile> {
+    index
+        .profiles
+        .iter()
+        .find(|p| p.id == index.active_profile_id)
+        .ok_or_else(|| AppError::Other("Active profile not found".to_string()))
+}
+
+fn get_profile_by_id<'a>(index: &'a LibraryIndex, profile_id: &str) -> AppResult<&'a Profile> {
+    index
+        .profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| AppError::Other(format!("Profile {} not found", profile_id)))
+}
+
+fn resolve_profile_dirs(storage_dir: &Path, profile_id: &str) -> (PathBuf, PathBuf) {
+    let profile_dir = storage_dir.join("profiles").join(profile_id);
+    let overlay_dir = profile_dir.join("overlay");
+    let cache_dir = profile_dir.join("cache");
+    (overlay_dir, cache_dir)
+}
+
+// ============================================================================
+// Public Profile Management Functions
+// ============================================================================
+
+/// Create a new profile.
+pub fn create_profile(
     app_handle: &AppHandle,
     settings: &Settings,
-) -> AppResult<Vec<EnabledMod>> {
+    name: String,
+) -> AppResult<Profile> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
-    // Deterministic ordering: by installed_at then id.
-    index
-        .mods
-        .sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
+    // Validate name is not empty or whitespace
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::Other("Profile name cannot be empty".to_string()));
+    }
 
-    // Extract enabled mods from archives to cache directory
-    let cache_dir = storage_dir.join("cache");
+    // Validate unique name
+    if index.profiles.iter().any(|p| p.name == name) {
+        return Err(AppError::Other(format!(
+            "Profile '{}' already exists",
+            name
+        )));
+    }
+
+    let profile = Profile {
+        id: Uuid::new_v4().to_string(),
+        name,
+        enabled_mods: Vec::new(),
+        created_at: Utc::now(),
+        last_used: Utc::now(),
+    };
+
+    // Create profile directories
+    let (overlay_dir, cache_dir) = resolve_profile_dirs(&storage_dir, &profile.id);
+    fs::create_dir_all(&overlay_dir)?;
+    fs::create_dir_all(&cache_dir)?;
+
+    index.profiles.push(profile.clone());
+    save_library_index(&storage_dir, &index)?;
+
+    tracing::info!("Created profile: {} (id={})", profile.name, profile.id);
+    Ok(profile)
+}
+
+/// Delete a profile by ID.
+pub fn delete_profile(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    profile_id: String,
+) -> AppResult<()> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let mut index = load_library_index(&storage_dir)?;
+
+    // Validate profile exists and check constraints
+    let profile = get_profile_by_id(&index, &profile_id)?;
+
+    // Cannot delete Default profile
+    if profile.name == "Default" {
+        return Err(AppError::Other("Cannot delete Default profile".to_string()));
+    }
+
+    // Cannot delete active profile
+    if profile_id == index.active_profile_id {
+        return Err(AppError::Other(
+            "Cannot delete active profile. Switch to another profile first.".to_string(),
+        ));
+    }
+
+    // Remove from index
+    index.profiles.retain(|p| p.id != profile_id);
+
+    // Delete profile directories
+    let profile_dir = storage_dir.join("profiles").join(&profile_id);
+    if profile_dir.exists() {
+        fs::remove_dir_all(&profile_dir)?;
+        tracing::info!("Deleted profile directory: {}", profile_dir.display());
+    }
+
+    save_library_index(&storage_dir, &index)?;
+
+    tracing::info!("Deleted profile: {}", profile_id);
+    Ok(())
+}
+
+/// Switch to a different profile.
+pub fn switch_profile(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    profile_id: String,
+) -> AppResult<Profile> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let mut index = load_library_index(&storage_dir)?;
+
+    // Validate profile exists
+    get_profile_by_id(&index, &profile_id)?;
+
+    // Update active profile
+    index.active_profile_id = profile_id.clone();
+
+    // Update last_used timestamp
+    if let Some(profile) = index.profiles.iter_mut().find(|p| p.id == profile_id) {
+        profile.last_used = Utc::now();
+        let result = profile.clone();
+        save_library_index(&storage_dir, &index)?;
+
+        tracing::info!("Switched to profile: {} (id={})", result.name, result.id);
+        Ok(result)
+    } else {
+        Err(AppError::Other(
+            "Profile not found after validation".to_string(),
+        ))
+    }
+}
+
+/// Get all profiles.
+pub fn get_profiles(app_handle: &AppHandle, settings: &Settings) -> AppResult<Vec<Profile>> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let index = load_library_index(&storage_dir)?;
+    Ok(index.profiles.clone())
+}
+
+/// Rename a profile.
+pub fn rename_profile(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    profile_id: String,
+    new_name: String,
+) -> AppResult<Profile> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let mut index = load_library_index(&storage_dir)?;
+
+    // Validate name is not empty or whitespace
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err(AppError::Other("Profile name cannot be empty".to_string()));
+    }
+
+    // Check for duplicate names
+    if index
+        .profiles
+        .iter()
+        .any(|p| p.id != profile_id && p.name == new_name)
+    {
+        return Err(AppError::Other(format!(
+            "Profile '{}' already exists",
+            new_name
+        )));
+    }
+
+    // Cannot rename Default profile
+    let profile = index
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| AppError::Other("Profile not found".to_string()))?;
+
+    if profile.name == "Default" {
+        return Err(AppError::Other("Cannot rename Default profile".to_string()));
+    }
+
+    profile.name = new_name;
+    let result = profile.clone();
+    save_library_index(&storage_dir, &index)?;
+
+    tracing::info!("Renamed profile {} to: {}", profile_id, result.name);
+    Ok(result)
+}
+
+/// Get the active profile.
+pub fn get_active_profile_info(app_handle: &AppHandle, settings: &Settings) -> AppResult<Profile> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let index = load_library_index(&storage_dir)?;
+    let profile = get_active_profile(&index)?;
+    Ok(profile.clone())
+}
+
+// ============================================================================
+// Overlay Functions
+// ============================================================================
+
+pub(crate) fn get_enabled_mods_for_overlay(
+    app_handle: &AppHandle,
+    settings: &Settings,
+) -> AppResult<(String, Vec<EnabledMod>)> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let index = load_library_index(&storage_dir)?;
+
+    // Get active profile
+    let active_profile_id = index.active_profile_id.clone();
+    let active_profile = index
+        .profiles
+        .iter()
+        .find(|p| p.id == active_profile_id)
+        .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
+
+    // Use profile-specific cache directory
+    let cache_dir = storage_dir
+        .join("profiles")
+        .join(&active_profile_id)
+        .join("cache");
 
     // Clean and recreate cache directory to ensure fresh extraction
     if cache_dir.exists() {
@@ -372,7 +657,13 @@ pub(crate) fn get_enabled_mods_for_overlay(
 
     let mut enabled_mods = Vec::new();
 
-    for entry in index.mods.into_iter().filter(|m| m.enabled) {
+    // Process mods in the order they appear in enabled_mods list (maintains priority)
+    for mod_id in &active_profile.enabled_mods {
+        let Some(entry) = index.mods.iter().find(|m| &m.id == mod_id) else {
+            tracing::warn!("Mod {} in profile but not found in library", mod_id);
+            continue;
+        };
+
         // If archive_path exists, extract to cache; otherwise use mod_dir directly (legacy)
         let mod_dir = if let Some(archive_path) = &entry.archive_path {
             if !archive_path.exists() {
@@ -409,19 +700,19 @@ pub(crate) fn get_enabled_mods_for_overlay(
             cached_mod_dir
         } else {
             // Legacy: mod was installed before archive support
-            entry.mod_dir
+            entry.mod_dir.clone()
         };
 
         enabled_mods.push(EnabledMod {
-            id: entry.id,
+            id: entry.id.clone(),
             mod_dir,
         });
     }
 
-    Ok(enabled_mods)
+    Ok((active_profile_id, enabled_mods))
 }
 
-fn read_installed_mod(entry: &LibraryModEntry) -> AppResult<InstalledMod> {
+fn read_installed_mod(entry: &LibraryModEntry, enabled: bool) -> AppResult<InstalledMod> {
     let project = load_mod_project(&entry.mod_dir)?;
     let authors = project
         .authors
@@ -457,7 +748,7 @@ fn read_installed_mod(entry: &LibraryModEntry) -> AppResult<InstalledMod> {
         version: project.version,
         description: Some(project.description).filter(|s| !s.is_empty()),
         authors,
-        enabled: entry.enabled,
+        enabled,
         installed_at: entry.installed_at,
         file_path: entry.file_path.clone(),
         layers,

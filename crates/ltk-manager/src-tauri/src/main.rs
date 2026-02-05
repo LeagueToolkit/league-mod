@@ -110,10 +110,18 @@ fn main() {
             commands::toggle_mod,
             commands::inspect_modpkg,
             commands::get_mod_thumbnail,
+            commands::get_storage_directory,
             // Patcher
             commands::start_patcher,
             commands::stop_patcher,
             commands::get_patcher_status,
+            // Profiles
+            commands::list_mod_profiles,
+            commands::get_active_mod_profile,
+            commands::create_mod_profile,
+            commands::delete_mod_profile,
+            commands::switch_mod_profile,
+            commands::rename_mod_profile,
             // Shell
             commands::reveal_in_explorer,
             // Workshop

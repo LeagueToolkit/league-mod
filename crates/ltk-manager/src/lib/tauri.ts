@@ -86,6 +86,15 @@ export interface OverlayProgress {
   total: number;
 }
 
+// Profile types
+export interface Profile {
+  id: string;
+  name: string;
+  enabledMods: string[];
+  createdAt: string;
+  lastUsed: string;
+}
+
 // Workshop types
 export interface WorkshopProject {
   path: string;
@@ -178,6 +187,7 @@ export const api = {
     invokeResult<void>("toggle_mod", { modId, enabled }),
   getModThumbnail: (thumbnailPath: string) =>
     invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
+  getStorageDirectory: () => invokeResult<string>("get_storage_directory"),
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),
@@ -186,6 +196,19 @@ export const api = {
   startPatcher: (config: PatcherConfig) => invokeResult<void>("start_patcher", { config }),
   stopPatcher: () => invokeResult<void>("stop_patcher"),
   getPatcherStatus: () => invokeResult<PatcherStatus>("get_patcher_status"),
+
+  // Profiles
+  listModProfiles: () => invokeResult<Profile[]>("list_mod_profiles"),
+  getActiveModProfile: () => invokeResult<Profile>("get_active_mod_profile"),
+  createModProfile: (name: string) => invokeResult<Profile>("create_mod_profile", { name }),
+  deleteModProfile: (profileId: string) => invokeResult<void>("delete_mod_profile", { profileId }),
+  switchModProfile: (profileId: string) =>
+    invokeResult<Profile>("switch_mod_profile", { profileId }),
+  renameModProfile: (profileId: string, newName: string) =>
+    invokeResult<Profile>("rename_mod_profile", { profileId, newName }),
+
+  // Shell
+  revealInExplorer: (path: string) => invokeResult<void>("reveal_in_explorer", { path }),
 
   // Workshop
   getWorkshopProjects: () => invokeResult<WorkshopProject[]>("get_workshop_projects"),
