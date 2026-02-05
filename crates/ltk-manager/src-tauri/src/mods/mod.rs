@@ -2,7 +2,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::{get_app_data_dir, Settings};
 use chrono::{DateTime, Utc};
 use ltk_mod_project::{ModProject, ModProjectLayer};
-use ltk_modpkg::{Modpkg, ModpkgExtractor};
+use ltk_modpkg::Modpkg;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -97,12 +97,6 @@ struct LibraryModEntry {
     /// Path to the stored mod archive file (for overlay building).
     #[serde(skip_serializing_if = "Option::is_none")]
     archive_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EnabledMod {
-    pub id: String,
-    pub mod_dir: PathBuf,
 }
 
 /// Information returned by `inspect_modpkg`.
@@ -631,7 +625,7 @@ pub fn get_active_profile_info(app_handle: &AppHandle, settings: &Settings) -> A
 pub(crate) fn get_enabled_mods_for_overlay(
     app_handle: &AppHandle,
     settings: &Settings,
-) -> AppResult<(String, Vec<EnabledMod>)> {
+) -> AppResult<(String, Vec<ltk_overlay::EnabledMod>)> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
     let index = load_library_index(&storage_dir)?;
 
@@ -643,18 +637,6 @@ pub(crate) fn get_enabled_mods_for_overlay(
         .find(|p| p.id == active_profile_id)
         .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
 
-    // Use profile-specific cache directory
-    let cache_dir = storage_dir
-        .join("profiles")
-        .join(&active_profile_id)
-        .join("cache");
-
-    // Clean and recreate cache directory to ensure fresh extraction
-    if cache_dir.exists() {
-        fs::remove_dir_all(&cache_dir)?;
-    }
-    fs::create_dir_all(&cache_dir)?;
-
     let mut enabled_mods = Vec::new();
 
     // Process mods in the order they appear in enabled_mods list (maintains priority)
@@ -664,48 +646,48 @@ pub(crate) fn get_enabled_mods_for_overlay(
             continue;
         };
 
-        // If archive_path exists, extract to cache; otherwise use mod_dir directly (legacy)
-        let mod_dir = if let Some(archive_path) = &entry.archive_path {
-            if !archive_path.exists() {
-                tracing::warn!(
-                    "Archive not found for mod {}: {}",
-                    entry.id,
-                    archive_path.display()
-                );
-                continue;
-            }
-
-            let cached_mod_dir = cache_dir.join(&entry.id);
-            fs::create_dir_all(&cached_mod_dir)?;
-
-            let extension = archive_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-
-            tracing::info!(
-                "Extracting mod {} from archive {} to cache {}",
-                entry.id,
-                archive_path.display(),
-                cached_mod_dir.display()
-            );
-
-            if extension == "fantome" {
-                install_fantome_to_dir(archive_path, &cached_mod_dir)?;
-            } else {
-                install_modpkg_to_dir(archive_path, &cached_mod_dir)?;
-            }
-
-            cached_mod_dir
-        } else {
-            // Legacy: mod was installed before archive support
-            entry.mod_dir.clone()
+        let Some(archive_path) = &entry.archive_path else {
+            tracing::warn!("Mod {} has no archive path, skipping", entry.id);
+            continue;
         };
 
-        enabled_mods.push(EnabledMod {
+        if !archive_path.exists() {
+            tracing::warn!(
+                "Archive not found for mod {}: {}",
+                entry.id,
+                archive_path.display()
+            );
+            continue;
+        }
+
+        let extension = archive_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        tracing::info!(
+            "Creating content provider for mod {} from archive {}",
+            entry.id,
+            archive_path.display()
+        );
+
+        let content: Box<dyn ltk_overlay::ModContentProvider> = if extension == "fantome" {
+            let file = std::fs::File::open(archive_path)?;
+            let provider = crate::overlay::fantome_content::FantomeContent::new(file)
+                .map_err(|e| AppError::Other(format!("Failed to open fantome archive: {}", e)))?;
+            Box::new(provider)
+        } else {
+            let file = std::fs::File::open(archive_path)?;
+            let modpkg = ltk_modpkg::Modpkg::mount_from_reader(file)
+                .map_err(|e| AppError::Modpkg(e.to_string()))?;
+            Box::new(crate::overlay::modpkg_content::ModpkgContent::new(modpkg))
+        };
+
+        enabled_mods.push(ltk_overlay::EnabledMod {
             id: entry.id.clone(),
-            mod_dir,
+            content,
+            priority: 0,
         });
     }
 
@@ -766,16 +748,6 @@ fn load_mod_project(mod_dir: &Path) -> AppResult<ModProject> {
         ))
     })?;
     serde_json::from_str(&contents).map_err(AppError::from)
-}
-
-fn install_fantome_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
-    let file = std::fs::File::open(file_path)?;
-    let mut extractor = ltk_fantome::FantomeExtractor::new(file)
-        .map_err(|e| AppError::Other(format!("Fantome extract init failed: {}", e)))?;
-    extractor
-        .extract_to(mod_dir)
-        .map_err(|e| AppError::Other(format!("Fantome extract failed: {}", e)))?;
-    Ok(())
 }
 
 fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<()> {
@@ -866,75 +838,6 @@ fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<
     }
 
     tracing::info!("Extracted fantome metadata to {}", metadata_dir.display());
-    Ok(())
-}
-
-fn install_modpkg_to_dir(file_path: &Path, mod_dir: &Path) -> AppResult<()> {
-    let file = std::fs::File::open(file_path)?;
-    let mut modpkg =
-        Modpkg::mount_from_reader(file).map_err(|e| AppError::Modpkg(e.to_string()))?;
-
-    // Extract content into content/<layer>/...
-    let content_dir = mod_dir.join("content");
-    fs::create_dir_all(&content_dir)?;
-    let mut extractor = ModpkgExtractor::new(&mut modpkg);
-    extractor
-        .extract_all(&content_dir)
-        .map_err(|e| AppError::Modpkg(e.to_string()))?;
-
-    // Build a mod project config from metadata/header layers.
-    let metadata = modpkg
-        .load_metadata()
-        .map_err(|e| AppError::Modpkg(e.to_string()))?;
-
-    // Use header layers as source of truth (they always exist for modpkg content).
-    let mut layers: Vec<ModProjectLayer> = modpkg
-        .layers
-        .values()
-        .map(|l| ModProjectLayer {
-            name: l.name.clone(),
-            priority: l.priority,
-            description: metadata
-                .layers
-                .iter()
-                .find(|ml| ml.name == l.name)
-                .and_then(|ml| ml.description.clone()),
-        })
-        .collect();
-    layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
-
-    // Ensure base exists.
-    if !layers.iter().any(|l| l.name == "base") {
-        layers.insert(0, ModProjectLayer::base());
-    }
-
-    let project = ModProject {
-        name: metadata.name,
-        display_name: metadata.display_name,
-        version: metadata.version.to_string(),
-        description: metadata.description.unwrap_or_default(),
-        authors: metadata
-            .authors
-            .into_iter()
-            .map(|a| ltk_mod_project::ModProjectAuthor::Name(a.name))
-            .collect(),
-        license: None,
-        transformers: Vec::new(),
-        layers,
-        thumbnail: None,
-    };
-
-    let config_path = mod_dir.join("mod.config.json");
-    fs::write(config_path, serde_json::to_string_pretty(&project)?)?;
-
-    // Optional meta: README + thumbnail.webp
-    if let Ok(readme_bytes) = modpkg.load_readme() {
-        let _ = fs::write(mod_dir.join("README.md"), readme_bytes);
-    }
-    if let Ok(thumbnail_bytes) = modpkg.load_thumbnail() {
-        let _ = fs::write(mod_dir.join("thumbnail.webp"), thumbnail_bytes);
-    }
-
     Ok(())
 }
 

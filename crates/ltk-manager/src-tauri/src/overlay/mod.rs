@@ -1,3 +1,6 @@
+pub mod fantome_content;
+pub mod modpkg_content;
+
 use crate::error::{AppError, AppResult};
 use crate::mods::get_enabled_mods_for_overlay;
 use crate::state::{get_app_data_dir, Settings};
@@ -45,16 +48,6 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
         enabled_ids.join(", ")
     );
 
-    // Convert to ltk_overlay::EnabledMod
-    let overlay_mods = enabled_mods
-        .into_iter()
-        .map(|m| ltk_overlay::EnabledMod {
-            id: m.id,
-            mod_dir: m.mod_dir,
-            priority: 0,
-        })
-        .collect();
-
     // Build overlay using ltk_overlay crate
     let app_handle_clone = app_handle.clone();
     let mut builder = ltk_overlay::OverlayBuilder::new(game_dir, overlay_root.clone())
@@ -79,7 +72,7 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
             );
         });
 
-    builder.set_enabled_mods(overlay_mods);
+    builder.set_enabled_mods(enabled_mods);
 
     builder
         .build()

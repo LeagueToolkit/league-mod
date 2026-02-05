@@ -1,22 +1,22 @@
 //! Main overlay builder implementation.
 
+use crate::content::ModContentProvider;
 use crate::error::Result;
 use crate::game_index::GameIndex;
 use crate::state::OverlayState;
 use crate::utils::resolve_chunk_hash;
 use crate::wad_builder::build_patched_wad;
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// A mod to be included in the overlay.
-#[derive(Debug, Clone)]
 pub struct EnabledMod {
     /// Unique identifier for the mod.
     pub id: String,
-    /// Directory containing the mod project (with mod.config.json and content/).
-    pub mod_dir: PathBuf,
+    /// Content provider for accessing mod files.
+    pub content: Box<dyn ModContentProvider>,
     /// Global priority for conflict resolution (higher wins).
     pub priority: i32,
 }
@@ -242,50 +242,28 @@ impl OverlayBuilder {
 
         // Collect ALL mod overrides as a flat map: path_hash -> bytes
         let mut all_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
-        // Full WAD replacement files keyed by target relative game path
-        let mut wad_replacements: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
 
-        for enabled_mod in &self.enabled_mods {
-            tracing::info!(
-                "Processing mod id={} dir={}",
-                enabled_mod.id,
-                enabled_mod.mod_dir.display()
-            );
+        for enabled_mod in &mut self.enabled_mods {
+            tracing::info!("Processing mod id={}", enabled_mod.id);
 
-            let project = Self::load_mod_project(&enabled_mod.mod_dir)?;
+            let project = enabled_mod.content.mod_project()?;
             let mut layers = project.layers.clone();
             layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
 
             for layer in &layers {
-                let layer_dir = enabled_mod.mod_dir.join("content").join(&layer.name);
-                if !layer_dir.exists() {
+                let wad_names = enabled_mod.content.list_layer_wads(&layer.name)?;
+                if wad_names.is_empty() {
                     tracing::debug!(
-                        "Mod={} layer='{}' dir missing, skipping: {}",
+                        "Mod={} layer='{}' no WADs found, skipping",
                         enabled_mod.id,
                         layer.name,
-                        layer_dir.display()
                     );
                     continue;
                 }
 
-                tracing::info!(
-                    "Mod={} layer='{}' dir={}",
-                    enabled_mod.id,
-                    layer.name,
-                    layer_dir.display()
-                );
+                tracing::info!("Mod={} layer='{}'", enabled_mod.id, layer.name);
 
-                // Each subdirectory ending with .wad.client is a WAD overlay root
-                for entry in std::fs::read_dir(&layer_dir)? {
-                    let entry = entry?;
-                    let wad_path = entry.path();
-                    let Some(wad_name) = wad_path.file_name().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    if !wad_name.to_ascii_lowercase().ends_with(".wad.client") {
-                        continue;
-                    }
-
+                for wad_name in &wad_names {
                     let original_wad_path = game_index.find_wad(wad_name)?;
                     let relative_game_path = original_wad_path
                         .strip_prefix(&self.game_dir)
@@ -304,35 +282,21 @@ impl OverlayBuilder {
                         relative_game_path.display()
                     );
 
-                    if wad_path.is_dir() {
-                        // Collect overrides into the global override map
-                        let before = all_overrides.len();
-                        Self::ingest_wad_dir_overrides(&wad_path, &mut all_overrides)?;
-                        let after = all_overrides.len();
-                        tracing::info!(
-                            "WAD='{}' overrides added={} total_all_overrides={}",
-                            wad_name,
-                            after.saturating_sub(before),
-                            after
-                        );
-                    } else if wad_path.is_file() {
-                        if let Some(prev) =
-                            wad_replacements.insert(relative_game_path.clone(), wad_path.clone())
-                        {
-                            tracing::warn!(
-                                "WAD='{}' replacement overridden by later mod/layer: prev={} new={}",
-                                wad_name,
-                                prev.display(),
-                                wad_path.display()
-                            );
-                        } else {
-                            tracing::info!(
-                                "WAD='{}' using full replacement file={}",
-                                wad_name,
-                                wad_path.display()
-                            );
-                        }
+                    let before = all_overrides.len();
+                    let override_files = enabled_mod
+                        .content
+                        .read_wad_overrides(&layer.name, wad_name)?;
+                    for (rel_path, bytes) in override_files {
+                        let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
+                        all_overrides.insert(path_hash, bytes);
                     }
+                    let after = all_overrides.len();
+                    tracing::info!(
+                        "WAD='{}' overrides added={} total_all_overrides={}",
+                        wad_name,
+                        after.saturating_sub(before),
+                        after
+                    );
                 }
             }
         }
@@ -341,20 +305,6 @@ impl OverlayBuilder {
             "Collected {} unique override hashes from all mods",
             all_overrides.len()
         );
-
-        // Write full replacement WADs first
-        for (relative_game_path, src_wad_path) in &wad_replacements {
-            let dst_wad_path = self.overlay_root.join(relative_game_path);
-            if let Some(parent) = dst_wad_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            tracing::info!(
-                "Copying WAD replacement src={} dst={}",
-                src_wad_path.display(),
-                dst_wad_path.display()
-            );
-            std::fs::copy(src_wad_path, &dst_wad_path)?;
-        }
 
         // Distribute overrides to ALL affected WADs using the game hash index
         let mut wad_overrides: BTreeMap<PathBuf, HashMap<u64, Vec<u8>>> = BTreeMap::new();
@@ -390,14 +340,6 @@ impl OverlayBuilder {
                 current: current_wad,
                 total: total_wads,
             });
-
-            if wad_replacements.contains_key(&relative_game_path) {
-                tracing::info!(
-                    "Skipping patch build for {} (covered by full replacement)",
-                    relative_game_path.display()
-                );
-                continue;
-            }
 
             let src_wad_path = self.game_dir.join(&relative_game_path);
             let dst_wad_path = self.overlay_root.join(&relative_game_path);
@@ -478,47 +420,12 @@ impl OverlayBuilder {
 
         Ok(true)
     }
-
-    /// Load mod project from directory.
-    fn load_mod_project(mod_dir: &Path) -> Result<ltk_mod_project::ModProject> {
-        let config_path = mod_dir.join("mod.config.json");
-        let contents = std::fs::read_to_string(&config_path)?;
-        Ok(serde_json::from_str(&contents)?)
-    }
-
-    /// Ingest all overrides from a WAD directory.
-    ///
-    /// Recursively walks the directory and adds all files as overrides.
-    fn ingest_wad_dir_overrides(
-        wad_dir: &Path,
-        out: &mut HashMap<u64, Vec<u8>>,
-    ) -> Result<()> {
-        let mut stack = vec![wad_dir.to_path_buf()];
-
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir)? {
-                let entry = entry?;
-                let path = entry.path();
-
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-
-                let rel = path.strip_prefix(wad_dir).unwrap_or(&path);
-                let bytes = std::fs::read(&path)?;
-                let path_hash = resolve_chunk_hash(rel, &bytes)?;
-                out.insert(path_hash, bytes);
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::FsModContent;
 
     #[test]
     fn test_builder_creation() {
@@ -535,7 +442,7 @@ mod tests {
 
         builder.set_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
-            mod_dir: PathBuf::from("/mods/mod1"),
+            content: Box::new(FsModContent::new(PathBuf::from("/mods/mod1"))),
             priority: 0,
         }]);
 

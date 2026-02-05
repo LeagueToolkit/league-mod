@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use ltk_overlay::{OverlayBuilder, EnabledMod};
+//! use ltk_overlay::{OverlayBuilder, EnabledMod, FsModContent};
 //! use std::path::PathBuf;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,7 +28,7 @@
 //! builder.set_enabled_mods(vec![
 //!     EnabledMod {
 //!         id: "my-mod".to_string(),
-//!         mod_dir: PathBuf::from("/path/to/mod"),
+//!         content: Box::new(FsModContent::new(PathBuf::from("/path/to/mod"))),
 //!         priority: 0,
 //!     },
 //! ]);
@@ -41,6 +41,7 @@
 //! ```
 
 pub mod builder;
+pub mod content;
 pub mod error;
 pub mod game_index;
 pub mod state;
@@ -49,5 +50,6 @@ pub mod wad_builder;
 
 // Re-export main types
 pub use builder::{EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage};
+pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};
 pub use game_index::GameIndex;

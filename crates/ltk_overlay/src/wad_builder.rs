@@ -214,8 +214,7 @@ pub fn build_patched_wad(
 ///
 /// Used for handling ZstdMulti compression format.
 fn find_zstd_magic_offset(raw: &[u8]) -> Option<usize> {
-    raw.windows(ZSTD_MAGIC.len())
-        .position(|w| w == ZSTD_MAGIC)
+    raw.windows(ZSTD_MAGIC.len()).position(|w| w == ZSTD_MAGIC)
 }
 
 /// Compress data using Zstd compression (level 3).
