@@ -105,3 +105,21 @@ fn get_mod_thumbnail_inner(thumbnail_path: &str) -> crate::error::AppResult<Stri
 
     Ok(thumbnail_path.to_string())
 }
+
+/// Get the mod storage directory path.
+#[tauri::command]
+pub fn get_storage_directory(
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<String> {
+    get_storage_directory_inner(&app_handle, &settings).into()
+}
+
+fn get_storage_directory_inner(
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<String> {
+    let settings = settings.0.lock().mutex_err()?.clone();
+    let (storage_dir, _) = crate::mods::resolve_storage_dirs(app_handle, &settings)?;
+    Ok(storage_dir.display().to_string())
+}

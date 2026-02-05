@@ -1,17 +1,19 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
+import { LuFolderOpen, LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
 import { ModCard } from "@/components/ModCard";
-import type { AppError } from "@/lib/tauri";
+import { useToast } from "@/components/Toast";
+import { api, type AppError, unwrap } from "@/lib/tauri";
 import {
+  ProfileSelector,
   useInstalledMods,
   useInstallMod,
   useToggleMod,
   useUninstallMod,
-} from "@/modules/library/api";
+} from "@/modules/library";
 import {
   useOverlayProgress,
   usePatcherStatus,
@@ -39,6 +41,7 @@ export function Library() {
   const startPatcher = useStartPatcher();
   const stopPatcher = useStopPatcher();
   const overlayProgress = useOverlayProgress();
+  const toast = useToast();
 
   const enabledModsCount = mods.filter((m) => m.enabled).length;
   const hasEnabledMods = enabledModsCount > 0;
@@ -129,6 +132,16 @@ export function Library() {
     });
   }
 
+  async function handleOpenStorageDirectory() {
+    try {
+      const result = await api.getStorageDirectory();
+      const path = unwrap(result);
+      await api.revealInExplorer(path);
+    } catch (error: any) {
+      toast.error("Failed to open directory", error.message);
+    }
+  }
+
   const filteredMods = mods.filter(
     (mod) =>
       mod.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -155,6 +168,18 @@ export function Library() {
         className="flex items-center gap-4 border-b border-surface-600 px-4 py-3"
         data-tauri-drag-region
       >
+        {/* Profile Selector */}
+        <ProfileSelector />
+
+        {/* Open Storage Directory */}
+        <IconButton
+          icon={<LuFolderOpen className="h-4 w-4" />}
+          variant="ghost"
+          size="sm"
+          onClick={handleOpenStorageDirectory}
+          title="Open storage directory"
+        />
+
         {/* Search */}
         <div className="relative flex-1">
           <LuSearch className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-surface-500" />

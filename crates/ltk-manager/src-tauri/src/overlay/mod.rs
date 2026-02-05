@@ -43,13 +43,21 @@ impl Default for OverlayState {
 /// Returns the overlay root directory (the prefix passed to the legacy patcher).
 pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<PathBuf> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
-    let overlay_root = storage_dir.join("overlay");
+
+    // Get active profile ID and enabled mods
+    let (profile_id, enabled_mods) = get_enabled_mods_for_overlay(app_handle, settings)?;
+
+    // Use profile-specific overlay directory
+    let overlay_root = storage_dir
+        .join("profiles")
+        .join(&profile_id)
+        .join("overlay");
     let overlay_state_path = overlay_root.join("overlay.json");
 
     tracing::info!("Overlay: storage_dir={}", storage_dir.display());
+    tracing::info!("Overlay: profile_id={}", profile_id);
     tracing::info!("Overlay: overlay_root={}", overlay_root.display());
 
-    let enabled_mods = get_enabled_mods_for_overlay(app_handle, settings)?;
     let enabled_ids = enabled_mods
         .iter()
         .map(|m| m.id.clone())
