@@ -34,6 +34,8 @@ pub enum ErrorCode {
     ProjectAlreadyExists,
     /// Failed to pack workshop project
     PackFailed,
+    /// WAD file error
+    Wad,
 }
 
 /// Structured error response sent over IPC.
@@ -168,6 +170,12 @@ pub enum AppError {
 
     #[error("Failed to pack project: {0}")]
     PackFailed(String),
+
+    #[error("WAD error: {0}")]
+    WadError(#[from] ltk_wad::WadError),
+
+    #[error("WAD builder error: {0}")]
+    WadBuilderError(#[from] ltk_wad::WadBuilderError),
 }
 
 impl From<AppError> for AppErrorResponse {
@@ -225,6 +233,10 @@ impl From<AppError> for AppErrorResponse {
             .with_context(serde_json::json!({ "projectName": name })),
 
             AppError::PackFailed(msg) => AppErrorResponse::new(ErrorCode::PackFailed, msg),
+
+            AppError::WadError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
+
+            AppError::WadBuilderError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
         }
     }
 }

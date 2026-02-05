@@ -43,7 +43,9 @@
 pub mod builder;
 pub mod error;
 pub mod game_index;
+pub mod state;
 pub mod utils;
+pub mod wad_builder;
 
 // Re-export main types
 pub use builder::{EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage};

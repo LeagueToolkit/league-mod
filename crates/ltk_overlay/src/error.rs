@@ -19,7 +19,11 @@ pub enum Error {
 
     /// WAD error.
     #[error("WAD error: {0}")]
-    Wad(String),
+    WadError(#[from] ltk_wad::WadError),
+
+    /// WAD builder error.
+    #[error("WAD builder error: {0}")]
+    WadBuilderError(#[from] ltk_wad::WadBuilderError),
 
     /// Game directory not found or invalid.
     #[error("Invalid game directory: {0}")]

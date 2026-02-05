@@ -13,7 +13,8 @@ authors = ["LeagueToolkit"]
 
 [dependencies]
 # LeagueToolkit crates
-ltk_wad = "0.2.6"
+ltk_wad = "0.2.11"
+ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.1.0", path = "../ltk_mod_project" }
 ltk_modpkg = { version = "0.1.0", path = "../ltk_modpkg" }
 

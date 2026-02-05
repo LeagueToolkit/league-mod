@@ -165,9 +165,10 @@ fn build_game_hash_index(
     game_dir: &Path,
     data_final_dir: &Path,
 ) -> Result<HashMap<u64, Vec<PathBuf>>> {
-    let hash_to_wads: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+    use ltk_wad::Wad;
+
+    let mut hash_to_wads: HashMap<u64, Vec<PathBuf>> = HashMap::new();
     let mut wad_count = 0;
-    #[allow(unused_mut)] // Will be used in full implementation
     let mut chunk_count = 0;
 
     let mut stack = vec![data_final_dir.to_path_buf()];
@@ -191,25 +192,41 @@ fn build_game_hash_index(
             }
 
             // Get relative path from game_dir
-            let _relative_path = match path.strip_prefix(game_dir) {
+            let relative_path = match path.strip_prefix(game_dir) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => continue,
             };
 
-            // TODO: Mount WAD and index all chunk hashes
-            // For now, this is a placeholder
-            // In the full implementation, we would:
-            // 1. Open the WAD file
-            // 2. Mount it using ltk_wad
-            // 3. Iterate over all chunks
-            // 4. Add path_hash -> relative_path mapping
+            // Mount WAD and index all chunk hashes
+            let file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("Failed to open WAD '{}': {}", path.display(), e);
+                    continue;
+                }
+            };
+
+            let wad = match Wad::mount(file) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("Failed to mount WAD '{}': {}", path.display(), e);
+                    continue;
+                }
+            };
 
             wad_count += 1;
+            for chunk in wad.chunks().iter() {
+                hash_to_wads
+                    .entry(chunk.path_hash)
+                    .or_default()
+                    .push(relative_path.clone());
+                chunk_count += 1;
+            }
         }
     }
 
     tracing::info!(
-        "Game hash index built: {} WADs, {} chunks, {} unique hashes",
+        "Game hash index built: {} WADs, {} total chunk entries, {} unique hashes",
         wad_count,
         chunk_count,
         hash_to_wads.len()
