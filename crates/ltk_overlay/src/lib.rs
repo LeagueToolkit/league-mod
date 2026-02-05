@@ -1,18 +1,54 @@
-//! WAD overlay/profile builder for League of Legends mods.
+//! WAD overlay builder for League of Legends mods.
 //!
-//! This crate provides functionality to build WAD overlays from enabled mods,
-//! allowing the League patcher to load modded assets. It supports:
+//! This crate builds WAD overlay directories from a set of enabled mods. The overlay
+//! contains patched copies of game WAD files with mod content applied on top, which a
+//! patcher DLL can redirect the game to load instead of the originals.
 //!
-//! - **Incremental rebuilds**: Only rebuild WADs that have changed
-//! - **Cross-WAD matching**: Distribute mod files to all affected WADs
-//! - **Layer system**: Respect mod layer priorities
-//! - **String overrides**: Apply metadata-driven string table modifications
-//! - **Conflict resolution**: Detect and resolve conflicts between mods
+//! # How It Works
+//!
+//! The overlay build process has four stages:
+//!
+//! 1. **Indexing** — Scan the game's `DATA/FINAL` directory and mount every
+//!    `.wad.client` file. Build two indexes:
+//!    - *Filename index*: WAD filename (case-insensitive) -> filesystem paths
+//!    - *Hash index*: chunk path hash (`u64`) -> list of WAD files containing it
+//!
+//! 2. **Collecting overrides** — For each enabled mod (in order), read its layer
+//!    structure and WAD override files through the [`ModContentProvider`] trait.
+//!    Each override file is resolved to a `u64` path hash (either parsed from a hex
+//!    filename or computed from the normalized path). All overrides are collected
+//!    into a single `HashMap<u64, Vec<u8>>`. When multiple mods override the same
+//!    hash, the last mod in the list wins.
+//!
+//! 3. **Distributing to WADs** — Using the hash index, each override is distributed
+//!    to *every* game WAD that contains that path hash ("cross-WAD matching"). This
+//!    means a single skin texture override will automatically be applied to both
+//!    the champion WAD and any map WAD that shares the same asset.
+//!
+//! 4. **Patching WADs** — For each affected game WAD, a patched copy is built in the
+//!    overlay directory. The patched WAD contains all original chunks plus the
+//!    overrides, with optimizations for audio files (kept uncompressed) and chunk
+//!    deduplication.
+//!
+//! # Content Provider Abstraction
+//!
+//! Mod content is accessed through the [`ModContentProvider`] trait, which decouples
+//! the builder from any particular storage format. Implementations can read from:
+//!
+//! - Filesystem directories ([`FsModContent`])
+//! - `.modpkg` archives (implemented in `ltk-manager`)
+//! - `.fantome` ZIP archives (implemented in `ltk-manager`)
+//!
+//! # Overlay State Caching
+//!
+//! After a successful build, an `overlay.json` state file is persisted containing the
+//! list of enabled mod IDs and a game directory fingerprint. On the next build, if the
+//! state matches and the overlay WAD files are still valid, the build is skipped entirely.
 //!
 //! # Example
 //!
 //! ```no_run
-//! use ltk_overlay::{OverlayBuilder, EnabledMod};
+//! use ltk_overlay::{OverlayBuilder, EnabledMod, FsModContent};
 //! use std::path::PathBuf;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,24 +64,27 @@
 //! builder.set_enabled_mods(vec![
 //!     EnabledMod {
 //!         id: "my-mod".to_string(),
-//!         mod_dir: PathBuf::from("/path/to/mod"),
+//!         content: Box::new(FsModContent::new(PathBuf::from("/path/to/mod"))),
 //!         priority: 0,
 //!     },
 //! ]);
 //!
 //! let result = builder.build()?;
-//! println!("Built {} WADs, reused {}",
-//!     result.wads_built.len(), result.wads_reused.len());
+//! println!("Built {} WADs in {:?}", result.wads_built.len(), result.build_time);
 //! # Ok(())
 //! # }
-//! ```
 
 pub mod builder;
+pub mod content;
 pub mod error;
 pub mod game_index;
+pub mod state;
 pub mod utils;
+pub mod wad_builder;
 
-// Re-export main types
+// Re-export main public API.
 pub use builder::{EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage};
+pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};
 pub use game_index::GameIndex;
+pub use state::OverlayState;

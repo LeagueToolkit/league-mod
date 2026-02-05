@@ -34,6 +34,8 @@ pub enum ErrorCode {
     ProjectAlreadyExists,
     /// Failed to pack workshop project
     PackFailed,
+    /// WAD file error
+    Wad,
 }
 
 /// Structured error response sent over IPC.
@@ -66,10 +68,19 @@ impl AppErrorResponse {
 }
 
 /// Result type for IPC commands.
-/// This is always "successful" at the Tauri level - the actual success/failure
-/// is encoded in the response payload for type-safe error handling on the frontend.
 ///
-/// Serializes to `{ "ok": true, "value": T }` or `{ "ok": false, "error": AppErrorResponse }`.
+/// ```rust
+/// #[tauri::command]
+/// pub fn my_command() -> IpcResult<String> {
+///     my_command_inner().into()
+/// }
+///
+/// fn my_command_inner() -> AppResult<String> {
+///     Ok("value".to_string())
+/// }
+/// ```
+///
+/// Serializes to: `{ "ok": true, "value": T }` or `{ "ok": false, "error": ... }`
 #[derive(Debug, Clone)]
 pub enum IpcResult<T> {
     Ok { value: T },
@@ -168,6 +179,12 @@ pub enum AppError {
 
     #[error("Failed to pack project: {0}")]
     PackFailed(String),
+
+    #[error("WAD error: {0}")]
+    WadError(#[from] ltk_wad::WadError),
+
+    #[error("WAD builder error: {0}")]
+    WadBuilderError(#[from] ltk_wad::WadBuilderError),
 }
 
 impl From<AppError> for AppErrorResponse {
@@ -225,6 +242,10 @@ impl From<AppError> for AppErrorResponse {
             .with_context(serde_json::json!({ "projectName": name })),
 
             AppError::PackFailed(msg) => AppErrorResponse::new(ErrorCode::PackFailed, msg),
+
+            AppError::WadError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
+
+            AppError::WadBuilderError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
         }
     }
 }

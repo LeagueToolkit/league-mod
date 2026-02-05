@@ -230,7 +230,6 @@ fn extract_packed_wad<R: Read>(
 
     let cursor = Cursor::new(wad_data);
     let mut wad = Wad::mount(cursor)?;
-    let (mut decoder, chunks) = wad.decode();
 
     std::fs::create_dir_all(output_dir)?;
 
@@ -240,11 +239,11 @@ fn extract_packed_wad<R: Read>(
 
     if let Some(ht) = hashtable {
         let extractor = WadExtractor::new(ht);
-        extractor.extract_all(&mut decoder, chunks, output_dir_utf8)?;
+        extractor.extract_all(&mut wad, output_dir_utf8)?;
     } else {
         let resolver = HexPathResolver;
         let extractor = WadExtractor::new(&resolver);
-        extractor.extract_all(&mut decoder, chunks, output_dir_utf8)?;
+        extractor.extract_all(&mut wad, output_dir_utf8)?;
     }
 
     Ok(())

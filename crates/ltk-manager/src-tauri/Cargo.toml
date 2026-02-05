@@ -21,7 +21,9 @@ ltk_modpkg = { path = "../../ltk_modpkg", features = ["project"] }
 ltk_mod_project = { path = "../../ltk_mod_project" }
 ltk_mod_core = { path = "../../ltk_mod_core" }
 ltk_fantome = { path = "../../ltk_fantome" }
-ltk_wad = "0.2.6"
+ltk_overlay = { path = "../../ltk_overlay" }
+ltk_wad = "0.2.11"
+ltk_file = "0.2.8"
 
 camino = "1.2"
 semver = "1.0"
