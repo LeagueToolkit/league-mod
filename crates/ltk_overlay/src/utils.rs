@@ -1,11 +1,22 @@
-//! Utility functions for overlay building.
+//! Path normalization and hash resolution utilities.
+//!
+//! These functions bridge the gap between how mod files are stored on disk (or in
+//! archives) and the `u64` path hashes used inside WAD files.
 
 use crate::error::Result;
 use std::path::Path;
 
-/// Normalize a relative path for hash calculation.
+/// Normalize a relative path for hash computation.
 ///
-/// This handles special cases like .ltk suffixes added by extractors.
+/// Strips `.ltk` suffixes that the LeagueToolkit extractor adds to avoid filename
+/// collisions with the WAD format:
+///
+/// - `file.ltk.bin` -> `file.bin` (`.ltk` removed, original extension preserved)
+/// - `file.ltk` -> `file` (bare `.ltk` suffix removed)
+/// - `file.bin` -> `file.bin` (no change)
+///
+/// Path separators are normalized to forward slashes (`/`) for consistent hashing
+/// across platforms.
 pub fn normalize_rel_path_for_hash(rel_path: &Path, _bytes: &[u8]) -> String {
     let mut parts = rel_path
         .components()
@@ -41,10 +52,18 @@ pub fn normalize_rel_path_for_hash(rel_path: &Path, _bytes: &[u8]) -> String {
     joined.replace('\\', "/")
 }
 
-/// Resolve chunk hash for a file.
+/// Resolve the WAD chunk path hash for a mod override file.
 ///
-/// If the file is named with a hex hash (16 hex digits), use that directly.
-/// Otherwise, compute the hash from the normalized path.
+/// Two resolution strategies:
+///
+/// 1. **Hex-hash filename**: If the file stem is exactly 16 hex digits
+///    (e.g., `0123456789abcdef.bin`), it is parsed directly as a `u64` hash.
+///    This is used by packed WAD content providers that don't have the original
+///    path names.
+///
+/// 2. **Named path**: Otherwise, the path is normalized via
+///    [`normalize_rel_path_for_hash`] and hashed with
+///    [`ltk_modpkg::utils::hash_chunk_name`] (xxHash3).
 pub fn resolve_chunk_hash(rel_path: &Path, bytes: &[u8]) -> Result<u64> {
     let file_name = rel_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let file_stem = Path::new(file_name)

@@ -1,26 +1,48 @@
-//! Overlay state management for incremental rebuilds.
+//! Overlay state persistence for build caching.
+//!
+//! After a successful overlay build, an [`OverlayState`] is serialized to
+//! `overlay.json` inside the overlay directory. On the next build, the builder
+//! loads this file and compares it against the current configuration. If the
+//! enabled mod list and game fingerprint match (and the overlay WAD files on
+//! disk are still valid), the entire build is skipped.
+//!
+//! The state is deliberately simple — it tracks *what* was built, not *how*.
+//! Any mismatch triggers a full rebuild. This avoids complex incremental
+//! diffing logic while still providing a significant speedup for the common
+//! case of "nothing changed since last build".
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Persistent overlay state for incremental rebuilds.
+/// Snapshot of the overlay build configuration, persisted as `overlay.json`.
 ///
-/// This tracks what was built into the overlay, allowing us to skip
-/// rebuilds when nothing has changed.
+/// Used to determine whether the existing overlay can be reused or needs rebuilding.
+/// The comparison is strict: any change to the mod list (including reordering) or
+/// game directory invalidates the state.
+///
+/// # JSON format
+///
+/// ```json
+/// {
+///   "version": 2,
+///   "enabledMods": ["mod-a", "mod-b"],
+///   "gameFingerprint": 1234567890
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
-    /// State format version.
-    /// Current version is 2.
+    /// Schema version (current: `2`). Used for forward compatibility — if a
+    /// future version changes the format, old overlays won't match.
     pub version: u32,
 
-    /// List of enabled mod IDs (in order).
-    /// Used to detect when mods are added, removed, or reordered.
+    /// Ordered list of enabled mod IDs at the time the overlay was built.
+    /// Order matters because it determines conflict resolution.
     pub enabled_mods: Vec<String>,
 
-    /// Game fingerprint when overlay was built.
-    /// Used to detect when the game has been updated.
+    /// xxHash3 fingerprint of the game directory's WAD files.
+    /// Changes when the game is patched (file sizes/timestamps differ).
     pub game_fingerprint: u64,
 }
 

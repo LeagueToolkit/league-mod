@@ -1,4 +1,24 @@
 //! Main overlay builder implementation.
+//!
+//! The [`OverlayBuilder`] orchestrates the full overlay build pipeline:
+//! game indexing, override collection, cross-WAD distribution, and WAD patching.
+//!
+//! # Build Algorithm
+//!
+//! 1. Validate that `game_dir/DATA/FINAL` exists.
+//! 2. Build a [`GameIndex`] from all `.wad.client` files in the game directory.
+//! 3. Check the saved [`OverlayState`] — if the enabled mod list and game fingerprint
+//!    match, and the overlay WAD files on disk are still valid, skip the build entirely.
+//! 4. Wipe the overlay directory and iterate each [`EnabledMod`] in order:
+//!    - Read its [`ModProject`](ltk_mod_project::ModProject) to get layer definitions.
+//!    - For each layer (sorted by priority), list WAD targets and read override files.
+//!    - Resolve each override file to a `u64` path hash and collect into a global map.
+//!      Later mods overwrite earlier ones on hash collision (last-writer-wins).
+//! 5. Distribute the collected overrides to all game WADs containing each hash
+//!    (cross-WAD matching via [`GameIndex::find_wads_with_hash`]).
+//! 6. For each affected WAD, call [`build_patched_wad`](crate::wad_builder::build_patched_wad)
+//!    to produce a patched copy in the overlay directory.
+//! 7. Persist the new [`OverlayState`] and emit a completion progress event.
 
 use crate::content::ModContentProvider;
 use crate::error::Result;
@@ -11,92 +31,116 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// A mod to be included in the overlay.
+/// A mod to be included in the overlay build.
+///
+/// Each enabled mod contributes override files through its [`ModContentProvider`].
+/// Mods are processed in the order they appear in the `enabled_mods` list passed to
+/// [`OverlayBuilder::set_enabled_mods`]. When two mods override the same path hash,
+/// the mod that appears *later* in the list wins (last-writer-wins).
 pub struct EnabledMod {
-    /// Unique identifier for the mod.
+    /// Unique identifier for the mod (used in state tracking and logging).
     pub id: String,
-    /// Content provider for accessing mod files.
+    /// Content provider for accessing mod metadata and override files.
+    ///
+    /// This can be backed by a filesystem directory, a `.modpkg` archive, a
+    /// `.fantome` ZIP, or any other source that implements [`ModContentProvider`].
     pub content: Box<dyn ModContentProvider>,
     /// Global priority for conflict resolution (higher wins).
+    ///
+    /// Currently unused — ordering in the enabled list determines winner.
     pub priority: i32,
 }
 
 /// Progress information emitted during overlay building.
+///
+/// Serialized as JSON and sent to the frontend via Tauri events so the UI can
+/// display a progress bar and stage label. The `current`/`total` fields are only
+/// meaningful during the [`PatchingWad`](OverlayStage::PatchingWad) stage.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayProgress {
     /// Current stage of the build process.
     pub stage: OverlayStage,
-    /// Current file being processed (if applicable).
+    /// Filename of the WAD currently being patched (set during `PatchingWad`).
     pub current_file: Option<String>,
-    /// Current progress counter.
+    /// 1-based index of the WAD currently being patched.
     pub current: u32,
-    /// Total items to process.
+    /// Total number of WADs that need patching.
     pub total: u32,
 }
 
-/// Stages of overlay building.
+/// Stages of the overlay build pipeline.
+///
+/// Emitted in order: `Indexing` -> `CollectingOverrides` -> `PatchingWad` (repeated) -> `Complete`.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OverlayStage {
-    /// Indexing game files.
+    /// Scanning the game directory and building the [`GameIndex`].
     Indexing,
-    /// Collecting mod overrides.
+    /// Reading override files from all enabled mods.
     CollectingOverrides,
-    /// Building/patching a WAD file.
+    /// Building a patched WAD file in the overlay directory.
     PatchingWad,
-    /// Applying string overrides.
+    /// Applying string table overrides (reserved for future use).
     ApplyingStringOverrides,
-    /// Build complete.
+    /// Build finished successfully.
     Complete,
 }
 
-/// Result of an overlay build operation.
+/// Summary returned after an overlay build completes.
 #[derive(Debug)]
 pub struct OverlayBuildResult {
-    /// Root directory of the overlay.
+    /// Root directory of the overlay (mirrors the game's `DATA/FINAL` structure).
     pub overlay_root: PathBuf,
-    /// List of WAD files that were built.
+    /// WAD files that were freshly built during this run.
     pub wads_built: Vec<PathBuf>,
-    /// List of WAD files that were reused from previous build.
+    /// WAD files reused from a previous build (not yet implemented).
     pub wads_reused: Vec<PathBuf>,
-    /// Detected conflicts between mods.
+    /// Detected conflicts between mods (not yet implemented).
     pub conflicts: Vec<Conflict>,
-    /// Total build time.
+    /// Wall-clock time for the entire build.
     pub build_time: Duration,
 }
 
-/// A conflict between multiple mods modifying the same file.
+/// A conflict where multiple mods override the same chunk (not yet implemented).
 #[derive(Debug, Clone)]
 pub struct Conflict {
-    /// Hash of the conflicting file path.
+    /// xxHash3 path hash of the conflicting chunk.
     pub path_hash: u64,
-    /// Human-readable path (if available).
+    /// Human-readable path (if available from hash tables).
     pub path: String,
-    /// All mods that provide this file.
+    /// All mods that contributed an override for this chunk.
     pub contributing_mods: Vec<ModContribution>,
-    /// The mod that won (based on priority/ordering).
+    /// The mod whose override was used (last-writer-wins).
     pub winner: String,
 }
 
-/// Information about a mod contributing a file.
+/// Details about one mod's contribution to a conflicting chunk.
 #[derive(Debug, Clone)]
 pub struct ModContribution {
-    /// Mod ID.
+    /// Unique mod identifier.
     pub mod_id: String,
-    /// Mod display name.
+    /// Human-readable mod name.
     pub mod_name: String,
-    /// Layer name.
+    /// Layer name the override came from.
     pub layer: String,
-    /// Layer priority.
+    /// Layer priority value.
     pub priority: i32,
-    /// Installation order (index in enabled mods list).
+    /// Position in the enabled mods list (0-based).
     pub install_order: usize,
 }
 
 type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
-/// Main overlay builder.
+/// Orchestrates the overlay build pipeline.
+///
+/// Create a builder with [`new`](Self::new), configure it with
+/// [`set_enabled_mods`](Self::set_enabled_mods) and optionally
+/// [`with_progress`](Self::with_progress), then call [`build`](Self::build).
+///
+/// The builder owns the enabled mod list and consumes each mod's content provider
+/// during the build. After building, the same builder instance can be reconfigured
+/// and built again.
 pub struct OverlayBuilder {
     game_dir: PathBuf,
     overlay_root: PathBuf,
@@ -109,8 +153,10 @@ impl OverlayBuilder {
     ///
     /// # Arguments
     ///
-    /// * `game_dir` - Path to the League of Legends Game directory
-    /// * `overlay_root` - Path where the overlay will be built
+    /// * `game_dir` — Path to the League of Legends `Game/` directory. Must contain
+    ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
+    /// * `overlay_root` — Directory where patched WAD files will be written. This
+    ///   directory is wiped and recreated on each full rebuild.
     pub fn new(game_dir: PathBuf, overlay_root: PathBuf) -> Self {
         Self {
             game_dir,
@@ -120,7 +166,10 @@ impl OverlayBuilder {
         }
     }
 
-    /// Set a progress callback to receive build progress updates.
+    /// Register a progress callback.
+    ///
+    /// The callback receives [`OverlayProgress`] updates at each stage of the build.
+    /// This is typically used to forward progress to a UI via Tauri events.
     pub fn with_progress<F>(mut self, callback: F) -> Self
     where
         F: Fn(OverlayProgress) + Send + Sync + 'static,
@@ -129,21 +178,19 @@ impl OverlayBuilder {
         self
     }
 
-    /// Set the list of enabled mods to include in the overlay.
+    /// Set the ordered list of mods to include in the overlay.
+    ///
+    /// Order matters: when two mods override the same chunk, the mod that appears
+    /// later in this list wins.
     pub fn set_enabled_mods(&mut self, mods: Vec<EnabledMod>) {
         self.enabled_mods = mods;
     }
 
-    /// Build the overlay, using incremental rebuild when possible.
+    /// Build the overlay, skipping the rebuild if the overlay state is still valid.
     ///
-    /// This will:
-    /// 1. Index the game files
-    /// 2. Collect overrides from enabled mods
-    /// 3. Determine which WADs need rebuilding
-    /// 4. Build only the changed WADs
-    /// 5. Apply string overrides (if any)
-    ///
-    /// Returns information about what was built.
+    /// Checks the saved `overlay.json` state file — if the enabled mod IDs and game
+    /// fingerprint match, and the existing overlay WAD files can be mounted, the
+    /// build is skipped entirely. Otherwise, performs a full rebuild.
     pub fn build(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
 
@@ -162,7 +209,10 @@ impl OverlayBuilder {
         })
     }
 
-    /// Force a full rebuild of the overlay, ignoring any cached state.
+    /// Force a full rebuild, ignoring the saved overlay state.
+    ///
+    /// Use this when the user explicitly requests a rebuild or when you know
+    /// the overlay is out of date for reasons the state file cannot track.
     pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
         self.rebuild_all_internal()?;
@@ -177,7 +227,7 @@ impl OverlayBuilder {
         })
     }
 
-    /// Internal implementation for full rebuild.
+    /// Core build implementation. See module-level docs for the full algorithm.
     fn rebuild_all_internal(&mut self) -> Result<()> {
         tracing::info!("Building overlay...");
         tracing::info!("Game dir: {}", self.game_dir.display());
@@ -369,14 +419,18 @@ impl OverlayBuilder {
         Ok(())
     }
 
-    /// Emit progress update if a callback is set.
+    /// Emit a progress event if a callback was registered.
     fn emit_progress(&self, progress: OverlayProgress) {
         if let Some(callback) = &self.progress_callback {
             callback(progress);
         }
     }
 
-    /// Validate that overlay outputs exist and are valid.
+    /// Check that the overlay directory contains valid, mountable WAD files.
+    ///
+    /// Returns `false` if the `DATA/` subdirectory doesn't exist, contains no WAD
+    /// files, or any WAD file fails to mount. This guards against corrupted overlays
+    /// (e.g., from a crashed previous build).
     fn validate_overlay_outputs(&self) -> Result<bool> {
         use ltk_wad::Wad;
 

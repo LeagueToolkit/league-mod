@@ -1,4 +1,26 @@
-//! WAD building and patching functions.
+//! WAD patching: applying mod overrides to game WAD files.
+//!
+//! The core function is [`build_patched_wad`], which takes an original game WAD file
+//! and a set of override chunks, and produces a new WAD file containing all original
+//! chunks plus the overrides.
+//!
+//! # Compression Strategy
+//!
+//! Override data arrives uncompressed from content providers. The builder decides how
+//! to compress each chunk:
+//!
+//! - **Audio files** (Wwise Bank / Wwise Package, detected by magic bytes): stored
+//!   uncompressed for streaming performance.
+//! - **ZstdMulti chunks**: If the original chunk uses League's `ZstdMulti` format
+//!   (an uncompressed header prefix followed by zstd-compressed data), the builder
+//!   preserves this structure by compressing only the payload portion.
+//! - **Everything else**: compressed with Zstd at level 3.
+//!
+//! # Deduplication
+//!
+//! Chunks with identical compressed data (same xxHash3 checksum) are tracked to avoid
+//! writing duplicate bytes. Statistics on deduplication savings are returned in
+//! [`PatchedWadStats`].
 
 use crate::error::{Error, Result};
 use ltk_file::LeagueFileKind;
@@ -10,40 +32,41 @@ use xxhash_rust::xxh3::xxh3_64;
 
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// Statistics from building a patched WAD.
+/// Build statistics returned by [`build_patched_wad`].
 #[derive(Debug, Clone)]
 pub struct PatchedWadStats {
-    /// Number of chunks written.
+    /// Total number of chunks in the output WAD (original + overrides).
     pub chunks_written: usize,
-    /// Number of chunks overridden.
+    /// Number of chunks that were replaced by mod overrides.
     pub overrides_applied: usize,
-    /// Number of audio chunks kept uncompressed.
+    /// Number of override chunks kept uncompressed (audio files).
     pub audio_uncompressed: usize,
-    /// Number of chunks deduplicated.
+    /// Number of chunks that shared data with another chunk (deduplicated).
     pub chunks_deduplicated: usize,
-    /// Bytes saved through deduplication.
+    /// Bytes saved by deduplication.
     pub bytes_saved_dedup: usize,
-    /// Time taken to build the WAD.
+    /// Wall-clock time to build this WAD, in milliseconds.
     pub elapsed_ms: u128,
 }
 
-/// Build a patched WAD file by applying overrides to a base WAD.
+/// Build a patched WAD by overlaying mod chunks on top of an original game WAD.
+///
+/// The output WAD preserves the original chunk order and contains *all* chunks from
+/// the source — those present in `overrides` get their data replaced, everything else
+/// is copied verbatim. Override hashes that don't exist in the source WAD are silently
+/// ignored (with a warning log).
+///
+/// Parent directories for `dst_wad_path` are created automatically.
 ///
 /// # Arguments
 ///
-/// * `src_wad_path` - Path to the original game WAD file
-/// * `dst_wad_path` - Path where the patched WAD will be written
-/// * `overrides` - Map of path_hash -> file data to override in the WAD
-///
-/// # Optimizations
-///
-/// 1. **Audio detection**: Audio files (.bnk, .wpk) are kept uncompressed for performance
-/// 2. **Deduplication**: Chunks with identical data share disk space
-/// 3. **ZstdMulti preservation**: Preserves special compression format when possible
+/// * `src_wad_path` — Absolute path to the original game WAD file.
+/// * `dst_wad_path` — Absolute path where the patched WAD will be written.
+/// * `overrides` — Map of `path_hash -> uncompressed_file_data` to overlay.
 ///
 /// # Returns
 ///
-/// Statistics about the build process.
+/// [`PatchedWadStats`] with build metrics (chunk counts, dedup savings, timing).
 pub fn build_patched_wad(
     src_wad_path: &Path,
     dst_wad_path: &Path,
@@ -210,14 +233,15 @@ pub fn build_patched_wad(
     })
 }
 
-/// Find the offset of ZSTD magic bytes in data.
+/// Find the byte offset of the first Zstd frame magic (`0x28B52FFD`) in `raw`.
 ///
-/// Used for handling ZstdMulti compression format.
+/// In `ZstdMulti` chunks, bytes before this offset are an uncompressed header
+/// (e.g., a Wwise SoundBank descriptor) that must be preserved as-is.
 fn find_zstd_magic_offset(raw: &[u8]) -> Option<usize> {
     raw.windows(ZSTD_MAGIC.len()).position(|w| w == ZSTD_MAGIC)
 }
 
-/// Compress data using Zstd compression (level 3).
+/// Compress `data` with Zstd at compression level 3.
 pub fn compress_zstd(data: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut encoder = zstd::Encoder::new(std::io::BufWriter::new(&mut out), 3)?;
@@ -226,9 +250,11 @@ pub fn compress_zstd(data: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Determine if data should be compressed based on file type.
+/// Returns `true` if the data should be Zstd-compressed.
 ///
-/// Audio files should remain uncompressed for performance.
+/// Audio files (Wwise Bank and Wwise Package) are excluded from compression
+/// because the game streams them and benefits from direct access without
+/// decompression overhead.
 pub fn should_compress(data: &[u8]) -> bool {
     !matches!(
         LeagueFileKind::identify_from_bytes(data),

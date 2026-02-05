@@ -1,25 +1,49 @@
-//! Game file indexing for efficient WAD lookup.
+//! Game file indexing for WAD and chunk lookup.
+//!
+//! The [`GameIndex`] is built once at the start of every overlay build by scanning
+//! all `.wad.client` files under the game's `DATA/FINAL` directory. It provides two
+//! kinds of lookups that the builder relies on:
+//!
+//! 1. **Filename lookup** ([`find_wad`](GameIndex::find_wad)) — Resolve a WAD name
+//!    like `"Aatrox.wad.client"` (as listed by a mod) to its full filesystem path.
+//!    The lookup is case-insensitive. If the same filename appears in multiple
+//!    locations, an [`AmbiguousWad`](crate::Error::AmbiguousWad) error is returned.
+//!
+//! 2. **Hash lookup** ([`find_wads_with_hash`](GameIndex::find_wads_with_hash)) —
+//!    Given a chunk path hash (`u64`), return *all* WAD files that contain a chunk
+//!    with that hash. This powers cross-WAD matching: a single mod override can be
+//!    distributed to every game WAD that shares the same asset.
+//!
+//! A **game fingerprint** is also computed from the file sizes and modification times
+//! of all WADs. This fingerprint is persisted in [`OverlayState`](crate::state::OverlayState)
+//! and used to detect game patches that invalidate the overlay.
 
 use crate::error::{Error, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Index of game WAD files for efficient lookup.
+/// Index of all WAD files in a League of Legends game directory.
 ///
-/// This index provides two main lookups:
-/// 1. By filename (case-insensitive) -> list of WAD file paths
-/// 2. By path hash -> list of WAD files containing that chunk
+/// Built by scanning `DATA/FINAL` and mounting every `.wad.client` file to
+/// record its chunk hashes. The index is ephemeral (rebuilt each overlay build)
+/// — cache serialization is stubbed out for future implementation.
 pub struct GameIndex {
-    /// Maps lowercase WAD filename to list of full paths.
-    /// This handles the case where the same WAD name might exist in multiple locations.
+    /// WAD filename (lowercased) -> full filesystem paths.
+    ///
+    /// Most filenames map to a single path, but the structure supports duplicates
+    /// so we can error on ambiguity rather than silently picking one.
     wad_index: HashMap<String, Vec<PathBuf>>,
 
-    /// Maps chunk path hash to list of WAD files (relative to game dir) containing it.
-    /// This enables cross-WAD matching - finding all WADs that contain a specific file.
+    /// Chunk path hash -> WAD file paths (relative to game dir) that contain it.
+    ///
+    /// This is the core data structure for cross-WAD matching. A typical League
+    /// installation has ~500k unique chunk hashes across ~200 WAD files.
     hash_index: HashMap<u64, Vec<PathBuf>>,
 
-    /// Fingerprint of the game directory state.
-    /// Used to detect when the game has been updated and the index needs rebuilding.
+    /// Fingerprint derived from WAD file sizes and modification times.
+    ///
+    /// Used to detect game patches — if the fingerprint changes between builds,
+    /// the overlay must be fully rebuilt even if the enabled mod list hasn't changed.
     game_fingerprint: u64,
 }
 
@@ -125,7 +149,7 @@ impl GameIndex {
     }
 }
 
-/// Build an index of WAD filenames to their full paths.
+/// Recursively scan `root` for `.wad.client` files and index them by lowercase filename.
 fn build_wad_filename_index(root: &Path) -> Result<HashMap<String, Vec<PathBuf>>> {
     let mut index: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut stack = vec![root.to_path_buf()];
@@ -158,9 +182,9 @@ fn build_wad_filename_index(root: &Path) -> Result<HashMap<String, Vec<PathBuf>>
     Ok(index)
 }
 
-/// Build a reverse index of path hashes to WAD files.
+/// Mount every WAD file and build a reverse index: `chunk_path_hash -> [relative_wad_paths]`.
 ///
-/// This scans all WAD files and builds a map of `path_hash -> [wad_paths]`.
+/// WAD files that fail to open or mount are skipped with a warning.
 fn build_game_hash_index(
     game_dir: &Path,
     data_final_dir: &Path,
@@ -235,9 +259,10 @@ fn build_game_hash_index(
     Ok(hash_to_wads)
 }
 
-/// Calculate a fingerprint of the game directory.
+/// Compute an xxHash3 fingerprint from all WAD file paths, sizes, and modification times.
 ///
-/// This is used to detect when the game has been patched and the index needs rebuilding.
+/// Any change to WAD files (game patch, file corruption) will produce a different
+/// fingerprint, triggering a full overlay rebuild.
 fn calculate_game_fingerprint(data_final_dir: &Path) -> Result<u64> {
     use xxhash_rust::xxh3::xxh3_64;
 

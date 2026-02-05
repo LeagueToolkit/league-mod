@@ -1,8 +1,15 @@
 //! Mod content provider abstraction.
 //!
-//! This module defines the [`ModContentProvider`] trait that abstracts how mod content
-//! is accessed during overlay building. This allows reading from different sources
-//! (filesystem directories, archives, etc.) without changing the builder logic.
+//! This module defines the [`ModContentProvider`] trait that decouples the overlay
+//! builder from any particular mod storage format. Implementations provide access to:
+//!
+//! - Mod project metadata (name, version, layers)
+//! - WAD target names per layer
+//! - Override file data for each WAD
+//!
+//! The crate ships [`FsModContent`] for reading from standard filesystem directories.
+//! Archive-backed implementations (`.modpkg`, `.fantome`) live in the `ltk-manager`
+//! crate where the archive format dependencies are available.
 
 use crate::error::Result;
 use ltk_mod_project::ModProject;
@@ -11,23 +18,44 @@ use std::path::PathBuf;
 /// Abstracts how mod content is accessed during overlay building.
 ///
 /// Implementors provide access to mod project metadata, layer structure,
-/// and WAD override data without prescribing how it is stored.
+/// and WAD override data without prescribing how content is stored or read.
 ///
-/// All mod WAD content is treated as overlays — individual file overrides
-/// that get patched on top of the original game WADs.
+/// All mod WAD content is treated as **overlays** — individual file overrides
+/// that get patched on top of the original game WADs. There is no concept of
+/// full WAD replacement; every mod contributes individual chunks.
+///
+/// # Implementing
+///
+/// Implementations must be [`Send`] so the builder can be used across threads.
+/// Methods take `&mut self` to allow stateful readers (e.g., seeking within an
+/// archive).
+///
+/// The returned `Vec<(PathBuf, Vec<u8>)>` from [`read_wad_overrides`](Self::read_wad_overrides)
+/// uses paths that are resolved to `u64` hashes by [`resolve_chunk_hash`](crate::utils::resolve_chunk_hash):
+/// - **Named paths** (e.g., `data/characters/aatrox/skin0.bin`) are hashed via
+///   [`ltk_modpkg::utils::hash_chunk_name`].
+/// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
+///   `u64` values. This is used by packed WAD content where original paths are lost.
 pub trait ModContentProvider: Send {
-    /// Get the mod project configuration (layers, metadata, etc.).
+    /// Return the mod's project configuration.
+    ///
+    /// This provides the mod name, version, description, author list, and — most
+    /// importantly — the layer definitions that control how overrides are applied.
     fn mod_project(&mut self) -> Result<ModProject>;
 
-    /// List WAD targets for a given layer.
+    /// List WAD targets that have override content in the given layer.
     ///
-    /// Returns the WAD filenames (e.g., "Aatrox.wad.client") that have
-    /// override content in this layer.
+    /// Returns WAD filenames such as `"Aatrox.wad.client"` or `"Map11.wad.client"`.
+    /// The builder uses these names to look up the corresponding game WAD via
+    /// [`GameIndex::find_wad`](crate::game_index::GameIndex::find_wad).
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>>;
 
-    /// Read override files for a WAD in a layer.
+    /// Read all override files for a WAD in a layer.
     ///
-    /// Returns `(relative_path_within_wad, file_bytes)` pairs.
+    /// Returns `(relative_path, file_bytes)` pairs. The relative path is the file's
+    /// location *within* the WAD (e.g., `data/characters/aatrox/skin0.bin`), used to
+    /// compute the chunk path hash. The bytes are the uncompressed file content that
+    /// will replace the corresponding chunk in the game WAD.
     fn read_wad_overrides(
         &mut self,
         layer: &str,
@@ -37,20 +65,34 @@ pub trait ModContentProvider: Send {
 
 /// Filesystem-backed mod content provider.
 ///
-/// Reads mod content from a standard directory layout:
+/// Reads mod content from a standard on-disk directory layout used during
+/// mod development and by the `league-mod` CLI:
+///
 /// ```text
 /// mod_dir/
-///   mod.config.json
+///   mod.config.json              # Project metadata and layer definitions
 ///   content/
-///     base/
-///       Aatrox.wad.client/   (directory of override files)
+///     base/                      # Layer name (matches a layer in mod.config.json)
+///       Aatrox.wad.client/       # WAD target directory
+///         data/
+///           characters/
+///             aatrox/
+///               skin0.bin        # Override file (path = chunk hash key)
+///     high_res/                  # Optional additional layer
+///       Aatrox.wad.client/
+///         ...
 /// ```
+///
+/// Only subdirectories under each layer whose name ends in `.wad.client`
+/// (case-insensitive) are recognized as WAD targets.
 pub struct FsModContent {
     mod_dir: PathBuf,
 }
 
 impl FsModContent {
-    /// Create a new filesystem content provider from a mod directory.
+    /// Create a new filesystem content provider rooted at the given mod directory.
+    ///
+    /// The directory must contain a `mod.config.json` and a `content/` subdirectory.
     pub fn new(mod_dir: PathBuf) -> Self {
         Self { mod_dir }
     }
