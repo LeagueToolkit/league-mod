@@ -188,6 +188,7 @@ export const api = {
   getModThumbnail: (thumbnailPath: string) =>
     invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
   getStorageDirectory: () => invokeResult<string>("get_storage_directory"),
+  reorderMods: (modIds: string[]) => invokeResult<void>("reorder_mods", { modIds }),
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),

@@ -111,6 +111,7 @@ fn main() {
             commands::inspect_modpkg,
             commands::get_mod_thumbnail,
             commands::get_storage_directory,
+            commands::reorder_mods,
             // Patcher
             commands::start_patcher,
             commands::stop_patcher,

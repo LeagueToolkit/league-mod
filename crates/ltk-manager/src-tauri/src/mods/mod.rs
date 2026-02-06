@@ -127,7 +127,7 @@ pub fn get_installed_mods(
     settings: &Settings,
 ) -> AppResult<Vec<InstalledMod>> {
     let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
-    let mut index = load_library_index(&storage_dir)?;
+    let index = load_library_index(&storage_dir)?;
 
     // Get active profile to check enabled mods
     let active_profile_id = index.active_profile_id.clone();
@@ -137,15 +137,37 @@ pub fn get_installed_mods(
         .find(|p| p.id == active_profile_id)
         .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
 
-    // Deterministic ordering: by installed_at then id.
-    index
-        .mods
-        .sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
+    // Enabled mods first in their enabled_mods order (priority order),
+    // then disabled mods sorted by installed_at.
+    let enabled_set: std::collections::HashSet<&str> = active_profile
+        .enabled_mods
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
-    let mut result = Vec::new();
-    for entry in &index.mods {
-        let enabled = active_profile.enabled_mods.contains(&entry.id);
-        match read_installed_mod(entry, enabled) {
+    let mut enabled_result = Vec::new();
+    for mod_id in &active_profile.enabled_mods {
+        let Some(entry) = index.mods.iter().find(|m| &m.id == mod_id) else {
+            continue;
+        };
+        match read_installed_mod(entry, true) {
+            Ok(m) => enabled_result.push(m),
+            Err(e) => {
+                tracing::warn!("Skipping broken mod entry {}: {}", entry.id, e);
+            }
+        }
+    }
+
+    let mut disabled_entries: Vec<&LibraryModEntry> = index
+        .mods
+        .iter()
+        .filter(|m| !enabled_set.contains(m.id.as_str()))
+        .collect();
+    disabled_entries.sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
+
+    let mut result = enabled_result;
+    for entry in disabled_entries {
+        match read_installed_mod(entry, false) {
             Ok(m) => result.push(m),
             Err(e) => {
                 tracing::warn!("Skipping broken mod entry {}: {}", entry.id, e);
@@ -154,6 +176,40 @@ pub fn get_installed_mods(
     }
 
     Ok(result)
+}
+
+/// Reorder the enabled mods for the active profile.
+/// The provided `mod_ids` must exactly match the current `enabled_mods` set.
+pub fn reorder_mods(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    mod_ids: Vec<String>,
+) -> AppResult<()> {
+    let (storage_dir, _) = resolve_storage_dirs(app_handle, settings)?;
+    let mut index = load_library_index(&storage_dir)?;
+
+    let active_profile_id = index.active_profile_id.clone();
+    let profile = index
+        .profiles
+        .iter_mut()
+        .find(|p| p.id == active_profile_id)
+        .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
+
+    // Validate that the provided IDs exactly match the current enabled_mods set
+    let mut current_sorted = profile.enabled_mods.clone();
+    current_sorted.sort();
+    let mut new_sorted = mod_ids.clone();
+    new_sorted.sort();
+
+    if current_sorted != new_sorted {
+        return Err(AppError::ValidationFailed(
+            "Provided mod IDs do not match the current enabled mods".to_string(),
+        ));
+    }
+
+    profile.enabled_mods = mod_ids;
+    save_library_index(&storage_dir, &index)?;
+    Ok(())
 }
 
 pub fn install_mod_from_package(
