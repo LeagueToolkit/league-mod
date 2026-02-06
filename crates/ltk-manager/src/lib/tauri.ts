@@ -27,6 +27,8 @@ export interface Settings {
   theme: "light" | "dark" | "system";
   accentColor: AccentColor;
   firstRunComplete: boolean;
+  backdropImage: string | null;
+  backdropBlur: number | null;
 }
 
 export interface InstalledMod {

@@ -1,7 +1,15 @@
 import { getRouteApi } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { LuCircleAlert, LuCircleCheck, LuFolderOpen, LuInfo, LuLoader } from "react-icons/lu";
+import {
+  LuCircleAlert,
+  LuCircleCheck,
+  LuFolderOpen,
+  LuImage,
+  LuInfo,
+  LuLoader,
+  LuX,
+} from "react-icons/lu";
 
 import { Button, IconButton } from "@/components";
 import { api, type Settings as SettingsType } from "@/lib/tauri";
@@ -135,6 +143,28 @@ export function Settings() {
     }
   }
 
+  async function handleBrowseBackdropImage() {
+    if (!settings) return;
+
+    try {
+      const selected = await open({
+        title: "Select Background Image",
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
+
+      if (selected) {
+        saveSettings({ ...settings, backdropImage: selected as string });
+      }
+    } catch (error) {
+      console.error("Failed to browse:", error);
+    }
+  }
+
+  function handleClearBackdropImage() {
+    if (!settings) return;
+    saveSettings({ ...settings, backdropImage: null });
+  }
+
   if (isLoading || !settings) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -158,7 +188,7 @@ export function Settings() {
         <h2 className="text-xl font-semibold text-surface-100">Settings</h2>
       </header>
 
-      <div className="mx-auto max-w-2xl space-y-8 p-6">
+      <div className="settings-container mx-auto max-w-2xl space-y-8 p-6">
         {/* First Run Banner */}
         {firstRun && !settings.leaguePath && (
           <div className="flex items-start gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 p-4">
@@ -374,6 +404,58 @@ export function Settings() {
                 <span className="text-sm text-surface-400">Preview</span>
               </div>
             </div>
+          </div>
+
+          {/* Background Image */}
+          <div className="mt-6 space-y-3">
+            <span className="block text-sm font-medium text-surface-400">Background Image</span>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={settings.backdropImage || ""}
+                readOnly
+                placeholder="No image selected"
+                className="flex-1 rounded-lg border border-surface-600 bg-surface-700 px-4 py-2.5 text-surface-200 placeholder:text-surface-500"
+              />
+              <IconButton
+                icon={<LuImage className="h-5 w-5" />}
+                variant="outline"
+                size="lg"
+                onClick={handleBrowseBackdropImage}
+              />
+              {settings.backdropImage && (
+                <IconButton
+                  icon={<LuX className="h-5 w-5" />}
+                  variant="outline"
+                  size="lg"
+                  onClick={handleClearBackdropImage}
+                />
+              )}
+            </div>
+            <p className="text-sm text-surface-500">
+              Set a background image for the app. The UI will render with a frosted glass effect
+              over the image.
+            </p>
+
+            {/* Blur slider — only visible when a backdrop image is set */}
+            {settings.backdropImage && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-surface-500">Blur Amount</span>
+                  <span className="text-xs text-surface-400">{settings.backdropBlur ?? 40}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={settings.backdropBlur ?? 40}
+                  onChange={(e) =>
+                    saveSettings({ ...settings, backdropBlur: Number(e.target.value) })
+                  }
+                  className="h-2 w-full cursor-pointer appearance-none rounded-full bg-surface-600"
+                />
+              </div>
+            )}
           </div>
         </section>
 

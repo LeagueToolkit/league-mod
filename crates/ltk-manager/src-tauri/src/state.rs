@@ -116,4 +116,8 @@ pub struct Settings {
     pub theme: Theme,
     /// Accent color configuration.
     pub accent_color: AccentColor,
+    /// Optional backdrop image path for glassmorphism effect.
+    pub backdrop_image: Option<PathBuf>,
+    /// Backdrop blur amount in pixels (default: 40).
+    pub backdrop_blur: Option<u32>,
 }

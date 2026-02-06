@@ -1,41 +1,50 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LuCheck, LuPlus, LuX } from "react-icons/lu";
 
-import { Button, Field, IconButton } from "@/components";
+import { Button, Field, IconButton, useToast } from "@/components";
+import { useCreateProfile } from "@/modules/library/api";
 
-interface ProfileCreateFormProps {
-  isCreating: boolean;
-  value: string;
-  onChange: (value: string) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
-  onStartCreating: () => void;
-  isSubmitting: boolean;
-}
+export function ProfileCreateForm() {
+  const createProfile = useCreateProfile();
+  const toast = useToast();
 
-export function ProfileCreateForm({
-  isCreating,
-  value,
-  onChange,
-  onSubmit,
-  onCancel,
-  onStartCreating,
-  isSubmitting,
-}: ProfileCreateFormProps) {
+  const [isCreating, setIsCreating] = useState(false);
+  const [name, setName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus input when entering create mode
   useEffect(() => {
     if (isCreating) {
       inputRef.current?.focus();
     }
   }, [isCreating]);
 
+  const handleSubmit = async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    try {
+      await createProfile.mutateAsync(trimmedName);
+      setName("");
+      setIsCreating(false);
+      toast.success("Profile created", `Profile "${trimmedName}" has been created.`);
+    } catch (error: unknown) {
+      toast.error(
+        "Failed to create profile",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
+  const handleCancel = () => {
+    setIsCreating(false);
+    setName("");
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
-      onSubmit();
+      handleSubmit();
     } else if (e.key === "Escape") {
-      onCancel();
+      handleCancel();
     }
   };
 
@@ -44,7 +53,7 @@ export function ProfileCreateForm({
       <Button
         variant="ghost"
         size="sm"
-        onClick={onStartCreating}
+        onClick={() => setIsCreating(true)}
         left={<LuPlus className="h-4 w-4" />}
         className="w-full justify-start"
       >
@@ -58,8 +67,8 @@ export function ProfileCreateForm({
       <Field.Control
         ref={inputRef}
         type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
         onKeyDown={handleKeyDown}
         className="h-7 flex-1 px-2 py-1 text-sm"
         placeholder="Profile name..."
@@ -68,12 +77,17 @@ export function ProfileCreateForm({
         icon={<LuCheck className="h-4 w-4" />}
         variant="ghost"
         size="xs"
-        onClick={onSubmit}
-        disabled={!value.trim() || isSubmitting}
-        loading={isSubmitting}
+        onClick={handleSubmit}
+        disabled={!name.trim() || createProfile.isPending}
+        loading={createProfile.isPending}
         className="text-green-400 hover:text-green-300"
       />
-      <IconButton icon={<LuX className="h-4 w-4" />} variant="ghost" size="xs" onClick={onCancel} />
+      <IconButton
+        icon={<LuX className="h-4 w-4" />}
+        variant="ghost"
+        size="xs"
+        onClick={handleCancel}
+      />
     </div>
   );
 }
