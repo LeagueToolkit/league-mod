@@ -1,16 +1,8 @@
-import { Dialog } from "@base-ui-components/react";
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
-import {
-  LuCheck,
-  LuCircleAlert,
-  LuFolderOpen,
-  LuPackage,
-  LuTriangleAlert,
-  LuX,
-} from "react-icons/lu";
+import { LuCheck, LuCircleAlert, LuFolderOpen, LuPackage, LuTriangleAlert } from "react-icons/lu";
 
-import { Button, IconButton, RadioGroup } from "@/components";
+import { Button, Dialog, RadioGroup } from "@/components";
 import type { PackResult, ValidationResult, WorkshopProject } from "@/lib/tauri";
 
 interface PackDialogProps {
@@ -44,21 +36,14 @@ export function PackDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-600 bg-surface-800 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-surface-600 px-6 py-4">
-            <Dialog.Title className="text-lg font-semibold text-surface-100">
-              Pack {project.displayName}
-            </Dialog.Title>
-            <IconButton
-              icon={<LuX className="h-5 w-5" />}
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-            />
-          </div>
+        <Dialog.Backdrop />
+        <Dialog.Overlay size="lg">
+          <Dialog.Header>
+            <Dialog.Title>Pack {project.displayName}</Dialog.Title>
+            <Dialog.Close />
+          </Dialog.Header>
 
-          <div className="px-6 py-4">
+          <Dialog.Body>
             {packResult ? (
               <div className="space-y-4">
                 <div className="flex flex-col items-center py-4 text-center">
@@ -153,9 +138,9 @@ export function PackDialog({
                 )}
               </div>
             )}
-          </div>
+          </Dialog.Body>
 
-          <div className="flex justify-end gap-3 border-t border-surface-600 px-6 py-4">
+          <Dialog.Footer>
             {packResult ? (
               <>
                 <Button variant="ghost" onClick={onClose}>
@@ -191,8 +176,8 @@ export function PackDialog({
                 </Button>
               </>
             )}
-          </div>
-        </Dialog.Popup>
+          </Dialog.Footer>
+        </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
   );

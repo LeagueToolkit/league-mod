@@ -112,9 +112,42 @@ For backend-to-frontend events (e.g., overlay progress), use `listen<T>()` from 
 
 TanStack Router with file-based routing in `src/routes/`. Route tree is auto-generated in `routeTree.gen.ts`. The root route (`__root.tsx`) checks setup status and redirects to `/settings` on first run.
 
+### Component Library (`src/components/`)
+
+**ALWAYS use reusable components from `@/components` instead of native HTML or raw base-ui imports.** Module code should never import from `@base-ui-components/react` directly — all base-ui primitives must be wrapped in `src/components/` first.
+
+**Available components:**
+| Component | Usage | Base-UI Primitive |
+|---|---|---|
+| `Button`, `IconButton` | All clickable actions | `Button` |
+| `Field`, `FormField`, `TextareaField` | All form inputs (text, textarea) | `Field` |
+| `Checkbox`, `CheckboxGroup` | Boolean/multi-select inputs | `Checkbox` |
+| `RadioGroup` (compound: `Root`, `Label`, `Options`, `Card`, `Item`) | Mutually exclusive choices | `Radio`, `RadioGroup` |
+| `Tabs` (compound: `Root`, `List`, `Tab`, `Panel`, `Indicator`) | Tabbed content | `Tabs` |
+| `Tooltip`, `SimpleTooltip` | Hover information | `Tooltip` |
+| `Toast`, `ToastProvider`, `useToast()` | Notifications | `Toast` |
+
+**Not yet wrapped (needed):**
+| Component | Priority | Current Workaround |
+|---|---|---|
+| `Dialog` / `AlertDialog` | HIGH | Raw `Dialog.*` from base-ui in 4 module files |
+| `Switch` | HIGH | Hand-rolled `<button>` toggles in `ModCard.tsx` |
+| `Menu` / `ContextMenu` | HIGH | Raw `<div role="button">` backdrops + manual menus |
+| `Separator` | MEDIUM | Raw `<hr>` elements |
+| `Select` | MEDIUM | Not yet needed but will be |
+| `Popover` | MEDIUM | Raw div-based dropdowns in `ProfileSelector` |
+| `Progress` | LOW | Custom overlay progress rendering |
+| `ScrollArea` | LOW | Native scrollbars |
+
+When adding a new base-ui component:
+
+1. Create wrapper in `src/components/NewComponent.tsx`
+2. Export from `src/components/index.ts`
+3. Import in modules via `@/components`, never from `@base-ui-components/react` directly
+
 ### Key Dependencies
 
-- `@base-ui-components/react` — Headless UI primitives (Dialog, Tooltip, Popover)
+- `@base-ui-components/react` — Headless UI primitives (wrapped via `src/components/`)
 - `@tanstack/react-form` + `zod` — Form management with validation
 - `ts-pattern` — Exhaustive pattern matching
 - `zustand` — Client-side state (not for server state — use TanStack Query)

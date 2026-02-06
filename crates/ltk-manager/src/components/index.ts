@@ -1,5 +1,6 @@
 export * from "./Button";
 export * from "./Checkbox";
+export * from "./Dialog";
 export * from "./FormField";
 export * from "./RadioGroup";
 export * from "./Tabs";

@@ -212,11 +212,18 @@ export function useProfiles() {
 - Return descriptive errors from backend
 
 ### Using Component Library
-**ALWAYS use custom components instead of native HTML:**
+**ALWAYS use reusable components from `@/components` instead of native HTML or raw base-ui imports.** Never import from `@base-ui-components/react` directly in module code — all base-ui primitives must be wrapped in `src/components/` first and imported via `@/components`.
+
+**Available wrapped components:**
 - `Button` / `IconButton` - Variants: filled, light, outline, ghost, transparent; Sizes: xs, sm, md, lg, xl
-- `Field.Control` - Styled text inputs
-- `Checkbox`, `RadioGroup`, `Tabs` - Form controls
-- `@base-ui-components/react` - For Dialog, Tooltip, Popover when needed
+- `Field` / `FormField` / `TextareaField` - Styled form inputs
+- `Checkbox` / `CheckboxGroup` - Boolean/multi-select inputs
+- `RadioGroup` - Mutually exclusive choices (compound: Root, Label, Options, Card, Item)
+- `Tabs` - Tabbed content (compound: Root, List, Tab, Panel, Indicator)
+- `Tooltip` / `SimpleTooltip` - Hover information
+- `Toast` / `useToast()` - Notifications
+
+**Not yet wrapped (create in `src/components/` before using):** Dialog, AlertDialog, Switch, Menu, ContextMenu, Select, Popover, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

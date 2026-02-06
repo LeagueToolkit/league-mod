@@ -1,8 +1,6 @@
-import { Dialog } from "@base-ui-components/react";
-import { LuX } from "react-icons/lu";
 import { z } from "zod";
 
-import { Button, IconButton } from "@/components";
+import { Button, Dialog } from "@/components";
 import { useAppForm } from "@/lib/form";
 import type { CreateProjectArgs } from "@/lib/tauri";
 
@@ -64,19 +62,12 @@ export function NewProjectDialog({ open, onClose, onSubmit, isPending }: NewProj
   return (
     <Dialog.Root open={open} onOpenChange={(open) => !open && handleClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-600 bg-surface-800 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-surface-600 px-6 py-4">
-            <Dialog.Title className="text-lg font-semibold text-surface-100">
-              New Project
-            </Dialog.Title>
-            <IconButton
-              icon={<LuX className="h-5 w-5" />}
-              variant="ghost"
-              size="sm"
-              onClick={handleClose}
-            />
-          </div>
+        <Dialog.Backdrop />
+        <Dialog.Overlay>
+          <Dialog.Header>
+            <Dialog.Title>New Project</Dialog.Title>
+            <Dialog.Close />
+          </Dialog.Header>
 
           <form
             onSubmit={(e) => {
@@ -84,13 +75,11 @@ export function NewProjectDialog({ open, onClose, onSubmit, isPending }: NewProj
               form.handleSubmit();
             }}
           >
-            <div className="space-y-4 px-6 py-4">
-              {/* Project Name (slug) */}
+            <Dialog.Body className="space-y-4">
               <form.AppField
                 name="name"
                 listeners={{
                   onChange: ({ value }) => {
-                    // Auto-generate display name when name changes
                     const currentDisplayName = form.getFieldValue("displayName");
                     const previousName = form.state.values.name;
                     if (
@@ -114,17 +103,14 @@ export function NewProjectDialog({ open, onClose, onSubmit, isPending }: NewProj
                 )}
               </form.AppField>
 
-              {/* Display Name */}
               <form.AppField name="displayName">
                 {(field) => <field.TextField label="Display Name" placeholder="My Awesome Mod" />}
               </form.AppField>
 
-              {/* Author */}
               <form.AppField name="authorName">
                 {(field) => <field.TextField label="Author" placeholder="Your name" />}
               </form.AppField>
 
-              {/* Description */}
               <form.AppField name="description">
                 {(field) => (
                   <field.TextareaField
@@ -134,9 +120,9 @@ export function NewProjectDialog({ open, onClose, onSubmit, isPending }: NewProj
                   />
                 )}
               </form.AppField>
-            </div>
+            </Dialog.Body>
 
-            <div className="flex justify-end gap-3 border-t border-surface-600 px-6 py-4">
+            <Dialog.Footer>
               <Button variant="ghost" onClick={handleClose}>
                 Cancel
               </Button>
@@ -154,9 +140,9 @@ export function NewProjectDialog({ open, onClose, onSubmit, isPending }: NewProj
                   </Button>
                 )}
               </form.Subscribe>
-            </div>
+            </Dialog.Footer>
           </form>
-        </Dialog.Popup>
+        </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
   );
