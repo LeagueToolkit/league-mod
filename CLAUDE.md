@@ -226,8 +226,9 @@ export function useProfiles() {
 - `Switch` - Toggle on/off; Sizes: sm, md
 - `Menu` - Dropdown menus (compound: Root, Trigger, Portal, Positioner, Popup, Item, Separator, Group, GroupLabel). Item supports `icon` and `variant="danger"`.
 - `Select` / `SelectField` - Dropdown select inputs. Compound for custom layouts, `SelectField` for quick use with `options` array. TanStack Form: `field.SelectField`.
+- `Popover` - Positioned popover panels (compound: Root, Trigger, Portal, Backdrop, Positioner, Popup, Arrow, Title, Description, Close).
 
-**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Popover, Separator, Progress, ScrollArea
+**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

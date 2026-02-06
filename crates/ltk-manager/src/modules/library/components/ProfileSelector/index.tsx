@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { LuChevronDown } from "react-icons/lu";
 
-import { useToast } from "@/components";
+import { Button, Popover, useToast } from "@/components";
 import type { Profile } from "@/lib/tauri";
 import {
   useActiveProfile,
@@ -13,7 +14,6 @@ import {
 
 import { ProfileCreateForm } from "./ProfileCreateForm";
 import { ProfileDeleteDialog } from "./ProfileDeleteDialog";
-import { ProfileDropdownTrigger } from "./ProfileDropdownTrigger";
 import { ProfileListItem } from "./ProfileListItem";
 
 export function ProfileSelector() {
@@ -32,23 +32,13 @@ export function ProfileSelector() {
   const [editingName, setEditingName] = useState("");
   const [profileToDelete, setProfileToDelete] = useState<Profile | null>(null);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setIsCreating(false);
-        setEditingId(null);
-      }
+  const handleOpenChange = (open: boolean) => {
+    setIsOpen(open);
+    if (!open) {
+      setIsCreating(false);
+      setEditingId(null);
     }
-
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [isOpen]);
+  };
 
   const handleSwitch = async (profileId: string) => {
     try {
@@ -123,52 +113,64 @@ export function ProfileSelector() {
   };
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      <ProfileDropdownTrigger
-        activeProfileName={activeProfile?.name || "Default"}
-        isOpen={isOpen}
-        onClick={() => setIsOpen(!isOpen)}
-      />
+    <>
+      <Popover.Root open={isOpen} onOpenChange={handleOpenChange}>
+        <Popover.Trigger
+          render={
+            <Button
+              variant="default"
+              size="sm"
+              className="group"
+              right={
+                <LuChevronDown className="h-4 w-4 text-surface-400 transition-transform group-data-[popup-open]:rotate-180" />
+              }
+            />
+          }
+        >
+          {activeProfile?.name || "Default"}
+        </Popover.Trigger>
 
-      {/* Dropdown Menu */}
-      {isOpen && (
-        <div className="absolute top-full left-0 z-50 mt-1 w-64 rounded-lg border border-surface-600 bg-surface-800 shadow-xl">
-          <div className="max-h-[400px] overflow-y-auto p-1">
-            {/* Profile List */}
-            {profiles.map((profile) => (
-              <ProfileListItem
-                key={profile.id}
-                profile={profile}
-                isActive={profile.id === activeProfile?.id}
-                isEditing={editingId === profile.id}
-                editValue={editingName}
-                onSwitch={handleSwitch}
-                onStartEdit={startEditing}
-                onEditChange={setEditingName}
-                onEditSubmit={handleRename}
-                onEditCancel={cancelEditing}
-                onDeleteClick={handleDeleteClick}
-                isSwitching={switchProfile.isPending}
-                isRenaming={renameProfile.isPending}
-                isDeleting={deleteProfile.isPending}
-              />
-            ))}
+        <Popover.Portal>
+          <Popover.Positioner side="bottom" align="start">
+            <Popover.Popup className="w-64">
+              <div className="max-h-[400px] overflow-y-auto p-1">
+                {/* Profile List */}
+                {profiles.map((profile) => (
+                  <ProfileListItem
+                    key={profile.id}
+                    profile={profile}
+                    isActive={profile.id === activeProfile?.id}
+                    isEditing={editingId === profile.id}
+                    editValue={editingName}
+                    onSwitch={handleSwitch}
+                    onStartEdit={startEditing}
+                    onEditChange={setEditingName}
+                    onEditSubmit={handleRename}
+                    onEditCancel={cancelEditing}
+                    onDeleteClick={handleDeleteClick}
+                    isSwitching={switchProfile.isPending}
+                    isRenaming={renameProfile.isPending}
+                    isDeleting={deleteProfile.isPending}
+                  />
+                ))}
 
-            {/* Create New Profile */}
-            <div className="mt-1 border-t border-surface-700 pt-1">
-              <ProfileCreateForm
-                isCreating={isCreating}
-                value={newProfileName}
-                onChange={setNewProfileName}
-                onSubmit={handleCreate}
-                onCancel={cancelCreating}
-                onStartCreating={() => setIsCreating(true)}
-                isSubmitting={createProfile.isPending}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+                {/* Create New Profile */}
+                <div className="mt-1 border-t border-surface-700 pt-1">
+                  <ProfileCreateForm
+                    isCreating={isCreating}
+                    value={newProfileName}
+                    onChange={setNewProfileName}
+                    onSubmit={handleCreate}
+                    onCancel={cancelCreating}
+                    onStartCreating={() => setIsCreating(true)}
+                    isSubmitting={createProfile.isPending}
+                  />
+                </div>
+              </div>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
 
       {/* Delete Confirmation Dialog */}
       <ProfileDeleteDialog
@@ -178,6 +180,6 @@ export function ProfileSelector() {
         onConfirm={handleDeleteConfirm}
         isPending={deleteProfile.isPending}
       />
-    </div>
+    </>
   );
 }
