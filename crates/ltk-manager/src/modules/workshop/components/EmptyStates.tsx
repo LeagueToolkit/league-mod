@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { LuDownload, LuFolderOpen, LuHammer, LuPlus, LuSearch, LuSettings } from "react-icons/lu";
 
-import { Button } from "@/components/Button";
+import { Button } from "@/components";
 import type { AppError } from "@/lib/tauri";
 
 export function LoadingState() {

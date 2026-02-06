@@ -212,11 +212,23 @@ export function useProfiles() {
 - Return descriptive errors from backend
 
 ### Using Component Library
-**ALWAYS use custom components instead of native HTML:**
+**ALWAYS use reusable components from `@/components` instead of native HTML or raw base-ui imports.** Never import from `@base-ui-components/react` directly in module code — all base-ui primitives must be wrapped in `src/components/` first and imported via `@/components`.
+
+**Available wrapped components:**
 - `Button` / `IconButton` - Variants: filled, light, outline, ghost, transparent; Sizes: xs, sm, md, lg, xl
-- `Field.Control` - Styled text inputs
-- `Checkbox`, `RadioGroup`, `Tabs` - Form controls
-- `@base-ui-components/react` - For Dialog, Tooltip, Popover when needed
+- `Field` / `FormField` / `TextareaField` - Styled form inputs
+- `Checkbox` / `CheckboxGroup` - Boolean/multi-select inputs
+- `RadioGroup` - Mutually exclusive choices (compound: Root, Label, Options, Card, Item)
+- `Tabs` - Tabbed content (compound: Root, List, Tab, Panel, Indicator)
+- `Tooltip` / `SimpleTooltip` - Hover information
+- `Toast` / `useToast()` - Notifications
+- `Dialog` - Modal dialogs (compound: Root, Portal, Backdrop, Overlay, Header, Title, Body, Footer, Close)
+- `Switch` - Toggle on/off; Sizes: sm, md
+- `Menu` - Dropdown menus (compound: Root, Trigger, Portal, Positioner, Popup, Item, Separator, Group, GroupLabel). Item supports `icon` and `variant="danger"`.
+- `Select` / `SelectField` - Dropdown select inputs. Compound for custom layouts, `SelectField` for quick use with `options` array. TanStack Form: `field.SelectField`.
+- `Popover` - Positioned popover panels (compound: Root, Trigger, Portal, Backdrop, Positioner, Popup, Arrow, Title, Description, Close).
+
+**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

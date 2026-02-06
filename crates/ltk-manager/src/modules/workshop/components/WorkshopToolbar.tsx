@@ -1,6 +1,6 @@
 import { LuDownload, LuGrid3X3, LuList, LuPlus, LuSearch } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 
 export type ViewMode = "grid" | "list";
 

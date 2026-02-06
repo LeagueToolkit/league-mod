@@ -8,7 +8,16 @@ import {
   FieldError,
   FieldLabel,
   FieldRoot,
-} from "@/components/FormField";
+  SelectIcon,
+  SelectItem,
+  type SelectOption,
+  SelectPopup,
+  SelectPortal,
+  SelectPositioner,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+} from "@/components";
 
 import { useFieldContext, useFormContext } from "./form-context";
 
@@ -99,6 +108,61 @@ export function TextareaField({
         )}
         {...props}
       />
+      {hasError && <FieldError>{field.state.meta.errors.join(", ")}</FieldError>}
+    </FieldRoot>
+  );
+}
+
+// SelectField - Pre-bound select field component
+export interface SelectFieldProps {
+  label?: string;
+  description?: string;
+  required?: boolean;
+  placeholder?: string;
+  options: SelectOption[];
+  disabled?: boolean;
+  className?: string;
+  triggerClassName?: string;
+}
+
+export function SelectField({
+  label,
+  description,
+  required,
+  placeholder,
+  options,
+  disabled,
+  className,
+  triggerClassName,
+}: SelectFieldProps) {
+  const field = useFieldContext<string>();
+  const hasError = field.state.meta.errors.length > 0;
+
+  return (
+    <FieldRoot className={className}>
+      {label && <FieldLabel required={required}>{label}</FieldLabel>}
+      {description && <FieldDescription>{description}</FieldDescription>}
+      <SelectRoot
+        value={field.state.value}
+        onValueChange={(value) => field.handleChange(value ?? "")}
+        disabled={disabled}
+      >
+        <SelectTrigger hasError={hasError} className={triggerClassName}>
+          <SelectValue placeholder={placeholder} />
+          <SelectIcon />
+        </SelectTrigger>
+        <SelectPortal>
+          <SelectPositioner>
+            <SelectPopup>
+              {options.map((option) => (
+                <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </SelectPositioner>
+        </SelectPortal>
+      </SelectRoot>
       {hasError && <FieldError>{field.state.meta.errors.join(", ")}</FieldError>}
     </FieldRoot>
   );

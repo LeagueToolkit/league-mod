@@ -3,11 +3,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { LuFolderOpen, LuGrid3X3, LuList, LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
-import { ModCard } from "@/components/ModCard";
-import { useToast } from "@/components/Toast";
+import { Button, IconButton, useToast } from "@/components";
 import { api, type AppError, unwrap } from "@/lib/tauri";
 import {
+  ModCard,
   ProfileSelector,
   useInstalledMods,
   useInstallMod,

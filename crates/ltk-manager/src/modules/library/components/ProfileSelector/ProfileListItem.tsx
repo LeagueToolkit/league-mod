@@ -1,6 +1,6 @@
 import { LuCheck, LuPencil, LuTrash2 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import type { Profile } from "@/lib/tauri";
 
 import { ProfileEditForm } from "./ProfileEditForm";
