@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
-import { Button, IconButton, Switch } from "@/components";
+import { IconButton, Menu, Switch } from "@/components";
 import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 
 interface InstalledMod {
@@ -29,22 +28,14 @@ interface ModCardProps {
 }
 
 export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
-  const [showMenu, setShowMenu] = useState(false);
   const { data: thumbnailUrl } = useModThumbnail(mod.id, mod.thumbnailPath);
 
   async function handleOpenLocation() {
     try {
-      // Use modDir (installed location) instead of filePath (source file)
       await invoke("reveal_in_explorer", { path: mod.modDir });
     } catch (error) {
       console.error("Failed to open location:", error);
     }
-    setShowMenu(false);
-  }
-
-  function handleViewDetails() {
-    onViewDetails?.(mod);
-    setShowMenu(false);
   }
 
   function handleCardClick(e: React.MouseEvent) {
@@ -90,21 +81,44 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
         </div>
 
         {/* Menu */}
-        <div className="relative" data-no-toggle>
-          <IconButton
-            icon={<LuEllipsisVertical className="h-4 w-4" />}
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowMenu(!showMenu)}
-          />
-          {showMenu && (
-            <ContextMenu
-              onClose={() => setShowMenu(false)}
-              onUninstall={() => onUninstall(mod.id)}
-              onOpenLocation={handleOpenLocation}
-              onViewDetails={handleViewDetails}
+        <div data-no-toggle>
+          <Menu.Root>
+            <Menu.Trigger
+              render={
+                <IconButton
+                  icon={<LuEllipsisVertical className="h-4 w-4" />}
+                  variant="ghost"
+                  size="sm"
+                />
+              }
             />
-          )}
+            <Menu.Portal>
+              <Menu.Positioner>
+                <Menu.Popup>
+                  <Menu.Item
+                    icon={<LuInfo className="h-4 w-4" />}
+                    onClick={() => onViewDetails?.(mod)}
+                  >
+                    View Details
+                  </Menu.Item>
+                  <Menu.Item
+                    icon={<LuFolderOpen className="h-4 w-4" />}
+                    onClick={handleOpenLocation}
+                  >
+                    Open Location
+                  </Menu.Item>
+                  <Menu.Separator />
+                  <Menu.Item
+                    icon={<LuTrash2 className="h-4 w-4" />}
+                    variant="danger"
+                    onClick={() => onUninstall(mod.id)}
+                  >
+                    Uninstall
+                  </Menu.Item>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
         </div>
       </div>
     );
@@ -154,80 +168,48 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
           <span className="flex-1 truncate">
             {mod.authors.length > 0 ? mod.authors[0] : "Unknown"}
           </span>
-          <div className="relative ml-1 shrink-0" data-no-toggle>
-            <IconButton
-              icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
-              variant="ghost"
-              size="xs"
-              onClick={() => setShowMenu(!showMenu)}
-              className="h-5 w-5"
-            />
-            {showMenu && (
-              <ContextMenu
-                onClose={() => setShowMenu(false)}
-                onUninstall={() => onUninstall(mod.id)}
-                onOpenLocation={handleOpenLocation}
-                onViewDetails={handleViewDetails}
+          <div className="ml-1 shrink-0" data-no-toggle>
+            <Menu.Root>
+              <Menu.Trigger
+                render={
+                  <IconButton
+                    icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
+                    variant="ghost"
+                    size="xs"
+                    className="h-5 w-5"
+                  />
+                }
               />
-            )}
+              <Menu.Portal>
+                <Menu.Positioner>
+                  <Menu.Popup>
+                    <Menu.Item
+                      icon={<LuInfo className="h-4 w-4" />}
+                      onClick={() => onViewDetails?.(mod)}
+                    >
+                      View Details
+                    </Menu.Item>
+                    <Menu.Item
+                      icon={<LuFolderOpen className="h-4 w-4" />}
+                      onClick={handleOpenLocation}
+                    >
+                      Open Location
+                    </Menu.Item>
+                    <Menu.Separator />
+                    <Menu.Item
+                      icon={<LuTrash2 className="h-4 w-4" />}
+                      variant="danger"
+                      onClick={() => onUninstall(mod.id)}
+                    >
+                      Uninstall
+                    </Menu.Item>
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </Menu.Root>
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-interface ContextMenuProps {
-  onClose: () => void;
-  onUninstall: () => void;
-  onOpenLocation: () => void;
-  onViewDetails: () => void;
-}
-
-function ContextMenu({ onClose, onUninstall, onOpenLocation, onViewDetails }: ContextMenuProps) {
-  return (
-    <>
-      <div
-        className="fixed inset-0 z-10"
-        onClick={onClose}
-        onKeyDown={(e) => e.key === "Escape" && onClose()}
-        role="button"
-        tabIndex={0}
-        aria-label="Close menu"
-      />
-      <div className="absolute top-full right-0 z-20 mt-1 w-44 animate-fade-in rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl">
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuInfo className="h-4 w-4" />}
-          onClick={onViewDetails}
-          className="w-full justify-start rounded-none px-3"
-        >
-          View Details
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuFolderOpen className="h-4 w-4" />}
-          onClick={onOpenLocation}
-          className="w-full justify-start rounded-none px-3"
-        >
-          Open Location
-        </Button>
-        <hr className="my-1 border-surface-600" />
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuTrash2 className="h-4 w-4" />}
-          onClick={() => {
-            onUninstall();
-            onClose();
-          }}
-          className="w-full justify-start rounded-none px-3 text-red-400 hover:text-red-300"
-        >
-          Uninstall
-        </Button>
-      </div>
-    </>
   );
 }

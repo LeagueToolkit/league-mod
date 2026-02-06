@@ -127,12 +127,11 @@ TanStack Router with file-based routing in `src/routes/`. Route tree is auto-gen
 | `Tooltip`, `SimpleTooltip` | Hover information | `Tooltip` |
 | `Toast`, `ToastProvider`, `useToast()` | Notifications | `Toast` |
 | `Switch` (sizes: `sm`, `md`) | Toggle on/off | `Switch` |
+| `Menu` (compound: `Root`, `Trigger`, `Portal`, `Positioner`, `Popup`, `Item`, `Separator`, `Group`, `GroupLabel`) | Dropdown/context menus | `Menu` |
 
 **Not yet wrapped (needed):**
 | Component | Priority | Current Workaround |
 | ---------------------- | -------- | -------------------------------------------------- |
-| `Menu` / `ContextMenu` | HIGH | Raw `<div role="button">` backdrops + manual menus |
-| `Separator` | MEDIUM | Raw `<hr>` elements |
 | `Select` | MEDIUM | Not yet needed but will be |
 | `Popover` | MEDIUM | Raw div-based dropdowns in `ProfileSelector` |
 | `Progress` | LOW | Custom overlay progress rendering |

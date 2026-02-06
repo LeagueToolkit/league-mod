@@ -2,6 +2,7 @@ export * from "./Button";
 export * from "./Checkbox";
 export * from "./Dialog";
 export * from "./FormField";
+export * from "./Menu";
 export * from "./RadioGroup";
 export * from "./Switch";
 export * from "./Tabs";

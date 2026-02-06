@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
 import {
   LuEllipsisVertical,
   LuFolderOpen,
@@ -9,7 +8,7 @@ import {
   LuTrash2,
 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components";
+import { Button, IconButton, Menu } from "@/components";
 import type { WorkshopProject } from "@/lib/tauri";
 
 import { useProjectThumbnail } from "../api/useProjectThumbnail";
@@ -31,7 +30,6 @@ export function ProjectCard({
   onDelete,
   onSetThumbnail,
 }: ProjectCardProps) {
-  const [showMenu, setShowMenu] = useState(false);
   const { data: thumbnailUrl } = useProjectThumbnail(project.path, project.thumbnailPath);
 
   async function handleOpenLocation() {
@@ -40,7 +38,6 @@ export function ProjectCard({
     } catch (error) {
       console.error("Failed to open location:", error);
     }
-    setShowMenu(false);
   }
 
   function handleCardClick(e: React.MouseEvent) {
@@ -86,36 +83,55 @@ export function ProjectCard({
           >
             Pack
           </Button>
-          <div className="relative">
-            <IconButton
-              icon={<LuEllipsisVertical className="h-4 w-4" />}
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowMenu(!showMenu)}
+          <Menu.Root>
+            <Menu.Trigger
+              render={
+                <IconButton
+                  icon={<LuEllipsisVertical className="h-4 w-4" />}
+                  variant="ghost"
+                  size="sm"
+                />
+              }
             />
-            {showMenu && (
-              <ContextMenu
-                onClose={() => setShowMenu(false)}
-                onEdit={() => {
-                  onEdit(project);
-                  setShowMenu(false);
-                }}
-                onPack={() => {
-                  onPack(project);
-                  setShowMenu(false);
-                }}
-                onSetThumbnail={() => {
-                  onSetThumbnail(project);
-                  setShowMenu(false);
-                }}
-                onOpenLocation={handleOpenLocation}
-                onDelete={() => {
-                  onDelete(project);
-                  setShowMenu(false);
-                }}
-              />
-            )}
-          </div>
+            <Menu.Portal>
+              <Menu.Positioner>
+                <Menu.Popup>
+                  <Menu.Item
+                    icon={<LuPencil className="h-4 w-4" />}
+                    onClick={() => onEdit(project)}
+                  >
+                    Edit Project
+                  </Menu.Item>
+                  <Menu.Item
+                    icon={<LuPackage className="h-4 w-4" />}
+                    onClick={() => onPack(project)}
+                  >
+                    Pack
+                  </Menu.Item>
+                  <Menu.Item
+                    icon={<LuImage className="h-4 w-4" />}
+                    onClick={() => onSetThumbnail(project)}
+                  >
+                    Set Thumbnail
+                  </Menu.Item>
+                  <Menu.Item
+                    icon={<LuFolderOpen className="h-4 w-4" />}
+                    onClick={handleOpenLocation}
+                  >
+                    Open Location
+                  </Menu.Item>
+                  <Menu.Separator />
+                  <Menu.Item
+                    icon={<LuTrash2 className="h-4 w-4" />}
+                    variant="danger"
+                    onClick={() => onDelete(project)}
+                  >
+                    Delete
+                  </Menu.Item>
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
         </div>
       </div>
     );
@@ -129,34 +145,46 @@ export function ProjectCard({
     >
       {/* Menu in top-right corner */}
       <div className="absolute top-2 right-2 z-10" data-no-click>
-        <IconButton
-          icon={<LuEllipsisVertical className="h-4 w-4" />}
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowMenu(!showMenu)}
-        />
-        {showMenu && (
-          <ContextMenu
-            onClose={() => setShowMenu(false)}
-            onEdit={() => {
-              onEdit(project);
-              setShowMenu(false);
-            }}
-            onPack={() => {
-              onPack(project);
-              setShowMenu(false);
-            }}
-            onSetThumbnail={() => {
-              onSetThumbnail(project);
-              setShowMenu(false);
-            }}
-            onOpenLocation={handleOpenLocation}
-            onDelete={() => {
-              onDelete(project);
-              setShowMenu(false);
-            }}
+        <Menu.Root>
+          <Menu.Trigger
+            render={
+              <IconButton
+                icon={<LuEllipsisVertical className="h-4 w-4" />}
+                variant="ghost"
+                size="sm"
+              />
+            }
           />
-        )}
+          <Menu.Portal>
+            <Menu.Positioner>
+              <Menu.Popup>
+                <Menu.Item icon={<LuPencil className="h-4 w-4" />} onClick={() => onEdit(project)}>
+                  Edit Project
+                </Menu.Item>
+                <Menu.Item icon={<LuPackage className="h-4 w-4" />} onClick={() => onPack(project)}>
+                  Pack
+                </Menu.Item>
+                <Menu.Item
+                  icon={<LuImage className="h-4 w-4" />}
+                  onClick={() => onSetThumbnail(project)}
+                >
+                  Set Thumbnail
+                </Menu.Item>
+                <Menu.Item icon={<LuFolderOpen className="h-4 w-4" />} onClick={handleOpenLocation}>
+                  Open Location
+                </Menu.Item>
+                <Menu.Separator />
+                <Menu.Item
+                  icon={<LuTrash2 className="h-4 w-4" />}
+                  variant="danger"
+                  onClick={() => onDelete(project)}
+                >
+                  Delete
+                </Menu.Item>
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
       </div>
 
       {/* Thumbnail */}
@@ -184,84 +212,5 @@ export function ProjectCard({
         </div>
       </div>
     </div>
-  );
-}
-
-interface ContextMenuProps {
-  onClose: () => void;
-  onEdit: () => void;
-  onPack: () => void;
-  onSetThumbnail: () => void;
-  onOpenLocation: () => void;
-  onDelete: () => void;
-}
-
-function ContextMenu({
-  onClose,
-  onEdit,
-  onPack,
-  onSetThumbnail,
-  onOpenLocation,
-  onDelete,
-}: ContextMenuProps) {
-  return (
-    <>
-      <div
-        className="fixed inset-0 z-10"
-        onClick={onClose}
-        onKeyDown={(e) => e.key === "Escape" && onClose()}
-        role="button"
-        tabIndex={0}
-        aria-label="Close menu"
-      />
-      <div className="absolute top-full right-0 z-20 mt-1 w-44 animate-fade-in rounded-lg border border-surface-600 bg-surface-700 py-1 shadow-xl">
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuPencil className="h-4 w-4" />}
-          onClick={onEdit}
-          className="w-full justify-start rounded-none px-3"
-        >
-          Edit Project
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuPackage className="h-4 w-4" />}
-          onClick={onPack}
-          className="w-full justify-start rounded-none px-3"
-        >
-          Pack
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuImage className="h-4 w-4" />}
-          onClick={onSetThumbnail}
-          className="w-full justify-start rounded-none px-3"
-        >
-          Set Thumbnail
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuFolderOpen className="h-4 w-4" />}
-          onClick={onOpenLocation}
-          className="w-full justify-start rounded-none px-3"
-        >
-          Open Location
-        </Button>
-        <hr className="my-1 border-surface-600" />
-        <Button
-          variant="ghost"
-          size="sm"
-          left={<LuTrash2 className="h-4 w-4" />}
-          onClick={onDelete}
-          className="w-full justify-start rounded-none px-3 text-red-400 hover:text-red-300"
-        >
-          Delete
-        </Button>
-      </div>
-    </>
   );
 }

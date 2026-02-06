@@ -25,7 +25,7 @@ export const Switch = forwardRef<HTMLSpanElement, SwitchProps>(
       <BaseSwitch.Root
         ref={ref}
         className={twMerge(
-          "relative rounded-full transition-colors",
+          "relative inline-flex rounded-full transition-colors",
           "bg-surface-700 data-[checked]:bg-brand-500",
           trackClasses[size],
           className,
