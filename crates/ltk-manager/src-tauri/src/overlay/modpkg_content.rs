@@ -27,14 +27,16 @@ impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
             .modpkg
             .layers
             .values()
-            .map(|l| ModProjectLayer {
-                name: l.name.clone(),
-                priority: l.priority,
-                description: metadata
-                    .layers
-                    .iter()
-                    .find(|ml| ml.name == l.name)
-                    .and_then(|ml| ml.description.clone()),
+            .map(|l| {
+                let meta_layer = metadata.layers.iter().find(|ml| ml.name == l.name);
+                ModProjectLayer {
+                    name: l.name.clone(),
+                    priority: l.priority,
+                    description: meta_layer.and_then(|ml| ml.description.clone()),
+                    string_overrides: meta_layer
+                        .map(|ml| ml.string_overrides.clone())
+                        .unwrap_or_default(),
+                }
             })
             .collect();
         layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
