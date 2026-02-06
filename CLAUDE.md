@@ -222,8 +222,10 @@ export function useProfiles() {
 - `Tabs` - Tabbed content (compound: Root, List, Tab, Panel, Indicator)
 - `Tooltip` / `SimpleTooltip` - Hover information
 - `Toast` / `useToast()` - Notifications
+- `Dialog` - Modal dialogs (compound: Root, Portal, Backdrop, Overlay, Header, Title, Body, Footer, Close)
+- `Switch` - Toggle on/off; Sizes: sm, md
 
-**Not yet wrapped (create in `src/components/` before using):** Dialog, AlertDialog, Switch, Menu, ContextMenu, Select, Popover, Separator, Progress, ScrollArea
+**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Menu, ContextMenu, Select, Popover, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

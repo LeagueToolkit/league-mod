@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components";
+import { Button, IconButton, Switch } from "@/components";
 import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 
 interface InstalledMod {
@@ -86,7 +86,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
 
         {/* Toggle */}
         <div data-no-toggle>
-          <Toggle enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
+          <Switch checked={mod.enabled} onCheckedChange={(checked) => onToggle(mod.id, checked)} />
         </div>
 
         {/* Menu */}
@@ -121,7 +121,12 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
     >
       {/* Toggle in top-right corner */}
       <div className="absolute top-2 right-2 z-10" data-no-toggle>
-        <ToggleSmall enabled={mod.enabled} onChange={(enabled) => onToggle(mod.id, enabled)} />
+        <Switch
+          size="sm"
+          checked={mod.enabled}
+          onCheckedChange={(checked) => onToggle(mod.id, checked)}
+          className="shadow-lg data-[unchecked]:bg-surface-600/80 data-[unchecked]:backdrop-blur-sm"
+        />
       </div>
 
       {/* Thumbnail */}
@@ -169,52 +174,6 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
         </div>
       </div>
     </div>
-  );
-}
-
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!enabled)}
-      className={`relative h-6 w-11 rounded-full transition-colors ${
-        enabled ? "bg-brand-500" : "bg-surface-700"
-      }`}
-    >
-      <span
-        className={`absolute top-1 left-1 h-4 w-4 rounded-full bg-white transition-transform ${
-          enabled ? "translate-x-5" : "translate-x-0"
-        }`}
-      />
-    </button>
-  );
-}
-
-// Smaller toggle for overlay on thumbnail
-function ToggleSmall({
-  enabled,
-  onChange,
-}: {
-  enabled: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onChange(!enabled);
-      }}
-      className={`relative h-5 w-9 rounded-full shadow-lg transition-colors ${
-        enabled ? "bg-brand-500" : "bg-surface-600/80 backdrop-blur-sm"
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-          enabled ? "translate-x-4" : "translate-x-0"
-        }`}
-      />
-    </button>
   );
 }
 

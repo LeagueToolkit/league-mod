@@ -118,7 +118,7 @@ TanStack Router with file-based routing in `src/routes/`. Route tree is auto-gen
 
 **Available components:**
 | Component | Usage | Base-UI Primitive |
-|---|---|---|
+| ------------------------------------------------------------------- | -------------------------------- | --------------------- |
 | `Button`, `IconButton` | All clickable actions | `Button` |
 | `Field`, `FormField`, `TextareaField` | All form inputs (text, textarea) | `Field` |
 | `Checkbox`, `CheckboxGroup` | Boolean/multi-select inputs | `Checkbox` |
@@ -126,12 +126,11 @@ TanStack Router with file-based routing in `src/routes/`. Route tree is auto-gen
 | `Tabs` (compound: `Root`, `List`, `Tab`, `Panel`, `Indicator`) | Tabbed content | `Tabs` |
 | `Tooltip`, `SimpleTooltip` | Hover information | `Tooltip` |
 | `Toast`, `ToastProvider`, `useToast()` | Notifications | `Toast` |
+| `Switch` (sizes: `sm`, `md`) | Toggle on/off | `Switch` |
 
 **Not yet wrapped (needed):**
 | Component | Priority | Current Workaround |
-|---|---|---|
-| `Dialog` / `AlertDialog` | HIGH | Raw `Dialog.*` from base-ui in 4 module files |
-| `Switch` | HIGH | Hand-rolled `<button>` toggles in `ModCard.tsx` |
+| ---------------------- | -------- | -------------------------------------------------- |
 | `Menu` / `ContextMenu` | HIGH | Raw `<div role="button">` backdrops + manual menus |
 | `Separator` | MEDIUM | Raw `<hr>` elements |
 | `Select` | MEDIUM | Not yet needed but will be |

@@ -3,6 +3,7 @@ export * from "./Checkbox";
 export * from "./Dialog";
 export * from "./FormField";
 export * from "./RadioGroup";
+export * from "./Switch";
 export * from "./Tabs";
 export * from "./Toast";
 export * from "./ToastProvider";
