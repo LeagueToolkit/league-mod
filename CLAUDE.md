@@ -225,8 +225,9 @@ export function useProfiles() {
 - `Dialog` - Modal dialogs (compound: Root, Portal, Backdrop, Overlay, Header, Title, Body, Footer, Close)
 - `Switch` - Toggle on/off; Sizes: sm, md
 - `Menu` - Dropdown menus (compound: Root, Trigger, Portal, Positioner, Popup, Item, Separator, Group, GroupLabel). Item supports `icon` and `variant="danger"`.
+- `Select` / `SelectField` - Dropdown select inputs. Compound for custom layouts, `SelectField` for quick use with `options` array. TanStack Form: `field.SelectField`.
 
-**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Select, Popover, Separator, Progress, ScrollArea
+**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Popover, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

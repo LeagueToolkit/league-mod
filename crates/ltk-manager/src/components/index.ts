@@ -4,6 +4,7 @@ export * from "./Dialog";
 export * from "./FormField";
 export * from "./Menu";
 export * from "./RadioGroup";
+export * from "./Select";
 export * from "./Switch";
 export * from "./Tabs";
 export * from "./Toast";

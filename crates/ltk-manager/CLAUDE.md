@@ -128,11 +128,11 @@ TanStack Router with file-based routing in `src/routes/`. Route tree is auto-gen
 | `Toast`, `ToastProvider`, `useToast()` | Notifications | `Toast` |
 | `Switch` (sizes: `sm`, `md`) | Toggle on/off | `Switch` |
 | `Menu` (compound: `Root`, `Trigger`, `Portal`, `Positioner`, `Popup`, `Item`, `Separator`, `Group`, `GroupLabel`) | Dropdown/context menus | `Menu` |
+| `Select`, `SelectField` (compound + simplified), TanStack Form: `field.SelectField` | Dropdown select inputs | `Select` |
 
 **Not yet wrapped (needed):**
 | Component | Priority | Current Workaround |
 | ---------------------- | -------- | -------------------------------------------------- |
-| `Select` | MEDIUM | Not yet needed but will be |
 | `Popover` | MEDIUM | Raw div-based dropdowns in `ProfileSelector` |
 | `Progress` | LOW | Custom overlay progress rendering |
 | `ScrollArea` | LOW | Native scrollbars |
