@@ -10,8 +10,7 @@ import {
   LuX,
 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
-import { RadioGroup } from "@/components/RadioGroup";
+import { Button, IconButton, RadioGroup } from "@/components";
 import type { PackResult, ValidationResult, WorkshopProject } from "@/lib/tauri";
 
 interface PackDialogProps {

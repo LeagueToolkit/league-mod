@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui-components/react";
 import { LuTriangleAlert, LuX } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import type { Profile } from "@/lib/tauri";
 
 interface ProfileDeleteDialogProps {

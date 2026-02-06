@@ -1,6 +1,6 @@
 import { LuChevronDown } from "react-icons/lu";
 
-import { Button } from "@/components/Button";
+import { Button } from "@/components";
 
 interface ProfileDropdownTriggerProps {
   activeProfileName: string;

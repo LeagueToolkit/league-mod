@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import { LuCheck, LuPlus, LuX } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
-import { Field } from "@/components/FormField";
+import { Button, Field, IconButton } from "@/components";
 
 interface ProfileCreateFormProps {
   isCreating: boolean;

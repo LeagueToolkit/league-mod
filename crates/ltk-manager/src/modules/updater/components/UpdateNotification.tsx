@@ -1,6 +1,6 @@
 import { LuCircleAlert, LuDownload, LuRefreshCw, LuX } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 
 import type { UseUpdateCheckReturn } from "../hooks/useUpdateCheck";
 

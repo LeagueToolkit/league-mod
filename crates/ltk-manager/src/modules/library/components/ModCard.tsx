@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
 import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 
 interface InstalledMod {

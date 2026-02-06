@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { useToast } from "@/components/Toast";
+import { useToast } from "@/components";
 import type { Profile } from "@/lib/tauri";
 import {
   useActiveProfile,

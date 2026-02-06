@@ -5,7 +5,7 @@ import type { IconType } from "react-icons";
 import { LuHammer, LuLibrary, LuMinus, LuSettings, LuSquare, LuX } from "react-icons/lu";
 import { twMerge } from "tailwind-merge";
 
-import { IconButton } from "@/components/Button";
+import { IconButton } from "@/components";
 
 const navItems = [
   { to: "/", label: "Library", icon: LuLibrary, exact: true },

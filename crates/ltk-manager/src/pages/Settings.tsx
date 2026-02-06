@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { LuCircleAlert, LuCircleCheck, LuFolderOpen, LuInfo, LuLoader } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import { api, type Settings as SettingsType } from "@/lib/tauri";
 import { ACCENT_PRESETS, useAppInfo, useSaveSettings, useSettings } from "@/modules/settings";
 import { unwrapForQuery } from "@/utils/query";

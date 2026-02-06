@@ -8,7 +8,7 @@ import {
   FieldError,
   FieldLabel,
   FieldRoot,
-} from "@/components/FormField";
+} from "@/components";
 
 import { useFieldContext, useFormContext } from "./form-context";
 

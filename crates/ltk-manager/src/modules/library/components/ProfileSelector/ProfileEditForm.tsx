@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import { LuCheck, LuX } from "react-icons/lu";
 
-import { IconButton } from "@/components/Button";
-import { Field } from "@/components/FormField";
+import { Field, IconButton } from "@/components";
 
 interface ProfileEditFormProps {
   profileId: string;

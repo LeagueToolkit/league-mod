@@ -2,7 +2,7 @@ import { Dialog } from "@base-ui-components/react";
 import { LuX } from "react-icons/lu";
 import { z } from "zod";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import { useAppForm } from "@/lib/form";
 import type { CreateProjectArgs } from "@/lib/tauri";
 

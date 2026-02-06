@@ -9,7 +9,7 @@ import {
   LuTrash2,
 } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, IconButton } from "@/components";
 import type { WorkshopProject } from "@/lib/tauri";
 
 import { useProjectThumbnail } from "../api/useProjectThumbnail";
