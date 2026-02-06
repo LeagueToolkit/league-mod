@@ -211,7 +211,9 @@ body {
 }
 
 [data-tauri-drag-region] button,
-[data-tauri-drag-region] a {
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea {
   -webkit-app-region: no-drag;
 }
 
