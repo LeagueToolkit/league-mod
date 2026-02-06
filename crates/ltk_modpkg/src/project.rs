@@ -16,6 +16,7 @@
 
 use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
+    metadata::CURRENT_SCHEMA_VERSION,
     utils::hash_layer_name,
     ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
 };
@@ -193,7 +194,7 @@ fn build_metadata(
 
     let builder = builder
         .with_metadata(ModpkgMetadata {
-            schema_version: 1,
+            schema_version: CURRENT_SCHEMA_VERSION,
             name: mod_project.name.clone(),
             display_name: mod_project.display_name.clone(),
             description: Some(mod_project.description.clone()),
@@ -249,11 +250,15 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
     let base_description = base_from_config
         .and_then(|l| l.description.clone())
         .or_else(|| Some("Base layer of the mod".to_string()));
+    let base_string_overrides = base_from_config
+        .map(|l| l.string_overrides.clone())
+        .unwrap_or_default();
 
     layers.push(ModpkgLayerMetadata {
         name: "base".to_string(),
         priority: 0,
         description: base_description,
+        string_overrides: base_string_overrides,
     });
 
     // Non-base layers
@@ -262,6 +267,7 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
             name: layer.name.clone(),
             priority: layer.priority,
             description: layer.description.clone(),
+            string_overrides: layer.string_overrides.clone(),
         });
     }
 

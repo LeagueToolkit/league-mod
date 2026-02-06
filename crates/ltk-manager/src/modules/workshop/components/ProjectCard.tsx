@@ -4,6 +4,7 @@ import {
   LuEllipsisVertical,
   LuFolderOpen,
   LuImage,
+  LuLanguages,
   LuPackage,
   LuPencil,
   LuTrash2,
@@ -21,6 +22,7 @@ interface ProjectCardProps {
   onPack: (project: WorkshopProject) => void;
   onDelete: (project: WorkshopProject) => void;
   onSetThumbnail: (project: WorkshopProject) => void;
+  onStringOverrides: (project: WorkshopProject) => void;
 }
 
 export function ProjectCard({
@@ -30,6 +32,7 @@ export function ProjectCard({
   onPack,
   onDelete,
   onSetThumbnail,
+  onStringOverrides,
 }: ProjectCardProps) {
   const [showMenu, setShowMenu] = useState(false);
   const { data: thumbnailUrl } = useProjectThumbnail(project.path, project.thumbnailPath);
@@ -108,6 +111,10 @@ export function ProjectCard({
                   onSetThumbnail(project);
                   setShowMenu(false);
                 }}
+                onStringOverrides={() => {
+                  onStringOverrides(project);
+                  setShowMenu(false);
+                }}
                 onOpenLocation={handleOpenLocation}
                 onDelete={() => {
                   onDelete(project);
@@ -148,6 +155,10 @@ export function ProjectCard({
             }}
             onSetThumbnail={() => {
               onSetThumbnail(project);
+              setShowMenu(false);
+            }}
+            onStringOverrides={() => {
+              onStringOverrides(project);
               setShowMenu(false);
             }}
             onOpenLocation={handleOpenLocation}
@@ -192,6 +203,7 @@ interface ContextMenuProps {
   onEdit: () => void;
   onPack: () => void;
   onSetThumbnail: () => void;
+  onStringOverrides: () => void;
   onOpenLocation: () => void;
   onDelete: () => void;
 }
@@ -201,6 +213,7 @@ function ContextMenu({
   onEdit,
   onPack,
   onSetThumbnail,
+  onStringOverrides,
   onOpenLocation,
   onDelete,
 }: ContextMenuProps) {
@@ -241,6 +254,15 @@ function ContextMenu({
           className="w-full justify-start rounded-none px-3"
         >
           Set Thumbnail
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          left={<LuLanguages className="h-4 w-4" />}
+          onClick={onStringOverrides}
+          className="w-full justify-start rounded-none px-3"
+        >
+          String Overrides
         </Button>
         <Button
           variant="ghost"

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add `string_overrides` field to `ModProjectLayer` for per-layer string text customization
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.1.3...ltk_mod_project-v0.1.4) - 2025-12-02
 
 ### Other

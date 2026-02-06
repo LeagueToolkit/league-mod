@@ -5,6 +5,7 @@ export { useImportFromModpkg } from "./useImportFromModpkg";
 export { usePackProject } from "./usePackProject";
 export { projectThumbnailOptions, useProjectThumbnail } from "./useProjectThumbnail";
 export { useSaveProjectConfig } from "./useSaveProjectConfig";
+export { useSaveStringOverrides } from "./useSaveStringOverrides";
 export { useSetProjectThumbnail } from "./useSetProjectThumbnail";
 export { useValidateProject, validateProjectOptions } from "./useValidateProject";
 export { useWorkshopProject, workshopProjectOptions } from "./useWorkshopProject";

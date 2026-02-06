@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add `string_overrides` field to `ModpkgLayerMetadata` for per-layer string text customization
+- bump metadata schema version from 1 to 2; v1 metadata remains backward-compatible
+
 ## [0.1.5](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.4...ltk_modpkg-v0.1.5) - 2025-12-02
 
 ### Added

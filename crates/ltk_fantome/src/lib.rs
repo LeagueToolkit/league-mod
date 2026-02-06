@@ -2,6 +2,7 @@ use eyre::Result;
 use image::ImageFormat;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{File, read_dir};
 use std::io::Write;
 use std::path::Path;
@@ -26,6 +27,21 @@ pub struct FantomeInfo {
     pub version: String,
     #[serde(rename = "Description")]
     pub description: String,
+    /// Per-layer metadata including string overrides.
+    #[serde(rename = "Layers", default, skip_serializing_if = "HashMap::is_empty")]
+    pub layers: HashMap<String, FantomeLayerInfo>,
+}
+
+/// Per-layer metadata in a Fantome info.json.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FantomeLayerInfo {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Priority")]
+    pub priority: i32,
+    /// String overrides for this layer.
+    #[serde(rename = "StringOverrides", default, skip_serializing_if = "HashMap::is_empty")]
+    pub string_overrides: HashMap<String, String>,
 }
 
 /// Create a standard Fantome file name from a mod project.
@@ -152,12 +168,16 @@ fn pack_metadata<W: Write + std::io::Seek>(
     project_root: &Path,
     options: &SimpleFileOptions,
 ) -> Result<()> {
+    // Build layers map with string overrides
+    let layers = build_fantome_layers(mod_project);
+
     // Create info.json
     let info = FantomeInfo {
         name: mod_project.display_name.clone(),
         author: format_authors(&mod_project.authors),
         version: mod_project.version.clone(),
         description: mod_project.description.clone(),
+        layers,
     };
 
     zip.start_file("META/info.json", *options)?;
@@ -196,6 +216,24 @@ fn pack_image<W: Write + std::io::Seek>(
     zip.write_all(&png_buffer)?;
 
     Ok(())
+}
+
+fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLayerInfo> {
+    let mut layers = HashMap::new();
+    for layer in &mod_project.layers {
+        // Only include layers that have string overrides
+        if !layer.string_overrides.is_empty() {
+            layers.insert(
+                layer.name.clone(),
+                FantomeLayerInfo {
+                    name: layer.name.clone(),
+                    priority: layer.priority,
+                    string_overrides: layer.string_overrides.clone(),
+                },
+            );
+        }
+    }
+    layers
 }
 
 fn format_authors(authors: &[ModProjectAuthor]) -> String {
