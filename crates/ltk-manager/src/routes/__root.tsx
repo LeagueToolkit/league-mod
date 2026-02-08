@@ -33,8 +33,8 @@ function RootLayout() {
   return (
     <div className="root flex h-screen flex-col bg-surface-900">
       <TitleBar version={appInfo?.version} />
-      <UpdateNotification updateState={updateState} />
-      <main className="flex-1 overflow-hidden">
+      <main className="relative flex-1 overflow-hidden">
+        <UpdateNotification updateState={updateState} />
         <Outlet />
         <TanStackRouterDevtools />
       </main>

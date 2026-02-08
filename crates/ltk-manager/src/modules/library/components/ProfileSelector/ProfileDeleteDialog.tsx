@@ -1,24 +1,33 @@
 import { LuTriangleAlert } from "react-icons/lu";
 
-import { Button, Dialog } from "@/components";
+import { Button, Dialog, useToast } from "@/components";
 import type { Profile } from "@/lib/tauri";
+import { useDeleteProfile } from "@/modules/library/api";
 
 interface ProfileDeleteDialogProps {
   open: boolean;
   profile: Profile | null;
   onClose: () => void;
-  onConfirm: () => void;
-  isPending?: boolean;
 }
 
-export function ProfileDeleteDialog({
-  open,
-  profile,
-  onClose,
-  onConfirm,
-  isPending,
-}: ProfileDeleteDialogProps) {
+export function ProfileDeleteDialog({ open, profile, onClose }: ProfileDeleteDialogProps) {
+  const deleteProfile = useDeleteProfile();
+  const toast = useToast();
+
   if (!profile) return null;
+
+  const handleConfirm = async () => {
+    try {
+      await deleteProfile.mutateAsync(profile.id);
+      onClose();
+      toast.success("Profile deleted");
+    } catch (error: unknown) {
+      toast.error(
+        "Failed to delete profile",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
 
   return (
     <Dialog.Root open={open} onOpenChange={(open) => !open && onClose()}>
@@ -48,13 +57,13 @@ export function ProfileDeleteDialog({
           </Dialog.Body>
 
           <Dialog.Footer>
-            <Button variant="ghost" onClick={onClose} disabled={isPending}>
+            <Button variant="ghost" onClick={onClose} disabled={deleteProfile.isPending}>
               Cancel
             </Button>
             <Button
               variant="filled"
-              onClick={onConfirm}
-              loading={isPending}
+              onClick={handleConfirm}
+              loading={deleteProfile.isPending}
               className="bg-red-600 hover:bg-red-500"
             >
               Delete Profile

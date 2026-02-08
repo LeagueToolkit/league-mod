@@ -21,7 +21,7 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Error state
   if (error) {
     return (
-      <div className="mx-4 mt-2 flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/80 px-4 py-3 backdrop-blur-sm">
+      <div className="absolute inset-x-0 top-0 z-50 mx-4 mt-2 flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/80 px-4 py-3 backdrop-blur-sm">
         <LuCircleAlert className="h-5 w-5 shrink-0 text-red-400" />
         <div className="flex-1">
           <p className="text-sm font-medium text-red-100">Update Error</p>
@@ -42,7 +42,7 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Downloading/Installing state
   if (updating) {
     return (
-      <div className="mx-4 mt-2 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
+      <div className="absolute inset-x-0 top-0 z-50 mx-4 mt-2 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <LuRefreshCw className="h-5 w-5 shrink-0 animate-spin text-accent-400" />
           <div className="flex-1">
@@ -65,7 +65,7 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
   // Update available state
   if (update) {
     return (
-      <div className="mx-4 mt-2 flex items-center gap-3 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
+      <div className="absolute inset-x-0 top-0 z-50 mx-4 mt-2 flex items-center gap-3 rounded-lg border border-accent-500/30 bg-gradient-to-r from-accent-600/20 to-accent-700/20 px-4 py-3 backdrop-blur-sm">
         <LuDownload className="h-5 w-5 shrink-0 text-accent-400" />
         <div className="flex-1">
           <p className="text-sm font-medium text-accent-100">Update Available: v{update.version}</p>

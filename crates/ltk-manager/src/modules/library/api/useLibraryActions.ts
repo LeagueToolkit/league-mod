@@ -58,8 +58,11 @@ export function useLibraryActions() {
       const result = await api.getStorageDirectory();
       const path = unwrap(result);
       await api.revealInExplorer(path);
-    } catch (error: any) {
-      toast.error("Failed to open directory", error.message);
+    } catch (error: unknown) {
+      toast.error(
+        "Failed to open directory",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
