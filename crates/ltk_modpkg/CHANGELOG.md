@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.5...ltk_modpkg-v0.1.6) - 2026-02-08
+
+### Added
+
+- support animated thumbnails
+- titlebar navigation
+
 ## [0.1.5](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.4...ltk_modpkg-v0.1.5) - 2025-12-02
 
 ### Added

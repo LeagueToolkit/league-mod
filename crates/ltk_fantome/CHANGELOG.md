@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.1.4...ltk_fantome-v0.1.5) - 2026-02-08
+
+### Added
+
+- start using overlay crate
+- titlebar navigation
+- separate legacy/new patcher, add overlay progress display, fix mod import
+
+### Other
+
+- Merge pull request #73 from LeagueToolkit/support-for-old-patcher
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.1.3...ltk_fantome-v0.1.4) - 2025-12-02
 
 ### Added
