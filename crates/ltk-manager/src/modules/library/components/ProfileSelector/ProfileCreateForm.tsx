@@ -20,7 +20,7 @@ export function ProfileCreateForm() {
 
   const handleSubmit = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName) return;
+    if (!trimmedName || createProfile.isPending) return;
 
     try {
       await createProfile.mutateAsync(trimmedName);

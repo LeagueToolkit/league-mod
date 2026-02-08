@@ -47,7 +47,7 @@ export function ProfileListItem({
 
   const handleRename = async () => {
     const trimmedName = editName.trim();
-    if (!trimmedName) return;
+    if (!trimmedName || renameProfile.isPending) return;
 
     try {
       await renameProfile.mutateAsync({ profileId: profile.id, newName: trimmedName });
