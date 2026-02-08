@@ -12,6 +12,7 @@ export { isErr, isOk, match, unwrap, unwrapOr } from "@/utils/result";
 export interface AppInfo {
   name: string;
   version: string;
+  logFilePath: string | null;
 }
 
 export interface AccentColor {

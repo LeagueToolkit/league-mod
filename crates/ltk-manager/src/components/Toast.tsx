@@ -3,6 +3,8 @@ import { type ReactNode } from "react";
 import { LuCircleAlert, LuCircleCheck, LuCircleX, LuInfo, LuX } from "react-icons/lu";
 import { twMerge } from "tailwind-merge";
 
+import { useNotificationStore } from "@/stores/notifications";
+
 export type ToastType = "success" | "error" | "warning" | "info";
 
 export interface ToastData {
@@ -82,6 +84,7 @@ export const useToastManager = BaseToast.useToastManager;
 // Helper function to create typed toasts
 export function useToast() {
   const toastManager = BaseToast.useToastManager();
+  const addNotification = useNotificationStore((s) => s.addNotification);
 
   return {
     toast: (options: {
@@ -90,14 +93,19 @@ export function useToast() {
       type?: ToastType;
       timeout?: number;
     }) => {
+      const type = options.type ?? "info";
+      if (options.title) {
+        addNotification({ title: options.title, description: options.description, type });
+      }
       return toastManager.add({
         title: options.title,
         description: options.description,
-        data: { type: options.type ?? "info" },
+        data: { type },
         timeout: options.timeout ?? 5000,
       });
     },
     success: (title: string, description?: string) => {
+      addNotification({ title, description, type: "success" });
       return toastManager.add({
         title,
         description,
@@ -106,6 +114,7 @@ export function useToast() {
       });
     },
     error: (title: string, description?: string) => {
+      addNotification({ title, description, type: "error" });
       return toastManager.add({
         title,
         description,
@@ -114,6 +123,7 @@ export function useToast() {
       });
     },
     warning: (title: string, description?: string) => {
+      addNotification({ title, description, type: "warning" });
       return toastManager.add({
         title,
         description,
@@ -122,6 +132,7 @@ export function useToast() {
       });
     },
     info: (title: string, description?: string) => {
+      addNotification({ title, description, type: "info" });
       return toastManager.add({
         title,
         description,
