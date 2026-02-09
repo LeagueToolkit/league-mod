@@ -19,7 +19,7 @@
 //! and used to detect game patches that invalidate the overlay.
 
 use crate::error::{Error, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Index of all WAD files in a League of Legends game directory.
@@ -45,6 +45,13 @@ pub struct GameIndex {
     /// Used to detect game patches — if the fingerprint changes between builds,
     /// the overlay must be fully rebuilt even if the enabled mod list hasn't changed.
     game_fingerprint: u64,
+
+    /// Path hashes for SubChunkTOC entries that mods must not override.
+    ///
+    /// For each `.wad.client` file, the corresponding `.wad.SubChunkTOC` path is
+    /// computed and hashed. Mod overrides matching these hashes are stripped during
+    /// the build to prevent mods from corrupting the game's sub-chunk loading.
+    subchunktoc_blocked: HashSet<u64>,
 }
 
 impl GameIndex {
@@ -68,13 +75,15 @@ impl GameIndex {
         tracing::info!("Building game index from {}", data_final_dir.display());
 
         let wad_index = build_wad_filename_index(&data_final_dir)?;
-        let hash_index = build_game_hash_index(game_dir, &data_final_dir)?;
+        let (hash_index, wad_relative_paths) = build_game_hash_index(game_dir, &data_final_dir)?;
         let game_fingerprint = calculate_game_fingerprint(&data_final_dir)?;
+        let subchunktoc_blocked = build_subchunktoc_blocked(&wad_relative_paths);
 
         tracing::info!(
-            "Game index built: {} WAD filenames, {} unique hashes, fingerprint: {:016x}",
+            "Game index built: {} WAD filenames, {} unique hashes, {} SubChunkTOC blocked, fingerprint: {:016x}",
             wad_index.len(),
             hash_index.len(),
+            subchunktoc_blocked.len(),
             game_fingerprint
         );
 
@@ -82,6 +91,7 @@ impl GameIndex {
             wad_index,
             hash_index,
             game_fingerprint,
+            subchunktoc_blocked,
         })
     }
 
@@ -147,6 +157,11 @@ impl GameIndex {
     pub fn game_fingerprint(&self) -> u64 {
         self.game_fingerprint
     }
+
+    /// Get the set of SubChunkTOC path hashes that mods must not override.
+    pub fn subchunktoc_blocked(&self) -> &HashSet<u64> {
+        &self.subchunktoc_blocked
+    }
 }
 
 /// Recursively scan `root` for `.wad.client` files and index them by lowercase filename.
@@ -182,16 +197,18 @@ fn build_wad_filename_index(root: &Path) -> Result<HashMap<String, Vec<PathBuf>>
     Ok(index)
 }
 
+/// Hash index mapping chunk path hashes to WAD paths, plus the list of WAD relative paths.
+type HashIndexResult = (HashMap<u64, Vec<PathBuf>>, Vec<PathBuf>);
+
 /// Mount every WAD file and build a reverse index: `chunk_path_hash -> [relative_wad_paths]`.
 ///
+/// Also returns the set of all WAD relative paths (for SubChunkTOC computation).
 /// WAD files that fail to open or mount are skipped with a warning.
-fn build_game_hash_index(
-    game_dir: &Path,
-    data_final_dir: &Path,
-) -> Result<HashMap<u64, Vec<PathBuf>>> {
+fn build_game_hash_index(game_dir: &Path, data_final_dir: &Path) -> Result<HashIndexResult> {
     use ltk_wad::Wad;
 
     let mut hash_to_wads: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+    let mut wad_relative_paths: Vec<PathBuf> = Vec::new();
     let mut wad_count = 0;
     let mut chunk_count = 0;
 
@@ -239,6 +256,7 @@ fn build_game_hash_index(
             };
 
             wad_count += 1;
+            wad_relative_paths.push(relative_path.clone());
             for chunk in wad.chunks().iter() {
                 hash_to_wads
                     .entry(chunk.path_hash)
@@ -256,7 +274,40 @@ fn build_game_hash_index(
         hash_to_wads.len()
     );
 
-    Ok(hash_to_wads)
+    Ok((hash_to_wads, wad_relative_paths))
+}
+
+/// Compute SubChunkTOC path hashes for all WAD relative paths.
+///
+/// For each WAD relative path like `DATA/FINAL/Champions/Aatrox.wad.client`, replaces
+/// the final `.client` extension with `.SubChunkTOC`, normalizes to forward slashes and
+/// lowercase, and hashes with XXH64 (seed 0).
+fn build_subchunktoc_blocked(wad_relative_paths: &[PathBuf]) -> HashSet<u64> {
+    use xxhash_rust::xxh64::xxh64;
+
+    let mut blocked = HashSet::new();
+
+    for rel_path in wad_relative_paths {
+        let path_str = rel_path.to_string_lossy();
+
+        // Replace the last extension (.client) with .SubChunkTOC
+        // e.g., "DATA/FINAL/Champions/Aatrox.wad.client" -> "DATA/FINAL/Champions/Aatrox.wad.SubChunkTOC"
+        let toc_path = if let Some(stripped) = path_str.strip_suffix(".client") {
+            format!("{}.SubChunkTOC", stripped)
+        } else {
+            // Shouldn't happen since we only scan .wad.client files, but handle gracefully
+            continue;
+        };
+
+        // Normalize: forward slashes, lowercase
+        let normalized = toc_path.replace('\\', "/").to_lowercase();
+        let hash = xxh64(normalized.as_bytes(), 0);
+        blocked.insert(hash);
+
+        tracing::trace!("SubChunkTOC blocked: {} -> {:016x}", normalized, hash);
+    }
+
+    blocked
 }
 
 /// Compute an xxHash3 fingerprint from all WAD file paths, sizes, and modification times.
@@ -307,9 +358,48 @@ fn calculate_game_fingerprint(data_final_dir: &Path) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_wad_index_creation() {
         // This would require a test fixture with actual WAD files
         // For now, just test that the types compile
+    }
+
+    #[test]
+    fn test_subchunktoc_blocked() {
+        let paths = vec![
+            PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client"),
+            PathBuf::from("DATA/FINAL/Maps/Map11.wad.client"),
+        ];
+
+        let blocked = build_subchunktoc_blocked(&paths);
+
+        // Should have one entry per WAD path
+        assert_eq!(blocked.len(), 2);
+
+        // Verify the hash for a known path
+        use xxhash_rust::xxh64::xxh64;
+        let expected_hash = xxh64(b"data/final/champions/aatrox.wad.subchunktoc", 0);
+        assert!(
+            blocked.contains(&expected_hash),
+            "Expected hash {:016x} for aatrox SubChunkTOC",
+            expected_hash
+        );
+    }
+
+    #[test]
+    fn test_subchunktoc_blocked_backslash_normalization() {
+        // Windows-style paths should be normalized to forward slashes
+        let paths = vec![PathBuf::from("DATA\\FINAL\\Champions\\Aatrox.wad.client")];
+
+        let blocked = build_subchunktoc_blocked(&paths);
+
+        use xxhash_rust::xxh64::xxh64;
+        let expected_hash = xxh64(b"data/final/champions/aatrox.wad.subchunktoc", 0);
+        assert!(
+            blocked.contains(&expected_hash),
+            "Backslash paths should normalize to same hash"
+        );
     }
 }

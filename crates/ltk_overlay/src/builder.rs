@@ -356,6 +356,24 @@ impl OverlayBuilder {
             all_overrides.len()
         );
 
+        // Filter out SubChunkTOC entries — mods must not override these
+        let blocked = game_index.subchunktoc_blocked();
+        let before_filter = all_overrides.len();
+        all_overrides.retain(|path_hash, _| {
+            let dominated = blocked.contains(path_hash);
+            if dominated {
+                tracing::debug!("Filtered SubChunkTOC override: {:016x}", path_hash);
+            }
+            !dominated
+        });
+        let filtered_count = before_filter - all_overrides.len();
+        if filtered_count > 0 {
+            tracing::info!(
+                "Filtered {} SubChunkTOC override(s) from mod overrides",
+                filtered_count
+            );
+        }
+
         // Distribute overrides to ALL affected WADs using the game hash index
         let mut wad_overrides: BTreeMap<PathBuf, HashMap<u64, Vec<u8>>> = BTreeMap::new();
         for (path_hash, override_bytes) in &all_overrides {

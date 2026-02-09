@@ -38,11 +38,42 @@ pnpm tauri dev
 ### Building
 
 ```bash
-# Build for production
+# Build for production (executable + installers)
 pnpm tauri build
 ```
 
-The built application will be in `src-tauri/target/release/bundle/`.
+The built application and installers will be in `src-tauri/target/release/bundle/`:
+
+| Platform | Installer Path                           | Format             |
+| -------- | ---------------------------------------- | ------------------ |
+| Windows  | `bundle/nsis/LTK Manager_*-setup.exe`    | NSIS installer     |
+| Windows  | `bundle/msi/LTK Manager_*.msi`           | MSI installer      |
+| macOS    | `bundle/dmg/LTK Manager_*.dmg`           | DMG disk image     |
+| macOS    | `bundle/macos/LTK Manager.app`           | Application bundle |
+| Linux    | `bundle/deb/ltk-manager_*.deb`           | Debian package     |
+| Linux    | `bundle/appimage/ltk-manager_*.AppImage` | AppImage           |
+
+To build a specific installer format only:
+
+```bash
+# Windows
+pnpm tauri build --bundles nsis
+pnpm tauri build --bundles msi
+
+# macOS
+pnpm tauri build --bundles dmg
+pnpm tauri build --bundles app
+
+# Linux
+pnpm tauri build --bundles deb
+pnpm tauri build --bundles appimage
+```
+
+For debug builds (faster, unoptimized):
+
+```bash
+pnpm tauri build --debug
+```
 
 ## Project Structure
 

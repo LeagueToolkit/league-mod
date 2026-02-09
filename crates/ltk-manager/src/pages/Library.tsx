@@ -10,6 +10,7 @@ import {
 } from "@/modules/library";
 import {
   useOverlayProgress,
+  usePatcherError,
   usePatcherStatus,
   useStartPatcher,
   useStopPatcher,
@@ -27,6 +28,9 @@ export function Library() {
   const startPatcher = useStartPatcher();
   const stopPatcher = useStopPatcher();
   const overlayProgress = useOverlayProgress();
+  usePatcherError();
+
+  const isStarting = patcherStatus?.phase === "building";
 
   const hasEnabledMods = mods.some((m) => m.enabled);
 
@@ -61,7 +65,7 @@ export function Library() {
         patcher={{
           status: patcherStatus,
           overlayProgress,
-          isStarting: startPatcher.isPending,
+          isStarting: isStarting,
           isStopping: stopPatcher.isPending,
           onStart: handleStartPatcher,
           onStop: handleStopPatcher,
