@@ -12,8 +12,8 @@
 //! crate where the archive format dependencies are available.
 
 use crate::error::Result;
+use camino::Utf8PathBuf;
 use ltk_mod_project::ModProject;
-use std::path::PathBuf;
 
 /// Abstracts how mod content is accessed during overlay building.
 ///
@@ -60,7 +60,7 @@ pub trait ModContentProvider: Send {
         &mut self,
         layer: &str,
         wad_name: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>>;
+    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>>;
 }
 
 /// Filesystem-backed mod content provider.
@@ -86,14 +86,14 @@ pub trait ModContentProvider: Send {
 /// Only subdirectories under each layer whose name ends in `.wad.client`
 /// (case-insensitive) are recognized as WAD targets.
 pub struct FsModContent {
-    mod_dir: PathBuf,
+    mod_dir: Utf8PathBuf,
 }
 
 impl FsModContent {
     /// Create a new filesystem content provider rooted at the given mod directory.
     ///
     /// The directory must contain a `mod.config.json` and a `content/` subdirectory.
-    pub fn new(mod_dir: PathBuf) -> Self {
+    pub fn new(mod_dir: Utf8PathBuf) -> Self {
         Self { mod_dir }
     }
 }
@@ -101,18 +101,18 @@ impl FsModContent {
 impl ModContentProvider for FsModContent {
     fn mod_project(&mut self) -> Result<ModProject> {
         let config_path = self.mod_dir.join("mod.config.json");
-        let contents = std::fs::read_to_string(&config_path)?;
+        let contents = std::fs::read_to_string(config_path.as_std_path())?;
         Ok(serde_json::from_str(&contents)?)
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
         let layer_dir = self.mod_dir.join("content").join(layer);
-        if !layer_dir.exists() {
+        if !layer_dir.as_std_path().exists() {
             return Ok(Vec::new());
         }
 
         let mut wads = Vec::new();
-        for entry in std::fs::read_dir(&layer_dir)? {
+        for entry in std::fs::read_dir(layer_dir.as_std_path())? {
             let entry = entry?;
             let path = entry.path();
             if !path.is_dir() {
@@ -133,23 +133,34 @@ impl ModContentProvider for FsModContent {
         &mut self,
         layer: &str,
         wad_name: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let wad_dir = self.mod_dir.join("content").join(layer).join(wad_name);
         let mut results = Vec::new();
         let mut stack = vec![wad_dir.clone()];
 
         while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir)? {
+            for entry in std::fs::read_dir(dir.as_std_path())? {
                 let entry = entry?;
                 let path = entry.path();
 
-                if path.is_dir() {
-                    stack.push(path);
+                let utf8_path = match Utf8PathBuf::from_path_buf(path) {
+                    Ok(p) => p,
+                    Err(p) => {
+                        tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
+                        continue;
+                    }
+                };
+
+                if utf8_path.as_std_path().is_dir() {
+                    stack.push(utf8_path);
                     continue;
                 }
 
-                let rel = path.strip_prefix(&wad_dir).unwrap_or(&path).to_path_buf();
-                let bytes = std::fs::read(&path)?;
+                let rel = utf8_path
+                    .strip_prefix(&wad_dir)
+                    .unwrap_or(&utf8_path)
+                    .to_path_buf();
+                let bytes = std::fs::read(utf8_path.as_std_path())?;
                 results.push((rel, bytes));
             }
         }
@@ -160,6 +171,7 @@ impl ModContentProvider for FsModContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use camino::Utf8PathBuf;
     use std::fs;
     use tempfile::tempdir;
 
@@ -200,7 +212,8 @@ mod tests {
     #[test]
     fn test_fs_mod_project() {
         let dir = create_test_mod_dir();
-        let mut provider = FsModContent::new(dir.path().to_path_buf());
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut provider = FsModContent::new(mod_dir);
 
         let project = provider.mod_project().unwrap();
         assert_eq!(project.name, "test-mod");
@@ -210,7 +223,8 @@ mod tests {
     #[test]
     fn test_fs_list_layer_wads() {
         let dir = create_test_mod_dir();
-        let mut provider = FsModContent::new(dir.path().to_path_buf());
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut provider = FsModContent::new(mod_dir);
 
         let wads = provider.list_layer_wads("base").unwrap();
         assert_eq!(wads.len(), 1);
@@ -220,7 +234,8 @@ mod tests {
     #[test]
     fn test_fs_list_layer_wads_missing_layer() {
         let dir = create_test_mod_dir();
-        let mut provider = FsModContent::new(dir.path().to_path_buf());
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut provider = FsModContent::new(mod_dir);
 
         let wads = provider.list_layer_wads("nonexistent").unwrap();
         assert!(wads.is_empty());
@@ -229,7 +244,8 @@ mod tests {
     #[test]
     fn test_fs_read_wad_overrides() {
         let dir = create_test_mod_dir();
-        let mut provider = FsModContent::new(dir.path().to_path_buf());
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut provider = FsModContent::new(mod_dir);
 
         let overrides = provider
             .read_wad_overrides("base", "Test.wad.client")
@@ -239,7 +255,7 @@ mod tests {
         // Check that both files are present (order may vary)
         let paths: Vec<String> = overrides
             .iter()
-            .map(|(p, _)| p.to_string_lossy().replace('\\', "/"))
+            .map(|(p, _)| p.as_str().replace('\\', "/"))
             .collect();
         assert!(paths.contains(&"file1.bin".to_string()));
         assert!(paths.contains(&"subdir/file2.bin".to_string()));

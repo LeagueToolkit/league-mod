@@ -4,7 +4,7 @@
 //! as the error type. External error types (`std::io::Error`, `serde_json::Error`,
 //! WAD errors) are automatically converted via `From` impls.
 
-use std::path::PathBuf;
+use camino::Utf8PathBuf;
 use thiserror::Error;
 
 /// Convenience alias used throughout the crate.
@@ -35,7 +35,7 @@ pub enum Error {
 
     /// A mod references a WAD file that doesn't exist in the game directory.
     #[error("WAD file not found: {0}")]
-    WadNotFound(PathBuf),
+    WadNotFound(Utf8PathBuf),
 
     /// A WAD filename matches multiple files in the game directory.
     #[error("Ambiguous WAD '{name}': found {count} candidates")]
@@ -43,7 +43,7 @@ pub enum Error {
 
     /// A mod directory is missing or inaccessible (used by [`FsModContent`](crate::FsModContent)).
     #[error("Invalid mod directory: {0}")]
-    InvalidModDir(PathBuf),
+    InvalidModDir(Utf8PathBuf),
 
     /// A mod's `mod.config.json` is missing or malformed.
     #[error("Invalid mod config: {0}")]

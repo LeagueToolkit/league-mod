@@ -25,11 +25,11 @@
 
 use crate::error::{Error, Result};
 use byteorder::{WriteBytesExt, LE};
+use camino::Utf8Path;
 use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
 use std::collections::HashMap;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::path::Path;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Build statistics returned by [`build_patched_wad`].
@@ -66,14 +66,14 @@ pub struct PatchedWadStats {
 ///
 /// [`PatchedWadStats`] with build metrics (chunk counts, dedup savings, timing).
 pub fn build_patched_wad(
-    src_wad_path: &Path,
-    dst_wad_path: &Path,
+    src_wad_path: &Utf8Path,
+    dst_wad_path: &Utf8Path,
     overrides: &HashMap<u64, Vec<u8>>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
     // Load original WAD
-    let file = std::fs::File::open(src_wad_path)?;
+    let file = std::fs::File::open(src_wad_path.as_std_path())?;
     let mut wad = Wad::mount(file)?;
     let chunks = wad.chunks().clone();
 
@@ -87,8 +87,8 @@ pub fn build_patched_wad(
         tracing::warn!(
             "Ignoring {} override chunk(s) not present in base WAD (src={} dst={})",
             unknown_override_hashes.len(),
-            src_wad_path.display(),
-            dst_wad_path.display()
+            src_wad_path,
+            dst_wad_path
         );
         tracing::debug!(
             "Unknown override hashes (first 16) = [{}]",
@@ -138,11 +138,11 @@ pub fn build_patched_wad(
 
     // Create parent directory if needed
     if let Some(parent) = dst_wad_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent.as_std_path())?;
     }
 
     // Write WAD v3.4 directly (avoids WadBuilder's path hash re-hashing issue)
-    let mut writer = BufWriter::new(std::fs::File::create(dst_wad_path)?);
+    let mut writer = BufWriter::new(std::fs::File::create(dst_wad_path.as_std_path())?);
 
     // Write header
     writer.write_u16::<LE>(0x5752)?; // "RW" magic
@@ -205,7 +205,7 @@ pub fn build_patched_wad(
 
     tracing::info!(
         "Patched WAD complete dst={} chunks={} overrides={} deduplicated={} saved_kb={} elapsed_ms={}",
-        dst_wad_path.display(),
+        dst_wad_path,
         ordered.len(),
         overrides_applied,
         chunks_deduplicated,

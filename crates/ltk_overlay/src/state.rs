@@ -12,8 +12,8 @@
 //! case of "nothing changed since last build".
 
 use crate::error::Result;
+use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
 ///
@@ -80,12 +80,12 @@ impl OverlayState {
     /// # Arguments
     ///
     /// * `path` - Path to the overlay.json state file
-    pub fn load(path: &Path) -> Result<Option<Self>> {
-        if !path.exists() {
+    pub fn load(path: &Utf8Path) -> Result<Option<Self>> {
+        if !path.as_std_path().exists() {
             return Ok(None);
         }
 
-        let contents = std::fs::read_to_string(path)?;
+        let contents = std::fs::read_to_string(path.as_std_path())?;
         let state: Self = serde_json::from_str(&contents)?;
         Ok(Some(state))
     }
@@ -97,13 +97,13 @@ impl OverlayState {
     /// # Arguments
     ///
     /// * `path` - Path where the overlay.json state file should be written
-    pub fn save(&self, path: &Path) -> Result<()> {
+    pub fn save(&self, path: &Utf8Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent.as_std_path())?;
         }
 
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, contents)?;
+        std::fs::write(path.as_std_path(), contents)?;
         Ok(())
     }
 
@@ -128,6 +128,7 @@ impl OverlayState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use camino::Utf8Path;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -184,16 +185,16 @@ mod tests {
     #[test]
     fn test_save_and_load() {
         let temp = NamedTempFile::new().unwrap();
-        let path = temp.path().to_path_buf();
+        let path = Utf8Path::from_path(temp.path()).unwrap();
 
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
         let state = OverlayState::new(mods.clone(), 0x123456);
 
         // Save
-        state.save(&path).unwrap();
+        state.save(path).unwrap();
 
         // Load
-        let loaded = OverlayState::load(&path).unwrap().unwrap();
+        let loaded = OverlayState::load(path).unwrap().unwrap();
         assert_eq!(loaded.version, state.version);
         assert_eq!(loaded.enabled_mods, state.enabled_mods);
         assert_eq!(loaded.game_fingerprint, state.game_fingerprint);
@@ -202,9 +203,10 @@ mod tests {
     #[test]
     fn test_load_nonexistent() {
         let temp = NamedTempFile::new().unwrap();
-        let path = temp.path().with_extension("nonexistent");
+        let std_path = temp.path().with_extension("nonexistent");
+        let path = Utf8Path::from_path(&std_path).unwrap();
 
-        let loaded = OverlayState::load(&path).unwrap();
+        let loaded = OverlayState::load(path).unwrap();
         assert!(loaded.is_none());
     }
 
@@ -214,7 +216,8 @@ mod tests {
         temp.write_all(b"{ invalid json }").unwrap();
         temp.flush().unwrap();
 
-        let result = OverlayState::load(temp.path());
+        let path = Utf8Path::from_path(temp.path()).unwrap();
+        let result = OverlayState::load(path);
         assert!(result.is_err());
     }
 

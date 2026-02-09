@@ -26,8 +26,8 @@ use crate::game_index::GameIndex;
 use crate::state::OverlayState;
 use crate::utils::resolve_chunk_hash;
 use crate::wad_builder::build_patched_wad;
+use camino::Utf8PathBuf;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -91,11 +91,11 @@ pub enum OverlayStage {
 #[derive(Debug)]
 pub struct OverlayBuildResult {
     /// Root directory of the overlay (mirrors the game's `DATA/FINAL` structure).
-    pub overlay_root: PathBuf,
+    pub overlay_root: Utf8PathBuf,
     /// WAD files that were freshly built during this run.
-    pub wads_built: Vec<PathBuf>,
+    pub wads_built: Vec<Utf8PathBuf>,
     /// WAD files reused from a previous build (not yet implemented).
-    pub wads_reused: Vec<PathBuf>,
+    pub wads_reused: Vec<Utf8PathBuf>,
     /// Detected conflicts between mods (not yet implemented).
     pub conflicts: Vec<Conflict>,
     /// Wall-clock time for the entire build.
@@ -142,8 +142,8 @@ type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 /// during the build. After building, the same builder instance can be reconfigured
 /// and built again.
 pub struct OverlayBuilder {
-    game_dir: PathBuf,
-    overlay_root: PathBuf,
+    game_dir: Utf8PathBuf,
+    overlay_root: Utf8PathBuf,
     enabled_mods: Vec<EnabledMod>,
     progress_callback: Option<ProgressCallback>,
 }
@@ -157,7 +157,7 @@ impl OverlayBuilder {
     ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
     /// * `overlay_root` — Directory where patched WAD files will be written. This
     ///   directory is wiped and recreated on each full rebuild.
-    pub fn new(game_dir: PathBuf, overlay_root: PathBuf) -> Self {
+    pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf) -> Self {
         Self {
             game_dir,
             overlay_root,
@@ -230,8 +230,8 @@ impl OverlayBuilder {
     /// Core build implementation. See module-level docs for the full algorithm.
     fn rebuild_all_internal(&mut self) -> Result<()> {
         tracing::info!("Building overlay...");
-        tracing::info!("Game dir: {}", self.game_dir.display());
-        tracing::info!("Overlay root: {}", self.overlay_root.display());
+        tracing::info!("Game dir: {}", self.game_dir);
+        tracing::info!("Overlay root: {}", self.overlay_root);
         tracing::info!("Enabled mods: {}", self.enabled_mods.len());
 
         // Emit start event
@@ -244,10 +244,10 @@ impl OverlayBuilder {
 
         // Validate game directory
         let data_final_dir = self.game_dir.join("DATA").join("FINAL");
-        if !data_final_dir.exists() {
+        if !data_final_dir.as_std_path().exists() {
             return Err(format!(
                 "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
-                self.game_dir.display()
+                self.game_dir
             )
             .into());
         }
@@ -277,10 +277,10 @@ impl OverlayBuilder {
         tracing::info!("Overlay: rebuilding overlay...");
 
         // Clean overlay and rebuild
-        if self.overlay_root.exists() {
-            std::fs::remove_dir_all(&self.overlay_root)?;
+        if self.overlay_root.as_std_path().exists() {
+            std::fs::remove_dir_all(self.overlay_root.as_std_path())?;
         }
-        std::fs::create_dir_all(&self.overlay_root)?;
+        std::fs::create_dir_all(self.overlay_root.as_std_path())?;
 
         // Emit collecting stage
         self.emit_progress(OverlayProgress {
@@ -317,19 +317,14 @@ impl OverlayBuilder {
                     let original_wad_path = game_index.find_wad(wad_name)?;
                     let relative_game_path = original_wad_path
                         .strip_prefix(&self.game_dir)
-                        .map_err(|_| {
-                            format!(
-                                "WAD path is not under Game/: {}",
-                                original_wad_path.display()
-                            )
-                        })?
+                        .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
                         .to_path_buf();
 
                     tracing::info!(
                         "WAD='{}' resolved original={} relative={}",
                         wad_name,
-                        original_wad_path.display(),
-                        relative_game_path.display()
+                        original_wad_path,
+                        relative_game_path
                     );
 
                     let before = all_overrides.len();
@@ -375,7 +370,7 @@ impl OverlayBuilder {
         }
 
         // Distribute overrides to ALL affected WADs using the game hash index
-        let mut wad_overrides: BTreeMap<PathBuf, HashMap<u64, Vec<u8>>> = BTreeMap::new();
+        let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, Vec<u8>>> = BTreeMap::new();
         for (path_hash, override_bytes) in &all_overrides {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wad_path in wad_paths {
@@ -396,10 +391,7 @@ impl OverlayBuilder {
         let total_wads = wad_overrides.len() as u32;
         for (idx, (relative_game_path, overrides)) in wad_overrides.into_iter().enumerate() {
             let current_wad = (idx + 1) as u32;
-            let wad_name = relative_game_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
+            let wad_name = relative_game_path.file_name().unwrap_or("unknown");
 
             // Emit progress event
             self.emit_progress(OverlayProgress {
@@ -414,8 +406,8 @@ impl OverlayBuilder {
 
             tracing::info!(
                 "Writing patched WAD src={} dst={} overrides={}",
-                src_wad_path.display(),
-                dst_wad_path.display(),
+                src_wad_path,
+                dst_wad_path,
                 overrides.len()
             );
 
@@ -453,11 +445,12 @@ impl OverlayBuilder {
         use ltk_wad::Wad;
 
         let data_dir = self.overlay_root.join("DATA");
-        if !data_dir.exists() {
+        if !data_dir.as_std_path().exists() {
             return Ok(false);
         }
 
-        let mut stack = vec![data_dir];
+        // Local traversal uses std::path since we only need it for File::open
+        let mut stack = vec![data_dir.into_std_path_buf()];
         let mut wad_files = Vec::new();
 
         while let Some(dir) = stack.pop() {
@@ -501,20 +494,22 @@ mod tests {
 
     #[test]
     fn test_builder_creation() {
-        let builder = OverlayBuilder::new(PathBuf::from("/game"), PathBuf::from("/overlay"));
+        let builder =
+            OverlayBuilder::new(Utf8PathBuf::from("/game"), Utf8PathBuf::from("/overlay"));
 
-        assert_eq!(builder.game_dir, PathBuf::from("/game"));
-        assert_eq!(builder.overlay_root, PathBuf::from("/overlay"));
+        assert_eq!(builder.game_dir, Utf8PathBuf::from("/game"));
+        assert_eq!(builder.overlay_root, Utf8PathBuf::from("/overlay"));
         assert_eq!(builder.enabled_mods.len(), 0);
     }
 
     #[test]
     fn test_set_enabled_mods() {
-        let mut builder = OverlayBuilder::new(PathBuf::from("/game"), PathBuf::from("/overlay"));
+        let mut builder =
+            OverlayBuilder::new(Utf8PathBuf::from("/game"), Utf8PathBuf::from("/overlay"));
 
         builder.set_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
-            content: Box::new(FsModContent::new(PathBuf::from("/mods/mod1"))),
+            content: Box::new(FsModContent::new(Utf8PathBuf::from("/mods/mod1"))),
             priority: 0,
         }]);
 
