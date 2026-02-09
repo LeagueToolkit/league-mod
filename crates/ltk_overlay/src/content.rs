@@ -143,16 +143,19 @@ impl ModContentProvider for FsModContent {
                 let entry = entry?;
                 let path = entry.path();
 
-                if path.is_dir() {
-                    let utf8_path = Utf8PathBuf::from_path_buf(path).map_err(|p| {
-                        crate::Error::Other(format!("Non-UTF-8 path: {}", p.display()))
-                    })?;
+                let utf8_path = match Utf8PathBuf::from_path_buf(path) {
+                    Ok(p) => p,
+                    Err(p) => {
+                        tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
+                        continue;
+                    }
+                };
+
+                if utf8_path.as_std_path().is_dir() {
                     stack.push(utf8_path);
                     continue;
                 }
 
-                let utf8_path = Utf8PathBuf::from_path_buf(path)
-                    .map_err(|p| crate::Error::Other(format!("Non-UTF-8 path: {}", p.display())))?;
                 let rel = utf8_path
                     .strip_prefix(&wad_dir)
                     .unwrap_or(&utf8_path)

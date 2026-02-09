@@ -172,8 +172,13 @@ fn build_wad_filename_index(root: &Utf8Path) -> Result<HashMap<String, Vec<Utf8P
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(dir.as_std_path())? {
             let entry = entry?;
-            let path = Utf8PathBuf::from_path_buf(entry.path())
-                .map_err(|p| Error::Other(format!("Non-UTF-8 path: {}", p.display())))?;
+            let path = match Utf8PathBuf::from_path_buf(entry.path()) {
+                Ok(p) => p,
+                Err(p) => {
+                    tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
+                    continue;
+                }
+            };
 
             if path.as_std_path().is_dir() {
                 stack.push(path);
@@ -221,8 +226,13 @@ fn build_game_hash_index(
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(dir.as_std_path())? {
             let entry = entry?;
-            let path = Utf8PathBuf::from_path_buf(entry.path())
-                .map_err(|p| Error::Other(format!("Non-UTF-8 path: {}", p.display())))?;
+            let path = match Utf8PathBuf::from_path_buf(entry.path()) {
+                Ok(p) => p,
+                Err(p) => {
+                    tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
+                    continue;
+                }
+            };
 
             if path.as_std_path().is_dir() {
                 stack.push(path);
@@ -328,8 +338,13 @@ fn calculate_game_fingerprint(data_final_dir: &Utf8Path) -> Result<u64> {
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(dir.as_std_path())? {
             let entry = entry?;
-            let path = Utf8PathBuf::from_path_buf(entry.path())
-                .map_err(|p| Error::Other(format!("Non-UTF-8 path: {}", p.display())))?;
+            let path = match Utf8PathBuf::from_path_buf(entry.path()) {
+                Ok(p) => p,
+                Err(p) => {
+                    tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
+                    continue;
+                }
+            };
 
             if path.as_std_path().is_dir() {
                 stack.push(path);

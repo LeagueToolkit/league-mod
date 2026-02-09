@@ -208,7 +208,7 @@ export function useProfiles() {
 ### Path Handling with Camino
 **ALWAYS use `camino::Utf8Path` / `Utf8PathBuf` instead of `std::path::Path` / `PathBuf` for path handling in Rust code.** Camino provides UTF-8 guaranteed paths that are more robust, ergonomic, and consistent across platforms.
 
-The workspace defines a shared version: `camino = "1.1"` (use `{ workspace = true }` in crate `Cargo.toml`).
+The workspace defines a shared version in the root `Cargo.toml` (currently `camino = "1.1"`). Prefer `camino = { workspace = true }` in crate `Cargo.toml` files.
 
 **Key patterns:**
 ```rust
