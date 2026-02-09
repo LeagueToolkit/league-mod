@@ -77,13 +77,16 @@ export interface PatcherConfig {
   flags?: number | null;
 }
 
+export type PatcherPhase = "idle" | "building" | "patching";
+
 export interface PatcherStatus {
   running: boolean;
   configPath: string | null;
+  phase: PatcherPhase;
 }
 
 export interface OverlayProgress {
-  stage: "indexing" | "patching" | "complete";
+  stage: "indexing" | "collecting" | "patching" | "strings" | "complete";
   currentFile: string | null;
   current: number;
   total: number;

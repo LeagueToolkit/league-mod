@@ -6,31 +6,31 @@
 //!
 //! # Compression Strategy
 //!
-//! Override data arrives uncompressed from content providers. The builder decides how
-//! to compress each chunk:
+//! All chunk data (both overrides and originals) is passed through in **uncompressed**
+//! form. The builder auto-detects each chunk's file type via
+//! [`LeagueFileKind::identify_from_bytes`] and applies the ideal compression:
 //!
-//! - **Audio files** (Wwise Bank / Wwise Package, detected by magic bytes): stored
-//!   uncompressed for streaming performance.
-//! - **ZstdMulti chunks**: If the original chunk uses League's `ZstdMulti` format
-//!   (an uncompressed header prefix followed by zstd-compressed data), the builder
-//!   preserves this structure by compressing only the payload portion.
+//! - **Audio files** (Wwise Bank / Wwise Package): stored uncompressed (`None`).
 //! - **Everything else**: compressed with Zstd at level 3.
+//!
+//! ZstdMulti chunks from the original WAD are decompressed by
+//! [`Wad::load_chunk_decompressed`] and then re-encoded as plain Zstd (or None for
+//! audio). This is correct because `WadBuilder` does not support `ZstdMulti` output
+//! and the game accepts plain Zstd as a replacement.
 //!
 //! # Deduplication
 //!
-//! Chunks with identical compressed data (same xxHash3 checksum) are tracked to avoid
-//! writing duplicate bytes. Statistics on deduplication savings are returned in
-//! [`PatchedWadStats`].
+//! Chunks with identical uncompressed data (same xxHash3 checksum) are tracked.
+//! Statistics on deduplication savings are returned in [`PatchedWadStats`].
 
 use crate::error::{Error, Result};
+use byteorder::{WriteBytesExt, LE};
 use ltk_file::LeagueFileKind;
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 use xxhash_rust::xxh3::xxh3_64;
-
-const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Build statistics returned by [`build_patched_wad`].
 #[derive(Debug, Clone)]
@@ -39,8 +39,6 @@ pub struct PatchedWadStats {
     pub chunks_written: usize,
     /// Number of chunks that were replaced by mod overrides.
     pub overrides_applied: usize,
-    /// Number of override chunks kept uncompressed (audio files).
-    pub audio_uncompressed: usize,
     /// Number of chunks that shared data with another chunk (deduplicated).
     pub chunks_deduplicated: usize,
     /// Bytes saved by deduplication.
@@ -53,8 +51,8 @@ pub struct PatchedWadStats {
 ///
 /// The output WAD preserves the original chunk order and contains *all* chunks from
 /// the source — those present in `overrides` get their data replaced, everything else
-/// is copied verbatim. Override hashes that don't exist in the source WAD are silently
-/// ignored (with a warning log).
+/// is decompressed from the original. Override hashes that don't exist in the source
+/// WAD are silently ignored (with a warning log).
 ///
 /// Parent directories for `dst_wad_path` are created automatically.
 ///
@@ -103,81 +101,39 @@ pub fn build_patched_wad(
         );
     }
 
+    // Collect chunk path hashes in original order (sorted by path_hash as WAD requires)
     let ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash).collect();
-    let mut builder = WadBuilder::default();
-    let mut chunk_data_map: HashMap<u64, Vec<u8>> = HashMap::new(); // path_hash -> compressed data
-    let mut dedup_tracker: HashMap<u64, u64> = HashMap::new(); // checksum -> first path_hash
-    let mut audio_chunks_uncompressed = 0usize;
+
+    // Pre-load all chunk data as uncompressed bytes
+    let mut chunk_data: HashMap<u64, Vec<u8>> = HashMap::with_capacity(ordered.len());
+    let mut overrides_applied = 0usize;
     let mut chunks_deduplicated = 0usize;
     let mut bytes_saved_dedup = 0usize;
+    let mut dedup_tracker: HashMap<u64, u64> = HashMap::new(); // checksum -> first path_hash
 
-    // Process each chunk and prepare data
     for &path_hash in &ordered {
         let orig = chunks
             .get(path_hash)
             .ok_or_else(|| Error::Other(format!("Missing base chunk {:016x}", path_hash)))?;
 
-        // Determine chunk data (either from override or original)
-        let (chunk_data, _uncompressed_size, compression_type) =
-            if let Some(bytes) = overrides.get(&path_hash) {
-                // Optimization 1: Audio detection - keep audio uncompressed
-                let is_audio = !should_compress(bytes);
-
-                if is_audio {
-                    audio_chunks_uncompressed += 1;
-                    (bytes.clone(), bytes.len(), WadChunkCompression::None)
-                } else if orig.compression_type == WadChunkCompression::ZstdMulti {
-                    // Preserve ZstdMulti structure (uncompressed prefix + zstd data)
-                    let raw = wad.load_chunk_raw(orig)?.to_vec();
-                    let prefix_len = find_zstd_magic_offset(&raw).unwrap_or(0);
-
-                    if prefix_len > 0 && bytes.len() >= prefix_len {
-                        let mut combined = Vec::with_capacity(prefix_len + bytes.len());
-                        combined.extend_from_slice(&bytes[..prefix_len]);
-                        let rest = compress_zstd(&bytes[prefix_len..])?;
-                        combined.extend_from_slice(&rest);
-                        (combined, bytes.len(), WadChunkCompression::ZstdMulti)
-                    } else {
-                        let compressed = compress_zstd(bytes)?;
-                        (compressed, bytes.len(), WadChunkCompression::Zstd)
-                    }
-                } else {
-                    // Everything else: Zstd compression
-                    let compressed = compress_zstd(bytes)?;
-                    (compressed, bytes.len(), WadChunkCompression::Zstd)
-                }
-            } else {
-                // No override: keep original chunk data
-                let raw = wad.load_chunk_raw(orig)?.to_vec();
-                (raw, orig.uncompressed_size, orig.compression_type)
-            };
-
-        // Optimization 2: Deduplication - check if this data was already seen
-        let checksum = xxh3_64(&chunk_data);
-        if let Some(&_existing_path_hash) = dedup_tracker.get(&checksum) {
-            // This data is a duplicate, track it
-            chunks_deduplicated += 1;
-            bytes_saved_dedup += chunk_data.len();
-            // Don't store duplicate data, WadBuilder will handle sharing
+        let data = if let Some(override_bytes) = overrides.get(&path_hash) {
+            overrides_applied += 1;
+            override_bytes.clone()
         } else {
-            // First time seeing this data
-            dedup_tracker.insert(checksum, path_hash);
-            chunk_data_map.insert(path_hash, chunk_data.clone());
-        }
-
-        // Add chunk to builder using WadChunkBuilder
-        // Note: WadBuilder doesn't support ZstdMulti, so we map it to Zstd
-        // (we've already prepared the data correctly above)
-        let builder_compression = match compression_type {
-            WadChunkCompression::ZstdMulti => WadChunkCompression::Zstd,
-            other => other,
+            // Decompress original chunk (handles None, Zstd, ZstdMulti, GZip)
+            wad.load_chunk_decompressed(orig)?.to_vec()
         };
 
-        let chunk_builder = WadChunkBuilder::default()
-            .with_path(format!("{:016x}", path_hash)) // Use hash as path
-            .with_force_compression(builder_compression);
+        // Track deduplication
+        let checksum = xxh3_64(&data);
+        if let Some(&_existing) = dedup_tracker.get(&checksum) {
+            chunks_deduplicated += 1;
+            bytes_saved_dedup += data.len();
+        } else {
+            dedup_tracker.insert(checksum, path_hash);
+        }
 
-        builder = builder.with_chunk(chunk_builder);
+        chunk_data.insert(path_hash, data);
     }
 
     // Create parent directory if needed
@@ -185,39 +141,73 @@ pub fn build_patched_wad(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Build WAD using WadBuilder API
-    let mut output = std::io::BufWriter::new(std::fs::File::create(dst_wad_path)?);
+    // Write WAD v3.4 directly (avoids WadBuilder's path hash re-hashing issue)
+    let mut writer = BufWriter::new(std::fs::File::create(dst_wad_path)?);
 
-    builder.build_to_writer(&mut output, |path_hash, cursor| {
-        // Provide chunk data - check if it's original or deduplicated
-        if let Some(data) = chunk_data_map.get(&path_hash) {
-            cursor.write_all(data)?;
-        } else {
-            // This chunk is deduplicated, find the original
-            for (&checksum, &original_hash) in &dedup_tracker {
-                if let Some(data) = chunk_data_map.get(&original_hash) {
-                    let data_checksum = xxh3_64(data);
-                    if data_checksum == checksum {
-                        cursor.write_all(data)?;
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(())
-    })?;
+    // Write header
+    writer.write_u16::<LE>(0x5752)?; // "RW" magic
+    writer.write_u8(3)?; // major version
+    writer.write_u8(4)?; // minor version
 
-    output.flush()?;
+    // Write dummy ECDSA signature (256 bytes) + checksum (8 bytes)
+    writer.write_all(&[0u8; 256])?;
+    writer.write_u64::<LE>(0)?;
+
+    // Write chunk count
+    writer.write_u32::<LE>(ordered.len() as u32)?;
+
+    // Write dummy TOC (32 bytes per chunk) — will be overwritten later
+    let toc_offset = writer.stream_position()?;
+    for _ in &ordered {
+        writer.write_all(&[0u8; 32])?;
+    }
+
+    // Write chunk data and build final TOC entries
+    let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
+
+    for &path_hash in &ordered {
+        let uncompressed = &chunk_data[&path_hash];
+
+        // Auto-detect file type and choose ideal compression
+        let kind = LeagueFileKind::identify_from_bytes(uncompressed);
+        let compression = kind.ideal_compression();
+
+        // Compress data
+        let compressed = compress_by_type(uncompressed, compression)?;
+        let compressed_checksum = xxh3_64(&compressed);
+
+        let data_offset = writer.stream_position()? as usize;
+        writer.write_all(&compressed)?;
+
+        final_chunks.push(WadChunk {
+            path_hash,
+            data_offset,
+            compressed_size: compressed.len(),
+            uncompressed_size: uncompressed.len(),
+            compression_type: compression,
+            is_duplicated: false,
+            frame_count: 0,
+            start_frame: 0,
+            checksum: compressed_checksum,
+        });
+    }
+
+    // Seek back and write final TOC
+    writer.seek(SeekFrom::Start(toc_offset))?;
+    for chunk in &final_chunks {
+        chunk.write_v3_4(&mut writer)?;
+    }
+
+    writer.flush()?;
 
     let elapsed_ms = start.elapsed().as_millis();
     let saved_kb = bytes_saved_dedup / 1024;
 
     tracing::info!(
-        "Patched WAD complete dst={} chunks={} overrides={} audio_uncompressed={} deduplicated={} saved_kb={} elapsed_ms={}",
+        "Patched WAD complete dst={} chunks={} overrides={} deduplicated={} saved_kb={} elapsed_ms={}",
         dst_wad_path.display(),
         ordered.len(),
-        overrides.len(),
-        audio_chunks_uncompressed,
+        overrides_applied,
         chunks_deduplicated,
         saved_kb,
         elapsed_ms
@@ -225,41 +215,28 @@ pub fn build_patched_wad(
 
     Ok(PatchedWadStats {
         chunks_written: ordered.len(),
-        overrides_applied: overrides.len(),
-        audio_uncompressed: audio_chunks_uncompressed,
+        overrides_applied,
         chunks_deduplicated,
         bytes_saved_dedup,
         elapsed_ms,
     })
 }
 
-/// Find the byte offset of the first Zstd frame magic (`0x28B52FFD`) in `raw`.
-///
-/// In `ZstdMulti` chunks, bytes before this offset are an uncompressed header
-/// (e.g., a Wwise SoundBank descriptor) that must be preserved as-is.
-fn find_zstd_magic_offset(raw: &[u8]) -> Option<usize> {
-    raw.windows(ZSTD_MAGIC.len()).position(|w| w == ZSTD_MAGIC)
-}
-
-/// Compress `data` with Zstd at compression level 3.
-pub fn compress_zstd(data: &[u8]) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut encoder = zstd::Encoder::new(std::io::BufWriter::new(&mut out), 3)?;
-    encoder.write_all(data)?;
-    encoder.finish()?;
-    Ok(out)
-}
-
-/// Returns `true` if the data should be Zstd-compressed.
-///
-/// Audio files (Wwise Bank and Wwise Package) are excluded from compression
-/// because the game streams them and benefits from direct access without
-/// decompression overhead.
-pub fn should_compress(data: &[u8]) -> bool {
-    !matches!(
-        LeagueFileKind::identify_from_bytes(data),
-        LeagueFileKind::WwiseBank | LeagueFileKind::WwisePackage
-    )
+/// Compress data using the specified compression type.
+fn compress_by_type(data: &[u8], compression: WadChunkCompression) -> Result<Vec<u8>> {
+    match compression {
+        WadChunkCompression::None => Ok(data.to_vec()),
+        WadChunkCompression::Zstd => {
+            let mut out = Vec::new();
+            let mut encoder = zstd::Encoder::new(BufWriter::new(&mut out), 3)?;
+            encoder.write_all(data)?;
+            encoder.finish()?;
+            Ok(out)
+        }
+        other => Err(Error::Other(format!(
+            "Unsupported compression type for writing: {other}"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -267,21 +244,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_zstd_magic() {
-        let data = vec![0x00, 0x01, 0x28, 0xB5, 0x2F, 0xFD, 0x02];
-        assert_eq!(find_zstd_magic_offset(&data), Some(2));
+    fn test_compress_by_type_none() {
+        let data = b"Hello, world!";
+        let result = compress_by_type(data, WadChunkCompression::None).unwrap();
+        assert_eq!(result, data);
     }
 
     #[test]
-    fn test_find_zstd_magic_not_found() {
-        let data = vec![0x00, 0x01, 0x02, 0x03];
-        assert_eq!(find_zstd_magic_offset(&data), None);
-    }
-
-    #[test]
-    fn test_compress_zstd() {
+    fn test_compress_by_type_zstd() {
         let data = b"Hello, world!".repeat(100);
-        let compressed = compress_zstd(&data).unwrap();
+        let compressed = compress_by_type(&data, WadChunkCompression::Zstd).unwrap();
         assert!(compressed.len() < data.len());
     }
 }

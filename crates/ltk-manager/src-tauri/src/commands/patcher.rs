@@ -1,17 +1,17 @@
-use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
+use crate::error::{AppError, AppErrorResponse, AppResult, IpcResult, MutexResultExt};
 use crate::legacy_patcher::api::PATCHER_DLL_NAME;
 use crate::legacy_patcher::runner::{
     run_legacy_patcher_loop, LegacyPatcherLoopError, DEFAULT_HOOK_TIMEOUT_MS,
 };
 use crate::overlay;
-use crate::patcher::PatcherState;
+use crate::patcher::{PatcherPhase, PatcherState};
 use crate::state::SettingsState;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Configuration for starting the patcher.
 #[derive(Debug, Clone, Deserialize)]
@@ -35,6 +35,8 @@ pub struct PatcherStatus {
     pub running: bool,
     /// The config path the patcher was started with.
     pub config_path: Option<String>,
+    /// Current phase of the patcher lifecycle.
+    pub phase: PatcherPhase,
 }
 
 /// Resolve the path to the patcher DLL from bundled resources.
@@ -95,8 +97,8 @@ fn resolve_patcher_dll_path(app_handle: &AppHandle) -> AppResult<PathBuf> {
 
 /// Start the patcher with the given configuration.
 ///
-/// The patcher runs in a background thread, continuously monitoring for the
-/// League of Legends process and applying hooks when found.
+/// Returns immediately after spawning a background thread that builds the overlay
+/// and then runs the patcher loop. Progress is reported via events.
 #[tauri::command]
 pub fn start_patcher(
     config: PatcherConfig,
@@ -117,18 +119,26 @@ fn start_patcher_inner(
     state: &State<PatcherState>,
     settings: &State<SettingsState>,
 ) -> AppResult<()> {
-    let mut patcher_state = state.0.lock().mutex_err()?;
+    // Lock briefly: check state, set phase, clone what we need for the thread
+    let (stop_flag, state_arc) = {
+        let mut patcher_state = state.0.lock().mutex_err()?;
 
-    if patcher_state.is_running() {
-        return Err(AppError::Other("Patcher is already running".to_string()));
-    }
+        if patcher_state.is_running() {
+            return Err(AppError::Other("Patcher is already running".to_string()));
+        }
+
+        patcher_state.stop_flag.store(false, Ordering::SeqCst);
+        patcher_state.phase = PatcherPhase::Building;
+
+        (Arc::clone(&patcher_state.stop_flag), Arc::clone(&state.0))
+    };
 
     tracing::info!("Start patcher requested (legacy DLL mode)");
+
+    // Resolve DLL path and snapshot settings — quick operations done on the calling thread
     let dll_path = resolve_patcher_dll_path(app_handle)?;
     tracing::info!("Using patcher DLL: {}", dll_path.display());
 
-    patcher_state.stop_flag.store(false, Ordering::SeqCst);
-    let stop_flag = Arc::clone(&patcher_state.stop_flag);
     let log_file = config.log_file.clone();
     let timeout_ms = config.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
     let flags = config.flags.unwrap_or(0);
@@ -148,24 +158,52 @@ fn start_patcher_inner(
             .unwrap_or_else(|| "<unset>".to_string())
     );
 
-    // Build/reuse overlay before starting the patcher thread.
-    // The returned directory is used as the legacy patcher prefix, so paths like
-    // `DATA/FINAL/.../*.wad.client` resolve to `<overlayRoot>/DATA/FINAL/.../*.wad.client`.
-    let overlay_root = overlay::ensure_overlay(app_handle, &settings_snapshot)?;
-    tracing::info!("Using overlay root: {}", overlay_root.display());
-
-    // Legacy patcher (cslol-dll.dll) concatenates the prefix directly with filenames
-    // like "DATA/FINAL/..." without adding a separator. Ensure trailing backslash.
-    let mut overlay_root_str = overlay_root.display().to_string();
-    if !overlay_root_str.ends_with('\\') && !overlay_root_str.ends_with('/') {
-        overlay_root_str.push('\\');
-    }
-    let overlay_root_for_thread = overlay_root_str.clone();
+    let app_handle_clone = app_handle.clone();
 
     let handle = thread::spawn(move || {
+        // Phase 1: Build overlay (the slow part)
+        let overlay_root = match overlay::ensure_overlay(&app_handle_clone, &settings_snapshot) {
+            Ok(root) => root,
+            Err(e) => {
+                tracing::error!(error = ?e, "Overlay build failed");
+                let error_response: AppErrorResponse = e.into();
+                let _ = app_handle_clone.emit("patcher-error", &error_response);
+                if let Ok(mut s) = state_arc.lock() {
+                    s.phase = PatcherPhase::Idle;
+                }
+                return;
+            }
+        };
+
+        // Check stop flag between build and patcher loop
+        if stop_flag.load(Ordering::SeqCst) {
+            tracing::info!("Stop requested after overlay build, exiting");
+            if let Ok(mut s) = state_arc.lock() {
+                s.phase = PatcherPhase::Idle;
+            }
+            return;
+        }
+
+        tracing::info!("Using overlay root: {}", overlay_root.display());
+
+        // Legacy patcher concatenates the prefix directly with filenames
+        // like "DATA/FINAL/..." without adding a separator. Ensure trailing backslash.
+        let mut overlay_root_str = overlay_root.display().to_string();
+        if !overlay_root_str.ends_with('\\') && !overlay_root_str.ends_with('/') {
+            overlay_root_str.push('\\');
+        }
+
+        // Phase 2: Run patcher loop
+        {
+            if let Ok(mut s) = state_arc.lock() {
+                s.phase = PatcherPhase::Patching;
+                s.config_path = Some(overlay_root_str.clone());
+            }
+        }
+
         match run_legacy_patcher_loop(
             &dll_path,
-            &overlay_root_for_thread,
+            &overlay_root_str,
             log_file.as_deref(),
             timeout_ms,
             flags,
@@ -175,11 +213,18 @@ fn start_patcher_inner(
             Err(LegacyPatcherLoopError::Stopped) => tracing::info!("Patcher stopped by request"),
             Err(e) => tracing::error!("Patcher loop error: {}", e),
         }
+
+        // Cleanup
+        if let Ok(mut s) = state_arc.lock() {
+            s.phase = PatcherPhase::Idle;
+            s.config_path = None;
+        }
         tracing::info!("Patcher thread exiting");
     });
 
+    // Store thread handle
+    let mut patcher_state = state.0.lock().mutex_err()?;
     patcher_state.thread_handle = Some(handle);
-    patcher_state.config_path = Some(overlay_root_str);
 
     Ok(())
 }
@@ -212,6 +257,7 @@ fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
 
     let mut patcher_state = state.0.lock().mutex_err()?;
     patcher_state.config_path = None;
+    patcher_state.phase = PatcherPhase::Idle;
 
     Ok(())
 }
@@ -223,9 +269,20 @@ pub fn get_patcher_status(state: State<PatcherState>) -> IpcResult<PatcherStatus
 }
 
 fn get_patcher_status_inner(state: &State<PatcherState>) -> AppResult<PatcherStatus> {
-    let patcher_state = state.0.lock().mutex_err()?;
+    let mut patcher_state = state.0.lock().mutex_err()?;
 
     let running = patcher_state.is_running();
+
+    // Defensive reset: if the thread has died but phase wasn't reset (e.g. panic),
+    // correct it so the UI doesn't get stuck.
+    if !running && patcher_state.phase != PatcherPhase::Idle {
+        tracing::warn!(
+            "Patcher thread dead but phase was {:?}, resetting to Idle",
+            patcher_state.phase
+        );
+        patcher_state.phase = PatcherPhase::Idle;
+        patcher_state.config_path = None;
+    }
 
     Ok(PatcherStatus {
         running,
@@ -234,5 +291,6 @@ fn get_patcher_status_inner(state: &State<PatcherState>) -> AppResult<PatcherSta
         } else {
             None
         },
+        phase: patcher_state.phase,
     })
 }
