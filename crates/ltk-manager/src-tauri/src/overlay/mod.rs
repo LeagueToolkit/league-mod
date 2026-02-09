@@ -4,6 +4,7 @@ pub mod modpkg_content;
 use crate::error::{AppError, AppResult};
 use crate::mods::get_enabled_mods_for_overlay;
 use crate::state::{get_app_data_dir, Settings};
+use camino::Utf8PathBuf;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
@@ -48,9 +49,15 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
         enabled_ids.join(", ")
     );
 
+    // Convert to Utf8PathBuf for ltk_overlay API
+    let utf8_game_dir = Utf8PathBuf::from_path_buf(game_dir)
+        .map_err(|p| AppError::Other(format!("Non-UTF-8 game directory path: {}", p.display())))?;
+    let utf8_overlay_root = Utf8PathBuf::from_path_buf(overlay_root.clone())
+        .map_err(|p| AppError::Other(format!("Non-UTF-8 overlay root path: {}", p.display())))?;
+
     // Build overlay using ltk_overlay crate
     let app_handle_clone = app_handle.clone();
-    let mut builder = ltk_overlay::OverlayBuilder::new(game_dir, overlay_root.clone())
+    let mut builder = ltk_overlay::OverlayBuilder::new(utf8_game_dir, utf8_overlay_root)
         .with_progress(move |progress| {
             // Convert ltk_overlay progress to our format
             let stage = match progress.stage {

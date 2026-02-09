@@ -1,10 +1,10 @@
+use camino::Utf8PathBuf;
 use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor};
 use ltk_overlay::content::ModContentProvider;
 use ltk_overlay::error::Result;
 use ltk_wad::Wad;
 use std::collections::HashSet;
 use std::io::{Cursor, Read, Seek};
-use std::path::PathBuf;
 use zip::ZipArchive;
 
 /// Content provider that reads directly from a `.fantome` ZIP archive.
@@ -119,7 +119,7 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
         &mut self,
         layer: &str,
         wad_name: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         if layer != "base" {
             return Ok(Vec::new());
         }
@@ -152,7 +152,7 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
                 entry.read_to_end(&mut bytes).map_err(|e| {
                     ltk_overlay::Error::Other(format!("Failed to read ZIP entry data: {}", e))
                 })?;
-                results.push((PathBuf::from(rel), bytes));
+                results.push((Utf8PathBuf::from(rel), bytes));
             }
         }
 
@@ -182,7 +182,7 @@ impl<R: Read + Seek + Send> FantomeContent<R> {
     ///
     /// Each WAD entry is returned with a hex-hash filename (e.g., "0123456789abcdef.bin")
     /// which the overlay builder's `resolve_chunk_hash` can interpret directly.
-    fn read_packed_wad_entries(&mut self, zip_index: usize) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    fn read_packed_wad_entries(&mut self, zip_index: usize) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let mut entry = self.archive.by_index(zip_index).map_err(|e| {
             ltk_overlay::Error::Other(format!("Failed to read packed WAD from ZIP: {}", e))
         })?;
@@ -207,7 +207,7 @@ impl<R: Read + Seek + Send> FantomeContent<R> {
 
             // Use hex hash as filename — resolve_chunk_hash will parse it correctly
             let hex_name = format!("{:016x}.bin", path_hash);
-            results.push((PathBuf::from(hex_name), bytes));
+            results.push((Utf8PathBuf::from(hex_name), bytes));
         }
 
         Ok(results)

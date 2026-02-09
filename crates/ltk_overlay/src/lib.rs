@@ -49,11 +49,11 @@
 //!
 //! ```no_run
 //! use ltk_overlay::{OverlayBuilder, EnabledMod, FsModContent};
-//! use std::path::PathBuf;
+//! use camino::Utf8PathBuf;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let game_dir = PathBuf::from("C:/Riot Games/League of Legends/Game");
-//! let overlay_root = PathBuf::from("C:/Users/.../overlay");
+//! let game_dir = Utf8PathBuf::from("C:/Riot Games/League of Legends/Game");
+//! let overlay_root = Utf8PathBuf::from("C:/Users/.../overlay");
 //!
 //! let mut builder = OverlayBuilder::new(game_dir, overlay_root)
 //!     .with_progress(|progress| {
@@ -64,7 +64,7 @@
 //! builder.set_enabled_mods(vec![
 //!     EnabledMod {
 //!         id: "my-mod".to_string(),
-//!         content: Box::new(FsModContent::new(PathBuf::from("/path/to/mod"))),
+//!         content: Box::new(FsModContent::new(Utf8PathBuf::from("/path/to/mod"))),
 //!         priority: 0,
 //!     },
 //! ]);
