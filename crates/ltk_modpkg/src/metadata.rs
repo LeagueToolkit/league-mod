@@ -259,6 +259,10 @@ mod tests {
     use std::io::Cursor;
 
     proptest! {
+        // Reduce test cases for CI performance (8 instead of default 256)
+        // The nested HashMap structure makes this test slow
+        #![proptest_config(ProptestConfig::with_cases(8))]
+
         #[test]
         fn test_metadata_roundtrip(metadata: ModpkgMetadata) {
             let mut cursor = Cursor::new(Vec::new());
