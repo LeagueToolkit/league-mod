@@ -32,7 +32,7 @@ serde_json = "1.0"
 zstd = "0.13"
 
 # Hashing
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 
 # IO
 byteorder = "1.5"

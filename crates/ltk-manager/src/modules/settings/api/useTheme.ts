@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect } from "react";
 
 import { useSettings } from "./useSettings";
@@ -19,13 +20,16 @@ const ACCENT_PRESETS: Record<string, number> = {
  */
 export function useTheme() {
   const { data: settings } = useSettings();
+  const theme = settings?.theme;
+  const accentColor = settings?.accentColor;
+  const backdropImage = settings?.backdropImage;
+  const backdropBlur = settings?.backdropBlur;
 
   useEffect(() => {
-    if (!settings) return;
+    if (!theme) return;
 
     const root = document.documentElement;
 
-    // Handle theme preference
     const applyTheme = (isDark: boolean) => {
       if (isDark) {
         root.classList.remove("light");
@@ -36,8 +40,7 @@ export function useTheme() {
       }
     };
 
-    if (settings.theme === "system") {
-      // Listen to system preference
+    if (theme === "system") {
       const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
       applyTheme(mediaQuery.matches);
 
@@ -48,28 +51,42 @@ export function useTheme() {
       mediaQuery.addEventListener("change", handleChange);
       return () => mediaQuery.removeEventListener("change", handleChange);
     } else {
-      applyTheme(settings.theme === "dark");
+      applyTheme(theme === "dark");
     }
-  }, [settings?.theme]);
+  }, [theme]);
 
   useEffect(() => {
-    if (!settings) return;
+    if (!accentColor) return;
 
     const root = document.documentElement;
 
-    // Apply accent color
     let hue: number;
 
-    if (settings.accentColor?.customHue != null) {
-      hue = settings.accentColor.customHue;
-    } else if (settings.accentColor?.preset && ACCENT_PRESETS[settings.accentColor.preset]) {
-      hue = ACCENT_PRESETS[settings.accentColor.preset];
+    if (accentColor.customHue != null) {
+      hue = accentColor.customHue;
+    } else if (accentColor.preset && ACCENT_PRESETS[accentColor.preset]) {
+      hue = ACCENT_PRESETS[accentColor.preset];
     } else {
-      hue = ACCENT_PRESETS.blue; // Default to blue
+      hue = ACCENT_PRESETS.blue;
     }
 
     root.style.setProperty("--accent-hue", String(hue));
-  }, [settings?.accentColor]);
+  }, [accentColor]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (backdropImage) {
+      const assetUrl = convertFileSrc(backdropImage);
+      root.classList.add("backdrop-active");
+      root.style.setProperty("--backdrop-image", `url("${assetUrl}")`);
+      root.style.setProperty("--backdrop-blur", `${backdropBlur ?? 40}px`);
+    } else {
+      root.classList.remove("backdrop-active");
+      root.style.removeProperty("--backdrop-image");
+      root.style.removeProperty("--backdrop-blur");
+    }
+  }, [backdropImage, backdropBlur]);
 }
 
 export { ACCENT_PRESETS };

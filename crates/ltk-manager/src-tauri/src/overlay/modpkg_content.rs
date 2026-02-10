@@ -1,10 +1,10 @@
+use camino::Utf8PathBuf;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
 use ltk_modpkg::Modpkg;
 use ltk_overlay::content::ModContentProvider;
 use ltk_overlay::error::Result;
 use std::collections::HashSet;
 use std::io::{Read, Seek};
-use std::path::PathBuf;
 
 /// Content provider that reads directly from a mounted `.modpkg` archive.
 pub struct ModpkgContent<R: Read + Seek> {
@@ -95,7 +95,7 @@ impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
         &mut self,
         layer: &str,
         wad_name: &str,
-    ) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
         let wad_prefix = format!("{}/", wad_name);
 
@@ -128,7 +128,7 @@ impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
                         path_hash, e
                     ))
                 })?;
-            results.push((PathBuf::from(rel_path), bytes.into_vec()));
+            results.push((Utf8PathBuf::from(rel_path), bytes.into_vec()));
         }
 
         Ok(results)

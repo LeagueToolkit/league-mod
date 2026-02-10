@@ -1,53 +1,102 @@
-import { LuCheck, LuPencil, LuTrash2 } from "react-icons/lu";
+import { useEffect, useRef, useState } from "react";
+import { LuCheck, LuPencil, LuTrash2, LuX } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, Field, IconButton, useToast } from "@/components";
 import type { Profile } from "@/lib/tauri";
-
-import { ProfileEditForm } from "./ProfileEditForm";
+import { useRenameProfile } from "@/modules/library/api";
 
 interface ProfileListItemProps {
   profile: Profile;
   isActive: boolean;
-  isEditing: boolean;
-  editValue: string;
   onSwitch: (profileId: string) => void;
-  onStartEdit: (profileId: string, currentName: string) => void;
-  onEditChange: (value: string) => void;
-  onEditSubmit: (profileId: string) => void;
-  onEditCancel: () => void;
   onDeleteClick: (profile: Profile) => void;
   isSwitching: boolean;
-  isRenaming: boolean;
-  isDeleting: boolean;
 }
 
 export function ProfileListItem({
   profile,
   isActive,
-  isEditing,
-  editValue,
   onSwitch,
-  onStartEdit,
-  onEditChange,
-  onEditSubmit,
-  onEditCancel,
   onDeleteClick,
   isSwitching,
-  isRenaming,
-  isDeleting,
 }: ProfileListItemProps) {
+  const renameProfile = useRenameProfile();
+  const toast = useToast();
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const isDefaultProfile = profile.name === "Default";
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+    }
+  }, [isEditing]);
+
+  const startEditing = () => {
+    setIsEditing(true);
+    setEditName(profile.name);
+  };
+
+  const cancelEditing = () => {
+    setIsEditing(false);
+    setEditName("");
+  };
+
+  const handleRename = async () => {
+    const trimmedName = editName.trim();
+    if (!trimmedName || renameProfile.isPending) return;
+
+    try {
+      await renameProfile.mutateAsync({ profileId: profile.id, newName: trimmedName });
+      setIsEditing(false);
+      setEditName("");
+      toast.success("Profile renamed");
+    } catch (error: unknown) {
+      toast.error(
+        "Failed to rename profile",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleRename();
+    } else if (e.key === "Escape") {
+      cancelEditing();
+    }
+  };
 
   if (isEditing) {
     return (
-      <ProfileEditForm
-        profileId={profile.id}
-        value={editValue}
-        onChange={onEditChange}
-        onSubmit={onEditSubmit}
-        onCancel={onEditCancel}
-        isSubmitting={isRenaming}
-      />
+      <div className="flex items-center gap-1 p-1">
+        <Field.Control
+          ref={inputRef}
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onKeyDown={handleKeyDown}
+          className="h-7 flex-1 px-2 py-1 text-sm"
+          placeholder="Profile name..."
+        />
+        <IconButton
+          icon={<LuCheck className="h-4 w-4" />}
+          variant="ghost"
+          size="xs"
+          onClick={handleRename}
+          disabled={!editName.trim() || renameProfile.isPending}
+          className="text-green-400 hover:text-green-300"
+        />
+        <IconButton
+          icon={<LuX className="h-4 w-4" />}
+          variant="ghost"
+          size="xs"
+          onClick={cancelEditing}
+        />
+      </div>
     );
   }
 
@@ -64,14 +113,13 @@ export function ProfileListItem({
         {profile.name}
       </Button>
 
-      {/* Edit and Delete buttons (hide for Default profile) */}
       {!isDefaultProfile && (
         <>
           <IconButton
             icon={<LuPencil className="h-3.5 w-3.5" />}
             variant="ghost"
             size="xs"
-            onClick={() => onStartEdit(profile.id, profile.name)}
+            onClick={startEditing}
             title="Rename profile"
           />
           <IconButton
@@ -79,7 +127,7 @@ export function ProfileListItem({
             variant="ghost"
             size="xs"
             onClick={() => onDeleteClick(profile)}
-            disabled={isDeleting || isActive}
+            disabled={isActive}
             className="hover:text-red-400"
             title="Delete profile"
           />

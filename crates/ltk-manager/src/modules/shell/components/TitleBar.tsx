@@ -5,7 +5,9 @@ import type { IconType } from "react-icons";
 import { LuHammer, LuLibrary, LuMinus, LuSettings, LuSquare, LuX } from "react-icons/lu";
 import { twMerge } from "tailwind-merge";
 
-import { IconButton } from "@/components/Button";
+import { IconButton } from "@/components";
+
+import { NotificationCenter } from "./NotificationCenter";
 
 const navItems = [
   { to: "/", label: "Library", icon: LuLibrary, exact: true },
@@ -105,8 +107,10 @@ export function TitleBar({ title = "LTK Manager", version }: TitleBarProps) {
         </nav>
       </div>
 
-      {/* Right: Settings and window controls */}
+      {/* Right: Notifications, Settings, and window controls */}
       <div className="flex h-full items-center">
+        <NotificationCenter />
+
         {/* Settings button */}
         <Link
           to="/settings"

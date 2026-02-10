@@ -1,1 +1,7 @@
-export { useOverlayProgress, usePatcherStatus, useStartPatcher, useStopPatcher } from "./api";
+export {
+  useOverlayProgress,
+  usePatcherError,
+  usePatcherStatus,
+  useStartPatcher,
+  useStopPatcher,
+} from "./api";

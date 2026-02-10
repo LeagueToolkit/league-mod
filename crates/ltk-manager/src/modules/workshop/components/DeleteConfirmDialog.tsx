@@ -1,7 +1,6 @@
-import { Dialog } from "@base-ui-components/react";
-import { LuTriangleAlert, LuX } from "react-icons/lu";
+import { LuTriangleAlert } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, Dialog } from "@/components";
 import type { WorkshopProject } from "@/lib/tauri";
 
 interface DeleteConfirmDialogProps {
@@ -24,21 +23,14 @@ export function DeleteConfirmDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-600 bg-surface-800 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-surface-600 px-6 py-4">
-            <Dialog.Title className="text-lg font-semibold text-surface-100">
-              Delete Project
-            </Dialog.Title>
-            <IconButton
-              icon={<LuX className="h-5 w-5" />}
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-            />
-          </div>
+        <Dialog.Backdrop />
+        <Dialog.Overlay>
+          <Dialog.Header>
+            <Dialog.Title>Delete Project</Dialog.Title>
+            <Dialog.Close />
+          </Dialog.Header>
 
-          <div className="px-6 py-4">
+          <Dialog.Body>
             <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-4">
               <LuTriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
               <div>
@@ -52,9 +44,9 @@ export function DeleteConfirmDialog({
                 <p className="mt-2 text-xs break-all text-surface-500">{project.path}</p>
               </div>
             </div>
-          </div>
+          </Dialog.Body>
 
-          <div className="flex justify-end gap-3 border-t border-surface-600 px-6 py-4">
+          <Dialog.Footer>
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
@@ -66,8 +58,8 @@ export function DeleteConfirmDialog({
             >
               Delete Project
             </Button>
-          </div>
-        </Dialog.Popup>
+          </Dialog.Footer>
+        </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
   );

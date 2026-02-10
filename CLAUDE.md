@@ -205,6 +205,47 @@ export function useProfiles() {
 
 ## Critical Development Patterns
 
+### Path Handling with Camino
+**ALWAYS use `camino::Utf8Path` / `Utf8PathBuf` instead of `std::path::Path` / `PathBuf` for path handling in Rust code.** Camino provides UTF-8 guaranteed paths that are more robust, ergonomic, and consistent across platforms.
+
+The workspace defines a shared version in the root `Cargo.toml` (currently `camino = "1.1"`). Prefer `camino = { workspace = true }` in crate `Cargo.toml` files.
+
+**Key patterns:**
+```rust
+use camino::{Utf8Path, Utf8PathBuf};
+
+// Function parameters: use &Utf8Path
+fn process_file(path: &Utf8Path) -> Result<()> { ... }
+
+// Owned paths: use Utf8PathBuf
+struct Config {
+    league_path: Option<Utf8PathBuf>,
+}
+
+// Construction
+let path = Utf8PathBuf::from("some/path");
+let joined = path.join("subdir");
+
+// Converting FROM std::path (e.g., from OS APIs)
+let std_path: PathBuf = std::env::current_exe()?;
+let utf8_path = Utf8PathBuf::from_path_buf(std_path)
+    .map_err(|p| format!("Non-UTF-8 path: {}", p.display()))?;
+
+// Converting TO std::path (e.g., for std::fs APIs)
+std::fs::File::open(utf8_path.as_std_path())?;
+std::fs::read_dir(utf8_path.as_std_path())?;
+
+// Direct string access (no lossy conversion needed)
+println!("Path: {}", utf8_path.as_str());
+```
+
+**When to use `as_std_path()`:** At FFI boundaries where `std::fs` or external crates require `&Path` / `PathBuf`. Keep camino types throughout internal logic and convert only at the edges.
+
+**Feature flags:** Add `serde1` feature when paths need serialization (e.g., in config structs):
+```toml
+camino = { workspace = true, features = ["serde1"] }
+```
+
 ### Input Validation
 **ALWAYS validate on backend, NEVER rely solely on frontend validation.**
 - Trim and validate string inputs
@@ -212,11 +253,23 @@ export function useProfiles() {
 - Return descriptive errors from backend
 
 ### Using Component Library
-**ALWAYS use custom components instead of native HTML:**
+**ALWAYS use reusable components from `@/components` instead of native HTML or raw base-ui imports.** Never import from `@base-ui-components/react` directly in module code — all base-ui primitives must be wrapped in `src/components/` first and imported via `@/components`.
+
+**Available wrapped components:**
 - `Button` / `IconButton` - Variants: filled, light, outline, ghost, transparent; Sizes: xs, sm, md, lg, xl
-- `Field.Control` - Styled text inputs
-- `Checkbox`, `RadioGroup`, `Tabs` - Form controls
-- `@base-ui-components/react` - For Dialog, Tooltip, Popover when needed
+- `Field` / `FormField` / `TextareaField` - Styled form inputs
+- `Checkbox` / `CheckboxGroup` - Boolean/multi-select inputs
+- `RadioGroup` - Mutually exclusive choices (compound: Root, Label, Options, Card, Item)
+- `Tabs` - Tabbed content (compound: Root, List, Tab, Panel, Indicator)
+- `Tooltip` / `SimpleTooltip` - Hover information
+- `Toast` / `useToast()` - Notifications
+- `Dialog` - Modal dialogs (compound: Root, Portal, Backdrop, Overlay, Header, Title, Body, Footer, Close)
+- `Switch` - Toggle on/off; Sizes: sm, md
+- `Menu` - Dropdown menus (compound: Root, Trigger, Portal, Positioner, Popup, Item, Separator, Group, GroupLabel). Item supports `icon` and `variant="danger"`.
+- `Select` / `SelectField` - Dropdown select inputs. Compound for custom layouts, `SelectField` for quick use with `options` array. TanStack Form: `field.SelectField`.
+- `Popover` - Positioned popover panels (compound: Root, Trigger, Portal, Backdrop, Positioner, Popup, Arrow, Title, Description, Close).
+
+**Not yet wrapped (create in `src/components/` before using):** AlertDialog, Separator, Progress, ScrollArea
 
 ### Adding Tauri Commands
 

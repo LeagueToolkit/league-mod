@@ -10,6 +10,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod commands;
 mod error;
 mod legacy_patcher;
+#[cfg(debug_assertions)]
+mod log_layer;
 mod mods;
 mod overlay;
 pub mod patcher;
@@ -65,6 +67,9 @@ fn main() {
     // If you need more/less verbosity at runtime, set `RUST_LOG`, e.g.:
     // - `RUST_LOG=ltk_manager=trace,tauri=info`
     // - `RUST_LOG=ltk_manager=debug,tauri=warn`
+    #[cfg(debug_assertions)]
+    let (_file_guard, log_path, app_handle_holder) = init_logging();
+    #[cfg(not(debug_assertions))]
     let (_file_guard, log_path) = init_logging();
 
     tracing::info!("Starting LTK Manager");
@@ -78,8 +83,12 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .setup(|app| {
+        .setup(move |app| {
             let app_handle = app.handle();
+
+            // Populate the app handle for the log layer in debug builds
+            #[cfg(debug_assertions)]
+            let _ = app_handle_holder.set(app_handle.clone());
 
             // Create individual states
             let settings_state = SettingsState::new(app_handle);
@@ -111,6 +120,7 @@ fn main() {
             commands::inspect_modpkg,
             commands::get_mod_thumbnail,
             commands::get_storage_directory,
+            commands::reorder_mods,
             // Patcher
             commands::start_patcher,
             commands::stop_patcher,
@@ -141,14 +151,17 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
+#[cfg(debug_assertions)]
+fn init_logging() -> (
+    Option<WorkerGuard>,
+    Option<std::path::PathBuf>,
+    std::sync::Arc<std::sync::OnceLock<tauri::AppHandle>>,
+) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "ltk_manager=debug,tauri=info".into());
 
-    // Default to stdout logs even if file setup fails.
     let stdout_layer = tracing_subscriber::fmt::layer();
 
-    // Best-effort: create a persistent log file under app data dir.
     let (file_guard, file_layer, log_path) = match default_log_dir() {
         Some(log_dir) => {
             if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -161,7 +174,57 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
             } else {
                 let file_appender = tracing_appender::rolling::never(&log_dir, "ltk-manager.log");
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-                let layer = tracing_subscriber::fmt::layer().with_writer(non_blocking);
+                let layer = tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false);
+                (
+                    Some(guard),
+                    Some(layer),
+                    Some(log_dir.join("ltk-manager.log")),
+                )
+            }
+        }
+        None => (None, None, None),
+    };
+
+    let app_handle_holder = std::sync::Arc::new(std::sync::OnceLock::new());
+    let tauri_log_layer = log_layer::TauriLogLayer::new(app_handle_holder.clone());
+
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(tauri_log_layer);
+    if let Some(layer) = file_layer {
+        registry.with(layer).init();
+    } else {
+        registry.init();
+    }
+
+    (file_guard, log_path, app_handle_holder)
+}
+
+#[cfg(not(debug_assertions))]
+fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "ltk_manager=debug,tauri=info".into());
+
+    let stdout_layer = tracing_subscriber::fmt::layer();
+
+    let (file_guard, file_layer, log_path) = match default_log_dir() {
+        Some(log_dir) => {
+            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+                eprintln!(
+                    "Failed to create log directory {}: {}",
+                    log_dir.display(),
+                    e
+                );
+                (None, None, None)
+            } else {
+                let file_appender = tracing_appender::rolling::never(&log_dir, "ltk-manager.log");
+                let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+                let layer = tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false);
                 (
                     Some(guard),
                     Some(layer),
@@ -184,7 +247,7 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
     (file_guard, log_path)
 }
 
-fn default_log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn default_log_dir() -> Option<std::path::PathBuf> {
     // Match `tauri.conf.json` identifier so logs sit next to `settings.json` on Windows.
     const IDENTIFIER: &str = "dev.leaguetoolkit.manager";
 

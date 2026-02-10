@@ -1,7 +1,7 @@
 use crate::error::{AppResult, IpcResult, MutexResultExt};
 use crate::mods::{
-    inspect_modpkg_file, install_mod_from_package, toggle_mod_enabled, uninstall_mod_by_id,
-    InstalledMod, ModpkgInfo,
+    inspect_modpkg_file, install_mod_from_package, reorder_mods as reorder_mods_inner_fn,
+    toggle_mod_enabled, uninstall_mod_by_id, InstalledMod, ModpkgInfo,
 };
 use crate::state::SettingsState;
 use tauri::{AppHandle, State};
@@ -81,6 +81,25 @@ fn toggle_mod_inner(
 ) -> AppResult<()> {
     let settings = settings.0.lock().mutex_err()?.clone();
     toggle_mod_enabled(app_handle, &settings, &mod_id, enabled)
+}
+
+/// Reorder the enabled mods in the active profile.
+#[tauri::command]
+pub fn reorder_mods(
+    mod_ids: Vec<String>,
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<()> {
+    reorder_mods_command_inner(mod_ids, &app_handle, &settings).into()
+}
+
+fn reorder_mods_command_inner(
+    mod_ids: Vec<String>,
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<()> {
+    let settings = settings.0.lock().mutex_err()?.clone();
+    reorder_mods_inner_fn(app_handle, &settings, mod_ids)
 }
 
 /// Inspect a `.modpkg` file and return its metadata.

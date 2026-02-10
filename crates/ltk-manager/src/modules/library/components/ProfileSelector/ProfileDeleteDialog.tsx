@@ -1,44 +1,45 @@
-import { Dialog } from "@base-ui-components/react";
-import { LuTriangleAlert, LuX } from "react-icons/lu";
+import { LuTriangleAlert } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components/Button";
+import { Button, Dialog, useToast } from "@/components";
 import type { Profile } from "@/lib/tauri";
+import { useDeleteProfile } from "@/modules/library/api";
 
 interface ProfileDeleteDialogProps {
   open: boolean;
   profile: Profile | null;
   onClose: () => void;
-  onConfirm: () => void;
-  isPending?: boolean;
 }
 
-export function ProfileDeleteDialog({
-  open,
-  profile,
-  onClose,
-  onConfirm,
-  isPending,
-}: ProfileDeleteDialogProps) {
+export function ProfileDeleteDialog({ open, profile, onClose }: ProfileDeleteDialogProps) {
+  const deleteProfile = useDeleteProfile();
+  const toast = useToast();
+
   if (!profile) return null;
+
+  const handleConfirm = async () => {
+    try {
+      await deleteProfile.mutateAsync(profile.id);
+      onClose();
+      toast.success("Profile deleted");
+    } catch (error: unknown) {
+      toast.error(
+        "Failed to delete profile",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
 
   return (
     <Dialog.Root open={open} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-600 bg-surface-800 shadow-2xl">
-          <div className="flex items-center justify-between border-b border-surface-600 px-6 py-4">
-            <Dialog.Title className="text-lg font-semibold text-surface-100">
-              Delete Profile
-            </Dialog.Title>
-            <IconButton
-              icon={<LuX className="h-5 w-5" />}
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-            />
-          </div>
+        <Dialog.Backdrop />
+        <Dialog.Overlay>
+          <Dialog.Header>
+            <Dialog.Title>Delete Profile</Dialog.Title>
+            <Dialog.Close />
+          </Dialog.Header>
 
-          <div className="px-6 py-4">
+          <Dialog.Body>
             <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-4">
               <LuTriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
               <div>
@@ -53,22 +54,22 @@ export function ProfileDeleteDialog({
                 <p className="mt-2 text-xs text-surface-500">This action cannot be undone.</p>
               </div>
             </div>
-          </div>
+          </Dialog.Body>
 
-          <div className="flex justify-end gap-3 border-t border-surface-600 px-6 py-4">
-            <Button variant="ghost" onClick={onClose} disabled={isPending}>
+          <Dialog.Footer>
+            <Button variant="ghost" onClick={onClose} disabled={deleteProfile.isPending}>
               Cancel
             </Button>
             <Button
               variant="filled"
-              onClick={onConfirm}
-              loading={isPending}
+              onClick={handleConfirm}
+              loading={deleteProfile.isPending}
               className="bg-red-600 hover:bg-red-500"
             >
               Delete Profile
             </Button>
-          </div>
-        </Dialog.Popup>
+          </Dialog.Footer>
+        </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
   );

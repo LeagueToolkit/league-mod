@@ -21,6 +21,10 @@
 
 /* Dark theme (VS Code inspired) - DEFAULT */
 :root {
+  /* RGB channels for alpha compositing in glass mode */
+  --surface-950-rgb: 14 14 14;
+  --surface-900-rgb: 30 30 30;
+
   /* Background colors */
   --surface-950: #0e0e0e;
   --surface-900: #1e1e1e; /* Editor background */
@@ -49,6 +53,9 @@
 
 /* Light theme overrides */
 :root.light {
+  --surface-950-rgb: 255 255 255;
+  --surface-900-rgb: 248 248 248;
+
   /* Background colors - inverted for light mode */
   --surface-950: #ffffff;
   --surface-900: #f8f8f8; /* Editor background */
@@ -211,7 +218,9 @@ body {
 }
 
 [data-tauri-drag-region] button,
-[data-tauri-drag-region] a {
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea {
   -webkit-app-region: no-drag;
 }
 
@@ -231,4 +240,60 @@ body {
 
 [data-toast-viewport] > * {
   pointer-events: auto;
+}
+
+/* ============================================
+   Backdrop / Glassmorphism Mode
+   ============================================ */
+
+.backdrop-active body {
+  background-color: transparent;
+}
+
+.backdrop-active .root {
+  background-color: transparent;
+}
+
+.backdrop-active .root::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--backdrop-image);
+  background-size: cover;
+  background-position: center;
+}
+
+.backdrop-active .title-bar {
+  background-color: rgb(var(--surface-950-rgb) / 0.95);
+  backdrop-filter: blur(var(--backdrop-blur, 40px)) saturate(1.2);
+}
+
+.backdrop-active main {
+  background-color: rgb(var(--surface-900-rgb) / 0.75);
+  backdrop-filter: blur(var(--backdrop-blur, 40px)) saturate(1.2);
+}
+
+.backdrop-active main > * > [class*="border-b"] {
+  background-color: rgb(var(--surface-950-rgb) / 0.4);
+}
+
+.backdrop-active main .settings-container {
+  background-color: rgb(var(--surface-900-rgb) / 0.5);
+  border-radius: 0.75rem;
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.backdrop-active main * {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.backdrop-active {
+  --surface-400: #a0a0a0;
+  --surface-500: #707070;
+}
+
+.backdrop-active ::-webkit-scrollbar-track {
+  background-color: transparent;
 }

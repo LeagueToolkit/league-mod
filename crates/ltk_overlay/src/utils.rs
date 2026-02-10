@@ -4,7 +4,7 @@
 //! archives) and the `u64` path hashes used inside WAD files.
 
 use crate::error::Result;
-use std::path::Path;
+use camino::Utf8Path;
 
 /// Normalize a relative path for hash computation.
 ///
@@ -17,10 +17,10 @@ use std::path::Path;
 ///
 /// Path separators are normalized to forward slashes (`/`) for consistent hashing
 /// across platforms.
-pub fn normalize_rel_path_for_hash(rel_path: &Path, _bytes: &[u8]) -> String {
+pub fn normalize_rel_path_for_hash(rel_path: &Utf8Path, _bytes: &[u8]) -> String {
     let mut parts = rel_path
         .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .map(|c| c.as_str().to_string())
         .collect::<Vec<_>>();
 
     if parts.is_empty() {
@@ -46,7 +46,7 @@ pub fn normalize_rel_path_for_hash(rel_path: &Path, _bytes: &[u8]) -> String {
 
     // If we stripped to empty (rare), fall back to original filename
     if joined.is_empty() {
-        return rel_path.to_string_lossy().replace('\\', "/");
+        return rel_path.as_str().replace('\\', "/");
     }
 
     joined.replace('\\', "/")
@@ -64,12 +64,9 @@ pub fn normalize_rel_path_for_hash(rel_path: &Path, _bytes: &[u8]) -> String {
 /// 2. **Named path**: Otherwise, the path is normalized via
 ///    [`normalize_rel_path_for_hash`] and hashed with
 ///    [`ltk_modpkg::utils::hash_chunk_name`] (xxHash3).
-pub fn resolve_chunk_hash(rel_path: &Path, bytes: &[u8]) -> Result<u64> {
-    let file_name = rel_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    let file_stem = Path::new(file_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
+    let file_name = rel_path.file_name().unwrap_or("");
+    let file_stem = Utf8Path::new(file_name).file_stem().unwrap_or("");
 
     // If this is a hex-hash filename (as emitted by HexPathResolver), use it directly
     if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -86,32 +83,32 @@ pub fn resolve_chunk_hash(rel_path: &Path, bytes: &[u8]) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use camino::Utf8PathBuf;
 
     #[test]
     fn test_normalize_ltk_suffix() {
-        let path = PathBuf::from("data/characters/aatrox/aatrox.ltk.bin");
+        let path = Utf8PathBuf::from("data/characters/aatrox/aatrox.ltk.bin");
         let normalized = normalize_rel_path_for_hash(&path, b"");
         assert_eq!(normalized, "data/characters/aatrox/aatrox.bin");
     }
 
     #[test]
     fn test_normalize_ltk_extension() {
-        let path = PathBuf::from("data/characters/aatrox/aatrox.ltk");
+        let path = Utf8PathBuf::from("data/characters/aatrox/aatrox.ltk");
         let normalized = normalize_rel_path_for_hash(&path, b"");
         assert_eq!(normalized, "data/characters/aatrox/aatrox");
     }
 
     #[test]
     fn test_normalize_regular_path() {
-        let path = PathBuf::from("data/characters/aatrox/aatrox.bin");
+        let path = Utf8PathBuf::from("data/characters/aatrox/aatrox.bin");
         let normalized = normalize_rel_path_for_hash(&path, b"");
         assert_eq!(normalized, "data/characters/aatrox/aatrox.bin");
     }
 
     #[test]
     fn test_resolve_hex_hash() {
-        let path = PathBuf::from("0123456789abcdef.bin");
+        let path = Utf8PathBuf::from("0123456789abcdef.bin");
         let hash = resolve_chunk_hash(&path, b"").unwrap();
         assert_eq!(hash, 0x0123456789abcdef);
     }

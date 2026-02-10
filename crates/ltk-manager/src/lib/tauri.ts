@@ -12,6 +12,7 @@ export { isErr, isOk, match, unwrap, unwrapOr } from "@/utils/result";
 export interface AppInfo {
   name: string;
   version: string;
+  logFilePath: string | null;
 }
 
 export interface AccentColor {
@@ -27,6 +28,8 @@ export interface Settings {
   theme: "light" | "dark" | "system";
   accentColor: AccentColor;
   firstRunComplete: boolean;
+  backdropImage: string | null;
+  backdropBlur: number | null;
 }
 
 export interface InstalledMod {
@@ -74,13 +77,16 @@ export interface PatcherConfig {
   flags?: number | null;
 }
 
+export type PatcherPhase = "idle" | "building" | "patching";
+
 export interface PatcherStatus {
   running: boolean;
   configPath: string | null;
+  phase: PatcherPhase;
 }
 
 export interface OverlayProgress {
-  stage: "indexing" | "patching" | "complete";
+  stage: "indexing" | "collecting" | "patching" | "strings" | "complete";
   currentFile: string | null;
   current: number;
   total: number;
@@ -189,6 +195,7 @@ export const api = {
   getModThumbnail: (thumbnailPath: string) =>
     invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
   getStorageDirectory: () => invokeResult<string>("get_storage_directory"),
+  reorderMods: (modIds: string[]) => invokeResult<void>("reorder_mods", { modIds }),
 
   // Inspector
   inspectModpkg: (filePath: string) => invokeResult<ModpkgInfo>("inspect_modpkg", { filePath }),

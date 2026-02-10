@@ -1,9 +1,8 @@
 import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
-import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useEffect } from "react";
 
 import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
-import { TitleBar } from "@/modules/shell";
+import { DevConsole, TitleBar, useDevLogStream } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
 
 function RootLayout() {
@@ -13,6 +12,8 @@ function RootLayout() {
   const location = useLocation();
 
   const { data: setupRequired, isLoading: isCheckingSetup } = useCheckSetupRequired();
+
+  useDevLogStream();
 
   // Redirect to settings if setup is required
   useEffect(() => {
@@ -33,11 +34,11 @@ function RootLayout() {
   return (
     <div className="root flex h-screen flex-col bg-surface-900">
       <TitleBar version={appInfo?.version} />
-      <UpdateNotification updateState={updateState} />
-      <main className="flex-1 overflow-hidden">
+      <main className="relative flex-1 overflow-hidden">
+        <UpdateNotification updateState={updateState} />
         <Outlet />
-        <TanStackRouterDevtools />
       </main>
+      {import.meta.env.DEV && <DevConsole />}
     </div>
   );
 }
