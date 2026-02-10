@@ -69,10 +69,11 @@ pub struct ModProjectLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// String overrides for this layer.
-    /// Maps field names (from lol.stringtable) to new string values.
+    /// String overrides for this layer, organized by locale.
+    /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
+    /// Inner map: field name (from lol.stringtable) -> new string value
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub string_overrides: HashMap<String, String>,
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

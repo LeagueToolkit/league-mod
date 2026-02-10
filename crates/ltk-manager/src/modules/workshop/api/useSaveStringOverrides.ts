@@ -8,7 +8,7 @@ import { workshopKeys } from "./keys";
 interface SaveStringOverridesVariables {
   projectPath: string;
   layerName: string;
-  stringOverrides: Record<string, string>;
+  stringOverrides: Record<string, Record<string, string>>;
 }
 
 /**

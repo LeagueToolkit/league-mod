@@ -798,8 +798,8 @@ fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<
     } else {
         let mut layers: Vec<ltk_mod_project::ModProjectLayer> = info
             .layers
-            .into_iter()
-            .map(|(_, layer_info)| ltk_mod_project::ModProjectLayer {
+            .into_values()
+            .map(|layer_info| ltk_mod_project::ModProjectLayer {
                 name: layer_info.name,
                 priority: layer_info.priority,
                 description: None,

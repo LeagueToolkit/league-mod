@@ -47,7 +47,7 @@ pub struct WorkshopLayer {
     pub priority: i32,
     pub description: Option<String>,
     #[serde(default)]
-    pub string_overrides: HashMap<String, String>,
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 /// Arguments for creating a new project.
@@ -544,7 +544,7 @@ fn get_project_thumbnail_inner(thumbnail_path: &str) -> AppResult<String> {
 pub fn save_layer_string_overrides(
     project_path: String,
     layer_name: String,
-    string_overrides: HashMap<String, String>,
+    string_overrides: HashMap<String, HashMap<String, String>>,
 ) -> IpcResult<WorkshopProject> {
     save_layer_string_overrides_inner(project_path, layer_name, string_overrides).into()
 }
@@ -552,7 +552,7 @@ pub fn save_layer_string_overrides(
 fn save_layer_string_overrides_inner(
     project_path: String,
     layer_name: String,
-    string_overrides: HashMap<String, String>,
+    string_overrides: HashMap<String, HashMap<String, String>>,
 ) -> AppResult<WorkshopProject> {
     let path = PathBuf::from(&project_path);
     if !path.exists() {

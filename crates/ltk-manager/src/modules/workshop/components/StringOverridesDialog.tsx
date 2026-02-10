@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui-components/react";
 import { useCallback, useEffect, useState } from "react";
-import { LuPlus, LuTrash2, LuX } from "react-icons/lu";
+import { LuGlobe, LuPlus, LuTrash2, LuX } from "react-icons/lu";
 
 import { Button, IconButton } from "@/components/Button";
 import { Field } from "@/components/FormField";
@@ -20,8 +20,41 @@ interface OverrideEntry {
   value: string;
 }
 
+// Common League of Legends locales
+const LOCALES = [
+  { value: "default", label: "Default (All Locales)" },
+  { value: "en_us", label: "English (US)" },
+  { value: "en_gb", label: "English (UK)" },
+  { value: "en_au", label: "English (AU)" },
+  { value: "en_ph", label: "English (PH)" },
+  { value: "en_sg", label: "English (SG)" },
+  { value: "ko_kr", label: "Korean" },
+  { value: "ja_jp", label: "Japanese" },
+  { value: "zh_cn", label: "Chinese (Simplified)" },
+  { value: "zh_tw", label: "Chinese (Traditional)" },
+  { value: "es_es", label: "Spanish (EU)" },
+  { value: "es_mx", label: "Spanish (LATAM)" },
+  { value: "es_ar", label: "Spanish (AR)" },
+  { value: "pt_br", label: "Portuguese (BR)" },
+  { value: "fr_fr", label: "French" },
+  { value: "de_de", label: "German" },
+  { value: "it_it", label: "Italian" },
+  { value: "pl_pl", label: "Polish" },
+  { value: "ro_ro", label: "Romanian" },
+  { value: "el_gr", label: "Greek" },
+  { value: "ru_ru", label: "Russian" },
+  { value: "tr_tr", label: "Turkish" },
+  { value: "cs_cz", label: "Czech" },
+  { value: "hu_hu", label: "Hungarian" },
+  { value: "th_th", label: "Thai" },
+  { value: "vn_vn", label: "Vietnamese" },
+  { value: "id_id", label: "Indonesian" },
+  { value: "ms_my", label: "Malay" },
+] as const;
+
 export function StringOverridesDialog({ open, project, onClose }: StringOverridesDialogProps) {
   const [selectedLayer, setSelectedLayer] = useState<string>("base");
+  const [selectedLocale, setSelectedLocale] = useState<string>("default");
   const [entries, setEntries] = useState<OverrideEntry[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [errors, setErrors] = useState<Record<number, string>>({});
@@ -31,23 +64,24 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
   // Get the currently selected layer data
   const currentLayer = project?.layers.find((l) => l.name === selectedLayer);
 
-  // Reset entries when dialog opens or layer changes
+  // Reset entries when dialog opens or layer/locale changes
   useEffect(() => {
     if (!currentLayer) {
       setEntries([]);
       return;
     }
-    const overrides = currentLayer.stringOverrides ?? {};
-    const initial = Object.entries(overrides).map(([key, value]) => ({ key, value }));
+    const localeOverrides = currentLayer.stringOverrides?.[selectedLocale] ?? {};
+    const initial = Object.entries(localeOverrides).map(([key, value]) => ({ key, value }));
     setEntries(initial);
     setHasChanges(false);
     setErrors({});
-  }, [currentLayer?.name, open]);
+  }, [currentLayer?.name, selectedLocale, open]);
 
   // Reset selected layer when dialog opens with a new project
   useEffect(() => {
     if (open && project?.layers.length) {
       setSelectedLayer(project.layers[0].name);
+      setSelectedLocale("default");
     }
   }, [open, project?.path]);
 
@@ -99,22 +133,34 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
   }
 
   function handleSave() {
-    if (!project || !validate(entries)) return;
+    if (!project || !currentLayer || !validate(entries)) return;
 
-    // Build the overrides map (trimming keys, filtering empty)
-    const overrides: Record<string, string> = {};
+    // Build the overrides map for the current locale
+    const localeOverrides: Record<string, string> = {};
     for (const entry of entries) {
       const trimmedKey = entry.key.trim();
       if (trimmedKey) {
-        overrides[trimmedKey] = entry.value;
+        localeOverrides[trimmedKey] = entry.value;
       }
+    }
+
+    // Preserve existing overrides for other locales
+    const allOverrides: Record<string, Record<string, string>> = {
+      ...currentLayer.stringOverrides,
+    };
+
+    // Update or remove the current locale's overrides
+    if (Object.keys(localeOverrides).length > 0) {
+      allOverrides[selectedLocale] = localeOverrides;
+    } else {
+      delete allOverrides[selectedLocale];
     }
 
     saveOverrides.mutate(
       {
         projectPath: project.path,
         layerName: selectedLayer,
-        stringOverrides: overrides,
+        stringOverrides: allOverrides,
       },
       {
         onSuccess: () => {
@@ -169,10 +215,31 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
 
           {/* Content */}
           <div className="flex-1 overflow-auto px-6 py-4">
+            {/* Locale selector */}
+            <div className="mb-4">
+              <Field.Root>
+                <Field.Label>Locale</Field.Label>
+                <div className="relative">
+                  <LuGlobe className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-surface-400" />
+                  <select
+                    value={selectedLocale}
+                    onChange={(e) => setSelectedLocale(e.target.value)}
+                    className="w-full appearance-none rounded-lg border border-surface-600 bg-surface-700 px-9 py-2 text-sm text-surface-100 outline-none transition-colors hover:border-surface-500 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+                  >
+                    {LOCALES.map((locale) => (
+                      <option key={locale.value} value={locale.value}>
+                        {locale.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </Field.Root>
+            </div>
+
             <div className="mb-3 flex items-center justify-between">
               <p className="text-sm text-surface-400">
                 {overrideCount === 0
-                  ? "No string overrides configured for this layer."
+                  ? "No string overrides configured for this locale."
                   : `${overrideCount} override${overrideCount !== 1 ? "s" : ""}`}
               </p>
               <Button
@@ -198,50 +265,34 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
                   <div key={index} className="flex items-start gap-2">
                     <Field.Root className="flex-1">
                       <Field.Control
+                        type="text"
                         value={entry.key}
-                        placeholder="e.g. generatedtip_spell_blindmonkqone_description"
-                        hasError={!!errors[index]}
                         onChange={(e) => handleUpdateEntry(index, "key", e.target.value)}
-                        onBlur={() => validate(entries)}
+                        placeholder="game_character_displayname_Ahri"
                       />
                       {errors[index] && (
-                        <p className="text-xs text-red-500">{errors[index]}</p>
+                        <Field.Error>{errors[index]}</Field.Error>
                       )}
                     </Field.Root>
+
                     <Field.Root className="flex-1">
                       <Field.Control
+                        type="text"
                         value={entry.value}
-                        placeholder="New string value"
                         onChange={(e) => handleUpdateEntry(index, "value", e.target.value)}
+                        placeholder="Fox Spirit"
                       />
                     </Field.Root>
+
                     <IconButton
                       icon={<LuTrash2 className="h-4 w-4" />}
                       variant="ghost"
                       size="sm"
-                      className="mt-1.5 shrink-0 text-surface-400 hover:text-red-400"
                       onClick={() => handleRemoveEntry(index)}
+                      className="mt-1"
                     />
                   </div>
                 ))}
-              </div>
-            )}
-
-            {entries.length === 0 && (
-              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-surface-600 py-10 text-center">
-                <p className="text-sm text-surface-400">
-                  String overrides let you change in-game text without replacing the full
-                  stringtable file.
-                </p>
-                <Button
-                  variant="light"
-                  size="sm"
-                  left={<LuPlus className="h-4 w-4" />}
-                  className="mt-3"
-                  onClick={handleAddEntry}
-                >
-                  Add your first override
-                </Button>
               </div>
             )}
           </div>
@@ -249,18 +300,15 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
           {/* Footer */}
           <div className="flex items-center justify-end gap-3 border-t border-surface-600 px-6 py-4">
             <Button variant="ghost" onClick={handleClose}>
-              {hasChanges ? "Discard" : "Close"}
+              Cancel
             </Button>
-            {hasChanges && (
-              <Button
-                variant="filled"
-                onClick={handleSave}
-                loading={saveOverrides.isPending}
-                disabled={Object.keys(errors).length > 0}
-              >
-                Save Changes
-              </Button>
-            )}
+            <Button
+              variant="filled"
+              onClick={handleSave}
+              disabled={!hasChanges || saveOverrides.isPending}
+            >
+              {saveOverrides.isPending ? "Saving..." : "Save Changes"}
+            </Button>
           </div>
         </Dialog.Popup>
       </Dialog.Portal>
@@ -268,12 +316,18 @@ export function StringOverridesDialog({ open, project, onClose }: StringOverride
   );
 }
 
+// Badge showing override count for a layer
 function OverrideBadge({ layer }: { layer: WorkshopLayer }) {
-  const count = Object.keys(layer.stringOverrides ?? {}).length;
-  if (count === 0) return null;
+  const totalCount = Object.values(layer.stringOverrides).reduce(
+    (sum, localeOverrides) => sum + Object.keys(localeOverrides).length,
+    0,
+  );
+
+  if (totalCount === 0) return null;
+
   return (
-    <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-500/20 px-1.5 text-xs font-medium text-brand-400">
-      {count}
+    <span className="ml-2 rounded-full bg-accent-500/20 px-2 py-0.5 text-xs font-medium text-accent-400">
+      {totalCount}
     </span>
   );
 }

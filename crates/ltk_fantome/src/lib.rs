@@ -39,9 +39,11 @@ pub struct FantomeLayerInfo {
     pub name: String,
     #[serde(rename = "Priority")]
     pub priority: i32,
-    /// String overrides for this layer.
+    /// String overrides for this layer, organized by locale.
+    /// Outer key: locale (e.g., "en_us", "ko_kr", or "default")
+    /// Inner map: field name -> replacement string
     #[serde(rename = "StringOverrides", default, skip_serializing_if = "HashMap::is_empty")]
-    pub string_overrides: HashMap<String, String>,
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 /// Create a standard Fantome file name from a mod project.

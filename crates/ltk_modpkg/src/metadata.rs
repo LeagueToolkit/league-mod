@@ -83,12 +83,15 @@ impl DistributorInfo {
 /// use std::collections::HashMap;
 /// use ltk_modpkg::ModpkgLayerMetadata;
 ///
+/// let mut en_us_overrides = HashMap::new();
+/// en_us_overrides.insert("game_character_displayname_Ahri".to_string(), "Fox Spirit".to_string());
+///
 /// let layer = ModpkgLayerMetadata {
 ///     name: "base".to_string(),
 ///     priority: 0,
 ///     description: Some("Base layer".to_string()),
 ///     string_overrides: HashMap::from([
-///         ("game_character_displayname_Ahri".to_string(), "Custom Name".to_string()),
+///         ("en_us".to_string(), en_us_overrides),
 ///     ]),
 /// };
 ///
@@ -105,17 +108,16 @@ pub struct ModpkgLayerMetadata {
     /// Optional human-readable description of the layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// String overrides for this layer (added in schema v2).
+    /// String overrides for this layer (added in schema v2), organized by locale.
     ///
-    /// Keys are field names from `data/menu/en_us/lol.stringtable`
-    /// (found in `Localized/Global.{locale}.wad.client`).
-    /// Values are the replacement strings.
+    /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
+    /// Inner map: field name (from `data/menu/{locale}/lol.stringtable`) -> replacement string
     ///
     /// Only the overrides are stored — not the full stringtable — so the
     /// mod stays compatible across game patches.
     /// Empty maps are omitted during serialization.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub string_overrides: HashMap<String, String>,
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 /// The metadata of a mod package.
@@ -366,8 +368,10 @@ mod tests {
             priority: 0,
             description: Some("Base layer".to_string()),
             string_overrides: HashMap::from([
-                ("field_a".to_string(), "New Value A".to_string()),
-                ("field_b".to_string(), "New Value B".to_string()),
+                ("en_us".to_string(), HashMap::from([
+                    ("field_a".to_string(), "New Value A".to_string()),
+                    ("field_b".to_string(), "New Value B".to_string()),
+                ])),
             ]),
         };
 
@@ -444,7 +448,9 @@ mod tests {
                     priority: 0,
                     description: None,
                     string_overrides: HashMap::from([
-                        ("game_stat_name".to_string(), "Custom Stat".to_string()),
+                        ("en_us".to_string(), HashMap::from([
+                            ("game_stat_name".to_string(), "Custom Stat".to_string()),
+                        ])),
                     ]),
                 },
                 ModpkgLayerMetadata {
@@ -452,8 +458,10 @@ mod tests {
                     priority: 10,
                     description: Some("Pink chroma".to_string()),
                     string_overrides: HashMap::from([
-                        ("champion_name".to_string(), "Custom Name".to_string()),
-                        ("ability_desc".to_string(), "Custom Description".to_string()),
+                        ("en_us".to_string(), HashMap::from([
+                            ("champion_name".to_string(), "Custom Name".to_string()),
+                            ("ability_desc".to_string(), "Custom Description".to_string()),
+                        ])),
                     ]),
                 },
             ],
@@ -466,10 +474,10 @@ mod tests {
         let read = ModpkgMetadata::read(&mut cursor).unwrap();
         assert_eq!(metadata, read);
         assert_eq!(read.schema_version, CURRENT_SCHEMA_VERSION);
-        assert_eq!(read.layers[0].string_overrides.len(), 1);
-        assert_eq!(read.layers[1].string_overrides.len(), 2);
+        assert_eq!(read.layers[0].string_overrides.len(), 1); // 1 locale
+        assert_eq!(read.layers[1].string_overrides.len(), 1); // 1 locale
         assert_eq!(
-            read.layers[0].string_overrides.get("game_stat_name"),
+            read.layers[0].string_overrides.get("en_us").and_then(|m| m.get("game_stat_name")),
             Some(&"Custom Stat".to_string())
         );
     }
