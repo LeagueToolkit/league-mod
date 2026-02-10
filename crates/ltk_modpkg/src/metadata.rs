@@ -367,12 +367,13 @@ mod tests {
             name: "base".to_string(),
             priority: 0,
             description: Some("Base layer".to_string()),
-            string_overrides: HashMap::from([
-                ("en_us".to_string(), HashMap::from([
+            string_overrides: HashMap::from([(
+                "en_us".to_string(),
+                HashMap::from([
                     ("field_a".to_string(), "New Value A".to_string()),
                     ("field_b".to_string(), "New Value B".to_string()),
-                ])),
-            ]),
+                ]),
+            )]),
         };
 
         let encoded = rmp_serde::to_vec_named(&layer).unwrap();
@@ -447,22 +448,22 @@ mod tests {
                     name: "base".to_string(),
                     priority: 0,
                     description: None,
-                    string_overrides: HashMap::from([
-                        ("en_us".to_string(), HashMap::from([
-                            ("game_stat_name".to_string(), "Custom Stat".to_string()),
-                        ])),
-                    ]),
+                    string_overrides: HashMap::from([(
+                        "en_us".to_string(),
+                        HashMap::from([("game_stat_name".to_string(), "Custom Stat".to_string())]),
+                    )]),
                 },
                 ModpkgLayerMetadata {
                     name: "chroma1".to_string(),
                     priority: 10,
                     description: Some("Pink chroma".to_string()),
-                    string_overrides: HashMap::from([
-                        ("en_us".to_string(), HashMap::from([
+                    string_overrides: HashMap::from([(
+                        "en_us".to_string(),
+                        HashMap::from([
                             ("champion_name".to_string(), "Custom Name".to_string()),
                             ("ability_desc".to_string(), "Custom Description".to_string()),
-                        ])),
-                    ]),
+                        ]),
+                    )]),
                 },
             ],
         };
@@ -477,7 +478,10 @@ mod tests {
         assert_eq!(read.layers[0].string_overrides.len(), 1); // 1 locale
         assert_eq!(read.layers[1].string_overrides.len(), 1); // 1 locale
         assert_eq!(
-            read.layers[0].string_overrides.get("en_us").and_then(|m| m.get("game_stat_name")),
+            read.layers[0]
+                .string_overrides
+                .get("en_us")
+                .and_then(|m| m.get("game_stat_name")),
             Some(&"Custom Stat".to_string())
         );
     }
