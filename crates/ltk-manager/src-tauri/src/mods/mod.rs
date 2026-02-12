@@ -281,7 +281,7 @@ pub fn install_mod_from_package(
         .iter_mut()
         .find(|p| p.id == active_profile_id)
     {
-        profile.enabled_mods.push(id.clone());
+        profile.enabled_mods.insert(0, id.clone());
     }
 
     save_library_index(&storage_dir, &index)?;
@@ -314,7 +314,7 @@ pub fn toggle_mod_enabled(
 
     if enabled {
         if !profile.enabled_mods.contains(&mod_id.to_string()) {
-            profile.enabled_mods.push(mod_id.to_string());
+            profile.enabled_mods.insert(0, mod_id.to_string());
         }
     } else {
         profile.enabled_mods.retain(|id| id != mod_id);
@@ -743,7 +743,6 @@ pub(crate) fn get_enabled_mods_for_overlay(
         enabled_mods.push(ltk_overlay::EnabledMod {
             id: entry.id.clone(),
             content,
-            priority: 0,
         });
     }
 

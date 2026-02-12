@@ -206,21 +206,12 @@ fn build_wad_filename_index(root: &Utf8Path) -> Result<HashMap<String, Vec<Utf8P
 /// Hash index mapping chunk path hashes to WAD paths, plus the list of WAD relative paths.
 type HashIndexResult = (HashMap<u64, Vec<Utf8PathBuf>>, Vec<Utf8PathBuf>);
 
-/// Mount every WAD file and build a reverse index: `chunk_path_hash -> [relative_wad_paths]`.
-///
-/// Also returns the set of all WAD relative paths (for SubChunkTOC computation).
-/// WAD files that fail to open or mount are skipped with a warning.
-fn build_game_hash_index(
+/// Collect all `.wad.client` file paths under `data_final_dir` as `(absolute, relative)` pairs.
+fn collect_wad_paths(
     game_dir: &Utf8Path,
     data_final_dir: &Utf8Path,
-) -> Result<HashIndexResult> {
-    use ltk_wad::Wad;
-
-    let mut hash_to_wads: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
-    let mut wad_relative_paths: Vec<Utf8PathBuf> = Vec::new();
-    let mut wad_count = 0;
-    let mut chunk_count = 0;
-
+) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>> {
+    let mut paths = Vec::new();
     let mut stack = vec![data_final_dir.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
@@ -247,44 +238,91 @@ fn build_game_hash_index(
                 continue;
             }
 
-            // Get relative path from game_dir
             let relative_path = match path.strip_prefix(game_dir) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => continue,
             };
 
-            // Mount WAD and index all chunk hashes
-            let file = match std::fs::File::open(path.as_std_path()) {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("Failed to open WAD '{}': {}", path, e);
-                    continue;
-                }
-            };
+            paths.push((path, relative_path));
+        }
+    }
 
-            let wad = match Wad::mount(file) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("Failed to mount WAD '{}': {}", path, e);
-                    continue;
-                }
-            };
+    Ok(paths)
+}
 
-            wad_count += 1;
-            wad_relative_paths.push(relative_path.clone());
-            for chunk in wad.chunks().iter() {
-                hash_to_wads
-                    .entry(chunk.path_hash)
-                    .or_default()
-                    .push(relative_path.clone());
-                chunk_count += 1;
-            }
+/// Per-WAD result from mounting: the chunk path hashes found inside.
+struct WadMountResult {
+    relative_path: Utf8PathBuf,
+    chunk_hashes: Vec<u64>,
+}
+
+/// Mount a single WAD and extract its chunk path hashes.
+fn mount_and_extract_hashes(
+    abs_path: &Utf8Path,
+    relative_path: Utf8PathBuf,
+) -> Option<WadMountResult> {
+    use ltk_wad::Wad;
+
+    let file = match std::fs::File::open(abs_path.as_std_path()) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("Failed to open WAD '{}': {}", abs_path, e);
+            return None;
+        }
+    };
+
+    let wad = match Wad::mount(file) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("Failed to mount WAD '{}': {}", abs_path, e);
+            return None;
+        }
+    };
+
+    let chunk_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
+    Some(WadMountResult {
+        relative_path,
+        chunk_hashes,
+    })
+}
+
+/// Mount every WAD file and build a reverse index: `chunk_path_hash -> [relative_wad_paths]`.
+///
+/// Also returns the set of all WAD relative paths (for SubChunkTOC computation).
+/// WAD files that fail to open or mount are skipped with a warning.
+/// WADs are mounted concurrently using rayon.
+fn build_game_hash_index(
+    game_dir: &Utf8Path,
+    data_final_dir: &Utf8Path,
+) -> Result<HashIndexResult> {
+    let wad_paths = collect_wad_paths(game_dir, data_final_dir)?;
+
+    // Mount all WADs in parallel and extract their chunk hashes
+    use rayon::prelude::*;
+    let mount_results: Vec<WadMountResult> = wad_paths
+        .into_par_iter()
+        .filter_map(|(abs, rel)| mount_and_extract_hashes(&abs, rel))
+        .collect();
+
+    // Merge results into the hash index
+    let mut hash_to_wads: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
+    let mut wad_relative_paths: Vec<Utf8PathBuf> = Vec::with_capacity(mount_results.len());
+    let mut chunk_count = 0usize;
+
+    for result in mount_results {
+        wad_relative_paths.push(result.relative_path.clone());
+        for hash in &result.chunk_hashes {
+            hash_to_wads
+                .entry(*hash)
+                .or_default()
+                .push(result.relative_path.clone());
+            chunk_count += 1;
         }
     }
 
     tracing::info!(
         "Game hash index built: {} WADs, {} total chunk entries, {} unique hashes",
-        wad_count,
+        wad_relative_paths.len(),
         chunk_count,
         hash_to_wads.len()
     );
@@ -359,8 +397,8 @@ fn calculate_game_fingerprint(data_final_dir: &Utf8Path) -> Result<u64> {
                 continue;
             }
 
-            // Include path and metadata in fingerprint
-            hasher_input.extend_from_slice(path.as_str().as_bytes());
+            let rel = path.strip_prefix(data_final_dir).unwrap_or(&path);
+            hasher_input.extend_from_slice(rel.as_str().as_bytes());
 
             if let Ok(metadata) = std::fs::metadata(path.as_std_path()) {
                 // Include file size and modification time

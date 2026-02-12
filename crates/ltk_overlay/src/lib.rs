@@ -18,7 +18,7 @@
 //!    Each override file is resolved to a `u64` path hash (either parsed from a hex
 //!    filename or computed from the normalized path). All overrides are collected
 //!    into a single `HashMap<u64, Vec<u8>>`. When multiple mods override the same
-//!    hash, the last mod in the list wins.
+//!    hash, the first mod in the list (highest priority) wins.
 //!
 //! 3. **Distributing to WADs** — Using the hash index, each override is distributed
 //!    to *every* game WAD that contains that path hash ("cross-WAD matching"). This
@@ -65,7 +65,6 @@
 //!     EnabledMod {
 //!         id: "my-mod".to_string(),
 //!         content: Box::new(FsModContent::new(Utf8PathBuf::from("/path/to/mod"))),
-//!         priority: 0,
 //!     },
 //! ]);
 //!

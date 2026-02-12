@@ -9,11 +9,13 @@
 //! 2. Build a [`GameIndex`] from all `.wad.client` files in the game directory.
 //! 3. Check the saved [`OverlayState`] — if the enabled mod list and game fingerprint
 //!    match, and the overlay WAD files on disk are still valid, skip the build entirely.
-//! 4. Wipe the overlay directory and iterate each [`EnabledMod`] in order:
+//! 4. Wipe the overlay directory and iterate each [`EnabledMod`] in **reverse** order
+//!    (back-to-front), so that the first mod in the list wins conflicts:
 //!    - Read its [`ModProject`](ltk_mod_project::ModProject) to get layer definitions.
 //!    - For each layer (sorted by priority), list WAD targets and read override files.
 //!    - Resolve each override file to a `u64` path hash and collect into a global map.
-//!      Later mods overwrite earlier ones on hash collision (last-writer-wins).
+//!      Later inserts overwrite earlier ones (last-writer-wins), meaning the first mod
+//!      in the list — processed last — has the highest effective priority.
 //! 5. Distribute the collected overrides to all game WADs containing each hash
 //!    (cross-WAD matching via [`GameIndex::find_wads_with_hash`]).
 //! 6. For each affected WAD, call [`build_patched_wad`](crate::wad_builder::build_patched_wad)
@@ -31,12 +33,19 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Shared byte buffer for override data distributed across multiple WADs.
+///
+/// A single mod override may be distributed to many WADs (cross-WAD matching),
+/// so we share the bytes via `Arc` instead of cloning.
+type SharedBytes = Arc<[u8]>;
+
 /// A mod to be included in the overlay build.
 ///
 /// Each enabled mod contributes override files through its [`ModContentProvider`].
 /// Mods are processed in the order they appear in the `enabled_mods` list passed to
-/// [`OverlayBuilder::set_enabled_mods`]. When two mods override the same path hash,
-/// the mod that appears *later* in the list wins (last-writer-wins).
+/// [`OverlayBuilder::set_enabled_mods`]. Position 0 (first in the list) has the
+/// **highest** priority — when two mods override the same path hash, the mod
+/// closer to the front of the list wins.
 pub struct EnabledMod {
     /// Unique identifier for the mod (used in state tracking and logging).
     pub id: String,
@@ -45,10 +54,6 @@ pub struct EnabledMod {
     /// This can be backed by a filesystem directory, a `.modpkg` archive, a
     /// `.fantome` ZIP, or any other source that implements [`ModContentProvider`].
     pub content: Box<dyn ModContentProvider>,
-    /// Global priority for conflict resolution (higher wins).
-    ///
-    /// Currently unused — ordering in the enabled list determines winner.
-    pub priority: i32,
 }
 
 /// Progress information emitted during overlay building.
@@ -180,8 +185,8 @@ impl OverlayBuilder {
 
     /// Set the ordered list of mods to include in the overlay.
     ///
-    /// Order matters: when two mods override the same chunk, the mod that appears
-    /// later in this list wins.
+    /// Order matters: the first mod in the list (index 0) has the highest priority.
+    /// When two mods override the same chunk, the mod closer to the front wins.
     pub fn set_enabled_mods(&mut self, mods: Vec<EnabledMod>) {
         self.enabled_mods = mods;
     }
@@ -290,10 +295,10 @@ impl OverlayBuilder {
             total: 0,
         });
 
-        // Collect ALL mod overrides as a flat map: path_hash -> bytes
-        let mut all_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
+        // Collect ALL mod overrides as a flat map: path_hash -> shared bytes
+        let mut all_overrides: HashMap<u64, SharedBytes> = HashMap::new();
 
-        for enabled_mod in &mut self.enabled_mods {
+        for enabled_mod in self.enabled_mods.iter_mut().rev() {
             tracing::info!("Processing mod id={}", enabled_mod.id);
 
             let project = enabled_mod.content.mod_project()?;
@@ -333,7 +338,7 @@ impl OverlayBuilder {
                         .read_wad_overrides(&layer.name, wad_name)?;
                     for (rel_path, bytes) in override_files {
                         let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
-                        all_overrides.insert(path_hash, bytes);
+                        all_overrides.insert(path_hash, Arc::from(bytes));
                     }
                     let after = all_overrides.len();
                     tracing::info!(
@@ -369,15 +374,16 @@ impl OverlayBuilder {
             );
         }
 
-        // Distribute overrides to ALL affected WADs using the game hash index
-        let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, Vec<u8>>> = BTreeMap::new();
+        // Distribute overrides to ALL affected WADs using the game hash index.
+        // SharedBytes (Arc<[u8]>) avoids cloning the actual data — only the Arc is cloned.
+        let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> = BTreeMap::new();
         for (path_hash, override_bytes) in &all_overrides {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wad_path in wad_paths {
                     wad_overrides
                         .entry(wad_path.clone())
                         .or_default()
-                        .insert(*path_hash, override_bytes.clone());
+                        .insert(*path_hash, Arc::clone(override_bytes));
                 }
             }
         }
@@ -510,7 +516,6 @@ mod tests {
         builder.set_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
             content: Box::new(FsModContent::new(Utf8PathBuf::from("/mods/mod1"))),
-            priority: 0,
         }]);
 
         assert_eq!(builder.enabled_mods.len(), 1);
