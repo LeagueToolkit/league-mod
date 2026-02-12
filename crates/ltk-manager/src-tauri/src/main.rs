@@ -147,6 +147,10 @@ fn main() {
             commands::set_project_thumbnail,
             commands::get_project_thumbnail,
             commands::save_layer_string_overrides,
+            commands::create_project_layer,
+            commands::delete_project_layer,
+            commands::reorder_project_layers,
+            commands::update_layer_description,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LuLayers } from "react-icons/lu";
+import { useState } from "react";
+import { LuLayers, LuPlus } from "react-icons/lu";
 
-import { useProjectContext } from "@/modules/workshop";
+import { Button } from "@/components";
+import type { WorkshopLayer } from "@/lib/tauri";
+import {
+  CreateLayerDialog,
+  DeleteLayerDialog,
+  EditLayerDialog,
+  LockedLayerCard,
+  SortableLayerList,
+  useCreateLayer,
+  useDeleteLayer,
+  useProjectContext,
+  useReorderLayers,
+} from "@/modules/workshop";
 
 export const Route = createFileRoute("/workshop/$projectName/layers")({
   component: ProjectLayers,
@@ -9,62 +22,95 @@ export const Route = createFileRoute("/workshop/$projectName/layers")({
 
 function ProjectLayers() {
   const project = useProjectContext();
-  const layers = [...project.layers].sort((a, b) => a.priority - b.priority);
+  const allLayers = [...project.layers].sort((a, b) => a.priority - b.priority);
+  const baseLayer = allLayers.find((l) => l.name === "base");
+  const sortableLayers = allLayers.filter((l) => l.name !== "base");
 
-  if (layers.length === 0) {
-    return (
-      <div className="flex h-48 flex-col items-center justify-center text-center">
-        <LuLayers className="mb-3 h-10 w-10 text-surface-600" />
-        <h3 className="text-sm font-medium text-surface-300">No layers</h3>
-        <p className="mt-1 text-sm text-surface-500">This project has no layers configured.</p>
-      </div>
+  const createLayer = useCreateLayer();
+  const deleteLayer = useDeleteLayer();
+  const reorderLayers = useReorderLayers();
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editLayer, setEditLayer] = useState<WorkshopLayer | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkshopLayer | null>(null);
+
+  function handleCreateSubmit(name: string, description: string) {
+    createLayer.mutate(
+      { projectPath: project.path, name, description: description || undefined },
+      { onSuccess: () => setCreateOpen(false) },
+    );
+  }
+
+  function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    deleteLayer.mutate(
+      { projectPath: project.path, layerName: deleteTarget.name },
+      { onSuccess: () => setDeleteTarget(null) },
     );
   }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div>
-        <h2 className="text-base font-semibold text-surface-100">Layers</h2>
-        <p className="mt-1 text-sm text-surface-400">
-          Layers are applied in priority order. Higher priority layers override lower ones.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-surface-100">Layers</h2>
+          <p className="mt-1 text-sm text-surface-400">
+            Layers are applied in priority order. Higher priority layers override lower ones. Drag
+            to reorder.
+          </p>
+        </div>
+        <Button variant="filled" size="sm" left={<LuPlus />} onClick={() => setCreateOpen(true)}>
+          Add Layer
+        </Button>
       </div>
 
-      <div className="space-y-3">
-        {layers.map((layer) => {
-          const stringOverrideCount = Object.values(layer.stringOverrides).reduce(
-            (sum, localeOverrides) => sum + Object.keys(localeOverrides).length,
-            0,
-          );
+      {allLayers.length === 0 ? (
+        <div className="flex h-48 flex-col items-center justify-center text-center">
+          <LuLayers className="mb-3 h-10 w-10 text-surface-600" />
+          <h3 className="text-sm font-medium text-surface-300">No layers</h3>
+          <p className="mt-1 text-sm text-surface-500">This project has no layers configured.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {baseLayer && (
+            <LockedLayerCard layer={baseLayer} onEdit={() => setEditLayer(baseLayer)} />
+          )}
 
-          return (
-            <div
-              key={layer.name}
-              className="rounded-lg border border-surface-700 bg-surface-800/50 p-4"
-            >
-              <div className="flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium text-surface-100">{layer.name}</h3>
-                    <span className="rounded-full bg-surface-700 px-2 py-0.5 text-xs text-surface-400">
-                      Priority {layer.priority}
-                    </span>
-                  </div>
-                  {layer.description && (
-                    <p className="mt-1 text-sm text-surface-400">{layer.description}</p>
-                  )}
-                </div>
+          {sortableLayers.length > 0 && (
+            <SortableLayerList
+              layers={sortableLayers}
+              onReorder={(names) =>
+                reorderLayers.mutate({ projectPath: project.path, layerNames: names })
+              }
+              onEdit={setEditLayer}
+              onDelete={setDeleteTarget}
+            />
+          )}
+        </div>
+      )}
 
-                {stringOverrideCount > 0 && (
-                  <span className="shrink-0 text-xs text-surface-400">
-                    {stringOverrideCount} string override{stringOverrideCount !== 1 ? "s" : ""}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <CreateLayerDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSubmit={handleCreateSubmit}
+        isPending={createLayer.isPending}
+        existingNames={allLayers.map((l) => l.name)}
+      />
+
+      <EditLayerDialog
+        open={editLayer !== null}
+        layer={editLayer}
+        onClose={() => setEditLayer(null)}
+        projectPath={project.path}
+      />
+
+      <DeleteLayerDialog
+        open={deleteTarget !== null}
+        layer={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        isPending={deleteLayer.isPending}
+      />
     </div>
   );
 }
