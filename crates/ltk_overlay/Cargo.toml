@@ -38,15 +38,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 byteorder = "1.5"
 camino = { workspace = true }
 
+# Parallelism
+rayon = "1.10"
+
 [dev-dependencies]
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[features]
-default = []
-# Enable parallel WAD building
-parallel = ["rayon"]
-
-[dependencies.rayon]
-version = "1.10"
-optional = true
