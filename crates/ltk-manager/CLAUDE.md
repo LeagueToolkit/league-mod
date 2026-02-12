@@ -40,6 +40,27 @@ RUST_LOG=ltk_manager=trace,tauri=info pnpm tauri dev
 
 From `.cursorrules`: avoid trivially descriptive comments. Only comment non-obvious business logic, workarounds, edge cases, or "why" decisions. Document all public Rust APIs with `///` doc comments.
 
+### JSX Conditional Rendering
+
+**Avoid ternary operators in JSX.** Use early returns or `{condition && <Component />}` instead.
+
+```tsx
+// Good — early return
+if (isLoading) return <LoadingState />;
+if (error) return <ErrorState error={error} />;
+return <Content />;
+
+// Good — single-line conditional
+{
+  hasItems && <ItemList items={items} />;
+}
+
+// Bad — ternary in JSX
+{
+  isLoading ? <LoadingState /> : error ? <ErrorState /> : <Content />;
+}
+```
+
 ### Import Conventions
 
 **Always import from barrel exports, never from subdirectories.** This keeps import paths stable and encapsulates internal structure.

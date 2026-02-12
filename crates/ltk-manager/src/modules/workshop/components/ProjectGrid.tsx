@@ -9,19 +9,9 @@ interface ProjectGridProps {
   onEdit: (project: WorkshopProject) => void;
   onPack: (project: WorkshopProject) => void;
   onDelete: (project: WorkshopProject) => void;
-  onSetThumbnail: (project: WorkshopProject) => void;
-  onStringOverrides: (project: WorkshopProject) => void;
 }
 
-export function ProjectGrid({
-  projects,
-  viewMode,
-  onEdit,
-  onPack,
-  onDelete,
-  onSetThumbnail,
-  onStringOverrides,
-}: ProjectGridProps) {
+export function ProjectGrid({ projects, viewMode, onEdit, onPack, onDelete }: ProjectGridProps) {
   return (
     <div
       className={
@@ -38,8 +28,6 @@ export function ProjectGrid({
           onEdit={onEdit}
           onPack={onPack}
           onDelete={onDelete}
-          onSetThumbnail={onSetThumbnail}
-          onStringOverrides={onStringOverrides}
         />
       ))}
     </div>

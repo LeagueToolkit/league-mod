@@ -11,7 +11,7 @@ import { NotificationCenter } from "./NotificationCenter";
 
 const navItems = [
   { to: "/", label: "Library", icon: LuLibrary, exact: true },
-  { to: "/creator", label: "Workshop", icon: LuHammer, exact: false },
+  { to: "/workshop", label: "Workshop", icon: LuHammer, exact: false },
 ] as const;
 
 const linkBaseClass =

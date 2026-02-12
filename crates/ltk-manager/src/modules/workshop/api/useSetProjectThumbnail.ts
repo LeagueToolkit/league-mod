@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api, type AppError, type WorkshopProject } from "@/lib/tauri";
 import { mutationFn } from "@/utils/query";
@@ -21,14 +22,23 @@ export function useSetProjectThumbnail() {
       api.setProjectThumbnail(projectPath, imagePath),
     ),
     onSuccess: (updatedProject) => {
-      // Invalidate project list to refresh thumbnailPath
-      queryClient.invalidateQueries({ queryKey: workshopKeys.projects() });
-      // Invalidate specific project
-      queryClient.invalidateQueries({ queryKey: workshopKeys.project(updatedProject.path) });
-      // Invalidate thumbnail query
-      queryClient.invalidateQueries({
-        queryKey: workshopKeys.thumbnail(updatedProject.path, updatedProject.thumbnailPath),
-      });
+      // Update project data in cache
+      queryClient.setQueryData<WorkshopProject[]>(workshopKeys.projects(), (old) =>
+        old?.map((p) => (p.path === updatedProject.path ? updatedProject : p)),
+      );
+      queryClient.setQueryData(workshopKeys.project(updatedProject.path), updatedProject);
+
+      // Directly set a cache-busted asset URL into the thumbnail query.
+      // The backend file path doesn't change (always thumbnail.webp), so
+      // convertFileSrc returns the same URL and the webview serves the cached
+      // image. Appending a timestamp forces the webview to fetch the new file.
+      if (updatedProject.thumbnailPath) {
+        const bustUrl = `${convertFileSrc(updatedProject.thumbnailPath)}?v=${Date.now()}`;
+        queryClient.setQueryData(
+          workshopKeys.thumbnail(updatedProject.path, updatedProject.thumbnailPath),
+          bustUrl,
+        );
+      }
     },
   });
 }

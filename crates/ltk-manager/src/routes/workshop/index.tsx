@@ -1,9 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 
 import type { CreateProjectArgs, PackResult, WorkshopProject } from "@/lib/tauri";
-import { useSettings } from "@/modules/settings";
 import type { ViewMode } from "@/modules/workshop";
 import {
   DeleteConfirmDialog,
@@ -12,25 +11,23 @@ import {
   NewProjectDialog,
   NoProjectsState,
   NoSearchResultsState,
-  NotConfiguredState,
   PackDialog,
   ProjectGrid,
-  StringOverridesDialog,
   useCreateProject,
   useDeleteProject,
   useImportFromModpkg,
   usePackProject,
-  useSetProjectThumbnail,
   useValidateProject,
   useWorkshopProjects,
   WorkshopToolbar,
 } from "@/modules/workshop";
 
-export const Route = createFileRoute("/creator")({
-  component: CreatorPage,
+export const Route = createFileRoute("/workshop/")({
+  component: WorkshopIndex,
 });
 
-function CreatorPage() {
+function WorkshopIndex() {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
@@ -38,25 +35,20 @@ function CreatorPage() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [packDialogOpen, setPackDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [stringOverridesOpen, setStringOverridesOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<WorkshopProject | null>(null);
   const [packResult, setPackResult] = useState<PackResult | null>(null);
 
   // API hooks
-  const { data: settings } = useSettings();
   const { data: projects = [], isLoading, error } = useWorkshopProjects();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
   const packProject = usePackProject();
   const importFromModpkg = useImportFromModpkg();
-  const setProjectThumbnail = useSetProjectThumbnail();
 
   const { data: validation, isLoading: validationLoading } = useValidateProject(
     selectedProject?.path ?? "",
     packDialogOpen,
   );
-
-  const workshopConfigured = !!settings?.workshopPath;
 
   const filteredProjects = projects.filter(
     (project) =>
@@ -64,7 +56,6 @@ function CreatorPage() {
       project.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  // Handlers
   function handleCreateProject(args: CreateProjectArgs) {
     createProject.mutate(args, {
       onSuccess: () => setNewProjectOpen(false),
@@ -73,18 +64,7 @@ function CreatorPage() {
   }
 
   function handleEditProject(project: WorkshopProject) {
-    // TODO: Implement project editor
-    console.log("Edit project:", project);
-  }
-
-  function handleOpenStringOverrides(project: WorkshopProject) {
-    setSelectedProject(project);
-    setStringOverridesOpen(true);
-  }
-
-  function handleCloseStringOverrides() {
-    setStringOverridesOpen(false);
-    setSelectedProject(null);
+    navigate({ to: "/workshop/$projectName", params: { projectName: project.name } });
   }
 
   function handleOpenPackDialog(project: WorkshopProject) {
@@ -143,32 +123,6 @@ function CreatorPage() {
     }
   }
 
-  async function handleSetThumbnail(project: WorkshopProject) {
-    const file = await open({
-      multiple: false,
-      filters: [
-        {
-          name: "Images",
-          extensions: ["webp", "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "ico"],
-        },
-      ],
-    });
-    if (file) {
-      setProjectThumbnail.mutate(
-        { projectPath: project.path, imagePath: file },
-        {
-          onError: (err) => console.error("Failed to set thumbnail:", err.message),
-        },
-      );
-    }
-  }
-
-  // Render not configured state
-  if (!workshopConfigured) {
-    return <NotConfiguredState />;
-  }
-
-  // Render content based on state
   function renderContent() {
     if (isLoading) return <LoadingState />;
     if (error) return <ErrorState error={error} />;
@@ -185,8 +139,6 @@ function CreatorPage() {
         onEdit={handleEditProject}
         onPack={handleOpenPackDialog}
         onDelete={handleOpenDeleteDialog}
-        onSetThumbnail={handleSetThumbnail}
-        onStringOverrides={handleOpenStringOverrides}
       />
     );
   }
@@ -229,12 +181,6 @@ function CreatorPage() {
         onClose={handleCloseDeleteDialog}
         onConfirm={handleDeleteProject}
         isPending={deleteProject.isPending}
-      />
-
-      <StringOverridesDialog
-        open={stringOverridesOpen}
-        project={selectedProject}
-        onClose={handleCloseStringOverrides}
       />
     </div>
   );
