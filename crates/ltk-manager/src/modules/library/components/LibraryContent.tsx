@@ -40,9 +40,6 @@ export function LibraryContent({
       mod.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const enabledMods = filteredMods.filter((m) => m.enabled);
-  const disabledMods = filteredMods.filter((m) => !m.enabled);
-
   if (isLoading) {
     return (
       <div className="flex-1 overflow-auto p-6">
@@ -67,95 +64,30 @@ export function LibraryContent({
     );
   }
 
-  return (
-    <div className="flex-1 overflow-auto p-6">
-      <EnabledModsSection
-        mods={enabledMods}
-        viewMode={viewMode}
-        isSearching={isSearching}
-        actions={actions}
-      />
-
-      {enabledMods.length > 0 && disabledMods.length > 0 && (
-        <SectionDivider label={`Disabled (${disabledMods.length})`} />
-      )}
-
-      <DisabledModsSection mods={disabledMods} viewMode={viewMode} actions={actions} />
-    </div>
-  );
-}
-
-function EnabledModsSection({
-  mods,
-  viewMode,
-  isSearching,
-  actions,
-}: {
-  mods: InstalledMod[];
-  viewMode: "grid" | "list";
-  isSearching: boolean;
-  actions: ReturnType<typeof useLibraryActions>;
-}) {
-  if (mods.length === 0) return null;
-
   const Card = isSearching ? ModCard : SortableModCard;
 
   return (
-    <SortableModList
-      mods={mods}
-      viewMode={viewMode}
-      onReorder={actions.handleReorder}
-      disabled={isSearching}
-      onToggle={actions.handleToggleMod}
-      onUninstall={actions.handleUninstallMod}
-    >
-      <div className={gridClass(viewMode, true)}>
-        {mods.map((mod) => (
-          <Card
-            key={mod.id}
-            mod={mod}
-            viewMode={viewMode}
-            onToggle={actions.handleToggleMod}
-            onUninstall={actions.handleUninstallMod}
-          />
-        ))}
-      </div>
-    </SortableModList>
-  );
-}
-
-function DisabledModsSection({
-  mods,
-  viewMode,
-  actions,
-}: {
-  mods: InstalledMod[];
-  viewMode: "grid" | "list";
-  actions: ReturnType<typeof useLibraryActions>;
-}) {
-  if (mods.length === 0) return null;
-
-  return (
-    <div className={gridClass(viewMode)}>
-      {mods.map((mod) => (
-        <ModCard
-          key={mod.id}
-          mod={mod}
-          viewMode={viewMode}
-          onToggle={actions.handleToggleMod}
-          onUninstall={actions.handleUninstallMod}
-        />
-      ))}
-    </div>
-  );
-}
-
-function SectionDivider({ label }: { label: string }) {
-  return (
-    <div className="my-6 flex items-center gap-3">
-      <div className="h-px flex-1 bg-surface-700" />
-      <span className="text-xs text-surface-500">{label}</span>
-      <div className="h-px flex-1 bg-surface-700" />
+    <div className="flex-1 overflow-auto p-6">
+      <SortableModList
+        mods={filteredMods}
+        viewMode={viewMode}
+        onReorder={actions.handleReorder}
+        disabled={isSearching}
+        onToggle={actions.handleToggleMod}
+        onUninstall={actions.handleUninstallMod}
+      >
+        <div className={gridClass(viewMode, !isSearching)}>
+          {filteredMods.map((mod) => (
+            <Card
+              key={mod.id}
+              mod={mod}
+              viewMode={viewMode}
+              onToggle={actions.handleToggleMod}
+              onUninstall={actions.handleUninstallMod}
+            />
+          ))}
+        </div>
+      </SortableModList>
     </div>
   );
 }

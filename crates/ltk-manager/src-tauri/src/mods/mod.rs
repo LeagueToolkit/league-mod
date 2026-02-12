@@ -18,8 +18,10 @@ pub struct Profile {
     pub id: String,
     /// User-friendly name
     pub name: String,
-    /// List of mod IDs enabled in this profile
+    /// List of mod IDs enabled in this profile (maintains overlay priority order)
     pub enabled_mods: Vec<String>,
+    /// Display order of all mods (enabled and disabled) in the UI
+    pub mod_order: Vec<String>,
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
     /// Last time this profile was used/switched to
@@ -72,6 +74,7 @@ impl Default for LibraryIndex {
             id: Uuid::new_v4().to_string(),
             name: "Default".to_string(),
             enabled_mods: Vec::new(),
+            mod_order: Vec::new(),
             created_at: Utc::now(),
             last_used: Utc::now(),
         };
@@ -137,37 +140,19 @@ pub fn get_installed_mods(
         .find(|p| p.id == active_profile_id)
         .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
 
-    // Enabled mods first in their enabled_mods order (priority order),
-    // then disabled mods sorted by installed_at.
     let enabled_set: std::collections::HashSet<&str> = active_profile
         .enabled_mods
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    let mut enabled_result = Vec::new();
-    for mod_id in &active_profile.enabled_mods {
+    let mut result = Vec::new();
+    for mod_id in &active_profile.mod_order {
         let Some(entry) = index.mods.iter().find(|m| &m.id == mod_id) else {
             continue;
         };
-        match read_installed_mod(entry, true) {
-            Ok(m) => enabled_result.push(m),
-            Err(e) => {
-                tracing::warn!("Skipping broken mod entry {}: {}", entry.id, e);
-            }
-        }
-    }
-
-    let mut disabled_entries: Vec<&LibraryModEntry> = index
-        .mods
-        .iter()
-        .filter(|m| !enabled_set.contains(m.id.as_str()))
-        .collect();
-    disabled_entries.sort_by(|a, b| a.installed_at.cmp(&b.installed_at).then(a.id.cmp(&b.id)));
-
-    let mut result = enabled_result;
-    for entry in disabled_entries {
-        match read_installed_mod(entry, false) {
+        let enabled = enabled_set.contains(mod_id.as_str());
+        match read_installed_mod(entry, enabled) {
             Ok(m) => result.push(m),
             Err(e) => {
                 tracing::warn!("Skipping broken mod entry {}: {}", entry.id, e);
@@ -178,8 +163,9 @@ pub fn get_installed_mods(
     Ok(result)
 }
 
-/// Reorder the enabled mods for the active profile.
-/// The provided `mod_ids` must exactly match the current `enabled_mods` set.
+/// Reorder all mods for the active profile.
+/// The provided `mod_ids` must exactly match all installed mod IDs.
+/// The `enabled_mods` order is derived from the new display order.
 pub fn reorder_mods(
     app_handle: &AppHandle,
     settings: &Settings,
@@ -195,19 +181,28 @@ pub fn reorder_mods(
         .find(|p| p.id == active_profile_id)
         .ok_or_else(|| AppError::Other("Active profile not found".to_string()))?;
 
-    // Validate that the provided IDs exactly match the current enabled_mods set
-    let mut current_sorted = profile.enabled_mods.clone();
-    current_sorted.sort();
-    let mut new_sorted = mod_ids.clone();
+    // Validate that the provided IDs exactly match all installed mods
+    let mut installed_sorted: Vec<&str> = index.mods.iter().map(|m| m.id.as_str()).collect();
+    installed_sorted.sort();
+    let mut new_sorted: Vec<&str> = mod_ids.iter().map(|s| s.as_str()).collect();
     new_sorted.sort();
 
-    if current_sorted != new_sorted {
+    if installed_sorted != new_sorted {
         return Err(AppError::ValidationFailed(
-            "Provided mod IDs do not match the current enabled mods".to_string(),
+            "Provided mod IDs do not match the installed mods".to_string(),
         ));
     }
 
-    profile.enabled_mods = mod_ids;
+    // Derive enabled_mods order from new display order
+    let enabled_set: std::collections::HashSet<&str> =
+        profile.enabled_mods.iter().map(|s| s.as_str()).collect();
+    profile.enabled_mods = mod_ids
+        .iter()
+        .filter(|id| enabled_set.contains(id.as_str()))
+        .cloned()
+        .collect();
+
+    profile.mod_order = mod_ids;
     save_library_index(&storage_dir, &index)?;
     Ok(())
 }
@@ -274,7 +269,7 @@ pub fn install_mod_from_package(
     };
     index.mods.push(entry.clone());
 
-    // Enable in active profile
+    // Enable in active profile and add to display order
     let active_profile_id = index.active_profile_id.clone();
     if let Some(profile) = index
         .profiles
@@ -282,6 +277,7 @@ pub fn install_mod_from_package(
         .find(|p| p.id == active_profile_id)
     {
         profile.enabled_mods.insert(0, id.clone());
+        profile.mod_order.insert(0, id.clone());
     }
 
     save_library_index(&storage_dir, &index)?;
@@ -314,7 +310,24 @@ pub fn toggle_mod_enabled(
 
     if enabled {
         if !profile.enabled_mods.contains(&mod_id.to_string()) {
-            profile.enabled_mods.insert(0, mod_id.to_string());
+            // Insert at position preserving relative order from mod_order
+            let insert_pos =
+                if let Some(order_pos) = profile.mod_order.iter().position(|id| id == mod_id) {
+                    profile
+                        .enabled_mods
+                        .iter()
+                        .position(|id| {
+                            profile
+                                .mod_order
+                                .iter()
+                                .position(|oid| oid == id)
+                                .is_none_or(|p| p > order_pos)
+                        })
+                        .unwrap_or(profile.enabled_mods.len())
+                } else {
+                    0
+                };
+            profile.enabled_mods.insert(insert_pos, mod_id.to_string());
         }
     } else {
         profile.enabled_mods.retain(|id| id != mod_id);
@@ -337,6 +350,12 @@ pub fn uninstall_mod_by_id(
     };
 
     let entry = index.mods.remove(pos);
+
+    // Remove from all profiles' mod_order and enabled_mods
+    for profile in &mut index.profiles {
+        profile.mod_order.retain(|id| id != mod_id);
+        profile.enabled_mods.retain(|id| id != mod_id);
+    }
 
     // Delete metadata directory
     if entry.mod_dir.exists() {
@@ -522,10 +541,14 @@ pub fn create_profile(
         )));
     }
 
+    // New profiles get all installed mods in their display order
+    let mod_order: Vec<String> = index.mods.iter().map(|m| m.id.clone()).collect();
+
     let profile = Profile {
         id: Uuid::new_v4().to_string(),
         name,
         enabled_mods: Vec::new(),
+        mod_order,
         created_at: Utc::now(),
         last_used: Utc::now(),
     };
