@@ -238,6 +238,8 @@ export const api = {
       description,
       authors,
     }),
+  renameWorkshopProject: (projectPath: string, newName: string) =>
+    invokeResult<WorkshopProject>("rename_workshop_project", { projectPath, newName }),
   deleteWorkshopProject: (projectPath: string) =>
     invokeResult<void>("delete_workshop_project", { projectPath }),
   packWorkshopProject: (args: PackProjectArgs) =>
@@ -259,5 +261,17 @@ export const api = {
       projectPath,
       layerName,
       stringOverrides,
+    }),
+  createProjectLayer: (projectPath: string, name: string, description?: string) =>
+    invokeResult<WorkshopProject>("create_project_layer", { projectPath, name, description }),
+  deleteProjectLayer: (projectPath: string, layerName: string) =>
+    invokeResult<WorkshopProject>("delete_project_layer", { projectPath, layerName }),
+  reorderProjectLayers: (projectPath: string, layerNames: string[]) =>
+    invokeResult<WorkshopProject>("reorder_project_layers", { projectPath, layerNames }),
+  updateLayerDescription: (projectPath: string, layerName: string, description?: string) =>
+    invokeResult<WorkshopProject>("update_layer_description", {
+      projectPath,
+      layerName,
+      description,
     }),
 };

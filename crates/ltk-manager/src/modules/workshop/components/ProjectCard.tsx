@@ -1,13 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-  LuEllipsisVertical,
-  LuFolderOpen,
-  LuImage,
-  LuLanguages,
-  LuPackage,
-  LuPencil,
-  LuTrash2,
-} from "react-icons/lu";
+import { LuEllipsisVertical, LuFolderOpen, LuPackage, LuPencil, LuTrash2 } from "react-icons/lu";
 
 import { Button, IconButton, Menu } from "@/components";
 import type { WorkshopProject } from "@/lib/tauri";
@@ -20,19 +12,9 @@ interface ProjectCardProps {
   onEdit: (project: WorkshopProject) => void;
   onPack: (project: WorkshopProject) => void;
   onDelete: (project: WorkshopProject) => void;
-  onSetThumbnail: (project: WorkshopProject) => void;
-  onStringOverrides: (project: WorkshopProject) => void;
 }
 
-export function ProjectCard({
-  project,
-  viewMode,
-  onEdit,
-  onPack,
-  onDelete,
-  onSetThumbnail,
-  onStringOverrides,
-}: ProjectCardProps) {
+export function ProjectCard({ project, viewMode, onEdit, onPack, onDelete }: ProjectCardProps) {
   const { data: thumbnailUrl } = useProjectThumbnail(project.path, project.thumbnailPath);
 
   async function handleOpenLocation() {
@@ -112,18 +94,6 @@ export function ProjectCard({
                     Pack
                   </Menu.Item>
                   <Menu.Item
-                    icon={<LuImage className="h-4 w-4" />}
-                    onClick={() => onSetThumbnail(project)}
-                  >
-                    Set Thumbnail
-                  </Menu.Item>
-                  <Menu.Item
-                    icon={<LuLanguages className="h-4 w-4" />}
-                    onClick={() => onStringOverrides(project)}
-                  >
-                    String Overrides
-                  </Menu.Item>
-                  <Menu.Item
                     icon={<LuFolderOpen className="h-4 w-4" />}
                     onClick={handleOpenLocation}
                   >
@@ -172,18 +142,6 @@ export function ProjectCard({
                 </Menu.Item>
                 <Menu.Item icon={<LuPackage className="h-4 w-4" />} onClick={() => onPack(project)}>
                   Pack
-                </Menu.Item>
-                <Menu.Item
-                  icon={<LuImage className="h-4 w-4" />}
-                  onClick={() => onSetThumbnail(project)}
-                >
-                  Set Thumbnail
-                </Menu.Item>
-                <Menu.Item
-                  icon={<LuLanguages className="h-4 w-4" />}
-                  onClick={() => onStringOverrides(project)}
-                >
-                  String Overrides
                 </Menu.Item>
                 <Menu.Item icon={<LuFolderOpen className="h-4 w-4" />} onClick={handleOpenLocation}>
                   Open Location

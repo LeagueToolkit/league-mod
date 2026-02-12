@@ -26,20 +26,7 @@ export function useReorderMods() {
         if (!old) return old;
 
         const modMap = new Map(old.map((m) => [m.id, m]));
-        const reordered: InstalledMod[] = [];
-
-        // Enabled mods in new order
-        for (const id of modIds) {
-          const mod = modMap.get(id);
-          if (mod) reordered.push(mod);
-        }
-
-        // Disabled mods after
-        for (const mod of old) {
-          if (!mod.enabled) reordered.push(mod);
-        }
-
-        return reordered;
+        return modIds.map((id) => modMap.get(id)).filter(Boolean) as InstalledMod[];
       });
 
       return { previous };

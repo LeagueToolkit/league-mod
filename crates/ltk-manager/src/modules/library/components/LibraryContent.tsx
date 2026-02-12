@@ -8,6 +8,11 @@ import { ModCard } from "./ModCard";
 import { SortableModCard } from "./SortableModCard";
 import { SortableModList } from "./SortableModList";
 
+function gridClass(viewMode: "grid" | "list", indent = false) {
+  if (viewMode === "list") return indent ? "space-y-2 pl-7" : "space-y-2";
+  return "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4";
+}
+
 interface LibraryContentProps {
   mods: InstalledMod[];
   searchQuery: string;
@@ -35,90 +40,54 @@ export function LibraryContent({
       mod.name.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const enabledMods = filteredMods.filter((m) => m.enabled);
-  const disabledMods = filteredMods.filter((m) => !m.enabled);
+  if (isLoading) {
+    return (
+      <div className="flex-1 overflow-auto p-6">
+        <LoadingState />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex-1 overflow-auto p-6">
+        <ErrorState error={error} />
+      </div>
+    );
+  }
+
+  if (filteredMods.length === 0) {
+    return (
+      <div className="flex-1 overflow-auto p-6">
+        <EmptyState onInstall={onInstall} hasSearch={isSearching} />
+      </div>
+    );
+  }
+
+  const Card = isSearching ? ModCard : SortableModCard;
 
   return (
     <div className="flex-1 overflow-auto p-6">
-      {isLoading ? (
-        <LoadingState />
-      ) : error ? (
-        <ErrorState error={error} />
-      ) : filteredMods.length === 0 ? (
-        <EmptyState onInstall={onInstall} hasSearch={!!searchQuery} />
-      ) : (
-        <div>
-          {/* Enabled mods (sortable) */}
-          {enabledMods.length > 0 && (
-            <SortableModList
-              mods={enabledMods}
+      <SortableModList
+        mods={filteredMods}
+        viewMode={viewMode}
+        onReorder={actions.handleReorder}
+        disabled={isSearching}
+        onToggle={actions.handleToggleMod}
+        onUninstall={actions.handleUninstallMod}
+      >
+        <div className={gridClass(viewMode, !isSearching)}>
+          {filteredMods.map((mod) => (
+            <Card
+              key={mod.id}
+              mod={mod}
               viewMode={viewMode}
-              onReorder={actions.handleReorder}
-              disabled={isSearching}
               onToggle={actions.handleToggleMod}
               onUninstall={actions.handleUninstallMod}
-            >
-              <div
-                className={
-                  viewMode === "grid"
-                    ? "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                    : "space-y-2 pl-7"
-                }
-              >
-                {enabledMods.map((mod) =>
-                  isSearching ? (
-                    <ModCard
-                      key={mod.id}
-                      mod={mod}
-                      viewMode={viewMode}
-                      onToggle={actions.handleToggleMod}
-                      onUninstall={actions.handleUninstallMod}
-                    />
-                  ) : (
-                    <SortableModCard
-                      key={mod.id}
-                      mod={mod}
-                      viewMode={viewMode}
-                      onToggle={actions.handleToggleMod}
-                      onUninstall={actions.handleUninstallMod}
-                    />
-                  ),
-                )}
-              </div>
-            </SortableModList>
-          )}
-
-          {/* Separator between enabled and disabled */}
-          {enabledMods.length > 0 && disabledMods.length > 0 && (
-            <div className="my-6 flex items-center gap-3">
-              <div className="h-px flex-1 bg-surface-700" />
-              <span className="text-xs text-surface-500">Disabled ({disabledMods.length})</span>
-              <div className="h-px flex-1 bg-surface-700" />
-            </div>
-          )}
-
-          {/* Disabled mods (not sortable) */}
-          {disabledMods.length > 0 && (
-            <div
-              className={
-                viewMode === "grid"
-                  ? "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                  : "space-y-2"
-              }
-            >
-              {disabledMods.map((mod) => (
-                <ModCard
-                  key={mod.id}
-                  mod={mod}
-                  viewMode={viewMode}
-                  onToggle={actions.handleToggleMod}
-                  onUninstall={actions.handleUninstallMod}
-                />
-              ))}
-            </div>
-          )}
+            />
+          ))}
         </div>
-      )}
+      </SortableModList>
     </div>
   );
 }
