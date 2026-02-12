@@ -866,7 +866,11 @@ fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<
         if !layers.iter().any(|l| l.name == "base") {
             layers.insert(0, ltk_mod_project::ModProjectLayer::base());
         }
-        layers.sort_by(|a, b| a.priority.cmp(&b.priority));
+        layers.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         layers
     };
 
