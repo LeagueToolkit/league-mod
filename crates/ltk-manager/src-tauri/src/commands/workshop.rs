@@ -4,6 +4,7 @@ use camino::Utf8PathBuf;
 use chrono::{DateTime, Utc};
 use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor, ModProjectLayer};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
@@ -45,6 +46,8 @@ pub struct WorkshopLayer {
     pub name: String,
     pub priority: i32,
     pub description: Option<String>,
+    #[serde(default)]
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 /// Arguments for creating a new project.
@@ -411,18 +414,20 @@ fn import_from_modpkg_inner(
         .extract_all(&content_dir)
         .map_err(|e| AppError::Modpkg(e.to_string()))?;
 
-    // Build layers from header
+    // Build layers from header, preserving string overrides from metadata
     let mut layers: Vec<ModProjectLayer> = modpkg
         .layers
         .values()
-        .map(|l| ModProjectLayer {
-            name: l.name.clone(),
-            priority: l.priority,
-            description: metadata
-                .layers
-                .iter()
-                .find(|ml| ml.name == l.name)
-                .and_then(|ml| ml.description.clone()),
+        .map(|l| {
+            let meta_layer = metadata.layers.iter().find(|ml| ml.name == l.name);
+            ModProjectLayer {
+                name: l.name.clone(),
+                priority: l.priority,
+                description: meta_layer.and_then(|ml| ml.description.clone()),
+                string_overrides: meta_layer
+                    .map(|ml| ml.string_overrides.clone())
+                    .unwrap_or_default(),
+            }
         })
         .collect();
     layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
@@ -532,6 +537,52 @@ fn get_project_thumbnail_inner(thumbnail_path: &str) -> AppResult<String> {
         return Err(AppError::InvalidPath(thumbnail_path.to_string()));
     }
     Ok(thumbnail_path.to_string())
+}
+
+/// Save string overrides for a specific layer in a workshop project.
+#[tauri::command]
+pub fn save_layer_string_overrides(
+    project_path: String,
+    layer_name: String,
+    string_overrides: HashMap<String, HashMap<String, String>>,
+) -> IpcResult<WorkshopProject> {
+    save_layer_string_overrides_inner(project_path, layer_name, string_overrides).into()
+}
+
+fn save_layer_string_overrides_inner(
+    project_path: String,
+    layer_name: String,
+    string_overrides: HashMap<String, HashMap<String, String>>,
+) -> AppResult<WorkshopProject> {
+    let path = PathBuf::from(&project_path);
+    if !path.exists() {
+        return Err(AppError::ProjectNotFound(project_path));
+    }
+
+    let config_path =
+        find_config_file(&path).ok_or_else(|| AppError::ProjectNotFound(project_path.clone()))?;
+
+    // Load existing config
+    let mut mod_project = load_mod_project(&config_path)?;
+
+    // Find the target layer
+    let layer = mod_project
+        .layers
+        .iter_mut()
+        .find(|l| l.name == layer_name)
+        .ok_or_else(|| {
+            AppError::ValidationFailed(format!("Layer '{}' not found in project", layer_name))
+        })?;
+
+    // Update string overrides
+    layer.string_overrides = string_overrides;
+
+    // Save as JSON
+    let json_config_path = path.join("mod.config.json");
+    let config_content = serde_json::to_string_pretty(&mod_project)?;
+    fs::write(&json_config_path, config_content)?;
+
+    load_workshop_project(&path)
 }
 
 /// Validate a project before packing.
@@ -700,6 +751,7 @@ fn load_workshop_project(project_dir: &std::path::Path) -> AppResult<WorkshopPro
             name: l.name.clone(),
             priority: l.priority,
             description: l.description.clone(),
+            string_overrides: l.string_overrides.clone(),
         })
         .collect();
 

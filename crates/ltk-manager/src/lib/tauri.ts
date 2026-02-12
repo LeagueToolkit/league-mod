@@ -123,6 +123,7 @@ export interface WorkshopLayer {
   name: string;
   priority: number;
   description?: string;
+  stringOverrides: Record<string, Record<string, string>>;
 }
 
 export interface CreateProjectArgs {
@@ -249,4 +250,14 @@ export const api = {
     invokeResult<WorkshopProject>("set_project_thumbnail", { projectPath, imagePath }),
   getProjectThumbnail: (thumbnailPath: string) =>
     invokeResult<string>("get_project_thumbnail", { thumbnailPath }),
+  saveLayerStringOverrides: (
+    projectPath: string,
+    layerName: string,
+    stringOverrides: Record<string, Record<string, string>>,
+  ) =>
+    invokeResult<WorkshopProject>("save_layer_string_overrides", {
+      projectPath,
+      layerName,
+      stringOverrides,
+    }),
 };

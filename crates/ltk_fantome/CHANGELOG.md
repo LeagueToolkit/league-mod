@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add `FantomeLayerInfo` struct and `Layers` field to `FantomeInfo` for per-layer string overrides
+- pack string overrides into `META/info.json` when building Fantome archives
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.1.3...ltk_fantome-v0.1.4) - 2025-12-02
 
 ### Added

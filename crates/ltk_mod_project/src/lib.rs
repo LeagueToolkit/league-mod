@@ -68,6 +68,12 @@ pub struct ModProjectLayer {
     /// Optional description of the layer
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// String overrides for this layer, organized by locale.
+    /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
+    /// Inner map: field name (from lol.stringtable) -> new string value
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -115,6 +121,7 @@ impl ModProjectLayer {
             name: "base".to_string(),
             priority: 0,
             description: Some("Base layer of the mod".to_string()),
+            string_overrides: HashMap::new(),
         }
     }
 }
@@ -125,6 +132,7 @@ pub fn default_layers() -> Vec<ModProjectLayer> {
         name: "base".to_string(),
         priority: 0,
         description: Some("Base layer of the mod".to_string()),
+        string_overrides: HashMap::new(),
     }]
 }
 
@@ -159,11 +167,13 @@ mod tests {
                     name: "base".to_string(),
                     priority: 0,
                     description: Some("Base layer of the mod".to_string()),
+                    string_overrides: HashMap::new(),
                 },
                 ModProjectLayer {
                     name: "chroma1".to_string(),
                     priority: 20,
                     description: Some("Chroma 1".to_string()),
+                    string_overrides: HashMap::new(),
                 },
             ],
             thumbnail: None,

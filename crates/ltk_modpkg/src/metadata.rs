@@ -6,6 +6,7 @@ use crate::{
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
 
 /// The path to the info.msgpack chunk.
@@ -72,6 +73,30 @@ impl DistributorInfo {
 }
 
 /// Per-layer metadata that can be stored inside the mod package metadata.
+///
+/// Added in schema version 2: the `string_overrides` field allows mods to
+/// customise in-game text without shipping the entire `lol.stringtable` file.
+///
+/// # Example
+///
+/// ```
+/// use std::collections::HashMap;
+/// use ltk_modpkg::ModpkgLayerMetadata;
+///
+/// let mut en_us_overrides = HashMap::new();
+/// en_us_overrides.insert("game_character_displayname_Ahri".to_string(), "Fox Spirit".to_string());
+///
+/// let layer = ModpkgLayerMetadata {
+///     name: "base".to_string(),
+///     priority: 0,
+///     description: Some("Base layer".to_string()),
+///     string_overrides: HashMap::from([
+///         ("en_us".to_string(), en_us_overrides),
+///     ]),
+/// };
+///
+/// assert_eq!(layer.string_overrides.len(), 1);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -83,6 +108,16 @@ pub struct ModpkgLayerMetadata {
     /// Optional human-readable description of the layer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// String overrides for this layer (added in schema v2), organized by locale.
+    ///
+    /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
+    /// Inner map: field name (from `data/menu/{locale}/lol.stringtable`) -> replacement string
+    ///
+    /// Only the overrides are stored — not the full stringtable — so the
+    /// mod stays compatible across game patches.
+    /// Empty maps are omitted during serialization.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
 /// The metadata of a mod package.
@@ -126,8 +161,11 @@ impl Default for ModpkgMetadata {
     }
 }
 
+/// Current metadata schema version.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
 fn default_schema_version() -> u32 {
-    1
+    2
 }
 
 impl ModpkgMetadata {
@@ -221,6 +259,10 @@ mod tests {
     use std::io::Cursor;
 
     proptest! {
+        // Reduce test cases for CI performance (8 instead of default 256)
+        // The nested HashMap structure makes this test slow
+        #![proptest_config(ProptestConfig::with_cases(8))]
+
         #[test]
         fn test_metadata_roundtrip(metadata: ModpkgMetadata) {
             let mut cursor = Cursor::new(Vec::new());
@@ -320,6 +362,131 @@ mod tests {
         println!(
             "License::Custom: {:02x?}",
             rmp_serde::to_vec_named(&license_custom).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_layer_string_overrides_roundtrip() {
+        let layer = ModpkgLayerMetadata {
+            name: "base".to_string(),
+            priority: 0,
+            description: Some("Base layer".to_string()),
+            string_overrides: HashMap::from([(
+                "en_us".to_string(),
+                HashMap::from([
+                    ("field_a".to_string(), "New Value A".to_string()),
+                    ("field_b".to_string(), "New Value B".to_string()),
+                ]),
+            )]),
+        };
+
+        let encoded = rmp_serde::to_vec_named(&layer).unwrap();
+        let decoded: ModpkgLayerMetadata = rmp_serde::from_slice(&encoded).unwrap();
+        assert_eq!(layer, decoded);
+    }
+
+    #[test]
+    fn test_layer_empty_overrides_skipped_in_serialization() {
+        let layer = ModpkgLayerMetadata {
+            name: "base".to_string(),
+            priority: 0,
+            description: None,
+            string_overrides: HashMap::new(),
+        };
+
+        let encoded = rmp_serde::to_vec_named(&layer).unwrap();
+        // Empty string_overrides should not appear in encoded bytes
+        let as_str = String::from_utf8_lossy(&encoded);
+        assert!(!as_str.contains("string_overrides"));
+
+        // Should still decode correctly
+        let decoded: ModpkgLayerMetadata = rmp_serde::from_slice(&encoded).unwrap();
+        assert_eq!(layer, decoded);
+    }
+
+    #[test]
+    fn test_v1_metadata_backward_compat() {
+        // Simulate a v1 metadata without string_overrides on layers
+        let v1_metadata = ModpkgMetadata {
+            schema_version: 1,
+            name: "old-mod".to_string(),
+            display_name: "Old Mod".to_string(),
+            description: None,
+            version: Version::parse("1.0.0").unwrap(),
+            distributor: None,
+            authors: vec![],
+            license: ModpkgLicense::None,
+            layers: vec![ModpkgLayerMetadata {
+                name: "base".to_string(),
+                priority: 0,
+                description: None,
+                string_overrides: HashMap::new(),
+            }],
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        v1_metadata.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+
+        let read = ModpkgMetadata::read(&mut cursor).unwrap();
+        assert_eq!(v1_metadata, read);
+        assert!(read.layers[0].string_overrides.is_empty());
+    }
+
+    #[test]
+    fn test_v2_metadata_with_string_overrides() {
+        let metadata = ModpkgMetadata {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            name: "test-mod".to_string(),
+            display_name: "Test Mod".to_string(),
+            description: Some("A mod with string overrides".to_string()),
+            version: Version::parse("2.0.0").unwrap(),
+            distributor: None,
+            authors: vec![ModpkgAuthor {
+                name: "Author".to_string(),
+                role: None,
+            }],
+            license: ModpkgLicense::None,
+            layers: vec![
+                ModpkgLayerMetadata {
+                    name: "base".to_string(),
+                    priority: 0,
+                    description: None,
+                    string_overrides: HashMap::from([(
+                        "en_us".to_string(),
+                        HashMap::from([("game_stat_name".to_string(), "Custom Stat".to_string())]),
+                    )]),
+                },
+                ModpkgLayerMetadata {
+                    name: "chroma1".to_string(),
+                    priority: 10,
+                    description: Some("Pink chroma".to_string()),
+                    string_overrides: HashMap::from([(
+                        "en_us".to_string(),
+                        HashMap::from([
+                            ("champion_name".to_string(), "Custom Name".to_string()),
+                            ("ability_desc".to_string(), "Custom Description".to_string()),
+                        ]),
+                    )]),
+                },
+            ],
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        metadata.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+
+        let read = ModpkgMetadata::read(&mut cursor).unwrap();
+        assert_eq!(metadata, read);
+        assert_eq!(read.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(read.layers[0].string_overrides.len(), 1); // 1 locale
+        assert_eq!(read.layers[1].string_overrides.len(), 1); // 1 locale
+        assert_eq!(
+            read.layers[0]
+                .string_overrides
+                .get("en_us")
+                .and_then(|m| m.get("game_stat_name")),
+            Some(&"Custom Stat".to_string())
         );
     }
 }

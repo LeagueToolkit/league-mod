@@ -848,6 +848,32 @@ fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<
     let info: ltk_fantome::FantomeInfo = serde_json::from_str(info_content)
         .map_err(|e| AppError::Other(format!("Failed to parse info.json: {}", e)))?;
 
+    // Build layers from Fantome info, preserving string overrides
+    let layers = if info.layers.is_empty() {
+        ltk_mod_project::default_layers()
+    } else {
+        let mut layers: Vec<ltk_mod_project::ModProjectLayer> = info
+            .layers
+            .into_values()
+            .map(|layer_info| ltk_mod_project::ModProjectLayer {
+                name: layer_info.name,
+                priority: layer_info.priority,
+                description: None,
+                string_overrides: layer_info.string_overrides,
+            })
+            .collect();
+        // Ensure base layer exists
+        if !layers.iter().any(|l| l.name == "base") {
+            layers.insert(0, ltk_mod_project::ModProjectLayer::base());
+        }
+        layers.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        layers
+    };
+
     // Create mod.config.json from metadata
     let project = ModProject {
         name: slug::slugify(&info.name),
@@ -857,7 +883,7 @@ fn extract_fantome_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<
         authors: vec![ltk_mod_project::ModProjectAuthor::Name(info.author)],
         license: None,
         transformers: Vec::new(),
-        layers: ltk_mod_project::default_layers(),
+        layers,
         thumbnail: None,
     };
 
@@ -907,18 +933,20 @@ fn extract_modpkg_metadata(file_path: &Path, metadata_dir: &Path) -> AppResult<(
         .load_metadata()
         .map_err(|e| AppError::Modpkg(e.to_string()))?;
 
-    // Use header layers as source of truth.
+    // Use header layers as source of truth, preserving string overrides from metadata.
     let mut layers: Vec<ModProjectLayer> = modpkg
         .layers
         .values()
-        .map(|l| ModProjectLayer {
-            name: l.name.clone(),
-            priority: l.priority,
-            description: metadata
-                .layers
-                .iter()
-                .find(|ml| ml.name == l.name)
-                .and_then(|ml| ml.description.clone()),
+        .map(|l| {
+            let meta_layer = metadata.layers.iter().find(|ml| ml.name == l.name);
+            ModProjectLayer {
+                name: l.name.clone(),
+                priority: l.priority,
+                description: meta_layer.and_then(|ml| ml.description.clone()),
+                string_overrides: meta_layer
+                    .map(|ml| ml.string_overrides.clone())
+                    .unwrap_or_default(),
+            }
         })
         .collect();
     layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));

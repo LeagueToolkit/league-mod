@@ -15,6 +15,7 @@ import {
   NotConfiguredState,
   PackDialog,
   ProjectGrid,
+  StringOverridesDialog,
   useCreateProject,
   useDeleteProject,
   useImportFromModpkg,
@@ -37,6 +38,7 @@ function CreatorPage() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [packDialogOpen, setPackDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [stringOverridesOpen, setStringOverridesOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<WorkshopProject | null>(null);
   const [packResult, setPackResult] = useState<PackResult | null>(null);
 
@@ -73,6 +75,16 @@ function CreatorPage() {
   function handleEditProject(project: WorkshopProject) {
     // TODO: Implement project editor
     console.log("Edit project:", project);
+  }
+
+  function handleOpenStringOverrides(project: WorkshopProject) {
+    setSelectedProject(project);
+    setStringOverridesOpen(true);
+  }
+
+  function handleCloseStringOverrides() {
+    setStringOverridesOpen(false);
+    setSelectedProject(null);
   }
 
   function handleOpenPackDialog(project: WorkshopProject) {
@@ -174,6 +186,7 @@ function CreatorPage() {
         onPack={handleOpenPackDialog}
         onDelete={handleOpenDeleteDialog}
         onSetThumbnail={handleSetThumbnail}
+        onStringOverrides={handleOpenStringOverrides}
       />
     );
   }
@@ -216,6 +229,12 @@ function CreatorPage() {
         onClose={handleCloseDeleteDialog}
         onConfirm={handleDeleteProject}
         isPending={deleteProject.isPending}
+      />
+
+      <StringOverridesDialog
+        open={stringOverridesOpen}
+        project={selectedProject}
+        onClose={handleCloseStringOverrides}
       />
     </div>
   );
