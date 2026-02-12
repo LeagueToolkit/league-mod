@@ -285,6 +285,67 @@ fn save_project_config_inner(
     load_workshop_project(&path)
 }
 
+/// Rename a workshop project (change its slug/directory name).
+#[tauri::command]
+pub fn rename_workshop_project(
+    project_path: String,
+    new_name: String,
+) -> IpcResult<WorkshopProject> {
+    rename_workshop_project_inner(project_path, new_name).into()
+}
+
+fn rename_workshop_project_inner(
+    project_path: String,
+    new_name: String,
+) -> AppResult<WorkshopProject> {
+    let new_name = new_name.trim().to_string();
+
+    if !is_valid_project_name(&new_name) {
+        return Err(AppError::ValidationFailed(
+            "Project name must be lowercase alphanumeric with hyphens only".to_string(),
+        ));
+    }
+
+    let old_path = PathBuf::from(&project_path);
+    if !old_path.exists() {
+        return Err(AppError::ProjectNotFound(project_path));
+    }
+
+    // Verify it's a valid project
+    if find_config_file(&old_path).is_none() {
+        return Err(AppError::ProjectNotFound(project_path));
+    }
+
+    let parent_dir = old_path
+        .parent()
+        .ok_or_else(|| AppError::InvalidPath("Cannot determine parent directory".to_string()))?;
+    let new_path = parent_dir.join(&new_name);
+
+    // Check if old name is the same as new name
+    if old_path == new_path {
+        return load_workshop_project(&old_path);
+    }
+
+    if new_path.exists() {
+        return Err(AppError::ProjectAlreadyExists(new_name));
+    }
+
+    // Rename the directory
+    fs::rename(&old_path, &new_path)?;
+
+    // Update mod_project.name in the config file
+    let config_path = find_config_file(&new_path)
+        .ok_or_else(|| AppError::ProjectNotFound(new_path.display().to_string()))?;
+    let mut mod_project = load_mod_project(&config_path)?;
+    mod_project.name = new_name;
+
+    let json_config_path = new_path.join("mod.config.json");
+    let config_content = serde_json::to_string_pretty(&mod_project)?;
+    fs::write(&json_config_path, config_content)?;
+
+    load_workshop_project(&new_path)
+}
+
 /// Delete a workshop project.
 #[tauri::command]
 pub fn delete_workshop_project(project_path: String) -> IpcResult<()> {

@@ -139,6 +139,7 @@ fn main() {
             commands::create_workshop_project,
             commands::get_workshop_project,
             commands::save_project_config,
+            commands::rename_workshop_project,
             commands::delete_workshop_project,
             commands::pack_workshop_project,
             commands::import_from_modpkg,

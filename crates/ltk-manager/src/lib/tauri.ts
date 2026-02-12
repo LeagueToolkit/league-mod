@@ -238,6 +238,8 @@ export const api = {
       description,
       authors,
     }),
+  renameWorkshopProject: (projectPath: string, newName: string) =>
+    invokeResult<WorkshopProject>("rename_workshop_project", { projectPath, newName }),
   deleteWorkshopProject: (projectPath: string) =>
     invokeResult<void>("delete_workshop_project", { projectPath }),
   packWorkshopProject: (args: PackProjectArgs) =>

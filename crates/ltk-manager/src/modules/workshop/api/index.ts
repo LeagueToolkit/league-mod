@@ -4,6 +4,7 @@ export { useDeleteProject } from "./useDeleteProject";
 export { useImportFromModpkg } from "./useImportFromModpkg";
 export { usePackProject } from "./usePackProject";
 export { projectThumbnailOptions, useProjectThumbnail } from "./useProjectThumbnail";
+export { useRenameProject } from "./useRenameProject";
 export { useSaveProjectConfig } from "./useSaveProjectConfig";
 export { useSaveStringOverrides } from "./useSaveStringOverrides";
 export { useSetProjectThumbnail } from "./useSetProjectThumbnail";
