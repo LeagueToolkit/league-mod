@@ -117,6 +117,14 @@ pub struct ModpkgLayerMetadata {
     /// mod stays compatible across game patches.
     /// Empty maps are omitted during serialization.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[cfg_attr(
+        test,
+        proptest(strategy = "proptest::collection::hash_map(\
+                \"[a-z]{2}_[a-z]{2}\", \
+                proptest::collection::hash_map(\"[a-z_]{1,30}\", \"[a-zA-Z0-9 ]{0,50}\", 0..3), \
+                0..2\
+            )")
+    )]
     pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
@@ -135,6 +143,12 @@ pub struct ModpkgMetadata {
     #[cfg_attr(test, proptest(value = "Version::new(0, 1, 0)"))]
     pub version: Version,
     pub distributor: Option<DistributorInfo>,
+    #[cfg_attr(
+        test,
+        proptest(
+            strategy = "proptest::collection::vec(proptest::prelude::any::<ModpkgAuthor>(), 0..3)"
+        )
+    )]
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
 
@@ -142,6 +156,12 @@ pub struct ModpkgMetadata {
     /// resolves layers; the canonical source of truth for layer priority is
     /// still the modpkg header.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        test,
+        proptest(
+            strategy = "proptest::collection::vec(proptest::prelude::any::<ModpkgLayerMetadata>(), 0..3)"
+        )
+    )]
     pub layers: Vec<ModpkgLayerMetadata>,
 }
 

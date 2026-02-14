@@ -2,8 +2,8 @@ pub mod fantome_content;
 pub mod modpkg_content;
 
 use crate::error::{AppError, AppResult};
-use crate::mods::get_enabled_mods_for_overlay;
-use crate::state::{get_app_data_dir, Settings};
+use crate::mods::{get_enabled_mods_for_overlay, resolve_storage_dir};
+use crate::state::Settings;
 use camino::Utf8PathBuf;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
@@ -23,6 +23,7 @@ pub struct OverlayProgress {
 /// Returns the overlay root directory (the prefix passed to the legacy patcher).
 pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<PathBuf> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
+
     let game_dir = resolve_game_dir(settings)?;
 
     // Get active profile ID and enabled mods
@@ -86,14 +87,6 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
         .map_err(|e| AppError::Other(format!("Overlay build failed: {}", e)))?;
 
     Ok(overlay_root)
-}
-
-fn resolve_storage_dir(app_handle: &AppHandle, settings: &Settings) -> AppResult<PathBuf> {
-    settings
-        .mod_storage_path
-        .clone()
-        .or_else(|| get_app_data_dir(app_handle).map(|d| d.join("mods")))
-        .ok_or_else(|| AppError::Other("Failed to resolve mod storage directory".to_string()))
 }
 
 fn resolve_game_dir(settings: &Settings) -> AppResult<PathBuf> {
