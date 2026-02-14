@@ -13,9 +13,7 @@ interface InstalledMod {
   authors: string[];
   enabled: boolean;
   installedAt: string;
-  filePath: string;
   layers: { name: string; priority: number; enabled: boolean }[];
-  thumbnailPath?: string;
   modDir: string;
 }
 
@@ -28,7 +26,7 @@ interface ModCardProps {
 }
 
 export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
-  const { data: thumbnailUrl } = useModThumbnail(mod.id, mod.thumbnailPath);
+  const { data: thumbnailUrl } = useModThumbnail(mod.id);
 
   async function handleOpenLocation() {
     try {

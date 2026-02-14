@@ -108,21 +108,24 @@ pub fn inspect_modpkg(file_path: String) -> IpcResult<ModpkgInfo> {
     inspect_modpkg_file(&file_path).into()
 }
 
-/// Get a mod's thumbnail as a base64 data URL.
+/// Get a mod's thumbnail as a base64 data URL, loaded on-the-fly from the archive.
+/// Returns `null` if the mod has no thumbnail.
 #[tauri::command]
-pub fn get_mod_thumbnail(thumbnail_path: String) -> IpcResult<String> {
-    get_mod_thumbnail_inner(&thumbnail_path).into()
+pub fn get_mod_thumbnail(
+    mod_id: String,
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<Option<String>> {
+    get_mod_thumbnail_inner(&mod_id, &app_handle, &settings).into()
 }
 
-fn get_mod_thumbnail_inner(thumbnail_path: &str) -> crate::error::AppResult<String> {
-    let path = std::path::Path::new(thumbnail_path);
-    if !path.exists() {
-        return Err(crate::error::AppError::InvalidPath(
-            thumbnail_path.to_string(),
-        ));
-    }
-
-    Ok(thumbnail_path.to_string())
+fn get_mod_thumbnail_inner(
+    mod_id: &str,
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<Option<String>> {
+    let settings = settings.0.lock().mutex_err()?.clone();
+    crate::mods::get_mod_thumbnail_data(app_handle, &settings, mod_id)
 }
 
 /// Get the mod storage directory path.
@@ -139,6 +142,6 @@ fn get_storage_directory_inner(
     settings: &State<SettingsState>,
 ) -> AppResult<String> {
     let settings = settings.0.lock().mutex_err()?.clone();
-    let (storage_dir, _) = crate::mods::resolve_storage_dirs(app_handle, &settings)?;
+    let storage_dir = crate::mods::resolve_storage_dir(app_handle, &settings)?;
     Ok(storage_dir.display().to_string())
 }

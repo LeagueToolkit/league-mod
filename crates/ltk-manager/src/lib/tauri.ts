@@ -41,9 +41,7 @@ export interface InstalledMod {
   authors: string[];
   enabled: boolean;
   installedAt: string;
-  filePath: string;
   layers: ModLayer[];
-  thumbnailPath?: string;
   modDir: string;
 }
 
@@ -192,8 +190,7 @@ export const api = {
   uninstallMod: (modId: string) => invokeResult<void>("uninstall_mod", { modId }),
   toggleMod: (modId: string, enabled: boolean) =>
     invokeResult<void>("toggle_mod", { modId, enabled }),
-  getModThumbnail: (thumbnailPath: string) =>
-    invokeResult<string>("get_mod_thumbnail", { thumbnailPath }),
+  getModThumbnail: (modId: string) => invokeResult<string | null>("get_mod_thumbnail", { modId }),
   getStorageDirectory: () => invokeResult<string>("get_storage_directory"),
   reorderMods: (modIds: string[]) => invokeResult<void>("reorder_mods", { modIds }),
 
