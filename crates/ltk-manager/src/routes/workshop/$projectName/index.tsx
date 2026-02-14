@@ -128,13 +128,13 @@ function ProjectOverview() {
         e.preventDefault();
         form.handleSubmit();
       }}
-      className="mx-auto max-w-3xl space-y-8"
+      className="mx-auto max-w-4xl space-y-8"
     >
-      {/* Thumbnail + Metadata side-by-side */}
-      <div className="flex gap-8">
+      {/* Thumbnail + Metadata */}
+      <div className="flex flex-col gap-6 md:flex-row md:gap-8">
         {/* Thumbnail */}
         <div className="shrink-0 space-y-3">
-          <div className="flex aspect-video w-72 items-center justify-center overflow-hidden rounded-lg border border-surface-600 bg-linear-to-br from-surface-700 to-surface-800">
+          <div className="flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg border border-surface-600 bg-linear-to-br from-surface-700 to-surface-800 md:w-72">
             {thumbnailUrl ? (
               <img
                 src={thumbnailUrl}

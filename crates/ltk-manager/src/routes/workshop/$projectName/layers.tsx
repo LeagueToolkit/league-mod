@@ -51,7 +51,7 @@ function ProjectLayers() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-surface-100">Layers</h2>
           <p className="mt-1 text-sm text-surface-400">
@@ -59,7 +59,13 @@ function ProjectLayers() {
             to reorder.
           </p>
         </div>
-        <Button variant="filled" size="sm" left={<LuPlus />} onClick={() => setCreateOpen(true)}>
+        <Button
+          variant="filled"
+          size="sm"
+          left={<LuPlus />}
+          onClick={() => setCreateOpen(true)}
+          className="shrink-0"
+        >
           Add Layer
         </Button>
       </div>
