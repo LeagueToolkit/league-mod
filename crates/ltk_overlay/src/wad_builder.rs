@@ -22,9 +22,8 @@ use byteorder::{WriteBytesExt, LE};
 use camino::Utf8Path;
 use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Build statistics returned by [`build_patched_wad`].
@@ -34,6 +33,8 @@ pub struct PatchedWadStats {
     pub chunks_written: usize,
     /// Number of chunks that were replaced by mod overrides.
     pub overrides_applied: usize,
+    /// Number of new entries added (not present in the original WAD).
+    pub new_entries_added: usize,
     /// Number of chunks passed through unchanged from the original WAD.
     pub chunks_passed_through: usize,
     /// Wall-clock time to build this WAD, in milliseconds.
@@ -43,9 +44,10 @@ pub struct PatchedWadStats {
 /// Build a patched WAD by overlaying mod chunks on top of an original game WAD.
 ///
 /// The output WAD preserves the original chunk order and contains *all* chunks from
-/// the source — those present in `overrides` get their data replaced, everything else
-/// is passed through as raw bytes from the original. Override hashes that don't exist in the source
-/// WAD are silently ignored (with a warning log).
+/// the source — those present in `override_hashes` get their data replaced, everything
+/// else is passed through as raw bytes from the original. Override hashes that don't
+/// exist in the source WAD are treated as **new entries** and inserted at the correct
+/// sorted position in the TOC.
 ///
 /// Parent directories for `dst_wad_path` are created automatically.
 ///
@@ -53,9 +55,13 @@ pub struct PatchedWadStats {
 ///
 /// * `src_wad_path` — Absolute path to the original game WAD file.
 /// * `dst_wad_path` — Absolute path where the patched WAD will be written.
-/// * `overrides` — Map of `path_hash -> uncompressed_file_data` to overlay.
-///   Values are `Arc<[u8]>` to allow zero-copy sharing when the same override
-///   is distributed to multiple WADs.
+/// * `override_hashes` — Set of path hashes that have overrides available.
+///   Used to plan the TOC layout (new entries, merge order) without requiring
+///   the actual data upfront.
+/// * `resolve_override` — Callback invoked once per override hash during the
+///   write pass. Must return the **uncompressed** file data for the given hash.
+///   This allows the caller to lazily load override data on demand instead of
+///   holding everything in memory.
 ///
 /// # Returns
 ///
@@ -63,7 +69,8 @@ pub struct PatchedWadStats {
 pub fn build_patched_wad(
     src_wad_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
-    overrides: &HashMap<u64, Arc<[u8]>>,
+    override_hashes: &HashSet<u64>,
+    mut resolve_override: impl FnMut(u64) -> Result<Vec<u8>>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
@@ -72,32 +79,31 @@ pub fn build_patched_wad(
     let mut wad = Wad::mount(file)?;
     let chunks = wad.chunks().clone();
 
-    // Warn about unknown override hashes
-    let unknown_override_hashes = overrides
-        .keys()
+    // Collect new entry hashes (in overrides but not in the original WAD)
+    let mut new_hashes: Vec<u64> = override_hashes
+        .iter()
         .filter(|&&h| !chunks.contains(h))
         .copied()
-        .collect::<Vec<_>>();
-    if !unknown_override_hashes.is_empty() {
-        tracing::warn!(
-            "Ignoring {} override chunk(s) not present in base WAD (src={} dst={})",
-            unknown_override_hashes.len(),
+        .collect();
+    new_hashes.sort();
+
+    if !new_hashes.is_empty() {
+        tracing::info!(
+            "Adding {} new entry/entries to WAD (src={} dst={})",
+            new_hashes.len(),
             src_wad_path,
             dst_wad_path
         );
-        tracing::debug!(
-            "Unknown override hashes (first 16) = [{}]",
-            unknown_override_hashes
-                .iter()
-                .take(16)
-                .map(|h| format!("{:016x}", h))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
     }
 
-    // Collect chunk path hashes in original order (sorted by path_hash as WAD requires)
-    let ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash).collect();
+    // Build a merged sorted list of ALL hashes (original + new).
+    // WAD TOC must be sorted by path_hash; binary_search insertion maintains this.
+    let mut ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash).collect();
+    for hash in &new_hashes {
+        let pos = ordered.binary_search(hash).unwrap_or_else(|i| i);
+        ordered.insert(pos, *hash);
+    }
+    let new_entries_added = new_hashes.len();
 
     let mut overrides_applied = 0usize;
 
@@ -129,19 +135,15 @@ pub fn build_patched_wad(
     let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
 
     for &path_hash in &ordered {
-        let orig = chunks
-            .get(path_hash)
-            .ok_or_else(|| Error::Other(format!("Missing base chunk {:016x}", path_hash)))?;
-
         let data_offset = writer.stream_position()? as usize;
 
-        if let Some(override_bytes) = overrides.get(&path_hash) {
-            // Override path: detect file type, compress, and write
+        if override_hashes.contains(&path_hash) {
+            let override_bytes = resolve_override(path_hash)?;
             overrides_applied += 1;
 
-            let kind = LeagueFileKind::identify_from_bytes(override_bytes);
+            let kind = LeagueFileKind::identify_from_bytes(&override_bytes);
             let compression = kind.ideal_compression();
-            let compressed = compress_by_type(override_bytes, compression)?;
+            let compressed = compress_by_type(&override_bytes, compression)?;
             let compressed_checksum = xxh3_64(&compressed);
 
             writer.write_all(&compressed)?;
@@ -159,6 +161,9 @@ pub fn build_patched_wad(
             });
         } else {
             // Pass-through: read raw compressed bytes and copy them unchanged
+            let orig = chunks
+                .get(path_hash)
+                .ok_or_else(|| Error::Other(format!("Missing base chunk {:016x}", path_hash)))?;
             let raw = wad.load_chunk_raw(orig)?;
             writer.write_all(&raw)?;
 
@@ -188,10 +193,11 @@ pub fn build_patched_wad(
     let chunks_passed_through = ordered.len() - overrides_applied;
 
     tracing::info!(
-        "Patched WAD complete dst={} chunks={} overrides={} passed_through={} elapsed_ms={}",
+        "Patched WAD complete dst={} chunks={} overrides={} new={} passed_through={} elapsed_ms={}",
         dst_wad_path,
         ordered.len(),
         overrides_applied,
+        new_entries_added,
         chunks_passed_through,
         elapsed_ms
     );
@@ -199,6 +205,7 @@ pub fn build_patched_wad(
     Ok(PatchedWadStats {
         chunks_written: ordered.len(),
         overrides_applied,
+        new_entries_added,
         chunks_passed_through,
         elapsed_ms,
     })

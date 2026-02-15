@@ -68,13 +68,13 @@ pub struct InstalledMod {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LibraryIndex {
+pub(crate) struct LibraryIndex {
     /// Installed mods (shared across all profiles)
     pub(super) mods: Vec<LibraryModEntry>,
     /// All profiles
     pub(super) profiles: Vec<Profile>,
     /// Currently active profile ID
-    pub(super) active_profile_id: String,
+    pub(crate) active_profile_id: String,
 }
 
 impl Default for LibraryIndex {
@@ -153,7 +153,7 @@ pub(super) fn library_index_path(storage_dir: &Path) -> PathBuf {
 
 /// Load the library index from disk.
 /// Creates the index file if it doesn't exist.
-pub(super) fn load_library_index(storage_dir: &Path) -> AppResult<LibraryIndex> {
+pub(crate) fn load_library_index(storage_dir: &Path) -> AppResult<LibraryIndex> {
     fs::create_dir_all(storage_dir)?;
 
     let path = library_index_path(storage_dir);

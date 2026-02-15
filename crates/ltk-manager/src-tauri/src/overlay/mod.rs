@@ -89,6 +89,30 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
     Ok(overlay_root)
 }
 
+/// Delete the active profile's `overlay.json` to force the next build to rebuild.
+///
+/// This is called after mod-state-changing operations (toggle, reorder, install,
+/// uninstall) as defense-in-depth: even though the builder's `matches()` check
+/// detects mismatches at build time, proactive invalidation makes the intent
+/// explicit and avoids relying solely on the comparison being correct.
+pub fn invalidate_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<()> {
+    let storage_dir = resolve_storage_dir(app_handle, settings)?;
+    let index = crate::mods::load_library_index(&storage_dir)?;
+    let overlay_json = storage_dir
+        .join("profiles")
+        .join(&index.active_profile_id)
+        .join("overlay")
+        .join("overlay.json");
+    if overlay_json.exists() {
+        std::fs::remove_file(&overlay_json)?;
+        tracing::info!(
+            "Invalidated overlay for profile {}",
+            index.active_profile_id
+        );
+    }
+    Ok(())
+}
+
 fn resolve_game_dir(settings: &Settings) -> AppResult<PathBuf> {
     let league_root = settings
         .league_path

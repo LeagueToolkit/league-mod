@@ -92,6 +92,11 @@ pub fn reorder_mods(
 
     profile.mod_order = mod_ids;
     save_library_index(&storage_dir, &index)?;
+
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after reordering mods: {}", e);
+    }
+
     Ok(())
 }
 
@@ -170,6 +175,10 @@ pub fn install_mod_from_package(
 
     save_library_index(&storage_dir, &index)?;
 
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after installing mod: {}", e);
+    }
+
     // Return materialized InstalledMod (enabled = true since we just enabled it)
     read_installed_mod(&entry, true, &storage_dir)
 }
@@ -222,6 +231,11 @@ pub fn toggle_mod_enabled(
     }
 
     save_library_index(&storage_dir, &index)?;
+
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after toggling mod: {}", e);
+    }
+
     Ok(())
 }
 
@@ -259,6 +273,11 @@ pub fn uninstall_mod_by_id(
     }
 
     save_library_index(&storage_dir, &index)?;
+
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after uninstalling mod: {}", e);
+    }
+
     Ok(())
 }
 

@@ -23,13 +23,13 @@
 //! 7. Persist the new [`OverlayState`] and emit a completion progress event.
 
 use crate::content::ModContentProvider;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::state::OverlayState;
 use crate::utils::resolve_chunk_hash;
 use crate::wad_builder::build_patched_wad;
 use camino::Utf8PathBuf;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -198,11 +198,7 @@ impl OverlayBuilder {
     /// build is skipped entirely. Otherwise, performs a full rebuild.
     pub fn build(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
-
-        // TODO: Implement incremental build logic
-        // For now, this is a placeholder that will call the full rebuild
-        self.rebuild_all_internal()?;
-
+        self.rebuild_all_internal(false)?;
         let build_time = start_time.elapsed();
 
         Ok(OverlayBuildResult {
@@ -220,7 +216,7 @@ impl OverlayBuilder {
     /// the overlay is out of date for reasons the state file cannot track.
     pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
-        self.rebuild_all_internal()?;
+        self.rebuild_all_internal(true)?;
         let build_time = start_time.elapsed();
 
         Ok(OverlayBuildResult {
@@ -233,8 +229,11 @@ impl OverlayBuilder {
     }
 
     /// Core build implementation. See module-level docs for the full algorithm.
-    fn rebuild_all_internal(&mut self) -> Result<()> {
-        tracing::info!("Building overlay...");
+    ///
+    /// When `force` is `true`, the overlay state cache check is skipped entirely
+    /// and the overlay is always rebuilt from scratch.
+    fn rebuild_all_internal(&mut self, force: bool) -> Result<()> {
+        tracing::info!("Building overlay (force={})...", force);
         tracing::info!("Game dir: {}", self.game_dir);
         tracing::info!("Overlay root: {}", self.overlay_root);
         tracing::info!("Enabled mods: {}", self.enabled_mods.len());
@@ -261,20 +260,23 @@ impl OverlayBuilder {
         tracing::info!("Indexing game files...");
         let game_index = GameIndex::build(&self.game_dir)?;
 
-        // Check if we can reuse the existing overlay
         let state_path = self.overlay_root.join("overlay.json");
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
 
-        if let Some(state) = OverlayState::load(&state_path)? {
-            if state.matches(&enabled_ids, game_index.game_fingerprint()) {
-                // Check if overlay outputs are still valid
-                if self.validate_overlay_outputs()? {
-                    tracing::info!("Overlay: reusing existing overlay (enabled mods unchanged)");
-                    return Ok(());
-                } else {
-                    tracing::info!(
-                        "Overlay: overlay state matched but outputs invalid; forcing rebuild"
-                    );
+        // Check if we can reuse the existing overlay (skipped when force=true)
+        if !force {
+            if let Some(state) = OverlayState::load(&state_path)? {
+                if state.matches(&enabled_ids, game_index.game_fingerprint()) {
+                    if self.validate_overlay_outputs()? {
+                        tracing::info!(
+                            "Overlay: reusing existing overlay (enabled mods unchanged)"
+                        );
+                        return Ok(());
+                    } else {
+                        tracing::info!(
+                            "Overlay: overlay state matched but outputs invalid; forcing rebuild"
+                        );
+                    }
                 }
             }
         }
@@ -297,6 +299,9 @@ impl OverlayBuilder {
 
         // Collect ALL mod overrides as a flat map: path_hash -> shared bytes
         let mut all_overrides: HashMap<u64, SharedBytes> = HashMap::new();
+        // Track which WAD (by relative game path) each override belongs to,
+        // so new entries (not in any game WAD) can still be routed correctly.
+        let mut override_target_wads: HashMap<u64, Utf8PathBuf> = HashMap::new();
 
         for enabled_mod in self.enabled_mods.iter_mut().rev() {
             tracing::info!("Processing mod id={}", enabled_mod.id);
@@ -339,6 +344,7 @@ impl OverlayBuilder {
                     for (rel_path, bytes) in override_files {
                         let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
                         all_overrides.insert(path_hash, Arc::from(bytes));
+                        override_target_wads.insert(path_hash, relative_game_path.clone());
                     }
                     let after = all_overrides.len();
                     tracing::info!(
@@ -377,6 +383,7 @@ impl OverlayBuilder {
         // Distribute overrides to ALL affected WADs using the game hash index.
         // SharedBytes (Arc<[u8]>) avoids cloning the actual data — only the Arc is cloned.
         let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> = BTreeMap::new();
+        let mut new_entry_count = 0usize;
         for (path_hash, override_bytes) in &all_overrides {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wad_path in wad_paths {
@@ -385,9 +392,23 @@ impl OverlayBuilder {
                         .or_default()
                         .insert(*path_hash, Arc::clone(override_bytes));
                 }
+            } else if let Some(target_wad) = override_target_wads.get(path_hash) {
+                // New entry: hash doesn't exist in any game WAD.
+                // Route it to the WAD that the mod's directory structure targets.
+                wad_overrides
+                    .entry(target_wad.clone())
+                    .or_default()
+                    .insert(*path_hash, Arc::clone(override_bytes));
+                new_entry_count += 1;
             }
         }
 
+        if new_entry_count > 0 {
+            tracing::info!(
+                "Routed {} new entries (not in any game WAD) via mod directory structure",
+                new_entry_count
+            );
+        }
         tracing::info!(
             "Distributed overrides to {} affected WAD files",
             wad_overrides.len()
@@ -395,7 +416,7 @@ impl OverlayBuilder {
 
         // Build patched WADs for all affected game WADs
         let total_wads = wad_overrides.len() as u32;
-        for (idx, (relative_game_path, overrides)) in wad_overrides.into_iter().enumerate() {
+        for (idx, (relative_game_path, mut overrides)) in wad_overrides.into_iter().enumerate() {
             let current_wad = (idx + 1) as u32;
             let wad_name = relative_game_path.file_name().unwrap_or("unknown");
 
@@ -417,7 +438,15 @@ impl OverlayBuilder {
                 overrides.len()
             );
 
-            build_patched_wad(&src_wad_path, &dst_wad_path, &overrides)?;
+            let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
+            build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
+                overrides
+                    .remove(&hash)
+                    .map(|arc| arc.to_vec())
+                    .ok_or_else(|| {
+                        Error::Other(format!("Missing override data for hash {:016x}", hash))
+                    })
+            })?;
         }
 
         // Persist overlay state for reuse
@@ -455,13 +484,28 @@ impl OverlayBuilder {
             return Ok(false);
         }
 
-        // Local traversal uses std::path since we only need it for File::open
+        // Local traversal uses std::path since we only need it for File::open.
+        // Catch IO errors during traversal — a corrupted or locked overlay
+        // directory should trigger a rebuild, not fail the entire build.
         let mut stack = vec![data_dir.into_std_path_buf()];
         let mut wad_files = Vec::new();
 
         while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir)? {
-                let entry = entry?;
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    tracing::warn!("Cannot read overlay directory {}: {}", dir.display(), e);
+                    return Ok(false);
+                }
+            };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        tracing::warn!("Cannot read overlay dir entry: {}", e);
+                        return Ok(false);
+                    }
+                };
                 let path = entry.path();
 
                 if path.is_dir() {
@@ -483,10 +527,20 @@ impl OverlayBuilder {
             return Ok(false);
         }
 
-        // Sanity check: overlay WADs should be mountable
+        // Sanity check: overlay WADs should be mountable.
+        // If any WAD is corrupted or locked, return false to trigger a rebuild
+        // instead of propagating the error as a build failure.
         for wad_path in wad_files {
-            let file = std::fs::File::open(&wad_path)?;
-            Wad::mount(file)?;
+            let ok = std::fs::File::open(&wad_path)
+                .map_err(|e| {
+                    tracing::warn!("Cannot open overlay WAD {}: {}", wad_path.display(), e);
+                    e
+                })
+                .and_then(|f| Wad::mount(f).map_err(std::io::Error::other))
+                .is_ok();
+            if !ok {
+                return Ok(false);
+            }
         }
 
         Ok(true)
