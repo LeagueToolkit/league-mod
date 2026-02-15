@@ -1,6 +1,6 @@
 [package]
 name = "ltk_fantome"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Helper library for working with League of Legends mods in the legacy Fantome format"
@@ -23,7 +23,7 @@ thiserror = "2.0"
 slug = "0.1"
 camino = "1.1"
 itertools = "0.14"
-ltk_mod_project = { version = "0.1.4", path = "../ltk_mod_project" }
+ltk_mod_project = { version = "0.2.0", path = "../ltk_mod_project" }
 ltk_wad = "0.2.6"
 
 [dev-dependencies]
