@@ -236,7 +236,7 @@ pub fn stop_patcher(state: State<PatcherState>) -> IpcResult<()> {
 }
 
 fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
-    let mut patcher_state = state.0.lock().mutex_err()?;
+    let patcher_state = state.0.lock().mutex_err()?;
 
     if !patcher_state.is_running() {
         return Err(AppError::Other("Patcher is not running".to_string()));
@@ -246,18 +246,12 @@ fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
 
     patcher_state.stop_flag.store(true, Ordering::SeqCst);
 
-    if let Some(handle) = patcher_state.thread_handle.take() {
-        drop(patcher_state);
-
-        match handle.join() {
-            Ok(()) => tracing::info!("Patcher thread joined successfully"),
-            Err(_) => tracing::error!("Patcher thread panicked"),
-        }
-    }
-
-    let mut patcher_state = state.0.lock().mutex_err()?;
-    patcher_state.config_path = None;
-    patcher_state.phase = PatcherPhase::Idle;
+    // Return immediately without blocking on handle.join().
+    // The overlay build can't be interrupted mid-way, so the thread will
+    // continue until the build completes, then check the stop flag and exit.
+    // The thread cleans up its own state (phase → Idle, config_path → None).
+    // If the thread finishes before that cleanup is observed, get_patcher_status's
+    // defensive reset handles the transition once is_finished() returns true.
 
     Ok(())
 }

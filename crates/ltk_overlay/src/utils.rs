@@ -5,6 +5,8 @@
 
 use crate::error::Result;
 use camino::Utf8Path;
+use std::collections::HashMap;
+use xxhash_rust::xxh3::xxh3_64;
 
 /// Normalize a relative path for hash computation.
 ///
@@ -80,6 +82,36 @@ pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
     Ok(ltk_modpkg::utils::hash_chunk_name(&normalized_rel))
 }
 
+/// Compute a deterministic fingerprint for a WAD's override set.
+///
+/// The fingerprint is based on sorted `(path_hash, content_hash)` pairs so that
+/// two identical override sets always produce the same fingerprint regardless of
+/// iteration order. Returns `0` for an empty override set.
+///
+/// This is used by the incremental builder to detect which WADs actually changed
+/// between builds and skip re-patching the ones that didn't.
+pub fn compute_wad_overrides_fingerprint<B: AsRef<[u8]>>(overrides: &HashMap<u64, B>) -> u64 {
+    if overrides.is_empty() {
+        return 0;
+    }
+
+    // Sort by path_hash for determinism
+    let mut entries: Vec<(u64, u64)> = overrides
+        .iter()
+        .map(|(&path_hash, bytes)| (path_hash, xxh3_64(bytes.as_ref())))
+        .collect();
+    entries.sort_unstable_by_key(|(path_hash, _)| *path_hash);
+
+    // Hash the sorted (path_hash, content_hash) pairs
+    let mut buf = Vec::with_capacity(entries.len() * 16);
+    for (path_hash, content_hash) in &entries {
+        buf.extend_from_slice(&path_hash.to_le_bytes());
+        buf.extend_from_slice(&content_hash.to_le_bytes());
+    }
+
+    xxh3_64(&buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +143,48 @@ mod tests {
         let path = Utf8PathBuf::from("0123456789abcdef.bin");
         let hash = resolve_chunk_hash(&path, b"").unwrap();
         assert_eq!(hash, 0x0123456789abcdef);
+    }
+
+    #[test]
+    fn test_wad_fingerprint_deterministic() {
+        let mut overrides1 = HashMap::new();
+        overrides1.insert(1u64, vec![1, 2, 3]);
+        overrides1.insert(2u64, vec![4, 5, 6]);
+
+        let mut overrides2 = HashMap::new();
+        overrides2.insert(2u64, vec![4, 5, 6]); // different insertion order
+        overrides2.insert(1u64, vec![1, 2, 3]);
+
+        assert_eq!(
+            compute_wad_overrides_fingerprint(&overrides1),
+            compute_wad_overrides_fingerprint(&overrides2)
+        );
+    }
+
+    #[test]
+    fn test_wad_fingerprint_different_content() {
+        let mut overrides1 = HashMap::new();
+        overrides1.insert(1u64, vec![1, 2, 3]);
+
+        let mut overrides2 = HashMap::new();
+        overrides2.insert(1u64, vec![4, 5, 6]);
+
+        assert_ne!(
+            compute_wad_overrides_fingerprint(&overrides1),
+            compute_wad_overrides_fingerprint(&overrides2)
+        );
+    }
+
+    #[test]
+    fn test_wad_fingerprint_empty() {
+        let overrides: HashMap<u64, Vec<u8>> = HashMap::new();
+        assert_eq!(compute_wad_overrides_fingerprint(&overrides), 0);
+    }
+
+    #[test]
+    fn test_wad_fingerprint_nonempty() {
+        let mut overrides = HashMap::new();
+        overrides.insert(42u64, vec![1, 2, 3]);
+        assert_ne!(compute_wad_overrides_fingerprint(&overrides), 0);
     }
 }
