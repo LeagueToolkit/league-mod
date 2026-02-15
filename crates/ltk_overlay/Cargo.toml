@@ -36,7 +36,8 @@ xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 
 # IO
 byteorder = "1.5"
-camino = { workspace = true }
+camino = { workspace = true, features = ["serde1"] }
+walkdir = "2"
 
 # Parallelism
 rayon = "1.10"

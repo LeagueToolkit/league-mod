@@ -6,29 +6,26 @@
 //! # Build Algorithm
 //!
 //! 1. Validate that `game_dir/DATA/FINAL` exists.
-//! 2. Build a [`GameIndex`] from all `.wad.client` files in the game directory.
-//! 3. Check the saved [`OverlayState`] — if the enabled mod list and game fingerprint
-//!    match, and the overlay WAD files on disk are still valid, skip the build entirely.
-//! 4. Wipe the overlay directory and iterate each [`EnabledMod`] in **reverse** order
-//!    (back-to-front), so that the first mod in the list wins conflicts:
-//!    - Read its [`ModProject`](ltk_mod_project::ModProject) to get layer definitions.
-//!    - For each layer (sorted by priority), list WAD targets and read override files.
-//!    - Resolve each override file to a `u64` path hash and collect into a global map.
-//!      Later inserts overwrite earlier ones (last-writer-wins), meaning the first mod
-//!      in the list — processed last — has the highest effective priority.
-//! 5. Distribute the collected overrides to all game WADs containing each hash
-//!    (cross-WAD matching via [`GameIndex::find_wads_with_hash`]).
-//! 6. For each affected WAD, call [`build_patched_wad`](crate::wad_builder::build_patched_wad)
-//!    to produce a patched copy in the overlay directory.
-//! 7. Persist the new [`OverlayState`] and emit a completion progress event.
+//! 2. Build (or load from cache) a [`GameIndex`] from all `.wad.client` files.
+//! 3. Load the saved [`OverlayState`] and choose a build strategy:
+//!    - **Skip**: mod list, game fingerprint, and per-WAD fingerprints all match,
+//!      and every overlay WAD file still exists on disk.
+//!    - **Incremental**: game fingerprint and state version match but mod list
+//!      differs. Compute per-WAD override fingerprints and only rebuild WADs
+//!      whose fingerprint changed. Remove stale WADs no longer needed.
+//!    - **Full rebuild**: state version or game fingerprint mismatch. Wipe all
+//!      overlay WAD files and rebuild everything from scratch.
+//! 4. For each WAD that needs rebuilding, call
+//!    [`build_patched_wad`](crate::wad_builder::build_patched_wad).
+//! 5. Persist the new [`OverlayState`] with per-WAD fingerprints.
 
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::state::OverlayState;
-use crate::utils::resolve_chunk_hash;
+use crate::utils::{compute_wad_overrides_fingerprint, resolve_chunk_hash};
 use crate::wad_builder::build_patched_wad;
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +96,7 @@ pub struct OverlayBuildResult {
     pub overlay_root: Utf8PathBuf,
     /// WAD files that were freshly built during this run.
     pub wads_built: Vec<Utf8PathBuf>,
-    /// WAD files reused from a previous build (not yet implemented).
+    /// WAD files reused from a previous build (unchanged fingerprint).
     pub wads_reused: Vec<Utf8PathBuf>,
     /// Detected conflicts between mods (not yet implemented).
     pub conflicts: Vec<Conflict>,
@@ -160,8 +157,7 @@ impl OverlayBuilder {
     ///
     /// * `game_dir` — Path to the League of Legends `Game/` directory. Must contain
     ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
-    /// * `overlay_root` — Directory where patched WAD files will be written. This
-    ///   directory is wiped and recreated on each full rebuild.
+    /// * `overlay_root` — Directory where patched WAD files will be written.
     pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf) -> Self {
         Self {
             game_dir,
@@ -191,54 +187,21 @@ impl OverlayBuilder {
         self.enabled_mods = mods;
     }
 
-    /// Build the overlay, skipping the rebuild if the overlay state is still valid.
+    /// Build the overlay with incremental rebuild support.
     ///
-    /// Checks the saved `overlay.json` state file — if the enabled mod IDs and game
-    /// fingerprint match, and the existing overlay WAD files can be mounted, the
-    /// build is skipped entirely. Otherwise, performs a full rebuild.
+    /// 1. If the overlay state matches exactly and all WAD files exist → skip.
+    /// 2. If the game fingerprint and state version match → incremental rebuild
+    ///    (only re-patch WADs whose override fingerprint changed).
+    /// 3. Otherwise → full rebuild (wipe and rebuild everything).
     pub fn build(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
-        self.rebuild_all_internal(false)?;
-        let build_time = start_time.elapsed();
 
-        Ok(OverlayBuildResult {
-            overlay_root: self.overlay_root.clone(),
-            wads_built: Vec::new(),  // TODO
-            wads_reused: Vec::new(), // TODO
-            conflicts: Vec::new(),   // TODO
-            build_time,
-        })
-    }
-
-    /// Force a full rebuild, ignoring the saved overlay state.
-    ///
-    /// Use this when the user explicitly requests a rebuild or when you know
-    /// the overlay is out of date for reasons the state file cannot track.
-    pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
-        let start_time = std::time::Instant::now();
-        self.rebuild_all_internal(true)?;
-        let build_time = start_time.elapsed();
-
-        Ok(OverlayBuildResult {
-            overlay_root: self.overlay_root.clone(),
-            wads_built: Vec::new(),  // TODO
-            wads_reused: Vec::new(), // TODO
-            conflicts: Vec::new(),   // TODO
-            build_time,
-        })
-    }
-
-    /// Core build implementation. See module-level docs for the full algorithm.
-    ///
-    /// When `force` is `true`, the overlay state cache check is skipped entirely
-    /// and the overlay is always rebuilt from scratch.
-    fn rebuild_all_internal(&mut self, force: bool) -> Result<()> {
-        tracing::info!("Building overlay (force={})...", force);
+        tracing::info!("Building overlay...");
         tracing::info!("Game dir: {}", self.game_dir);
         tracing::info!("Overlay root: {}", self.overlay_root);
         tracing::info!("Enabled mods: {}", self.enabled_mods.len());
 
-        // Emit start event
+        // --- Stage: Indexing ---
         self.emit_progress(OverlayProgress {
             stage: OverlayStage::Indexing,
             current_file: None,
@@ -256,40 +219,83 @@ impl OverlayBuilder {
             .into());
         }
 
-        // Index game files
-        tracing::info!("Indexing game files...");
-        let game_index = GameIndex::build(&self.game_dir)?;
+        // Ensure overlay root exists (for cache and state files)
+        std::fs::create_dir_all(self.overlay_root.as_std_path())?;
 
+        // Build or load cached game index
+        let cache_path = self.overlay_root.join("game_index_cache.json");
+        let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
+
+        // Load previous state
         let state_path = self.overlay_root.join("overlay.json");
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
+        let prev_state = OverlayState::load(&state_path)?;
 
-        // Check if we can reuse the existing overlay (skipped when force=true)
-        if !force {
-            if let Some(state) = OverlayState::load(&state_path)? {
-                if state.matches(&enabled_ids, game_index.game_fingerprint()) {
-                    if self.validate_overlay_outputs()? {
-                        tracing::info!(
-                            "Overlay: reusing existing overlay (enabled mods unchanged)"
-                        );
-                        return Ok(());
-                    } else {
-                        tracing::info!(
-                            "Overlay: overlay state matched but outputs invalid; forcing rebuild"
-                        );
-                    }
+        // --- Handle empty mod list ---
+        if self.enabled_mods.is_empty() {
+            tracing::info!("Overlay: no enabled mods, cleaning overlay");
+            self.clean_overlay_wads()?;
+            let state =
+                OverlayState::new(Vec::new(), game_index.game_fingerprint(), BTreeMap::new());
+            state.save(&state_path)?;
+            self.emit_progress(OverlayProgress {
+                stage: OverlayStage::Complete,
+                current_file: None,
+                current: 0,
+                total: 0,
+            });
+            return Ok(OverlayBuildResult {
+                overlay_root: self.overlay_root.clone(),
+                wads_built: Vec::new(),
+                wads_reused: Vec::new(),
+                conflicts: Vec::new(),
+                build_time: start_time.elapsed(),
+            });
+        }
+
+        // --- Fast path: exact match → skip entirely ---
+        if let Some(ref state) = prev_state {
+            if state.matches(&enabled_ids, game_index.game_fingerprint()) {
+                if self.validate_wads_exist(state) {
+                    tracing::info!("Overlay: exact match, skipping build");
+                    self.emit_progress(OverlayProgress {
+                        stage: OverlayStage::Complete,
+                        current_file: None,
+                        current: 0,
+                        total: 0,
+                    });
+                    let reused: Vec<Utf8PathBuf> = state
+                        .wad_fingerprints
+                        .keys()
+                        .map(|k| self.overlay_root.join(k))
+                        .collect();
+                    return Ok(OverlayBuildResult {
+                        overlay_root: self.overlay_root.clone(),
+                        wads_built: Vec::new(),
+                        wads_reused: reused,
+                        conflicts: Vec::new(),
+                        build_time: start_time.elapsed(),
+                    });
                 }
+                tracing::info!(
+                    "Overlay: state matched but some WADs missing, doing incremental repair"
+                );
             }
         }
 
-        tracing::info!("Overlay: rebuilding overlay...");
+        // Determine if incremental build is possible
+        let can_incremental = prev_state
+            .as_ref()
+            .is_some_and(|s| s.supports_incremental(game_index.game_fingerprint()));
 
-        // Clean overlay and rebuild
-        if self.overlay_root.as_std_path().exists() {
-            std::fs::remove_dir_all(self.overlay_root.as_std_path())?;
+        if !can_incremental {
+            tracing::info!(
+                "Overlay: full rebuild required (state version or game fingerprint mismatch)"
+            );
+            self.clean_overlay_wads()?;
         }
-        std::fs::create_dir_all(self.overlay_root.as_std_path())?;
 
-        // Emit collecting stage
+        // --- Stage: Collecting overrides ---
         self.emit_progress(OverlayProgress {
             stage: OverlayStage::CollectingOverrides,
             current_file: None,
@@ -297,7 +303,173 @@ impl OverlayBuilder {
             total: 0,
         });
 
-        // Collect ALL mod overrides as a flat map: path_hash -> shared bytes
+        let (all_overrides, override_target_wads) =
+            self.collect_all_overrides(&game_index)?;
+        let wad_overrides =
+            self.distribute_overrides(&all_overrides, &game_index, &override_target_wads);
+
+        // --- Compute per-WAD fingerprints ---
+        let new_wad_fingerprints: BTreeMap<String, u64> = wad_overrides
+            .iter()
+            .map(|(wad_path, overrides)| {
+                (
+                    wad_path.as_str().to_string(),
+                    compute_wad_overrides_fingerprint(overrides),
+                )
+            })
+            .collect();
+
+        // --- Partition WADs into rebuild / reuse ---
+        let mut wads_to_build: Vec<Utf8PathBuf> = Vec::new();
+        let mut wads_to_reuse: Vec<Utf8PathBuf> = Vec::new();
+
+        for (wad_path_str, &new_fp) in &new_wad_fingerprints {
+            let wad_path = Utf8PathBuf::from(wad_path_str);
+            let overlay_wad = self.overlay_root.join(&wad_path);
+
+            if can_incremental {
+                if let Some(ref state) = prev_state {
+                    if let Some(old_fp) = state.wad_fingerprint(wad_path_str) {
+                        if old_fp == new_fp && overlay_wad.as_std_path().exists() {
+                            tracing::debug!("Reusing WAD: {}", wad_path);
+                            wads_to_reuse.push(wad_path);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            tracing::debug!("Need to rebuild WAD: {}", wad_path);
+            wads_to_build.push(wad_path);
+        }
+
+        // --- Clean stale WADs (in old state but not in new) ---
+        if can_incremental {
+            if let Some(ref state) = prev_state {
+                for old_wad_path in state.wad_fingerprints.keys() {
+                    if !new_wad_fingerprints.contains_key(old_wad_path) {
+                        let stale_path = self.overlay_root.join(old_wad_path);
+                        if stale_path.as_std_path().exists() {
+                            tracing::info!("Removing stale WAD: {}", stale_path);
+                            std::fs::remove_file(stale_path.as_std_path())?;
+                        }
+                        self.cleanup_empty_parents(&stale_path);
+                    }
+                }
+            }
+        }
+
+        // --- Stage: Patching WADs ---
+        let total_wads = wads_to_build.len() as u32;
+        let mut built_paths: Vec<Utf8PathBuf> = Vec::with_capacity(wads_to_build.len());
+
+        for (idx, relative_game_path) in wads_to_build.iter().enumerate() {
+            let current_wad = (idx + 1) as u32;
+            let wad_name = relative_game_path.file_name().unwrap_or("unknown");
+
+            self.emit_progress(OverlayProgress {
+                stage: OverlayStage::PatchingWad,
+                current_file: Some(wad_name.to_string()),
+                current: current_wad,
+                total: total_wads,
+            });
+
+            let src_wad_path = self.game_dir.join(relative_game_path);
+            let dst_wad_path = self.overlay_root.join(relative_game_path);
+
+            let mut overrides = wad_overrides
+                .get(relative_game_path)
+                .expect("WAD must be in overrides map")
+                .clone();
+
+            tracing::info!(
+                "Patching WAD [{}/{}] src={} dst={} overrides={}",
+                current_wad,
+                total_wads,
+                src_wad_path,
+                dst_wad_path,
+                overrides.len()
+            );
+
+            let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
+            build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
+                overrides
+                    .remove(&hash)
+                    .map(|arc| arc.to_vec())
+                    .ok_or_else(|| {
+                        Error::Other(format!("Missing override data for hash {:016x}", hash))
+                    })
+            })?;
+            built_paths.push(dst_wad_path);
+        }
+
+        let reused_paths: Vec<Utf8PathBuf> = wads_to_reuse
+            .iter()
+            .map(|p| self.overlay_root.join(p))
+            .collect();
+
+        // --- Persist overlay state ---
+        let state = OverlayState::new(
+            enabled_ids,
+            game_index.game_fingerprint(),
+            new_wad_fingerprints,
+        );
+        state.save(&state_path)?;
+
+        // --- Stage: Complete ---
+        self.emit_progress(OverlayProgress {
+            stage: OverlayStage::Complete,
+            current_file: None,
+            current: total_wads,
+            total: total_wads,
+        });
+
+        tracing::info!(
+            "Overlay build complete: {} built, {} reused in {:?}",
+            built_paths.len(),
+            reused_paths.len(),
+            start_time.elapsed()
+        );
+
+        Ok(OverlayBuildResult {
+            overlay_root: self.overlay_root.clone(),
+            wads_built: built_paths,
+            wads_reused: reused_paths,
+            conflicts: Vec::new(), // Phase 4
+            build_time: start_time.elapsed(),
+        })
+    }
+
+    /// Force a full rebuild, ignoring the saved overlay state.
+    ///
+    /// Use this when the user explicitly requests a rebuild or when you know
+    /// the overlay is out of date for reasons the state file cannot track.
+    pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
+        // Remove previous state so build() sees no match
+        let state_path = self.overlay_root.join("overlay.json");
+        if state_path.as_std_path().exists() {
+            std::fs::remove_file(state_path.as_std_path())?;
+        }
+        self.clean_overlay_wads()?;
+        self.build()
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    /// Collect all mod overrides as a flat map: `path_hash -> shared bytes`.
+    ///
+    /// Also returns a map of `path_hash -> relative_wad_path` so new entries
+    /// (not in any game WAD) can be routed to the correct WAD.
+    ///
+    /// Iterates mods in **reverse** order (back-to-front) so that the first mod
+    /// in the list wins conflicts (last-writer-wins, with the front mod written last).
+    /// Layers are sorted by priority. SubChunkTOC entries are filtered out.
+    fn collect_all_overrides(
+        &mut self,
+        game_index: &GameIndex,
+    ) -> Result<(HashMap<u64, SharedBytes>, HashMap<u64, Utf8PathBuf>)> {
         let mut all_overrides: HashMap<u64, SharedBytes> = HashMap::new();
         // Track which WAD (by relative game path) each override belongs to,
         // so new entries (not in any game WAD) can still be routed correctly.
@@ -327,7 +499,9 @@ impl OverlayBuilder {
                     let original_wad_path = game_index.find_wad(wad_name)?;
                     let relative_game_path = original_wad_path
                         .strip_prefix(&self.game_dir)
-                        .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
+                        .map_err(|_| {
+                            format!("WAD path is not under Game/: {}", original_wad_path)
+                        })?
                         .to_path_buf();
 
                     tracing::info!(
@@ -380,11 +554,28 @@ impl OverlayBuilder {
             );
         }
 
-        // Distribute overrides to ALL affected WADs using the game hash index.
-        // SharedBytes (Arc<[u8]>) avoids cloning the actual data — only the Arc is cloned.
+        Ok((all_overrides, override_target_wads))
+    }
+
+    /// Distribute collected overrides to all affected WADs using the game hash index.
+    ///
+    /// `SharedBytes` (`Arc<[u8]>`) avoids cloning the actual data — only the Arc
+    /// pointer is cloned when the same override appears in multiple WADs.
+    ///
+    /// Overrides whose path hash doesn't appear in any game WAD are routed to the
+    /// WAD indicated by the mod's directory structure (`override_target_wads`).
+    ///
+    /// Returns a map of `relative_wad_path -> { path_hash -> override_bytes }`.
+    fn distribute_overrides(
+        &self,
+        all_overrides: &HashMap<u64, SharedBytes>,
+        game_index: &GameIndex,
+        override_target_wads: &HashMap<u64, Utf8PathBuf>,
+    ) -> BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> {
         let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> = BTreeMap::new();
         let mut new_entry_count = 0usize;
-        for (path_hash, override_bytes) in &all_overrides {
+
+        for (path_hash, override_bytes) in all_overrides {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wad_path in wad_paths {
                     wad_overrides
@@ -414,54 +605,56 @@ impl OverlayBuilder {
             wad_overrides.len()
         );
 
-        // Build patched WADs for all affected game WADs
-        let total_wads = wad_overrides.len() as u32;
-        for (idx, (relative_game_path, mut overrides)) in wad_overrides.into_iter().enumerate() {
-            let current_wad = (idx + 1) as u32;
-            let wad_name = relative_game_path.file_name().unwrap_or("unknown");
+        wad_overrides
+    }
 
-            // Emit progress event
-            self.emit_progress(OverlayProgress {
-                stage: OverlayStage::PatchingWad,
-                current_file: Some(wad_name.to_string()),
-                current: current_wad,
-                total: total_wads,
-            });
-
-            let src_wad_path = self.game_dir.join(&relative_game_path);
-            let dst_wad_path = self.overlay_root.join(&relative_game_path);
-
-            tracing::info!(
-                "Writing patched WAD src={} dst={} overrides={}",
-                src_wad_path,
-                dst_wad_path,
-                overrides.len()
-            );
-
-            let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
-            build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
-                overrides
-                    .remove(&hash)
-                    .map(|arc| arc.to_vec())
-                    .ok_or_else(|| {
-                        Error::Other(format!("Missing override data for hash {:016x}", hash))
-                    })
-            })?;
+    /// Check that all WADs listed in the state actually exist on disk.
+    fn validate_wads_exist(&self, state: &OverlayState) -> bool {
+        for wad_path in state.wad_fingerprints.keys() {
+            let full_path = self.overlay_root.join(wad_path);
+            if !full_path.as_std_path().exists() {
+                tracing::warn!("Expected overlay WAD missing: {}", full_path);
+                return false;
+            }
         }
+        true
+    }
 
-        // Persist overlay state for reuse
-        let state = OverlayState::new(enabled_ids, game_index.game_fingerprint());
-        state.save(&state_path)?;
-
-        // Emit completion event
-        self.emit_progress(OverlayProgress {
-            stage: OverlayStage::Complete,
-            current_file: None,
-            current: total_wads,
-            total: total_wads,
-        });
-
+    /// Remove all WAD files from the overlay directory.
+    ///
+    /// Deletes the `DATA/` subdirectory but preserves `overlay.json` and
+    /// `game_index_cache.json` at the overlay root.
+    fn clean_overlay_wads(&self) -> Result<()> {
+        let data_dir = self.overlay_root.join("DATA");
+        if data_dir.as_std_path().exists() {
+            std::fs::remove_dir_all(data_dir.as_std_path())?;
+        }
         Ok(())
+    }
+
+    /// Clean up empty parent directories after removing a stale WAD.
+    ///
+    /// Walks up from the given path toward `overlay_root`, removing empty
+    /// directories. Stops at the overlay root or the first non-empty directory.
+    fn cleanup_empty_parents(&self, path: &Utf8Path) {
+        let mut current = path.parent();
+        while let Some(dir) = current {
+            if dir == self.overlay_root {
+                break;
+            }
+            if dir.as_std_path().exists() {
+                match std::fs::read_dir(dir.as_std_path()) {
+                    Ok(mut entries) => {
+                        if entries.next().is_some() {
+                            break; // Not empty
+                        }
+                        let _ = std::fs::remove_dir(dir.as_std_path());
+                    }
+                    Err(_) => break,
+                }
+            }
+            current = dir.parent();
+        }
     }
 
     /// Emit a progress event if a callback was registered.
@@ -469,81 +662,6 @@ impl OverlayBuilder {
         if let Some(callback) = &self.progress_callback {
             callback(progress);
         }
-    }
-
-    /// Check that the overlay directory contains valid, mountable WAD files.
-    ///
-    /// Returns `false` if the `DATA/` subdirectory doesn't exist, contains no WAD
-    /// files, or any WAD file fails to mount. This guards against corrupted overlays
-    /// (e.g., from a crashed previous build).
-    fn validate_overlay_outputs(&self) -> Result<bool> {
-        use ltk_wad::Wad;
-
-        let data_dir = self.overlay_root.join("DATA");
-        if !data_dir.as_std_path().exists() {
-            return Ok(false);
-        }
-
-        // Local traversal uses std::path since we only need it for File::open.
-        // Catch IO errors during traversal — a corrupted or locked overlay
-        // directory should trigger a rebuild, not fail the entire build.
-        let mut stack = vec![data_dir.into_std_path_buf()];
-        let mut wad_files = Vec::new();
-
-        while let Some(dir) = stack.pop() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(e) => {
-                    tracing::warn!("Cannot read overlay directory {}: {}", dir.display(), e);
-                    return Ok(false);
-                }
-            };
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(e) => {
-                        tracing::warn!("Cannot read overlay dir entry: {}", e);
-                        return Ok(false);
-                    }
-                };
-                let path = entry.path();
-
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-
-                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-
-                if name.to_ascii_lowercase().ends_with(".wad.client") {
-                    wad_files.push(path);
-                }
-            }
-        }
-
-        if wad_files.is_empty() {
-            return Ok(false);
-        }
-
-        // Sanity check: overlay WADs should be mountable.
-        // If any WAD is corrupted or locked, return false to trigger a rebuild
-        // instead of propagating the error as a build failure.
-        for wad_path in wad_files {
-            let ok = std::fs::File::open(&wad_path)
-                .map_err(|e| {
-                    tracing::warn!("Cannot open overlay WAD {}: {}", wad_path.display(), e);
-                    e
-                })
-                .and_then(|f| Wad::mount(f).map_err(std::io::Error::other))
-                .is_ok();
-            if !ok {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
     }
 }
 

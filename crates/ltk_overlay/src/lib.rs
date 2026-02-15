@@ -39,11 +39,22 @@
 //! - `.modpkg` archives (implemented in `ltk-manager`)
 //! - `.fantome` ZIP archives (implemented in `ltk-manager`)
 //!
-//! # Overlay State Caching
+//! # Incremental Rebuild
 //!
 //! After a successful build, an `overlay.json` state file is persisted containing the
-//! list of enabled mod IDs and a game directory fingerprint. On the next build, if the
-//! state matches and the overlay WAD files are still valid, the build is skipped entirely.
+//! list of enabled mod IDs, a game directory fingerprint, and per-WAD override
+//! fingerprints. On the next build:
+//!
+//! - **Exact match**: mod list, game fingerprint, and all per-WAD fingerprints match,
+//!   and every overlay WAD exists on disk — the build is skipped entirely.
+//! - **Incremental**: game fingerprint matches but the mod list changed. Per-WAD
+//!   override fingerprints are compared and only WADs whose inputs changed are
+//!   re-patched. Stale WADs (no longer needed) are removed.
+//! - **Full rebuild**: game fingerprint or state version changed — all overlay WADs
+//!   are wiped and rebuilt from scratch.
+//!
+//! The game index (`GameIndex`) is also cached to disk to avoid re-mounting every
+//! WAD file on subsequent builds when the game hasn't been patched.
 //!
 //! # Example
 //!
