@@ -29,6 +29,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
+use xxhash_rust::xxh3::xxh3_64;
 
 /// Shared byte buffer for override data distributed across multiple WADs.
 ///
@@ -548,6 +549,29 @@ impl OverlayBuilder {
             tracing::info!(
                 "Filtered {} SubChunkTOC override(s) from mod overrides",
                 filtered_count
+            );
+        }
+
+        // Filter out lazy overrides — mod files identical to game originals.
+        // Comparing xxh3_64(override_bytes) against the pre-computed uncompressed
+        // content hash avoids recompressing and writing unchanged chunks.
+        let before_lazy = all_overrides.len();
+        all_overrides.retain(|&path_hash, bytes| {
+            if let Some(original_hash) = game_index.content_hash(path_hash) {
+                let override_hash = xxh3_64(bytes.as_ref());
+                if override_hash == original_hash {
+                    tracing::debug!("Filtered lazy override: {:016x}", path_hash);
+                    return false;
+                }
+            }
+            true
+        });
+        override_target_wads.retain(|hash, _| all_overrides.contains_key(hash));
+        let lazy_count = before_lazy - all_overrides.len();
+        if lazy_count > 0 {
+            tracing::info!(
+                "Filtered {} lazy override(s) (identical to game originals)",
+                lazy_count
             );
         }
 
