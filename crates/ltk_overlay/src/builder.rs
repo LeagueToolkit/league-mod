@@ -303,8 +303,7 @@ impl OverlayBuilder {
             total: 0,
         });
 
-        let (all_overrides, override_target_wads) =
-            self.collect_all_overrides(&game_index)?;
+        let (all_overrides, override_target_wads) = self.collect_all_overrides(&game_index)?;
         let wad_overrides =
             self.distribute_overrides(&all_overrides, &game_index, &override_target_wads);
 
@@ -499,9 +498,7 @@ impl OverlayBuilder {
                     let original_wad_path = game_index.find_wad(wad_name)?;
                     let relative_game_path = original_wad_path
                         .strip_prefix(&self.game_dir)
-                        .map_err(|_| {
-                            format!("WAD path is not under Game/: {}", original_wad_path)
-                        })?
+                        .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
                         .to_path_buf();
 
                     tracing::info!(

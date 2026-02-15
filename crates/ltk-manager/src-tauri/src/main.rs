@@ -163,7 +163,7 @@ fn init_logging() -> (
     std::sync::Arc<std::sync::OnceLock<tauri::AppHandle>>,
 ) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "ltk_manager=debug,tauri=info".into());
+        .unwrap_or_else(|_| "ltk_manager=debug,ltk_overlay=info,tauri=info".into());
 
     let stdout_layer = tracing_subscriber::fmt::layer();
 
@@ -211,7 +211,7 @@ fn init_logging() -> (
 #[cfg(not(debug_assertions))]
 fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "ltk_manager=debug,tauri=info".into());
+        .unwrap_or_else(|_| "ltk_manager=debug,ltk_overlay=info,tauri=info".into());
 
     let stdout_layer = tracing_subscriber::fmt::layer();
 
