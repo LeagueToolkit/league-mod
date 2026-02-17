@@ -181,8 +181,8 @@ fn init_logging() -> (
             } else {
                 let file_appender = rolling::RollingFileAppender::builder()
                     .rotation(rolling::Rotation::DAILY)
-                    .filename_prefix("ltk-manager-")
-                    .filename_suffix(".log")
+                    .filename_prefix("ltk-manager")
+                    .filename_suffix("log")
                     .build(&log_dir)
                     .expect("failed to create log file appender");
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
@@ -230,8 +230,8 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
             } else {
                 let file_appender = rolling::RollingFileAppender::builder()
                     .rotation(rolling::Rotation::DAILY)
-                    .filename_prefix("ltk-manager-")
-                    .filename_suffix(".log")
+                    .filename_prefix("ltk-manager")
+                    .filename_suffix("log")
                     .build(&log_dir)
                     .expect("failed to create log file appender");
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
@@ -275,8 +275,8 @@ fn cleanup_old_logs(log_dir: &std::path::Path, max_age_days: u64) {
             None => continue,
         };
 
-        // Only target dated log files (e.g. "ltk-manager-2026-02-17.log")
-        if !file_name.starts_with("ltk-manager-") || !file_name.ends_with(".log") {
+        // Only target dated log files (e.g. "ltk-manager.2026-02-17.log")
+        if !file_name.starts_with("ltk-manager.") || !file_name.ends_with(".log") {
             continue;
         }
 
