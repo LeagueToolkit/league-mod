@@ -32,11 +32,6 @@ name = "ltk_pki"
 publish = true
 changelog_update = true
 
-[[package]]
-name = "ltk-manager"
-publish = false
-git_release_enable = false
-
 [changelog]
 header = """
 # Changelog

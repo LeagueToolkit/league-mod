@@ -1,1 +1,0 @@
-export { UpdateNotification } from "./UpdateNotification";
