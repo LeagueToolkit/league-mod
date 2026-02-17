@@ -246,13 +246,6 @@ fn stop_patcher_inner(state: &State<PatcherState>) -> AppResult<()> {
 
     patcher_state.stop_flag.store(true, Ordering::SeqCst);
 
-    // Return immediately without blocking on handle.join().
-    // The overlay build can't be interrupted mid-way, so the thread will
-    // continue until the build completes, then check the stop flag and exit.
-    // The thread cleans up its own state (phase → Idle, config_path → None).
-    // If the thread finishes before that cleanup is observed, get_patcher_status's
-    // defensive reset handles the transition once is_finished() returns true.
-
     Ok(())
 }
 

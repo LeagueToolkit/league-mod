@@ -62,7 +62,7 @@ const variantClasses: Record<ButtonVariant, string> = {
 };
 
 const baseClasses =
-  "inline-flex items-center justify-center font-medium rounded-md transition-colors duration-150 select-none focus-visible:outline-brand-500 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none";
+  "inline-flex items-center justify-center font-medium rounded-md transition-colors duration-150 cursor-pointer select-none focus-visible:outline-brand-500 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none";
 
 const spinnerSizeClasses: Record<ButtonSize, string> = {
   xs: "text-sm",

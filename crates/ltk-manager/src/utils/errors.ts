@@ -13,6 +13,7 @@ export type ErrorCode =
   | "MOD_NOT_FOUND"
   | "VALIDATION_FAILED"
   | "INTERNAL_STATE"
+  | "PATCHER_RUNNING"
   | "UNKNOWN";
 
 /**

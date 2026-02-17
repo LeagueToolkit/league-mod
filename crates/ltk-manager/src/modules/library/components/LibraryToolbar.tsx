@@ -23,6 +23,7 @@ interface LibraryToolbarProps {
   patcher: PatcherProps;
   hasEnabledMods: boolean;
   isLoading: boolean;
+  isPatcherActive: boolean;
 }
 
 export function LibraryToolbar({
@@ -34,6 +35,7 @@ export function LibraryToolbar({
   patcher,
   hasEnabledMods,
   isLoading,
+  isPatcherActive,
 }: LibraryToolbarProps) {
   return (
     <div
@@ -84,6 +86,7 @@ export function LibraryToolbar({
         size="sm"
         onClick={actions.handleInstallMod}
         loading={actions.installMod.isPending || actions.bulkInstallMods.isPending}
+        disabled={isPatcherActive}
         left={<LuPlus className="h-4 w-4" />}
       >
         {actions.installMod.isPending || actions.bulkInstallMods.isPending

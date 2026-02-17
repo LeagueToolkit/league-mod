@@ -36,6 +36,8 @@ pub enum ErrorCode {
     PackFailed,
     /// WAD file error
     Wad,
+    /// Operation blocked because the patcher is running
+    PatcherRunning,
 }
 
 /// Structured error response sent over IPC.
@@ -185,6 +187,9 @@ pub enum AppError {
 
     #[error("WAD builder error: {0}")]
     WadBuilderError(#[from] ltk_wad::WadBuilderError),
+
+    #[error("Cannot modify mods while the patcher is running")]
+    PatcherRunning,
 }
 
 impl From<AppError> for AppErrorResponse {
@@ -246,6 +251,11 @@ impl From<AppError> for AppErrorResponse {
             AppError::WadError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
 
             AppError::WadBuilderError(e) => AppErrorResponse::new(ErrorCode::Wad, e.to_string()),
+
+            AppError::PatcherRunning => AppErrorResponse::new(
+                ErrorCode::PatcherRunning,
+                "Stop the patcher before modifying mods",
+            ),
         }
     }
 }

@@ -24,6 +24,7 @@ export function Library() {
   const stopPatcher = useStopPatcher();
 
   const isStarting = patcherStatus?.phase === "building";
+  const isPatcherActive = patcherStatus?.running ?? false;
 
   const hasEnabledMods = mods.some((m) => m.enabled);
 
@@ -64,6 +65,7 @@ export function Library() {
         }}
         hasEnabledMods={hasEnabledMods}
         isLoading={isLoading}
+        isPatcherActive={isPatcherActive}
       />
       <LibraryContent
         mods={mods}
@@ -73,6 +75,7 @@ export function Library() {
         isLoading={isLoading}
         error={error}
         onInstall={actions.handleInstallMod}
+        isPatcherActive={isPatcherActive}
       />
       <ImportProgressDialog
         open={actions.importDialogOpen}

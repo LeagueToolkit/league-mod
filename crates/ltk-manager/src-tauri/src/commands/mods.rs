@@ -1,9 +1,10 @@
-use crate::error::{AppResult, IpcResult, MutexResultExt};
+use crate::error::{AppError, AppResult, IpcResult, MutexResultExt};
 use crate::mods::{
     inspect_modpkg_file, install_mod_from_package, install_mods_from_packages,
     reorder_mods as reorder_mods_inner_fn, toggle_mod_enabled, uninstall_mod_by_id,
     BulkInstallResult, InstalledMod, ModpkgInfo,
 };
+use crate::patcher::PatcherState;
 use crate::state::SettingsState;
 use tauri::{AppHandle, State};
 
@@ -31,15 +32,18 @@ pub fn install_mod(
     file_path: String,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher: State<PatcherState>,
 ) -> IpcResult<InstalledMod> {
-    install_mod_inner(file_path, &app_handle, &settings).into()
+    install_mod_inner(file_path, &app_handle, &settings, &patcher).into()
 }
 
 fn install_mod_inner(
     file_path: String,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher: &State<PatcherState>,
 ) -> AppResult<InstalledMod> {
+    reject_if_patcher_running(patcher)?;
     let settings = settings.0.lock().mutex_err()?.clone();
     install_mod_from_package(app_handle, &settings, &file_path)
 }
@@ -50,15 +54,18 @@ pub fn install_mods(
     file_paths: Vec<String>,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher: State<PatcherState>,
 ) -> IpcResult<BulkInstallResult> {
-    install_mods_inner(file_paths, &app_handle, &settings).into()
+    install_mods_inner(file_paths, &app_handle, &settings, &patcher).into()
 }
 
 fn install_mods_inner(
     file_paths: Vec<String>,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher: &State<PatcherState>,
 ) -> AppResult<BulkInstallResult> {
+    reject_if_patcher_running(patcher)?;
     let settings = settings.0.lock().mutex_err()?.clone();
     install_mods_from_packages(app_handle, &settings, &file_paths)
 }
@@ -69,15 +76,18 @@ pub fn uninstall_mod(
     mod_id: String,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher: State<PatcherState>,
 ) -> IpcResult<()> {
-    uninstall_mod_inner(mod_id, &app_handle, &settings).into()
+    uninstall_mod_inner(mod_id, &app_handle, &settings, &patcher).into()
 }
 
 fn uninstall_mod_inner(
     mod_id: String,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher: &State<PatcherState>,
 ) -> AppResult<()> {
+    reject_if_patcher_running(patcher)?;
     let settings = settings.0.lock().mutex_err()?.clone();
     uninstall_mod_by_id(app_handle, &settings, &mod_id)
 }
@@ -89,8 +99,9 @@ pub fn toggle_mod(
     enabled: bool,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher: State<PatcherState>,
 ) -> IpcResult<()> {
-    toggle_mod_inner(mod_id, enabled, &app_handle, &settings).into()
+    toggle_mod_inner(mod_id, enabled, &app_handle, &settings, &patcher).into()
 }
 
 fn toggle_mod_inner(
@@ -98,7 +109,9 @@ fn toggle_mod_inner(
     enabled: bool,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher: &State<PatcherState>,
 ) -> AppResult<()> {
+    reject_if_patcher_running(patcher)?;
     let settings = settings.0.lock().mutex_err()?.clone();
     toggle_mod_enabled(app_handle, &settings, &mod_id, enabled)
 }
@@ -109,15 +122,18 @@ pub fn reorder_mods(
     mod_ids: Vec<String>,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher: State<PatcherState>,
 ) -> IpcResult<()> {
-    reorder_mods_command_inner(mod_ids, &app_handle, &settings).into()
+    reorder_mods_command_inner(mod_ids, &app_handle, &settings, &patcher).into()
 }
 
 fn reorder_mods_command_inner(
     mod_ids: Vec<String>,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher: &State<PatcherState>,
 ) -> AppResult<()> {
+    reject_if_patcher_running(patcher)?;
     let settings = settings.0.lock().mutex_err()?.clone();
     reorder_mods_inner_fn(app_handle, &settings, mod_ids)
 }
@@ -164,4 +180,13 @@ fn get_storage_directory_inner(
     let settings = settings.0.lock().mutex_err()?.clone();
     let storage_dir = crate::mods::resolve_storage_dir(app_handle, &settings)?;
     Ok(storage_dir.display().to_string())
+}
+
+/// Reject the operation if the patcher is currently running.
+fn reject_if_patcher_running(patcher: &State<PatcherState>) -> AppResult<()> {
+    let state = patcher.0.lock().mutex_err()?;
+    if state.is_running() {
+        return Err(AppError::PatcherRunning);
+    }
+    Ok(())
 }

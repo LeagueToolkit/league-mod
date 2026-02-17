@@ -23,9 +23,17 @@ interface ModCardProps {
   onToggle: (modId: string, enabled: boolean) => void;
   onUninstall: (modId: string) => void;
   onViewDetails?: (mod: InstalledMod) => void;
+  disabled?: boolean;
 }
 
-export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }: ModCardProps) {
+export function ModCard({
+  mod,
+  viewMode,
+  onToggle,
+  onUninstall,
+  onViewDetails,
+  disabled,
+}: ModCardProps) {
   const { data: thumbnailUrl } = useModThumbnail(mod.id);
 
   async function handleOpenLocation() {
@@ -37,6 +45,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
   }
 
   function handleCardClick(e: React.MouseEvent) {
+    if (disabled) return;
     // Don't toggle if clicking on menu button or toggle
     if ((e.target as HTMLElement).closest("[data-no-toggle]")) {
       return;
@@ -48,7 +57,9 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
     return (
       <div
         onClick={handleCardClick}
-        className={`flex cursor-pointer items-center gap-4 rounded-lg border p-4 transition-all ${
+        className={`flex items-center gap-4 rounded-lg border p-4 transition-all ${
+          disabled ? "cursor-default opacity-60" : "cursor-pointer"
+        } ${
           mod.enabled
             ? "border-brand-500/40 bg-surface-800 shadow-[0_0_15px_-3px] shadow-brand-500/30"
             : "border-surface-700 bg-surface-900 hover:border-surface-600"
@@ -75,18 +86,24 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
 
         {/* Toggle */}
         <div data-no-toggle>
-          <Switch checked={mod.enabled} onCheckedChange={(checked) => onToggle(mod.id, checked)} />
+          <Switch
+            disabled={disabled}
+            checked={mod.enabled}
+            onCheckedChange={(checked) => onToggle(mod.id, checked)}
+          />
         </div>
 
         {/* Menu */}
         <div data-no-toggle>
           <Menu.Root>
             <Menu.Trigger
+              disabled={disabled}
               render={
                 <IconButton
                   icon={<LuEllipsisVertical className="h-4 w-4" />}
                   variant="ghost"
                   size="sm"
+                  disabled={disabled}
                 />
               }
             />
@@ -109,6 +126,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
                   <Menu.Item
                     icon={<LuTrash2 className="h-4 w-4" />}
                     variant="danger"
+                    disabled={disabled}
                     onClick={() => onUninstall(mod.id)}
                   >
                     Uninstall
@@ -125,7 +143,9 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
   return (
     <div
       onClick={handleCardClick}
-      className={`group relative cursor-pointer rounded-xl border transition-all ${
+      className={`group relative rounded-xl border transition-all ${
+        disabled ? "cursor-default opacity-60" : "cursor-pointer"
+      } ${
         mod.enabled
           ? "border-brand-500/40 bg-surface-800 shadow-[0_0_20px_-5px] shadow-brand-500/40"
           : "border-surface-600 bg-surface-800 hover:border-surface-400"
@@ -135,6 +155,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
       <div className="absolute top-2 right-2 z-10" data-no-toggle>
         <Switch
           size="sm"
+          disabled={disabled}
           checked={mod.enabled}
           onCheckedChange={(checked) => onToggle(mod.id, checked)}
           className="shadow-lg data-[unchecked]:bg-surface-600/80 data-[unchecked]:backdrop-blur-sm"
@@ -169,12 +190,14 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
           <div className="ml-1 shrink-0" data-no-toggle>
             <Menu.Root>
               <Menu.Trigger
+                disabled={disabled}
                 render={
                   <IconButton
                     icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
                     variant="ghost"
                     size="xs"
                     className="h-5 w-5"
+                    disabled={disabled}
                   />
                 }
               />
@@ -197,6 +220,7 @@ export function ModCard({ mod, viewMode, onToggle, onUninstall, onViewDetails }:
                     <Menu.Item
                       icon={<LuTrash2 className="h-4 w-4" />}
                       variant="danger"
+                      disabled={disabled}
                       onClick={() => onUninstall(mod.id)}
                     >
                       Uninstall

@@ -13,6 +13,7 @@ interface SortableModCardProps {
   onToggle: (modId: string, enabled: boolean) => void;
   onUninstall: (modId: string) => void;
   onViewDetails?: (mod: InstalledMod) => void;
+  disabled?: boolean;
 }
 
 export function SortableModCard({
@@ -21,6 +22,7 @@ export function SortableModCard({
   onToggle,
   onUninstall,
   onViewDetails,
+  disabled,
 }: SortableModCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: mod.id,
@@ -35,7 +37,7 @@ export function SortableModCard({
   return (
     <div ref={setNodeRef} style={style} className="group/sortable relative">
       {/* Drag handle */}
-      {viewMode === "list" ? (
+      {!disabled && viewMode === "list" && (
         <div
           className="absolute top-1/2 -left-7 z-10 flex -translate-y-1/2 cursor-grab items-center opacity-0 transition-opacity group-hover/sortable:opacity-100"
           data-no-toggle
@@ -44,7 +46,8 @@ export function SortableModCard({
         >
           <LuGripVertical className="h-5 w-5 text-surface-500" />
         </div>
-      ) : (
+      )}
+      {!disabled && viewMode !== "list" && (
         <div
           className="absolute top-2 left-2 z-10 flex cursor-grab items-center rounded-md bg-surface-900/80 p-1 opacity-0 backdrop-blur-sm transition-opacity group-hover/sortable:opacity-100"
           data-no-toggle
@@ -61,6 +64,7 @@ export function SortableModCard({
         onToggle={onToggle}
         onUninstall={onUninstall}
         onViewDetails={onViewDetails}
+        disabled={disabled}
       />
     </div>
   );

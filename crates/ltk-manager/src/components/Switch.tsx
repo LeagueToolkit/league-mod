@@ -27,6 +27,7 @@ export const Switch = forwardRef<HTMLSpanElement, SwitchProps>(
         className={twMerge(
           "relative inline-flex rounded-full transition-colors",
           "bg-surface-700 data-[checked]:bg-brand-500",
+          "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
           trackClasses[size],
           className,
         )}

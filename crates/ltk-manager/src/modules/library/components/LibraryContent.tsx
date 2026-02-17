@@ -21,6 +21,7 @@ interface LibraryContentProps {
   isLoading: boolean;
   error: AppError | null;
   onInstall: () => void;
+  isPatcherActive?: boolean;
 }
 
 export function LibraryContent({
@@ -31,6 +32,7 @@ export function LibraryContent({
   isLoading,
   error,
   onInstall,
+  isPatcherActive,
 }: LibraryContentProps) {
   const isSearching = searchQuery.length > 0;
 
@@ -72,7 +74,7 @@ export function LibraryContent({
         mods={filteredMods}
         viewMode={viewMode}
         onReorder={actions.handleReorder}
-        disabled={isSearching}
+        disabled={isSearching || isPatcherActive}
         onToggle={actions.handleToggleMod}
         onUninstall={actions.handleUninstallMod}
       >
@@ -84,6 +86,7 @@ export function LibraryContent({
               viewMode={viewMode}
               onToggle={actions.handleToggleMod}
               onUninstall={actions.handleUninstallMod}
+              disabled={isPatcherActive}
             />
           ))}
         </div>
