@@ -66,11 +66,11 @@ pub struct PatchedWadStats {
 /// # Returns
 ///
 /// [`PatchedWadStats`] with build metrics (chunk counts, timing).
-pub fn build_patched_wad(
+pub fn build_patched_wad<B: AsRef<[u8]>>(
     src_wad_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
     override_hashes: &HashSet<u64>,
-    mut resolve_override: impl FnMut(u64) -> Result<Vec<u8>>,
+    mut resolve_override: impl FnMut(u64) -> Result<B>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
@@ -139,11 +139,12 @@ pub fn build_patched_wad(
 
         if override_hashes.contains(&path_hash) {
             let override_bytes = resolve_override(path_hash)?;
+            let override_data = override_bytes.as_ref();
             overrides_applied += 1;
 
-            let kind = LeagueFileKind::identify_from_bytes(&override_bytes);
+            let kind = LeagueFileKind::identify_from_bytes(override_data);
             let compression = kind.ideal_compression();
-            let compressed = compress_by_type(&override_bytes, compression)?;
+            let compressed = compress_by_type(override_data, compression)?;
             let compressed_checksum = xxh3_64(&compressed);
 
             writer.write_all(&compressed)?;
@@ -152,7 +153,7 @@ pub fn build_patched_wad(
                 path_hash,
                 data_offset,
                 compressed_size: compressed.len(),
-                uncompressed_size: override_bytes.len(),
+                uncompressed_size: override_data.len(),
                 compression_type: compression,
                 is_duplicated: false,
                 frame_count: 0,
