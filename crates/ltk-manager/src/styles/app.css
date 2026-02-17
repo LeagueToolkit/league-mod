@@ -51,23 +51,23 @@
   --accent-900: hsl(var(--accent-hue), var(--accent-saturation), 10%);
 }
 
-/* Light theme overrides */
+/* Light theme overrides (slate-tinted) */
 :root.light {
-  --surface-950-rgb: 255 255 255;
-  --surface-900-rgb: 248 248 248;
+  --surface-950-rgb: 248 250 252;
+  --surface-900-rgb: 241 245 249;
 
-  /* Background colors - inverted for light mode */
-  --surface-950: #ffffff;
-  --surface-900: #f8f8f8; /* Editor background */
-  --surface-800: #f3f3f3; /* Sidebar background */
-  --surface-700: #e8e8e8; /* Input/card background */
-  --surface-600: #d4d4d4; /* Borders, dividers */
-  --surface-500: #b0b0b0; /* Muted elements */
-  --surface-400: #808080; /* Placeholder text */
-  --surface-300: #616161; /* Secondary text */
-  --surface-200: #3c3c3c; /* Primary text */
-  --surface-100: #1e1e1e; /* Bright text */
-  --surface-50: #0e0e0e; /* Black text */
+  /* Background colors - slate-tinted for light mode */
+  --surface-950: #f8fafc; /* Page background */
+  --surface-900: #f1f5f9; /* Editor background */
+  --surface-800: #e8ecf2; /* Sidebar background */
+  --surface-700: #dbe1ea; /* Input/card background */
+  --surface-600: #bfc8d4; /* Borders, dividers */
+  --surface-500: #8494a7; /* Muted elements */
+  --surface-400: #64748b; /* Placeholder text */
+  --surface-300: #475569; /* Secondary text */
+  --surface-200: #1e293b; /* Primary text */
+  --surface-100: #0f172a; /* Bright text */
+  --surface-50: #020617; /* Black text */
 }
 
 @theme {
@@ -289,9 +289,30 @@ body {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
-.backdrop-active {
+.backdrop-active:not(.light) {
   --surface-400: #a0a0a0;
   --surface-500: #707070;
+}
+
+/* Light theme backdrop adjustments */
+.backdrop-active.light .title-bar {
+  background-color: rgb(var(--surface-950-rgb) / 0.92);
+}
+
+.backdrop-active.light main {
+  background-color: rgb(var(--surface-900-rgb) / 0.88);
+}
+
+.backdrop-active.light main > * > [class*="border-b"] {
+  background-color: rgb(var(--surface-950-rgb) / 0.5);
+}
+
+.backdrop-active.light main .settings-container {
+  background-color: rgb(var(--surface-900-rgb) / 0.7);
+}
+
+.backdrop-active.light main * {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
 }
 
 .backdrop-active ::-webkit-scrollbar-track {

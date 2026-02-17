@@ -44,10 +44,10 @@ export function StatusBar() {
         : null;
 
     return (
-      <div className="animate-in slide-in-from-bottom-2 border-t-2 border-brand-500 bg-surface-900/90 px-4 py-2 backdrop-blur-md">
+      <div className="animate-in slide-in-from-bottom-2 border-t-2 border-brand-500 bg-surface-950 px-4 py-2">
         <div className="flex items-center gap-3">
-          <LuLoader className="h-4 w-4 shrink-0 animate-spin text-brand-400" />
-          <span className="shrink-0 text-sm font-medium text-brand-300">Building Overlay</span>
+          <LuLoader className="h-4 w-4 shrink-0 animate-spin text-brand-500" />
+          <span className="shrink-0 text-sm font-medium text-brand-500">Building Overlay</span>
           <span className="text-sm text-surface-300">{label}</span>
           <div className="flex-1" />
           {counter && (
@@ -70,9 +70,9 @@ export function StatusBar() {
 
   // Patcher running (post-build) — minimal indicator
   return (
-    <div className="animate-in slide-in-from-bottom-2 flex items-center border-t-2 border-green-500 bg-surface-900/90 px-4 py-2 backdrop-blur-md">
-      <span className="mr-2 h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-400" />
-      <span className="text-sm font-medium text-green-300">Patcher running</span>
+    <div className="animate-in slide-in-from-bottom-2 flex items-center border-t-2 border-green-500 bg-surface-950 px-4 py-2">
+      <span className="mr-2 h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />
+      <span className="text-sm font-medium text-green-500">Patcher running</span>
       <div className="flex-1" />
       <Button
         variant="ghost"
