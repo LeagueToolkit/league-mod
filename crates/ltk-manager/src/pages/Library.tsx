@@ -6,7 +6,6 @@ import {
   LibraryContent,
   LibraryToolbar,
   useInstalledMods,
-  useInstallProgress,
   useLibraryActions,
   useModFileDrop,
 } from "@/modules/library";
@@ -25,7 +24,6 @@ export function Library() {
   const { data: mods = [], isLoading, error } = useInstalledMods();
   const actions = useLibraryActions();
   const isDragOver = useModFileDrop(actions.handleBulkInstallFiles);
-  const { progress: installProgress, reset: resetInstallProgress } = useInstallProgress();
 
   const { data: patcherStatus } = usePatcherStatus();
   const startPatcher = useStartPatcher();
@@ -54,11 +52,6 @@ export function Library() {
         console.error("Failed to stop patcher:", error.message);
       },
     });
-  }
-
-  function handleCloseImportDialog() {
-    actions.handleCloseImportDialog();
-    resetInstallProgress();
   }
 
   return (
@@ -92,8 +85,8 @@ export function Library() {
       />
       <ImportProgressDialog
         open={actions.importDialogOpen}
-        onClose={handleCloseImportDialog}
-        progress={installProgress}
+        onClose={actions.handleCloseImportDialog}
+        progress={actions.installProgress}
         result={actions.importResult}
       />
     </div>

@@ -6,6 +6,7 @@ import { api, type BulkInstallResult, unwrap } from "@/lib/tauri";
 
 import { useBulkInstallMods } from "./useBulkInstallMods";
 import { useInstallMod } from "./useInstallMod";
+import { useInstallProgress } from "./useInstallProgress";
 import { useReorderMods } from "./useReorderMods";
 import { useToggleMod } from "./useToggleMod";
 import { useUninstallMod } from "./useUninstallMod";
@@ -20,6 +21,7 @@ export function useLibraryActions() {
 
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importResult, setImportResult] = useState<BulkInstallResult | null>(null);
+  const { progress: installProgress, reset: resetInstallProgress } = useInstallProgress();
 
   async function handleInstallMod() {
     const files = await open({
@@ -77,7 +79,7 @@ export function useLibraryActions() {
         }
       },
       onError: (error) => {
-        setImportDialogOpen(false);
+        handleCloseImportDialog();
         toast.error("Import failed", error.message);
       },
     });
@@ -86,6 +88,7 @@ export function useLibraryActions() {
   function handleCloseImportDialog() {
     setImportDialogOpen(false);
     setImportResult(null);
+    resetInstallProgress();
   }
 
   function handleToggleMod(modId: string, enabled: boolean) {
@@ -135,6 +138,7 @@ export function useLibraryActions() {
     handleOpenStorageDirectory,
     importDialogOpen,
     importResult,
+    installProgress,
     handleCloseImportDialog,
   };
 }
