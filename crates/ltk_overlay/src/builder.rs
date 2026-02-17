@@ -26,7 +26,9 @@ use crate::state::OverlayState;
 use crate::utils::{compute_wad_overrides_fingerprint, resolve_chunk_hash};
 use crate::wad_builder::build_patched_wad;
 use camino::{Utf8Path, Utf8PathBuf};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use xxhash_rust::xxh3::xxh3_64;
@@ -359,49 +361,72 @@ impl OverlayBuilder {
             }
         }
 
-        // --- Stage: Patching WADs ---
+        // --- Stage: Patching WADs (parallel) ---
         let total_wads = wads_to_build.len() as u32;
-        let mut built_paths: Vec<Utf8PathBuf> = Vec::with_capacity(wads_to_build.len());
+        let completed = AtomicU32::new(0);
+        let game_dir = &self.game_dir;
+        let overlay_root = &self.overlay_root;
+        let progress_callback = &self.progress_callback;
 
-        for (idx, relative_game_path) in wads_to_build.iter().enumerate() {
-            let current_wad = (idx + 1) as u32;
-            let wad_name = relative_game_path.file_name().unwrap_or("unknown");
+        let emit = |progress: OverlayProgress| {
+            if let Some(callback) = progress_callback {
+                callback(progress);
+            }
+        };
 
-            self.emit_progress(OverlayProgress {
-                stage: OverlayStage::PatchingWad,
-                current_file: Some(wad_name.to_string()),
-                current: current_wad,
-                total: total_wads,
-            });
+        emit(OverlayProgress {
+            stage: OverlayStage::PatchingWad,
+            current_file: None,
+            current: 0,
+            total: total_wads,
+        });
 
-            let src_wad_path = self.game_dir.join(relative_game_path);
-            let dst_wad_path = self.overlay_root.join(relative_game_path);
+        let built_paths: Result<Vec<Utf8PathBuf>> = wads_to_build
+            .par_iter()
+            .map(|relative_game_path| {
+                let src_wad_path = game_dir.join(relative_game_path);
+                let dst_wad_path = overlay_root.join(relative_game_path);
 
-            let mut overrides = wad_overrides
-                .get(relative_game_path)
-                .expect("WAD must be in overrides map")
-                .clone();
+                let mut overrides = wad_overrides
+                    .get(relative_game_path)
+                    .expect("WAD must be in overrides map")
+                    .clone();
 
-            tracing::info!(
-                "Patching WAD [{}/{}] src={} dst={} overrides={}",
-                current_wad,
-                total_wads,
-                src_wad_path,
-                dst_wad_path,
-                overrides.len()
-            );
+                tracing::info!(
+                    "Patching WAD src={} dst={} overrides={}",
+                    src_wad_path,
+                    dst_wad_path,
+                    overrides.len()
+                );
 
-            let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
-            build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
-                overrides
-                    .remove(&hash)
-                    .map(|arc| arc.to_vec())
-                    .ok_or_else(|| {
-                        Error::Other(format!("Missing override data for hash {:016x}", hash))
-                    })
-            })?;
-            built_paths.push(dst_wad_path);
-        }
+                let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
+                build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
+                    overrides
+                        .remove(&hash)
+                        .map(|arc| arc.to_vec())
+                        .ok_or_else(|| {
+                            Error::Other(format!("Missing override data for hash {:016x}", hash))
+                        })
+                })?;
+
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                emit(OverlayProgress {
+                    stage: OverlayStage::PatchingWad,
+                    current_file: Some(
+                        relative_game_path
+                            .file_name()
+                            .unwrap_or("unknown")
+                            .to_string(),
+                    ),
+                    current: done,
+                    total: total_wads,
+                });
+
+                Ok(dst_wad_path)
+            })
+            .collect();
+
+        let built_paths = built_paths?;
 
         let reused_paths: Vec<Utf8PathBuf> = wads_to_reuse
             .iter()
