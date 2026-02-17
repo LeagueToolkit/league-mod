@@ -69,6 +69,23 @@ export interface LayerInfo {
   fileCount: number;
 }
 
+export interface BulkInstallResult {
+  installed: InstalledMod[];
+  failed: BulkInstallError[];
+}
+
+export interface BulkInstallError {
+  filePath: string;
+  fileName: string;
+  message: string;
+}
+
+export interface InstallProgress {
+  current: number;
+  total: number;
+  currentFile: string;
+}
+
 export interface PatcherConfig {
   logFile?: string | null;
   timeoutMs?: number | null;
@@ -187,6 +204,8 @@ export const api = {
   // Mods
   getInstalledMods: () => invokeResult<InstalledMod[]>("get_installed_mods"),
   installMod: (filePath: string) => invokeResult<InstalledMod>("install_mod", { filePath }),
+  installMods: (filePaths: string[]) =>
+    invokeResult<BulkInstallResult>("install_mods", { filePaths }),
   uninstallMod: (modId: string) => invokeResult<void>("uninstall_mod", { modId }),
   toggleMod: (modId: string, enabled: boolean) =>
     invokeResult<void>("toggle_mod", { modId, enabled }),

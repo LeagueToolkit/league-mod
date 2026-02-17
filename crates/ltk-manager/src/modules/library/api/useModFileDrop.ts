@@ -1,8 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
-import type { useInstallMod } from "./useInstallMod";
-
 const VALID_EXTENSIONS = [".modpkg", ".fantome"];
 
 function isValidModFile(path: string): boolean {
@@ -10,7 +8,7 @@ function isValidModFile(path: string): boolean {
   return VALID_EXTENSIONS.some((ext) => lowerPath.endsWith(ext));
 }
 
-export function useModFileDrop(installMod: ReturnType<typeof useInstallMod>) {
+export function useModFileDrop(onDrop: (filePaths: string[]) => void) {
   const [isDragOver, setIsDragOver] = useState(false);
 
   useEffect(() => {
@@ -24,12 +22,8 @@ export function useModFileDrop(installMod: ReturnType<typeof useInstallMod>) {
         const paths = event.payload.paths as string[];
         const validPaths = paths.filter(isValidModFile);
 
-        for (const path of validPaths) {
-          installMod.mutate(path, {
-            onError: (error) => {
-              console.error("Failed to install mod:", error.message);
-            },
-          });
+        if (validPaths.length > 0) {
+          onDrop(validPaths);
         }
       } else if (eventType === "leave" || eventType === "cancel") {
         setIsDragOver(false);
@@ -39,7 +33,7 @@ export function useModFileDrop(installMod: ReturnType<typeof useInstallMod>) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [installMod]);
+  }, [onDrop]);
 
   return isDragOver;
 }

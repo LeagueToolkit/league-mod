@@ -5,8 +5,8 @@ mod profiles;
 pub use inspect::{inspect_modpkg_file, ModpkgInfo};
 pub(crate) use library::get_enabled_mods_for_overlay;
 pub use library::{
-    get_installed_mods, get_mod_thumbnail_data, install_mod_from_package, reorder_mods,
-    toggle_mod_enabled, uninstall_mod_by_id,
+    get_installed_mods, get_mod_thumbnail_data, install_mod_from_package,
+    install_mods_from_packages, reorder_mods, toggle_mod_enabled, uninstall_mod_by_id,
 };
 pub use profiles::{
     create_profile, delete_profile, get_active_profile_info, get_profiles, rename_profile,
@@ -64,6 +64,32 @@ pub struct InstalledMod {
     pub layers: Vec<ModLayer>,
     /// Directory where the mod is installed
     pub mod_dir: String,
+}
+
+/// Result of a bulk mod install operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkInstallResult {
+    pub installed: Vec<InstalledMod>,
+    pub failed: Vec<BulkInstallError>,
+}
+
+/// Error info for a single file that failed during bulk install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkInstallError {
+    pub file_path: String,
+    pub file_name: String,
+    pub message: String,
+}
+
+/// Progress event emitted per-file during bulk mod install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgress {
+    pub current: usize,
+    pub total: usize,
+    pub current_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

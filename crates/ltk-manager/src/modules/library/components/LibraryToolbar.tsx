@@ -85,10 +85,12 @@ export function LibraryToolbar({
         variant="filled"
         size="sm"
         onClick={actions.handleInstallMod}
-        loading={actions.installMod.isPending}
+        loading={actions.installMod.isPending || actions.bulkInstallMods.isPending}
         left={<LuPlus className="h-4 w-4" />}
       >
-        {actions.installMod.isPending ? "Installing..." : "Add Mod"}
+        {actions.installMod.isPending || actions.bulkInstallMods.isPending
+          ? "Installing..."
+          : "Add Mod"}
       </Button>
 
       {patcher.status?.running ? (
@@ -97,7 +99,9 @@ export function LibraryToolbar({
           size="sm"
           onClick={patcher.onStop}
           loading={patcher.isStopping}
-          disabled={actions.installMod.isPending || patcher.isStopping}
+          disabled={
+            actions.installMod.isPending || actions.bulkInstallMods.isPending || patcher.isStopping
+          }
         >
           {patcher.isStopping ? "Stopping..." : "Stop Patcher"}
         </Button>
@@ -111,6 +115,7 @@ export function LibraryToolbar({
             isLoading ||
             !hasEnabledMods ||
             actions.installMod.isPending ||
+            actions.bulkInstallMods.isPending ||
             patcher.isStopping ||
             patcher.isStarting
           }

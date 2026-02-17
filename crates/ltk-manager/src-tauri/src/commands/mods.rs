@@ -1,7 +1,8 @@
 use crate::error::{AppResult, IpcResult, MutexResultExt};
 use crate::mods::{
-    inspect_modpkg_file, install_mod_from_package, reorder_mods as reorder_mods_inner_fn,
-    toggle_mod_enabled, uninstall_mod_by_id, InstalledMod, ModpkgInfo,
+    inspect_modpkg_file, install_mod_from_package, install_mods_from_packages,
+    reorder_mods as reorder_mods_inner_fn, toggle_mod_enabled, uninstall_mod_by_id,
+    BulkInstallResult, InstalledMod, ModpkgInfo,
 };
 use crate::state::SettingsState;
 use tauri::{AppHandle, State};
@@ -41,6 +42,25 @@ fn install_mod_inner(
 ) -> AppResult<InstalledMod> {
     let settings = settings.0.lock().mutex_err()?.clone();
     install_mod_from_package(app_handle, &settings, &file_path)
+}
+
+/// Install multiple mods from `.modpkg` or `.fantome` files in a single batch.
+#[tauri::command]
+pub fn install_mods(
+    file_paths: Vec<String>,
+    app_handle: AppHandle,
+    settings: State<SettingsState>,
+) -> IpcResult<BulkInstallResult> {
+    install_mods_inner(file_paths, &app_handle, &settings).into()
+}
+
+fn install_mods_inner(
+    file_paths: Vec<String>,
+    app_handle: &AppHandle,
+    settings: &State<SettingsState>,
+) -> AppResult<BulkInstallResult> {
+    let settings = settings.0.lock().mutex_err()?.clone();
+    install_mods_from_packages(app_handle, &settings, &file_paths)
 }
 
 /// Uninstall a mod by id.
