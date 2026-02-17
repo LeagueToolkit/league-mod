@@ -229,7 +229,7 @@ pub(crate) fn load_library_index(storage_dir: &Path) -> AppResult<LibraryIndex> 
         return Ok(LibraryIndex::default());
     }
 
-    Ok(serde_json::from_str(&fs::read_to_string(path)?).map_err(AppError::from)?)
+    serde_json::from_str(&fs::read_to_string(path)?).map_err(AppError::from)
 }
 
 pub(super) fn save_library_index(storage_dir: &Path, index: &LibraryIndex) -> AppResult<()> {
