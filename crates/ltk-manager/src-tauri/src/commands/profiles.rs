@@ -112,14 +112,16 @@ fn switch_mod_profile_inner(
 }
 
 /// Rename a profile.
+/// Returns an error if the patcher is currently running (rename touches the filesystem).
 #[tauri::command]
 pub fn rename_mod_profile(
     profile_id: String,
     new_name: String,
     app_handle: AppHandle,
     settings: State<SettingsState>,
+    patcher_state: State<PatcherState>,
 ) -> IpcResult<Profile> {
-    rename_mod_profile_inner(profile_id, new_name, &app_handle, &settings).into()
+    rename_mod_profile_inner(profile_id, new_name, &app_handle, &settings, &patcher_state).into()
 }
 
 fn rename_mod_profile_inner(
@@ -127,7 +129,17 @@ fn rename_mod_profile_inner(
     new_name: String,
     app_handle: &AppHandle,
     settings: &State<SettingsState>,
+    patcher_state: &State<PatcherState>,
 ) -> AppResult<Profile> {
+    let patcher = patcher_state.0.lock().mutex_err()?;
+    if patcher.is_running() {
+        return Err(AppError::Other(
+            "Cannot rename profiles while patcher is running. Please stop the patcher first."
+                .to_string(),
+        ));
+    }
+    drop(patcher);
+
     let settings = settings.0.lock().mutex_err()?.clone();
     rename_profile(app_handle, &settings, profile_id, new_name)
 }

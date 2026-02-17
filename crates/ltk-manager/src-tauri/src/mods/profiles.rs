@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::{
     get_active_profile, get_profile_by_id, load_library_index, resolve_profile_dirs,
-    resolve_storage_dir, save_library_index, Profile,
+    resolve_storage_dir, save_library_index, Profile, ProfileSlug,
 };
 
 /// Create a new profile.
@@ -33,12 +33,26 @@ pub fn create_profile(
         )));
     }
 
+    // Generate and validate slug
+    let slug = ProfileSlug::from_name(&name).ok_or_else(|| {
+        AppError::Other(
+            "Profile name must contain at least one alphanumeric character".to_string(),
+        )
+    })?;
+    if !slug.is_unique_in(&index, None) {
+        return Err(AppError::Other(format!(
+            "Profile '{}' already exists",
+            name
+        )));
+    }
+
     // New profiles get all installed mods in their display order
     let mod_order: Vec<String> = index.mods.iter().map(|m| m.id.clone()).collect();
 
     let profile = Profile {
         id: Uuid::new_v4().to_string(),
         name,
+        slug,
         enabled_mods: Vec::new(),
         mod_order,
         created_at: Utc::now(),
@@ -46,7 +60,7 @@ pub fn create_profile(
     };
 
     // Create profile directories
-    let (overlay_dir, cache_dir) = resolve_profile_dirs(&storage_dir, &profile.id);
+    let (overlay_dir, cache_dir) = resolve_profile_dirs(&storage_dir, &profile.slug);
     fs::create_dir_all(&overlay_dir)?;
     fs::create_dir_all(&cache_dir)?;
 
@@ -65,8 +79,6 @@ pub fn delete_profile(
 ) -> AppResult<()> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
-
-    // Validate profile exists and check constraints
     let profile = get_profile_by_id(&index, &profile_id)?;
 
     // Cannot delete Default profile
@@ -81,11 +93,11 @@ pub fn delete_profile(
         ));
     }
 
-    // Remove from index
+    let profile_slug = profile.slug.clone();
     index.profiles.retain(|p| p.id != profile_id);
 
     // Delete profile directories
-    let profile_dir = storage_dir.join("profiles").join(&profile_id);
+    let profile_dir = storage_dir.join("profiles").join(profile_slug.as_str());
     if profile_dir.exists() {
         fs::remove_dir_all(&profile_dir)?;
         tracing::info!("Deleted profile directory: {}", profile_dir.display());
@@ -105,11 +117,7 @@ pub fn switch_profile(
 ) -> AppResult<Profile> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
-
-    // Validate profile exists
     get_profile_by_id(&index, &profile_id)?;
-
-    // Update active profile
     index.active_profile_id = profile_id.clone();
 
     // Update last_used timestamp
@@ -150,6 +158,13 @@ pub fn rename_profile(
         return Err(AppError::Other("Profile name cannot be empty".to_string()));
     }
 
+    // Generate and validate new slug
+    let new_slug = ProfileSlug::from_name(&new_name).ok_or_else(|| {
+        AppError::Other(
+            "Profile name must contain at least one alphanumeric character".to_string(),
+        )
+    })?;
+
     // Check for duplicate names
     if index
         .profiles
@@ -159,6 +174,13 @@ pub fn rename_profile(
         return Err(AppError::Other(format!(
             "Profile '{}' already exists",
             new_name
+        )));
+    }
+
+    if !new_slug.is_unique_in(&index, Some(&profile_id)) {
+        return Err(AppError::Other(format!(
+            "Profile directory name '{}' conflicts with another profile",
+            new_slug
         )));
     }
 
@@ -173,7 +195,22 @@ pub fn rename_profile(
         return Err(AppError::Other("Cannot rename Default profile".to_string()));
     }
 
+    // Rename directory on disk if slug changed
+    if profile.slug != new_slug {
+        let old_dir = storage_dir.join("profiles").join(profile.slug.as_str());
+        let new_dir = storage_dir.join("profiles").join(new_slug.as_str());
+        if old_dir.exists() {
+            fs::rename(&old_dir, &new_dir)?;
+            tracing::info!(
+                "Renamed profile dir: {} -> {}",
+                old_dir.display(),
+                new_dir.display()
+            );
+        }
+    }
+
     profile.name = new_name;
+    profile.slug = new_slug;
     let result = profile.clone();
     save_library_index(&storage_dir, &index)?;
 

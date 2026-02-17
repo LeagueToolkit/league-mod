@@ -112,6 +112,7 @@ export interface OverlayProgress {
 export interface Profile {
   id: string;
   name: string;
+  slug: string;
   enabledMods: string[];
   createdAt: string;
   lastUsed: string;

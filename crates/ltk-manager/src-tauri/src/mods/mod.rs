@@ -22,6 +22,47 @@ use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use uuid::Uuid;
 
+/// Slugified profile name used as the filesystem directory name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProfileSlug(pub String);
+
+impl ProfileSlug {
+    /// Create a slug from a profile name. Returns `None` if the name produces an empty slug.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let s = slug::slugify(name);
+        if s.is_empty() {
+            None
+        } else {
+            Some(Self(s))
+        }
+    }
+
+    /// Check whether this slug is unique among profiles in the index.
+    pub fn is_unique_in(&self, index: &LibraryIndex, exclude_id: Option<&str>) -> bool {
+        !index
+            .profiles
+            .iter()
+            .any(|p| p.slug == *self && exclude_id.is_none_or(|id| p.id != id))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ProfileSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<String> for ProfileSlug {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 /// A mod profile for organizing different mod configurations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +71,9 @@ pub struct Profile {
     pub id: String,
     /// User-friendly name
     pub name: String,
+    /// Slugified name used as the filesystem directory name
+    #[serde(default)]
+    pub slug: ProfileSlug,
     /// List of mod IDs enabled in this profile (maintains overlay priority order)
     pub enabled_mods: Vec<String>,
     /// Display order of all mods (enabled and disabled) in the UI
@@ -95,11 +139,8 @@ pub struct InstallProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LibraryIndex {
-    /// Installed mods (shared across all profiles)
     pub(super) mods: Vec<LibraryModEntry>,
-    /// All profiles
     pub(super) profiles: Vec<Profile>,
-    /// Currently active profile ID
     pub(crate) active_profile_id: String,
 }
 
@@ -108,6 +149,7 @@ impl Default for LibraryIndex {
         let default_profile = Profile {
             id: Uuid::new_v4().to_string(),
             name: "Default".to_string(),
+            slug: ProfileSlug::from("default".to_string()),
             enabled_mods: Vec::new(),
             mod_order: Vec::new(),
             created_at: Utc::now(),
@@ -187,7 +229,7 @@ pub(crate) fn load_library_index(storage_dir: &Path) -> AppResult<LibraryIndex> 
         return Ok(LibraryIndex::default());
     }
 
-    serde_json::from_str(&fs::read_to_string(path)?).map_err(AppError::from)
+    Ok(serde_json::from_str(&fs::read_to_string(path)?).map_err(AppError::from)?)
 }
 
 pub(super) fn save_library_index(storage_dir: &Path, index: &LibraryIndex) -> AppResult<()> {
@@ -198,7 +240,7 @@ pub(super) fn save_library_index(storage_dir: &Path, index: &LibraryIndex) -> Ap
     Ok(())
 }
 
-pub(super) fn get_active_profile(index: &LibraryIndex) -> AppResult<&Profile> {
+pub(crate) fn get_active_profile(index: &LibraryIndex) -> AppResult<&Profile> {
     index
         .profiles
         .iter()
@@ -217,8 +259,11 @@ pub(super) fn get_profile_by_id<'a>(
         .ok_or_else(|| AppError::Other(format!("Profile {} not found", profile_id)))
 }
 
-pub(super) fn resolve_profile_dirs(storage_dir: &Path, profile_id: &str) -> (PathBuf, PathBuf) {
-    let profile_dir = storage_dir.join("profiles").join(profile_id);
+pub(super) fn resolve_profile_dirs(
+    storage_dir: &Path,
+    profile_slug: &ProfileSlug,
+) -> (PathBuf, PathBuf) {
+    let profile_dir = storage_dir.join("profiles").join(profile_slug.as_str());
     let overlay_dir = profile_dir.join("overlay");
     let cache_dir = profile_dir.join("cache");
     (overlay_dir, cache_dir)

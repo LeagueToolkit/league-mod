@@ -26,17 +26,17 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
 
     let game_dir = resolve_game_dir(settings)?;
 
-    // Get active profile ID and enabled mods
-    let (profile_id, enabled_mods) = get_enabled_mods_for_overlay(app_handle, settings)?;
+    // Get active profile slug and enabled mods
+    let (profile_slug, enabled_mods) = get_enabled_mods_for_overlay(app_handle, settings)?;
 
     // Use profile-specific overlay directory
     let overlay_root = storage_dir
         .join("profiles")
-        .join(&profile_id)
+        .join(profile_slug.as_str())
         .join("overlay");
 
     tracing::info!("Overlay: storage_dir={}", storage_dir.display());
-    tracing::info!("Overlay: profile_id={}", profile_id);
+    tracing::info!("Overlay: profile_slug={}", profile_slug);
     tracing::info!("Overlay: overlay_root={}", overlay_root.display());
     tracing::info!("Overlay: game_dir={}", game_dir.display());
 
@@ -98,16 +98,17 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
 pub fn invalidate_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<()> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
     let index = crate::mods::load_library_index(&storage_dir)?;
+    let active_profile = crate::mods::get_active_profile(&index)?;
     let overlay_json = storage_dir
         .join("profiles")
-        .join(&index.active_profile_id)
+        .join(active_profile.slug.as_str())
         .join("overlay")
         .join("overlay.json");
     if overlay_json.exists() {
         std::fs::remove_file(&overlay_json)?;
         tracing::info!(
             "Invalidated overlay for profile {}",
-            index.active_profile_id
+            active_profile.slug
         );
     }
     Ok(())

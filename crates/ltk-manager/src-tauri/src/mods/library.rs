@@ -425,7 +425,7 @@ pub fn get_mod_thumbnail_data(
 pub(crate) fn get_enabled_mods_for_overlay(
     app_handle: &AppHandle,
     settings: &Settings,
-) -> AppResult<(String, Vec<ltk_overlay::EnabledMod>)> {
+) -> AppResult<(super::ProfileSlug, Vec<ltk_overlay::EnabledMod>)> {
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
     let index = load_library_index(&storage_dir)?;
 
@@ -486,7 +486,7 @@ pub(crate) fn get_enabled_mods_for_overlay(
         });
     }
 
-    Ok((active_profile_id, enabled_mods))
+    Ok((active_profile.slug.clone(), enabled_mods))
 }
 
 fn read_installed_mod(
