@@ -5,6 +5,7 @@ export { useDeleteProfile } from "./useDeleteProfile";
 export { useInstallMod } from "./useInstallMod";
 export { useInstallProgress } from "./useInstallProgress";
 export { useLibraryActions } from "./useLibraryActions";
+export { useLibraryViewMode } from "./useLibraryViewMode";
 export { useModFileDrop } from "./useModFileDrop";
 export { useRenameProfile } from "./useRenameProfile";
 export { useReorderMods } from "./useReorderMods";

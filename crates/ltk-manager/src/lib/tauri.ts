@@ -30,6 +30,7 @@ export interface Settings {
   firstRunComplete: boolean;
   backdropImage: string | null;
   backdropBlur: number | null;
+  libraryViewMode: string | null;
 }
 
 export interface InstalledMod {

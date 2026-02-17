@@ -3,6 +3,7 @@ import { LuPlus, LuSearch, LuUpload } from "react-icons/lu";
 import { Button } from "@/components";
 import type { AppError, InstalledMod } from "@/lib/tauri";
 import type { useLibraryActions } from "@/modules/library/api";
+import { useLibraryViewMode } from "@/modules/library/api";
 
 import { ModCard } from "./ModCard";
 import { SortableModCard } from "./SortableModCard";
@@ -16,7 +17,6 @@ function gridClass(viewMode: "grid" | "list", indent = false) {
 interface LibraryContentProps {
   mods: InstalledMod[];
   searchQuery: string;
-  viewMode: "grid" | "list";
   actions: ReturnType<typeof useLibraryActions>;
   isLoading: boolean;
   error: AppError | null;
@@ -27,13 +27,13 @@ interface LibraryContentProps {
 export function LibraryContent({
   mods,
   searchQuery,
-  viewMode,
   actions,
   isLoading,
   error,
   onInstall,
   isPatcherActive,
 }: LibraryContentProps) {
+  const { viewMode } = useLibraryViewMode();
   const isSearching = searchQuery.length > 0;
 
   const filteredMods = mods.filter(

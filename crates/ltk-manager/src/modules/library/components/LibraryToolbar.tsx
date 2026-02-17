@@ -3,6 +3,7 @@ import { LuFolderOpen, LuGrid3X3, LuList, LuPlus, LuSearch } from "react-icons/l
 import { Button, IconButton } from "@/components";
 import type { PatcherStatus } from "@/lib/tauri";
 import type { useLibraryActions } from "@/modules/library/api";
+import { useLibraryViewMode } from "@/modules/library/api";
 
 import { ProfileSelector } from "./ProfileSelector";
 
@@ -17,8 +18,6 @@ interface PatcherProps {
 interface LibraryToolbarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  viewMode: "grid" | "list";
-  onViewModeChange: (mode: "grid" | "list") => void;
   actions: ReturnType<typeof useLibraryActions>;
   patcher: PatcherProps;
   hasEnabledMods: boolean;
@@ -29,14 +28,14 @@ interface LibraryToolbarProps {
 export function LibraryToolbar({
   searchQuery,
   onSearchChange,
-  viewMode,
-  onViewModeChange,
   actions,
   patcher,
   hasEnabledMods,
   isLoading,
   isPatcherActive,
 }: LibraryToolbarProps) {
+  const { viewMode, setViewMode } = useLibraryViewMode();
+
   return (
     <div
       className="flex items-center gap-4 border-b border-surface-600 px-4 py-3"
@@ -70,13 +69,13 @@ export function LibraryToolbar({
           icon={<LuGrid3X3 className="h-4 w-4" />}
           variant={viewMode === "grid" ? "default" : "ghost"}
           size="sm"
-          onClick={() => onViewModeChange("grid")}
+          onClick={() => setViewMode("grid")}
         />
         <IconButton
           icon={<LuList className="h-4 w-4" />}
           variant={viewMode === "list" ? "default" : "ghost"}
           size="sm"
-          onClick={() => onViewModeChange("list")}
+          onClick={() => setViewMode("list")}
         />
       </div>
 

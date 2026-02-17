@@ -120,4 +120,6 @@ pub struct Settings {
     pub backdrop_image: Option<PathBuf>,
     /// Backdrop blur amount in pixels (default: 40).
     pub backdrop_blur: Option<u32>,
+    /// Library view mode ("grid" or "list"). Defaults to "grid".
+    pub library_view_mode: Option<String>,
 }

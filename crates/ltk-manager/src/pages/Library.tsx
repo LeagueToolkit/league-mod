@@ -13,7 +13,6 @@ import { usePatcherStatus, useStartPatcher, useStopPatcher } from "@/modules/pat
 
 export function Library() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   const { data: mods = [], isLoading, error } = useInstalledMods();
   const actions = useLibraryActions();
@@ -53,8 +52,6 @@ export function Library() {
       <LibraryToolbar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
         actions={actions}
         patcher={{
           status: patcherStatus,
@@ -70,7 +67,6 @@ export function Library() {
       <LibraryContent
         mods={mods}
         searchQuery={searchQuery}
-        viewMode={viewMode}
         actions={actions}
         isLoading={isLoading}
         error={error}
