@@ -4,7 +4,7 @@
 )]
 
 use tauri::Manager;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::{non_blocking::WorkerGuard, rolling};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
@@ -73,8 +73,9 @@ fn main() {
     let (_file_guard, log_path) = init_logging();
 
     tracing::info!("Starting LTK Manager");
-    if let Some(p) = log_path {
-        tracing::info!("Backend log file: {}", p.display());
+    if let Some(ref p) = log_path {
+        tracing::info!("Log directory: {}", p.display());
+        cleanup_old_logs(p, 7);
     }
 
     tauri::Builder::default()
@@ -178,16 +179,17 @@ fn init_logging() -> (
                 );
                 (None, None, None)
             } else {
-                let file_appender = tracing_appender::rolling::never(&log_dir, "ltk-manager.log");
+                let file_appender = rolling::RollingFileAppender::builder()
+                    .rotation(rolling::Rotation::DAILY)
+                    .filename_prefix("ltk-manager-")
+                    .filename_suffix(".log")
+                    .build(&log_dir)
+                    .expect("failed to create log file appender");
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 let layer = tracing_subscriber::fmt::layer()
                     .with_writer(non_blocking)
                     .with_ansi(false);
-                (
-                    Some(guard),
-                    Some(layer),
-                    Some(log_dir.join("ltk-manager.log")),
-                )
+                (Some(guard), Some(layer), Some(log_dir))
             }
         }
         None => (None, None, None),
@@ -226,16 +228,17 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
                 );
                 (None, None, None)
             } else {
-                let file_appender = tracing_appender::rolling::never(&log_dir, "ltk-manager.log");
+                let file_appender = rolling::RollingFileAppender::builder()
+                    .rotation(rolling::Rotation::DAILY)
+                    .filename_prefix("ltk-manager-")
+                    .filename_suffix(".log")
+                    .build(&log_dir)
+                    .expect("failed to create log file appender");
                 let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
                 let layer = tracing_subscriber::fmt::layer()
                     .with_writer(non_blocking)
                     .with_ansi(false);
-                (
-                    Some(guard),
-                    Some(layer),
-                    Some(log_dir.join("ltk-manager.log")),
-                )
+                (Some(guard), Some(layer), Some(log_dir))
             }
         }
         None => (None, None, None),
@@ -251,6 +254,50 @@ fn init_logging() -> (Option<WorkerGuard>, Option<std::path::PathBuf>) {
     }
 
     (file_guard, log_path)
+}
+
+/// Delete log files older than `max_age_days` from the log directory.
+fn cleanup_old_logs(log_dir: &std::path::Path, max_age_days: u64) {
+    let max_age = std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
+
+    let entries = match std::fs::read_dir(log_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("Failed to read log directory for cleanup: {}", e);
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // Only target dated log files (e.g. "ltk-manager-2026-02-17.log")
+        if !file_name.starts_with("ltk-manager-") || !file_name.ends_with(".log") {
+            continue;
+        }
+
+        let modified = match entry.metadata().and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let age = match std::time::SystemTime::now().duration_since(modified) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        if age > max_age {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!("Failed to delete old log file {}: {}", path.display(), e);
+            } else {
+                tracing::info!("Deleted old log file: {}", path.display());
+            }
+        }
+    }
 }
 
 pub(crate) fn default_log_dir() -> Option<std::path::PathBuf> {

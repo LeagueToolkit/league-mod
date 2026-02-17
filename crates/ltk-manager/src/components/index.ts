@@ -5,6 +5,7 @@ export * from "./FormField";
 export * from "./Menu";
 export * from "./NavTabs";
 export * from "./Popover";
+export * from "./Progress";
 export * from "./RadioGroup";
 export * from "./Select";
 export * from "./Switch";

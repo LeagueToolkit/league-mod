@@ -5,6 +5,7 @@ import {
   ImportProgressDialog,
   LibraryContent,
   LibraryToolbar,
+  OverlayProgressDialog,
   useInstalledMods,
   useLibraryActions,
   useModFileDrop,
@@ -89,6 +90,7 @@ export function Library() {
         progress={actions.installProgress}
         result={actions.importResult}
       />
+      <OverlayProgressDialog open={isStarting} overlayProgress={overlayProgress} />
     </div>
   );
 }
