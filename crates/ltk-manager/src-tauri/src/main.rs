@@ -115,6 +115,7 @@ fn main() {
             // Mods
             commands::get_installed_mods,
             commands::install_mod,
+            commands::install_mods,
             commands::uninstall_mod,
             commands::toggle_mod,
             commands::inspect_modpkg,

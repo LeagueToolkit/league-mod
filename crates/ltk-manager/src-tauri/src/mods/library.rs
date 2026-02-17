@@ -9,9 +9,11 @@ use tauri::AppHandle;
 use uuid::Uuid;
 
 use super::{
-    load_library_index, resolve_storage_dir, save_library_index, InstalledMod, LibraryModEntry,
+    load_library_index, resolve_storage_dir, save_library_index, BulkInstallError,
+    BulkInstallResult, InstallProgress, InstalledMod, LibraryIndex, LibraryModEntry,
     ModArchiveFormat, ModLayer,
 };
+use tauri::Emitter;
 
 pub fn get_installed_mods(
     app_handle: &AppHandle,
@@ -105,14 +107,91 @@ pub fn install_mod_from_package(
     settings: &Settings,
     file_path: &str,
 ) -> AppResult<InstalledMod> {
+    let storage_dir = resolve_storage_dir(app_handle, settings)?;
+
+    let mut index = load_library_index(&storage_dir)?;
+
+    let (_entry, installed_mod) = install_single_mod_to_index(&storage_dir, &mut index, file_path)?;
+
+    save_library_index(&storage_dir, &index)?;
+
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after installing mod: {}", e);
+    }
+
+    Ok(installed_mod)
+}
+
+/// Install multiple mods in a single batch operation.
+///
+/// Loads `library.json` once, installs each mod, saves once, and invalidates
+/// the overlay once. Emits `"install-progress"` events per file.
+pub fn install_mods_from_packages(
+    app_handle: &AppHandle,
+    settings: &Settings,
+    file_paths: &[String],
+) -> AppResult<BulkInstallResult> {
+    let storage_dir = resolve_storage_dir(app_handle, settings)?;
+    let mut index = load_library_index(&storage_dir)?;
+
+    let total = file_paths.len();
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, file_path) in file_paths.iter().enumerate() {
+        let file_name = Path::new(file_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(file_path)
+            .to_string();
+
+        let _ = app_handle.emit(
+            "install-progress",
+            InstallProgress {
+                current: i + 1,
+                total,
+                current_file: file_name.clone(),
+            },
+        );
+
+        match install_single_mod_to_index(&storage_dir, &mut index, file_path) {
+            Ok((_entry, mod_info)) => {
+                installed.push(mod_info);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to install {}: {}", file_path, e);
+                failed.push(BulkInstallError {
+                    file_path: file_path.clone(),
+                    file_name,
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    save_library_index(&storage_dir, &index)?;
+
+    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
+        tracing::warn!("Failed to invalidate overlay after bulk install: {}", e);
+    }
+
+    Ok(BulkInstallResult { installed, failed })
+}
+
+/// Core install logic for a single mod file.
+///
+/// Copies the archive, extracts metadata, and adds the mod to the index.
+/// Does NOT load/save the index or invalidate the overlay.
+fn install_single_mod_to_index(
+    storage_dir: &Path,
+    index: &mut LibraryIndex,
+    file_path: &str,
+) -> AppResult<(LibraryModEntry, InstalledMod)> {
     let file_path = PathBuf::from(file_path);
     if !file_path.exists() {
         return Err(AppError::InvalidPath(file_path.display().to_string()));
     }
 
-    let storage_dir = resolve_storage_dir(app_handle, settings)?;
-
-    // Create archives and metadata directories
     let archives_dir = storage_dir.join("archives");
     let metadata_dir = storage_dir.join("metadata");
     fs::create_dir_all(&archives_dir)?;
@@ -151,10 +230,6 @@ pub fn install_mod_from_package(
         ModArchiveFormat::Modpkg => extract_modpkg_metadata(&archive_path, &mod_metadata_dir)?,
     }
 
-    // Add to index and persist.
-    let mut index = load_library_index(&storage_dir)?;
-
-    // Add mod entry to shared mods list
     let entry = LibraryModEntry {
         id: id.clone(),
         installed_at,
@@ -173,14 +248,8 @@ pub fn install_mod_from_package(
         profile.mod_order.insert(0, id.clone());
     }
 
-    save_library_index(&storage_dir, &index)?;
-
-    if let Err(e) = crate::overlay::invalidate_overlay(app_handle, settings) {
-        tracing::warn!("Failed to invalidate overlay after installing mod: {}", e);
-    }
-
-    // Return materialized InstalledMod (enabled = true since we just enabled it)
-    read_installed_mod(&entry, true, &storage_dir)
+    let installed_mod = read_installed_mod(&entry, true, storage_dir)?;
+    Ok((entry, installed_mod))
 }
 
 pub fn toggle_mod_enabled(

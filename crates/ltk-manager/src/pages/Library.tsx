@@ -2,9 +2,11 @@ import { useState } from "react";
 
 import {
   DragDropOverlay,
+  ImportProgressDialog,
   LibraryContent,
   LibraryToolbar,
   useInstalledMods,
+  useInstallProgress,
   useLibraryActions,
   useModFileDrop,
 } from "@/modules/library";
@@ -22,7 +24,8 @@ export function Library() {
 
   const { data: mods = [], isLoading, error } = useInstalledMods();
   const actions = useLibraryActions();
-  const isDragOver = useModFileDrop(actions.installMod);
+  const isDragOver = useModFileDrop(actions.handleBulkInstallFiles);
+  const { progress: installProgress, reset: resetInstallProgress } = useInstallProgress();
 
   const { data: patcherStatus } = usePatcherStatus();
   const startPatcher = useStartPatcher();
@@ -53,6 +56,11 @@ export function Library() {
     });
   }
 
+  function handleCloseImportDialog() {
+    actions.handleCloseImportDialog();
+    resetInstallProgress();
+  }
+
   return (
     <div className="relative flex h-full flex-col">
       <DragDropOverlay visible={isDragOver} />
@@ -81,6 +89,12 @@ export function Library() {
         isLoading={isLoading}
         error={error}
         onInstall={actions.handleInstallMod}
+      />
+      <ImportProgressDialog
+        open={actions.importDialogOpen}
+        onClose={handleCloseImportDialog}
+        progress={installProgress}
+        result={actions.importResult}
       />
     </div>
   );
