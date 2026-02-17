@@ -31,6 +31,8 @@ export interface Settings {
   backdropImage: string | null;
   backdropBlur: number | null;
   libraryViewMode: string | null;
+  /** Whether to patch TFT game files (Map22.wad.client). Default: false. */
+  patchTft: boolean;
 }
 
 export interface InstalledMod {

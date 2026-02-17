@@ -122,4 +122,7 @@ pub struct Settings {
     pub backdrop_blur: Option<u32>,
     /// Library view mode ("grid" or "list"). Defaults to "grid".
     pub library_view_mode: Option<String>,
+    /// Whether to patch TFT game files (Map22.wad.client). Default: false.
+    #[serde(default)]
+    pub patch_tft: bool,
 }

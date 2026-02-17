@@ -152,6 +152,9 @@ type ModOverrides = (HashMap<u64, Vec<u8>>, HashMap<u64, Utf8PathBuf>);
 
 type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
+/// WAD filenames that must never be patched (lowercased).
+const ALWAYS_BLOCKED: &[&str] = &["scripts.wad.client"];
+
 /// Orchestrates the overlay build pipeline.
 ///
 /// Create a builder with [`new`](Self::new), configure it with
@@ -165,12 +168,9 @@ pub struct OverlayBuilder {
     game_dir: Utf8PathBuf,
     overlay_root: Utf8PathBuf,
     enabled_mods: Vec<EnabledMod>,
+    blocked_wads: HashSet<String>,
     progress_callback: Option<ProgressCallback>,
 }
-
-// ---------------------------------------------------------------------------
-// Free functions (no `&self` — used by parallel closures)
-// ---------------------------------------------------------------------------
 
 /// Collect overrides from a single mod, processing all layers in priority order.
 ///
@@ -239,12 +239,6 @@ fn collect_single_mod_overrides(
 }
 
 /// Filter out overrides that should not be included in the overlay.
-///
-/// Removes in place:
-/// 1. **SubChunkTOC entries** — mods must not override these internal chunk-table files.
-/// 2. **Lazy overrides** — mod files identical to game originals (same xxh3_64 hash).
-///
-/// Also cleans up `override_target_wads` to stay in sync.
 fn filter_overrides(
     raw_overrides: &mut HashMap<u64, Vec<u8>>,
     override_target_wads: &mut HashMap<u64, Utf8PathBuf>,
@@ -305,6 +299,7 @@ impl OverlayBuilder {
             game_dir,
             overlay_root,
             enabled_mods: Vec::new(),
+            blocked_wads: HashSet::new(),
             progress_callback: None,
         }
     }
@@ -318,6 +313,15 @@ impl OverlayBuilder {
         F: Fn(OverlayProgress) + Send + Sync + 'static,
     {
         self.progress_callback = Some(Arc::new(callback));
+        self
+    }
+
+    /// Set additional WAD filenames to block from patching.
+    ///
+    /// These are merged with [`ALWAYS_BLOCKED`] at build time. Filenames
+    /// should be lowercased (e.g. `"map22.wad.client"`).
+    pub fn with_blocked_wads(mut self, wads: Vec<String>) -> Self {
+        self.blocked_wads = wads.into_iter().collect();
         self
     }
 
@@ -338,10 +342,13 @@ impl OverlayBuilder {
     pub fn build(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
 
+        let effective_blocked = self.effective_blocked_wads();
+
         tracing::info!("Building overlay...");
         tracing::info!("Game dir: {}", self.game_dir);
         tracing::info!("Overlay root: {}", self.overlay_root);
         tracing::info!("Enabled mods: {}", self.enabled_mods.len());
+        tracing::info!("Blocked WADs: {:?}", effective_blocked);
 
         // --- Stage: Indexing ---
         self.emit_progress(OverlayProgress::stage(OverlayStage::Indexing));
@@ -372,8 +379,12 @@ impl OverlayBuilder {
         if self.enabled_mods.is_empty() {
             tracing::info!("Overlay: no enabled mods, cleaning overlay");
             self.clean_overlay_wads()?;
-            let state =
-                OverlayState::new(Vec::new(), game_index.game_fingerprint(), BTreeMap::new());
+            let state = OverlayState::new(
+                Vec::new(),
+                game_index.game_fingerprint(),
+                effective_blocked.clone(),
+                BTreeMap::new(),
+            );
             state.save(&state_path)?;
             self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
             return Ok(OverlayBuildResult {
@@ -387,7 +398,11 @@ impl OverlayBuilder {
 
         // --- Fast path: exact match → skip entirely ---
         if let Some(ref state) = prev_state {
-            if state.matches(&enabled_ids, game_index.game_fingerprint()) {
+            if state.matches(
+                &enabled_ids,
+                game_index.game_fingerprint(),
+                &effective_blocked,
+            ) {
                 if self.validate_wads_exist(state) {
                     tracing::info!("Overlay: exact match, skipping build");
                     self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
@@ -426,8 +441,17 @@ impl OverlayBuilder {
         self.emit_progress(OverlayProgress::stage(OverlayStage::CollectingOverrides));
 
         let (all_overrides, override_target_wads) = self.collect_all_overrides(&game_index)?;
-        let wad_overrides =
+        let mut wad_overrides =
             self.distribute_overrides(all_overrides, &game_index, override_target_wads);
+
+        // --- Filter blocked WADs ---
+        wad_overrides.retain(|path, _| {
+            let blocked = self.is_wad_blocked(path);
+            if blocked {
+                tracing::info!("Blocked WAD from patching: {}", path);
+            }
+            !blocked
+        });
 
         // --- Partition WADs into rebuild / reuse ---
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
@@ -452,6 +476,7 @@ impl OverlayBuilder {
         let state = OverlayState::new(
             enabled_ids,
             game_index.game_fingerprint(),
+            effective_blocked,
             new_wad_fingerprints,
         );
         state.save(&state_path)?;
@@ -797,6 +822,21 @@ impl OverlayBuilder {
             }
             current = dir.parent();
         }
+    }
+
+    /// Compute the effective blocklist: [`ALWAYS_BLOCKED`] + user-configured, sorted and deduplicated.
+    fn effective_blocked_wads(&self) -> Vec<String> {
+        let mut all: Vec<String> = ALWAYS_BLOCKED.iter().map(|s| s.to_string()).collect();
+        all.extend(self.blocked_wads.iter().cloned());
+        all.sort();
+        all.dedup();
+        all
+    }
+
+    /// Check if a WAD path is blocked from patching.
+    fn is_wad_blocked(&self, wad_path: &Utf8Path) -> bool {
+        let filename = wad_path.file_name().unwrap_or("").to_ascii_lowercase();
+        ALWAYS_BLOCKED.contains(&filename.as_str()) || self.blocked_wads.contains(&filename)
     }
 
     /// Emit a progress event if a callback was registered.

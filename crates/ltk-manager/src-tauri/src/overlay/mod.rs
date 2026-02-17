@@ -56,9 +56,16 @@ pub fn ensure_overlay(app_handle: &AppHandle, settings: &Settings) -> AppResult<
     let utf8_overlay_root = Utf8PathBuf::from_path_buf(overlay_root.clone())
         .map_err(|p| AppError::Other(format!("Non-UTF-8 overlay root path: {}", p.display())))?;
 
+    // Build WAD blocklist from settings
+    let mut blocked_wads = Vec::new();
+    if !settings.patch_tft {
+        blocked_wads.push("map22.wad.client".to_string());
+    }
+
     // Build overlay using ltk_overlay crate
     let app_handle_clone = app_handle.clone();
     let mut builder = ltk_overlay::OverlayBuilder::new(utf8_game_dir, utf8_overlay_root)
+        .with_blocked_wads(blocked_wads)
         .with_progress(move |progress| {
             // Convert ltk_overlay progress to our format
             let stage = match progress.stage {
