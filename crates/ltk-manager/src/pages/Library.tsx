@@ -9,13 +9,7 @@ import {
   useLibraryActions,
   useModFileDrop,
 } from "@/modules/library";
-import {
-  useOverlayProgress,
-  usePatcherError,
-  usePatcherStatus,
-  useStartPatcher,
-  useStopPatcher,
-} from "@/modules/patcher";
+import { usePatcherStatus, useStartPatcher, useStopPatcher } from "@/modules/patcher";
 
 export function Library() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -28,8 +22,6 @@ export function Library() {
   const { data: patcherStatus } = usePatcherStatus();
   const startPatcher = useStartPatcher();
   const stopPatcher = useStopPatcher();
-  const overlayProgress = useOverlayProgress();
-  usePatcherError();
 
   const isStarting = patcherStatus?.phase === "building";
 
@@ -65,7 +57,6 @@ export function Library() {
         actions={actions}
         patcher={{
           status: patcherStatus,
-          overlayProgress,
           isStarting: isStarting,
           isStopping: stopPatcher.isPending,
           onStart: handleStartPatcher,

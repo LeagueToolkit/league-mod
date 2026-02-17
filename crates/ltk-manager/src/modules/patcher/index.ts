@@ -5,3 +5,4 @@ export {
   useStartPatcher,
   useStopPatcher,
 } from "./api";
+export * from "./components";

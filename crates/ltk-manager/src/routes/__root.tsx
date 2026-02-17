@@ -1,6 +1,7 @@
 import { createRootRoute, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
+import { StatusBar } from "@/modules/patcher";
 import { useAppInfo, useCheckSetupRequired } from "@/modules/settings";
 import { DevConsole, TitleBar, useDevLogStream } from "@/modules/shell";
 import { UpdateNotification, useUpdateCheck } from "@/modules/updater";
@@ -38,6 +39,7 @@ function RootLayout() {
         <UpdateNotification updateState={updateState} />
         <Outlet />
       </main>
+      <StatusBar />
       {import.meta.env.DEV && <DevConsole />}
     </div>
   );

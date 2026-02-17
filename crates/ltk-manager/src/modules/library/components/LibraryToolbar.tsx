@@ -1,15 +1,13 @@
 import { LuFolderOpen, LuGrid3X3, LuList, LuPlus, LuSearch } from "react-icons/lu";
-import { match, P } from "ts-pattern";
 
 import { Button, IconButton } from "@/components";
-import type { OverlayProgress, PatcherStatus } from "@/lib/tauri";
+import type { PatcherStatus } from "@/lib/tauri";
 import type { useLibraryActions } from "@/modules/library/api";
 
 import { ProfileSelector } from "./ProfileSelector";
 
 interface PatcherProps {
   status: PatcherStatus | undefined;
-  overlayProgress: OverlayProgress | null;
   isStarting: boolean;
   isStopping: boolean;
   onStart: () => void;
@@ -110,7 +108,7 @@ export function LibraryToolbar({
           variant={hasEnabledMods ? "filled" : "default"}
           size="sm"
           onClick={patcher.onStart}
-          loading={patcher.isStarting && !patcher.overlayProgress}
+          loading={patcher.isStarting}
           disabled={
             isLoading ||
             !hasEnabledMods ||
@@ -120,17 +118,7 @@ export function LibraryToolbar({
             patcher.isStarting
           }
         >
-          {match(patcher)
-            .with({ overlayProgress: P.nonNullable }, ({ overlayProgress }) =>
-              match(overlayProgress.stage)
-                .with("indexing", () => "Indexing...")
-                .with("collecting", () => "Collecting...")
-                .with("patching", () => "Patching...")
-                .with("strings", () => "Strings...")
-                .otherwise(() => "Starting..."),
-            )
-            .with({ isStarting: true }, () => "Building...")
-            .otherwise(() => "Start Patcher")}
+          {patcher.isStarting ? "Starting..." : "Start Patcher"}
         </Button>
       )}
     </div>

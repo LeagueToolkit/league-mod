@@ -1,6 +1,6 @@
 import { LuCircleCheck, LuCircleX } from "react-icons/lu";
 
-import { Button, Dialog } from "@/components";
+import { Button, Dialog, Progress } from "@/components";
 import type { BulkInstallResult, InstallProgress } from "@/lib/tauri";
 
 interface ImportProgressDialogProps {
@@ -32,32 +32,22 @@ export function ImportProgressDialog({
               <>
                 {progress ? (
                   <>
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm text-surface-300">
-                        <span>
-                          {progress.current} / {progress.total}
-                        </span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-surface-700">
-                        <div
-                          className="h-full rounded-full bg-brand-500 transition-all duration-300"
-                          style={{
-                            width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
+                    <Progress.Root
+                      value={progress.total > 0 ? (progress.current / progress.total) * 100 : 0}
+                      label={`${progress.current} / ${progress.total}`}
+                    >
+                      <Progress.Track>
+                        <Progress.Indicator />
+                      </Progress.Track>
+                    </Progress.Root>
                     <p className="truncate text-sm text-surface-400">{progress.currentFile}</p>
                   </>
                 ) : (
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm text-surface-300">
-                      <span>Preparing import...</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-700">
-                      <div className="h-full w-1/3 animate-pulse rounded-full bg-brand-500" />
-                    </div>
-                  </div>
+                  <Progress.Root value={null} label="Preparing import...">
+                    <Progress.Track>
+                      <Progress.Indicator />
+                    </Progress.Track>
+                  </Progress.Root>
                 )}
               </>
             )}

@@ -1,6 +1,6 @@
 import { LuCircleAlert, LuDownload, LuRefreshCw, LuX } from "react-icons/lu";
 
-import { Button, IconButton } from "@/components";
+import { Button, IconButton, Progress } from "@/components";
 
 import type { UseUpdateCheckReturn } from "../hooks/useUpdateCheck";
 
@@ -52,12 +52,11 @@ export function UpdateNotification({ updateState }: UpdateNotificationProps) {
             </p>
           </div>
         </div>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-700">
-          <div
-            className="h-full rounded-full bg-accent-500 transition-all duration-300"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
+        <Progress.Root value={progress} className="mt-2">
+          <Progress.Track size="sm">
+            <Progress.Indicator color="accent" />
+          </Progress.Track>
+        </Progress.Root>
       </div>
     );
   }
