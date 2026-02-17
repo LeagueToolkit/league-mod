@@ -58,7 +58,7 @@ export function ModCard({
       <div
         onClick={handleCardClick}
         className={`flex items-center gap-4 rounded-lg border p-4 transition-all ${
-          disabled ? "cursor-default opacity-60" : "cursor-pointer"
+          disabled ? "cursor-default" : "cursor-pointer"
         } ${
           mod.enabled
             ? "border-brand-500/40 bg-surface-800 shadow-[0_0_15px_-3px] shadow-brand-500/30"
@@ -144,7 +144,7 @@ export function ModCard({
     <div
       onClick={handleCardClick}
       className={`group relative rounded-xl border transition-all ${
-        disabled ? "cursor-default opacity-60" : "cursor-pointer"
+        disabled ? "cursor-default" : "cursor-pointer"
       } ${
         mod.enabled
           ? "border-brand-500/40 bg-surface-800 shadow-[0_0_20px_-5px] shadow-brand-500/40"
