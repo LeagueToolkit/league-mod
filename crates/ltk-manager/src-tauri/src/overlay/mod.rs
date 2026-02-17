@@ -106,10 +106,7 @@ pub fn invalidate_overlay(app_handle: &AppHandle, settings: &Settings) -> AppRes
         .join("overlay.json");
     if overlay_json.exists() {
         std::fs::remove_file(&overlay_json)?;
-        tracing::info!(
-            "Invalidated overlay for profile {}",
-            active_profile.slug
-        );
+        tracing::info!("Invalidated overlay for profile {}", active_profile.slug);
     }
     Ok(())
 }

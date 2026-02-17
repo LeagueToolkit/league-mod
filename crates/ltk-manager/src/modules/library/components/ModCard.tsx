@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
+import { LuCopy, LuEllipsisVertical, LuFolderOpen, LuInfo, LuTrash2 } from "react-icons/lu";
 
-import { IconButton, Menu, Switch } from "@/components";
+import { IconButton, Menu, Switch, useToast } from "@/components";
 import { useModThumbnail } from "@/modules/library/api/useModThumbnail";
 
 interface InstalledMod {
@@ -35,6 +35,12 @@ export function ModCard({
   disabled,
 }: ModCardProps) {
   const { data: thumbnailUrl } = useModThumbnail(mod.id);
+  const toast = useToast();
+
+  async function handleCopyId() {
+    await navigator.clipboard.writeText(mod.id);
+    toast.success("Copied mod ID to clipboard");
+  }
 
   async function handleOpenLocation() {
     try {
@@ -102,7 +108,7 @@ export function ModCard({
                 <IconButton
                   icon={<LuEllipsisVertical className="h-4 w-4" />}
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   disabled={disabled}
                 />
               }
@@ -121,6 +127,9 @@ export function ModCard({
                     onClick={handleOpenLocation}
                   >
                     Open Location
+                  </Menu.Item>
+                  <Menu.Item icon={<LuCopy className="h-4 w-4" />} onClick={handleCopyId}>
+                    Copy ID
                   </Menu.Item>
                   <Menu.Separator />
                   <Menu.Item
@@ -193,10 +202,9 @@ export function ModCard({
                 disabled={disabled}
                 render={
                   <IconButton
-                    icon={<LuEllipsisVertical className="h-3.5 w-3.5" />}
+                    icon={<LuEllipsisVertical className="h-4 w-4" />}
                     variant="ghost"
-                    size="xs"
-                    className="h-5 w-5"
+                    size="md"
                     disabled={disabled}
                   />
                 }
@@ -215,6 +223,9 @@ export function ModCard({
                       onClick={handleOpenLocation}
                     >
                       Open Location
+                    </Menu.Item>
+                    <Menu.Item icon={<LuCopy className="h-4 w-4" />} onClick={handleCopyId}>
+                      Copy ID
                     </Menu.Item>
                     <Menu.Separator />
                     <Menu.Item

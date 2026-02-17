@@ -35,9 +35,7 @@ pub fn create_profile(
 
     // Generate and validate slug
     let slug = ProfileSlug::from_name(&name).ok_or_else(|| {
-        AppError::Other(
-            "Profile name must contain at least one alphanumeric character".to_string(),
-        )
+        AppError::Other("Profile name must contain at least one alphanumeric character".to_string())
     })?;
     if !slug.is_unique_in(&index, None) {
         return Err(AppError::Other(format!(
@@ -160,9 +158,7 @@ pub fn rename_profile(
 
     // Generate and validate new slug
     let new_slug = ProfileSlug::from_name(&new_name).ok_or_else(|| {
-        AppError::Other(
-            "Profile name must contain at least one alphanumeric character".to_string(),
-        )
+        AppError::Other("Profile name must contain at least one alphanumeric character".to_string())
     })?;
 
     // Check for duplicate names
