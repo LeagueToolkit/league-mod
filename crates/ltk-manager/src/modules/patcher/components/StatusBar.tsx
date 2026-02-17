@@ -5,11 +5,12 @@ import type { OverlayProgress } from "@/lib/tauri";
 
 import { useOverlayProgress, usePatcherError, usePatcherStatus, useStopPatcher } from "../api";
 
-const stageLabels: Record<string, string> = {
+const stageLabels: Record<OverlayProgress["stage"], string> = {
   indexing: "Indexing game files...",
   collecting: "Collecting mod overrides...",
   patching: "Patching WAD files...",
   strings: "Applying string overrides...",
+  complete: "Overlay built successfully!",
 };
 
 function isDeterminate(stage: OverlayProgress["stage"]) {
