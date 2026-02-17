@@ -58,6 +58,7 @@ export function useLibraryActions() {
     }
 
     setImportResult(null);
+    resetInstallProgress();
     setImportDialogOpen(true);
 
     bulkInstallMods.mutate(filePaths, {

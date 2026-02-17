@@ -19,7 +19,7 @@ export function ImportProgressDialog({
   const isComplete = result !== null;
 
   return (
-    <Dialog.Root open={open} onOpenChange={(open) => !open && isComplete && onClose()}>
+    <Dialog.Root open={open} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Backdrop />
         <Dialog.Overlay size="sm">
@@ -28,22 +28,37 @@ export function ImportProgressDialog({
           </Dialog.Header>
 
           <Dialog.Body className="space-y-4">
-            {!isComplete && progress && (
+            {!isComplete && (
               <>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm text-surface-300">
-                    <span>
-                      {progress.current} / {progress.total}
-                    </span>
+                {progress ? (
+                  <>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm text-surface-300">
+                        <span>
+                          {progress.current} / {progress.total}
+                        </span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-surface-700">
+                        <div
+                          className="h-full rounded-full bg-brand-500 transition-all duration-300"
+                          style={{
+                            width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <p className="truncate text-sm text-surface-400">{progress.currentFile}</p>
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm text-surface-300">
+                      <span>Preparing import...</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-700">
+                      <div className="h-full w-1/3 animate-pulse rounded-full bg-brand-500" />
+                    </div>
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-surface-700">
-                    <div
-                      className="h-full rounded-full bg-brand-500 transition-all duration-300"
-                      style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                    />
-                  </div>
-                </div>
-                <p className="truncate text-sm text-surface-400">{progress.currentFile}</p>
+                )}
               </>
             )}
 
@@ -80,13 +95,11 @@ export function ImportProgressDialog({
             )}
           </Dialog.Body>
 
-          {isComplete && (
-            <Dialog.Footer>
-              <Button variant="filled" size="sm" onClick={onClose}>
-                Done
-              </Button>
-            </Dialog.Footer>
-          )}
+          <Dialog.Footer>
+            <Button variant="filled" size="sm" onClick={onClose}>
+              {isComplete ? "Done" : "Dismiss"}
+            </Button>
+          </Dialog.Footer>
         </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>

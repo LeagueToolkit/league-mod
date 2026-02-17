@@ -131,6 +131,13 @@ pub fn install_mods_from_packages(
     settings: &Settings,
     file_paths: &[String],
 ) -> AppResult<BulkInstallResult> {
+    if file_paths.is_empty() {
+        return Ok(BulkInstallResult {
+            installed: Vec::new(),
+            failed: Vec::new(),
+        });
+    }
+
     let storage_dir = resolve_storage_dir(app_handle, settings)?;
     let mut index = load_library_index(&storage_dir)?;
 
