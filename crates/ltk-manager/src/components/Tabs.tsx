@@ -60,12 +60,12 @@ export const TabsTab = forwardRef<HTMLButtonElement, TabsTabProps>(
       .with(
         "default",
         () =>
-          "text-surface-400 hover:text-surface-200 data-[selected]:text-brand-400 data-[selected]:after:absolute data-[selected]:after:inset-x-0 data-[selected]:after:-bottom-px data-[selected]:after:h-0.5 data-[selected]:after:bg-brand-500",
+          "text-surface-400 hover:text-surface-200 data-[active]:text-brand-400 data-[active]:after:absolute data-[active]:after:inset-x-0 data-[active]:after:-bottom-px data-[active]:after:h-0.5 data-[active]:after:bg-brand-500",
       )
       .with(
         "pills",
         () =>
-          "rounded-md text-surface-400 hover:text-surface-200 data-[selected]:bg-surface-700 data-[selected]:text-surface-100",
+          "rounded-md text-surface-400 hover:text-surface-200 data-[active]:bg-brand-500/10 data-[active]:text-brand-400",
       )
       .exhaustive();
 

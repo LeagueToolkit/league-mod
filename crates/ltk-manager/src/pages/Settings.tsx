@@ -1,15 +1,14 @@
 import { getRouteApi } from "@tanstack/react-router";
-import { LuInfo, LuLoader } from "react-icons/lu";
+import { LuInfo, LuLoader, LuPalette, LuSettings } from "react-icons/lu";
 
+import { Tabs } from "@/components";
 import {
   AboutSection,
   AppearanceSection,
-  LeaguePathSection,
-  ModStorageSection,
+  GeneralSection,
   useAppInfo,
   useSaveSettings,
   useSettings,
-  WorkshopSection,
 } from "@/modules/settings";
 
 const routeApi = getRouteApi("/settings");
@@ -33,33 +32,60 @@ export function Settings() {
   }
 
   return (
-    <div className="h-full overflow-auto">
-      {/* Header */}
-      <header className="flex h-16 items-center border-b border-surface-600 px-6">
+    <div className="flex h-full flex-col">
+      <header className="flex h-16 shrink-0 items-center border-b border-surface-600 px-6">
         <h2 className="text-xl font-semibold text-surface-100">Settings</h2>
       </header>
 
-      <div className="settings-container mx-auto max-w-2xl space-y-8 p-6">
-        {/* First Run Banner */}
-        {firstRun && !settings.leaguePath && (
-          <div className="flex items-start gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 p-4">
-            <LuInfo className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
-            <div>
-              <h3 className="font-medium text-brand-300">Welcome to LTK Manager!</h3>
-              <p className="mt-1 text-sm text-surface-400">
-                To get started, please configure your League of Legends installation path below. You
-                can use auto-detection or browse to the folder manually.
-              </p>
-            </div>
-          </div>
-        )}
+      <Tabs.Root defaultValue="general" className="flex min-h-0 flex-1 flex-row">
+        <Tabs.List
+          variant="pills"
+          className="w-52 shrink-0 flex-col items-stretch rounded-none border-r border-surface-600 bg-transparent p-3"
+        >
+          <Tabs.Tab variant="pills" value="general" className="flex items-center gap-2.5 text-left">
+            <LuSettings className="h-4 w-4 shrink-0" />
+            General
+          </Tabs.Tab>
+          <Tabs.Tab
+            variant="pills"
+            value="appearance"
+            className="flex items-center gap-2.5 text-left"
+          >
+            <LuPalette className="h-4 w-4 shrink-0" />
+            Appearance
+          </Tabs.Tab>
+          <Tabs.Tab variant="pills" value="about" className="flex items-center gap-2.5 text-left">
+            <LuInfo className="h-4 w-4 shrink-0" />
+            About
+          </Tabs.Tab>
+        </Tabs.List>
 
-        <LeaguePathSection settings={settings} onSave={saveSettings} />
-        <ModStorageSection settings={settings} onSave={saveSettings} />
-        <WorkshopSection settings={settings} onSave={saveSettings} />
-        <AppearanceSection settings={settings} onSave={saveSettings} />
-        <AboutSection appInfo={appInfo} />
-      </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <Tabs.Panel value="general" className="mx-auto max-w-2xl space-y-8 p-6">
+            {firstRun && !settings.leaguePath && (
+              <div className="flex items-start gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 p-4">
+                <LuInfo className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
+                <div>
+                  <h3 className="font-medium text-brand-300">Welcome to LTK Manager!</h3>
+                  <p className="mt-1 text-sm text-surface-400">
+                    To get started, please configure your League of Legends installation path below.
+                    You can use auto-detection or browse to the folder manually.
+                  </p>
+                </div>
+              </div>
+            )}
+            <GeneralSection settings={settings} onSave={saveSettings} />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="appearance" className="mx-auto max-w-2xl p-6">
+            <AppearanceSection settings={settings} onSave={saveSettings} />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="about" className="mx-auto max-w-2xl p-6">
+            <AboutSection appInfo={appInfo} />
+          </Tabs.Panel>
+        </div>
+      </Tabs.Root>
     </div>
   );
 }
