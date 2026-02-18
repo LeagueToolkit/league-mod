@@ -41,9 +41,9 @@
 //!
 //! # Incremental Rebuild
 //!
-//! After a successful build, an `overlay.json` state file is persisted containing the
-//! list of enabled mod IDs, a game directory fingerprint, and per-WAD override
-//! fingerprints. On the next build:
+//! After a successful build, an `overlay.json` state file is persisted (in the
+//! *state directory*) containing the list of enabled mod IDs, a game directory
+//! fingerprint, and per-WAD override fingerprints. On the next build:
 //!
 //! - **Exact match**: mod list, game fingerprint, and all per-WAD fingerprints match,
 //!   and every overlay WAD exists on disk — the build is skipped entirely.
@@ -64,9 +64,10 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let game_dir = Utf8PathBuf::from("C:/Riot Games/League of Legends/Game");
-//! let overlay_root = Utf8PathBuf::from("C:/Users/.../overlay");
+//! let profile_dir = Utf8PathBuf::from("C:/Users/.../profiles/default");
+//! let overlay_root = profile_dir.join("overlay");
 //!
-//! let mut builder = OverlayBuilder::new(game_dir, overlay_root)
+//! let mut builder = OverlayBuilder::new(game_dir, overlay_root, profile_dir)
 //!     .with_progress(|progress| {
 //!         println!("Stage: {:?}, Progress: {}/{}",
 //!             progress.stage, progress.current, progress.total);

@@ -167,6 +167,9 @@ const ALWAYS_BLOCKED: &[&str] = &["scripts.wad.client"];
 pub struct OverlayBuilder {
     game_dir: Utf8PathBuf,
     overlay_root: Utf8PathBuf,
+    /// Directory for `overlay.json` and `game_index_cache.json`
+    /// (typically the parent profile directory, e.g. `profiles/default/`).
+    state_dir: Utf8PathBuf,
     enabled_mods: Vec<EnabledMod>,
     blocked_wads: HashSet<String>,
     progress_callback: Option<ProgressCallback>,
@@ -293,11 +296,15 @@ impl OverlayBuilder {
     ///
     /// * `game_dir` — Path to the League of Legends `Game/` directory. Must contain
     ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
-    /// * `overlay_root` — Directory where patched WAD files will be written.
-    pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf) -> Self {
+    /// * `overlay_root` — Directory where patched WAD files will be written
+    ///   (e.g. `profiles/default/overlay`).
+    /// * `state_dir` — Directory for `overlay.json` and `game_index_cache.json`
+    ///   (e.g. the profile folder `profiles/default/`).
+    pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf, state_dir: Utf8PathBuf) -> Self {
         Self {
             game_dir,
             overlay_root,
+            state_dir,
             enabled_mods: Vec::new(),
             blocked_wads: HashSet::new(),
             progress_callback: None,
@@ -363,15 +370,16 @@ impl OverlayBuilder {
             .into());
         }
 
-        // Ensure overlay root exists (for cache and state files)
+        // Ensure overlay root and state dir exist
         std::fs::create_dir_all(self.overlay_root.as_std_path())?;
+        std::fs::create_dir_all(self.state_dir.as_std_path())?;
 
         // Build or load cached game index
-        let cache_path = self.overlay_root.join("game_index_cache.json");
+        let cache_path = self.state_dir.join("game_index_cache.json");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
 
         // Load previous state
-        let state_path = self.overlay_root.join("overlay.json");
+        let state_path = self.state_dir.join("overlay.json");
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
         let prev_state = OverlayState::load(&state_path)?;
 
@@ -512,7 +520,7 @@ impl OverlayBuilder {
     /// the overlay is out of date for reasons the state file cannot track.
     pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
         // Remove previous state so build() sees no match
-        let state_path = self.overlay_root.join("overlay.json");
+        let state_path = self.state_dir.join("overlay.json");
         if state_path.as_std_path().exists() {
             std::fs::remove_file(state_path.as_std_path())?;
         }
@@ -789,8 +797,9 @@ impl OverlayBuilder {
 
     /// Remove all WAD files from the overlay directory.
     ///
-    /// Deletes the `DATA/` subdirectory but preserves `overlay.json` and
-    /// `game_index_cache.json` at the overlay root.
+    /// Deletes the `DATA/` subdirectory under `overlay_root`. State files
+    /// (`overlay.json`, `game_index_cache.json`) live in `state_dir` and are
+    /// unaffected.
     fn clean_overlay_wads(&self) -> Result<()> {
         let data_dir = self.overlay_root.join("DATA");
         if data_dir.as_std_path().exists() {
@@ -854,18 +863,25 @@ mod tests {
 
     #[test]
     fn test_builder_creation() {
-        let builder =
-            OverlayBuilder::new(Utf8PathBuf::from("/game"), Utf8PathBuf::from("/overlay"));
+        let builder = OverlayBuilder::new(
+            Utf8PathBuf::from("/game"),
+            Utf8PathBuf::from("/profile/overlay"),
+            Utf8PathBuf::from("/profile"),
+        );
 
         assert_eq!(builder.game_dir, Utf8PathBuf::from("/game"));
-        assert_eq!(builder.overlay_root, Utf8PathBuf::from("/overlay"));
+        assert_eq!(builder.overlay_root, Utf8PathBuf::from("/profile/overlay"));
+        assert_eq!(builder.state_dir, Utf8PathBuf::from("/profile"));
         assert_eq!(builder.enabled_mods.len(), 0);
     }
 
     #[test]
     fn test_set_enabled_mods() {
-        let mut builder =
-            OverlayBuilder::new(Utf8PathBuf::from("/game"), Utf8PathBuf::from("/overlay"));
+        let mut builder = OverlayBuilder::new(
+            Utf8PathBuf::from("/game"),
+            Utf8PathBuf::from("/profile/overlay"),
+            Utf8PathBuf::from("/profile"),
+        );
 
         builder.set_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
