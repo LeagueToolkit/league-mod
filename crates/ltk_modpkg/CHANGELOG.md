@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.1.5...ltk_modpkg-v0.2.0) - 2026-02-18
+
+### Added
+
+- *(ltk-manager)* clean up library backend
+- add locale awareness to string overrides
+- add per-layer string overrides support (#83, #84)
+- support animated thumbnails
+- titlebar navigation
+
+### Other
+
+- reduce proptest cases from 256 to 8 for test_metadata_roundtrip
+- run cargo fmt on locale-aware string overrides code
+
 ### Added
 
 - add `string_overrides` field to `ModpkgLayerMetadata` for per-layer string text customization

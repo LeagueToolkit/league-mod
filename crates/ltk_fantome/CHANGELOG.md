@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.1.4...ltk_fantome-v0.2.0) - 2026-02-18
+
+### Added
+
+- add locale awareness to string overrides
+- add per-layer string overrides support (#83, #84)
+- start using overlay crate
+- titlebar navigation
+- separate legacy/new patcher, add overlay progress display, fix mod import
+
+### Other
+
+- run cargo fmt on locale-aware string overrides code
+- Merge pull request #73 from LeagueToolkit/support-for-old-patcher
+
 ### Added
 
 - add `FantomeLayerInfo` struct and `Layers` field to `FantomeInfo` for per-layer string overrides

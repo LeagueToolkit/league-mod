@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.1.4...ltk_mod_project-v0.2.0) - 2026-02-18
+
+### Added
+
+- add locale awareness to string overrides
+- add per-layer string overrides support (#83, #84)
+- titlebar navigation
+
 ### Added
 
 - add `string_overrides` field to `ModProjectLayer` for per-layer string text customization
