@@ -18,7 +18,7 @@
 //! of all WADs. This fingerprint is persisted in [`OverlayState`](crate::state::OverlayState)
 //! and used to detect game patches that invalidate the overlay.
 //!
-//! The index can be cached to disk as JSON via [`save`](GameIndex::save) /
+//! The index can be cached to disk as MessagePack via [`save`](GameIndex::save) /
 //! [`load_or_build`](GameIndex::load_or_build) to avoid re-mounting every WAD on
 //! subsequent builds when the game hasn't been patched.
 
@@ -29,25 +29,21 @@ use std::collections::{HashMap, HashSet};
 use walkdir::WalkDir;
 
 /// Version tag for the cache format.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 /// Serializable representation of a [`GameIndex`] for disk caching.
 ///
-/// JSON requires string keys for objects, so `hash_index` uses hex-encoded
-/// `u64` keys. Path values use `Utf8PathBuf` (enabled by camino's `serde1` feature).
+/// Uses MessagePack (via `rmp-serde`) for fast binary serialization with native
+/// `u64` keys — no hex encoding needed.
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct GameIndexCache {
     version: u32,
     game_fingerprint: u64,
     /// WAD filename (lowercased) -> full filesystem paths.
     wad_index: HashMap<String, Vec<Utf8PathBuf>>,
-    /// Hex-encoded u64 keys -> WAD relative paths.
-    hash_index: HashMap<String, Vec<Utf8PathBuf>>,
+    /// Chunk path hash -> WAD relative paths.
+    hash_index: HashMap<u64, Vec<Utf8PathBuf>>,
     subchunktoc_blocked: Vec<u64>,
-    /// Hex-encoded path_hash -> xxHash3 of uncompressed chunk bytes.
-    #[serde(default)]
-    content_hashes: HashMap<String, u64>,
 }
 
 /// Index of all WAD files in a League of Legends game directory.
@@ -80,13 +76,6 @@ pub struct GameIndex {
     /// computed and hashed. Mod overrides matching these hashes are stripped during
     /// the build to prevent mods from corrupting the game's sub-chunk loading.
     subchunktoc_blocked: HashSet<u64>,
-
-    /// Chunk path hash -> xxHash3 of the uncompressed chunk bytes.
-    ///
-    /// Used to detect "lazy" mod overrides that ship unmodified copies of game files.
-    /// At build time, `xxh3_64(override_bytes)` is compared against this hash — if
-    /// they match, the override is skipped (the original passthrough is used instead).
-    content_hashes: HashMap<u64, u64>,
 }
 
 impl GameIndex {
@@ -109,17 +98,18 @@ impl GameIndex {
 
         tracing::info!("Building game index from {}", data_final_dir);
 
-        let wad_index = build_wad_filename_index(&data_final_dir)?;
-        let (hash_index, wad_relative_paths, content_hashes) =
-            build_game_hash_index(game_dir, &data_final_dir)?;
-        let game_fingerprint = calculate_game_fingerprint(&data_final_dir)?;
+        // Single directory walk — reused by all three index-building functions.
+        let wad_paths = collect_wad_paths_sorted(&data_final_dir)?;
+
+        let wad_index = build_wad_filename_index(&wad_paths);
+        let (hash_index, wad_relative_paths) = build_game_hash_index(game_dir, &wad_paths);
+        let game_fingerprint = calculate_game_fingerprint(&wad_paths);
         let subchunktoc_blocked = build_subchunktoc_blocked(&wad_relative_paths);
 
         tracing::info!(
-            "Game index built: {} WAD filenames, {} unique hashes, {} content hashes, {} SubChunkTOC blocked, fingerprint: {:016x}",
+            "Game index built: {} WAD filenames, {} unique hashes, {} SubChunkTOC blocked, fingerprint: {:016x}",
             wad_index.len(),
             hash_index.len(),
-            content_hashes.len(),
             subchunktoc_blocked.len(),
             game_fingerprint
         );
@@ -129,7 +119,6 @@ impl GameIndex {
             hash_index,
             game_fingerprint,
             subchunktoc_blocked,
-            content_hashes,
         })
     }
 
@@ -153,7 +142,7 @@ impl GameIndex {
             Ok(Some(cached)) => {
                 // Verify the game hasn't been patched by computing a fresh fingerprint
                 let data_final_dir = game_dir.join("DATA").join("FINAL");
-                let current_fp = calculate_game_fingerprint(&data_final_dir)?;
+                let current_fp = calculate_game_fingerprint_from_dir(&data_final_dir)?;
 
                 if cached.game_fingerprint == current_fp {
                     tracing::info!(
@@ -187,7 +176,7 @@ impl GameIndex {
         Ok(index)
     }
 
-    /// Save the index to a cache file.
+    /// Save the index to a cache file using MessagePack.
     ///
     /// # Arguments
     ///
@@ -198,8 +187,9 @@ impl GameIndex {
         }
 
         let cache = self.to_cache();
-        let contents = serde_json::to_string(&cache)?;
-        std::fs::write(cache_path.as_std_path(), contents)?;
+        let bytes = rmp_serde::to_vec_named(&cache)
+            .map_err(|e| Error::Other(format!("Failed to serialize game index cache: {}", e)))?;
+        std::fs::write(cache_path.as_std_path(), bytes)?;
 
         tracing::debug!("Game index cache saved to {}", cache_path);
         Ok(())
@@ -251,12 +241,87 @@ impl GameIndex {
         &self.subchunktoc_blocked
     }
 
-    /// Look up the uncompressed content hash for a game chunk.
+    /// Compute content hashes on-demand for a batch of path hashes.
     ///
-    /// Returns `Some(xxh3_64)` of the original uncompressed bytes if the chunk
-    /// was successfully hashed during indexing, `None` otherwise.
-    pub fn content_hash(&self, path_hash: u64) -> Option<u64> {
-        self.content_hashes.get(&path_hash).copied()
+    /// Groups the requested `path_hashes` by the WAD files that contain them
+    /// (using the hash index), opens each WAD once, and decompresses only the
+    /// needed chunks to compute `xxh3_64(uncompressed_bytes)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `game_dir` - Path to the League of Legends Game directory
+    /// * `path_hashes` - The set of chunk path hashes to compute content hashes for
+    pub fn compute_content_hashes_batch(
+        &self,
+        game_dir: &Utf8Path,
+        path_hashes: &HashSet<u64>,
+    ) -> HashMap<u64, u64> {
+        use ltk_wad::Wad;
+        use xxhash_rust::xxh3::xxh3_64;
+
+        // Group requested hashes by WAD file (pick the first WAD for each hash).
+        let mut wad_to_hashes: HashMap<&Utf8PathBuf, Vec<u64>> = HashMap::new();
+        for &ph in path_hashes {
+            if let Some(wad_paths) = self.hash_index.get(&ph) {
+                if let Some(first_wad) = wad_paths.first() {
+                    wad_to_hashes.entry(first_wad).or_default().push(ph);
+                }
+            }
+        }
+
+        let mut result: HashMap<u64, u64> = HashMap::with_capacity(path_hashes.len());
+
+        for (wad_rel_path, hashes) in &wad_to_hashes {
+            let abs_path = game_dir.join(wad_rel_path);
+            let needed: HashSet<u64> = hashes.iter().copied().collect();
+
+            let file = match std::fs::File::open(abs_path.as_std_path()) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("Failed to open WAD '{}': {}", abs_path, e);
+                    continue;
+                }
+            };
+
+            let mut wad = match Wad::mount(file) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("Failed to mount WAD '{}': {}", abs_path, e);
+                    continue;
+                }
+            };
+
+            let chunks: Vec<_> = wad
+                .chunks()
+                .iter()
+                .filter(|c| needed.contains(&c.path_hash))
+                .cloned()
+                .collect();
+
+            for chunk in &chunks {
+                match wad.load_chunk_decompressed(chunk) {
+                    Ok(data) => {
+                        result.insert(chunk.path_hash, xxh3_64(&data));
+                    }
+                    Err(e) => {
+                        tracing::trace!(
+                            "Failed to decompress chunk {:016x} in '{}': {}",
+                            chunk.path_hash,
+                            abs_path,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            "Computed {} content hashes on-demand (from {} WADs)",
+            result.len(),
+            wad_to_hashes.len()
+        );
+
+        result
     }
 
     /// Deserialize a [`GameIndex`] from a cache file.
@@ -265,8 +330,14 @@ impl GameIndex {
             return Ok(None);
         }
 
-        let contents = std::fs::read_to_string(cache_path.as_std_path())?;
-        let cache: GameIndexCache = serde_json::from_str(&contents)?;
+        let bytes = std::fs::read(cache_path.as_std_path())?;
+        let cache: GameIndexCache = match rmp_serde::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to deserialize game index cache: {}", e);
+                return Ok(None);
+            }
+        };
 
         if cache.version != CACHE_VERSION {
             tracing::info!(
@@ -280,54 +351,24 @@ impl GameIndex {
         Ok(Some(Self::from_cache(cache)))
     }
 
-    /// Convert from the JSON-safe cache representation to the runtime format.
+    /// Convert from the cache representation to the runtime format.
     fn from_cache(cache: GameIndexCache) -> Self {
-        // Convert hex-string keys back to u64
-        let hash_index: HashMap<u64, Vec<Utf8PathBuf>> = cache
-            .hash_index
-            .into_iter()
-            .filter_map(|(hex_key, paths)| {
-                u64::from_str_radix(&hex_key, 16).ok().map(|k| (k, paths))
-            })
-            .collect();
-
-        let content_hashes: HashMap<u64, u64> = cache
-            .content_hashes
-            .into_iter()
-            .filter_map(|(hex_key, hash)| u64::from_str_radix(&hex_key, 16).ok().map(|k| (k, hash)))
-            .collect();
-
         Self {
             wad_index: cache.wad_index,
-            hash_index,
+            hash_index: cache.hash_index,
             game_fingerprint: cache.game_fingerprint,
             subchunktoc_blocked: cache.subchunktoc_blocked.into_iter().collect(),
-            content_hashes,
         }
     }
 
-    /// Convert to the JSON-safe cache representation for serialization.
+    /// Convert to the cache representation for serialization.
     fn to_cache(&self) -> GameIndexCache {
-        // Convert u64 keys to hex strings (JSON requires string keys)
-        let hash_index: HashMap<String, Vec<Utf8PathBuf>> = self
-            .hash_index
-            .iter()
-            .map(|(&k, v)| (format!("{:016x}", k), v.clone()))
-            .collect();
-
-        let content_hashes: HashMap<String, u64> = self
-            .content_hashes
-            .iter()
-            .map(|(&k, &v)| (format!("{:016x}", k), v))
-            .collect();
-
         GameIndexCache {
             version: CACHE_VERSION,
             game_fingerprint: self.game_fingerprint,
             wad_index: self.wad_index.clone(),
-            hash_index,
+            hash_index: self.hash_index.clone(),
             subchunktoc_blocked: self.subchunktoc_blocked.iter().copied().collect(),
-            content_hashes,
         }
     }
 }
@@ -370,44 +411,36 @@ fn collect_wad_paths_sorted(root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     Ok(paths)
 }
 
-/// Recursively scan `root` for `.wad.client` files and index them by lowercase filename.
-fn build_wad_filename_index(root: &Utf8Path) -> Result<HashMap<String, Vec<Utf8PathBuf>>> {
+/// Index pre-collected WAD paths by lowercase filename.
+fn build_wad_filename_index(wad_paths: &[Utf8PathBuf]) -> HashMap<String, Vec<Utf8PathBuf>> {
     let mut index: HashMap<String, Vec<Utf8PathBuf>> = HashMap::new();
 
-    for path in collect_wad_paths_sorted(root)? {
+    for path in wad_paths {
         let name = path.file_name().unwrap();
         index
             .entry(name.to_ascii_lowercase())
             .or_default()
-            .push(path);
+            .push(path.clone());
     }
 
-    Ok(index)
+    index
 }
 
-/// Hash index mapping chunk path hashes to WAD paths, the list of WAD relative paths,
-/// and the per-chunk uncompressed content hashes.
-type HashIndexResult = (
-    HashMap<u64, Vec<Utf8PathBuf>>,
-    Vec<Utf8PathBuf>,
-    HashMap<u64, u64>,
-);
+/// Hash index result: chunk path hashes -> WAD paths, plus the list of WAD relative paths.
+type HashIndexResult = (HashMap<u64, Vec<Utf8PathBuf>>, Vec<Utf8PathBuf>);
 
 /// Per-WAD result from mounting: the chunk path hashes found inside.
 struct WadMountResult {
     relative_path: Utf8PathBuf,
     chunk_hashes: Vec<u64>,
-    /// `(path_hash, xxh3_64(uncompressed_bytes))` for each successfully decompressed chunk.
-    content_hashes: Vec<(u64, u64)>,
 }
 
-/// Mount a single WAD and extract chunk path hashes + uncompressed content hashes.
+/// Mount a single WAD and extract chunk path hashes (TOC only — no data I/O).
 fn mount_and_extract_hashes(
     abs_path: &Utf8Path,
     relative_path: Utf8PathBuf,
 ) -> Option<WadMountResult> {
     use ltk_wad::Wad;
-    use xxhash_rust::xxh3::xxh3_64;
 
     let file = match std::fs::File::open(abs_path.as_std_path()) {
         Ok(f) => f,
@@ -417,7 +450,7 @@ fn mount_and_extract_hashes(
         }
     };
 
-    let mut wad = match Wad::mount(file) {
+    let wad = match Wad::mount(file) {
         Ok(w) => w,
         Err(e) => {
             tracing::warn!("Failed to mount WAD '{}': {}", abs_path, e);
@@ -425,32 +458,11 @@ fn mount_and_extract_hashes(
         }
     };
 
-    let chunks = wad.chunks().clone();
-    let chunk_hashes: Vec<u64> = chunks.iter().map(|c| c.path_hash).collect();
-
-    // Decompress each chunk and compute xxHash3 of the uncompressed bytes.
-    // Chunks that fail to decompress are skipped (no content hash stored).
-    let mut content_hashes = Vec::with_capacity(chunks.len());
-    for chunk in chunks.iter() {
-        match wad.load_chunk_decompressed(chunk) {
-            Ok(data) => {
-                content_hashes.push((chunk.path_hash, xxh3_64(&data)));
-            }
-            Err(e) => {
-                tracing::trace!(
-                    "Failed to decompress chunk {:016x} in '{}': {}",
-                    chunk.path_hash,
-                    abs_path,
-                    e
-                );
-            }
-        }
-    }
+    let chunk_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
 
     Some(WadMountResult {
         relative_path,
         chunk_hashes,
-        content_hashes,
     })
 }
 
@@ -459,29 +471,25 @@ fn mount_and_extract_hashes(
 /// Also returns the set of all WAD relative paths (for SubChunkTOC computation).
 /// WAD files that fail to open or mount are skipped with a warning.
 /// WADs are mounted concurrently using rayon.
-fn build_game_hash_index(
-    game_dir: &Utf8Path,
-    data_final_dir: &Utf8Path,
-) -> Result<HashIndexResult> {
-    // Collect all WAD paths and compute relative paths
-    let wad_paths: Vec<(Utf8PathBuf, Utf8PathBuf)> = collect_wad_paths_sorted(data_final_dir)?
-        .into_iter()
+fn build_game_hash_index(game_dir: &Utf8Path, wad_paths: &[Utf8PathBuf]) -> HashIndexResult {
+    // Compute relative paths
+    let wad_abs_rel: Vec<(&Utf8PathBuf, Utf8PathBuf)> = wad_paths
+        .iter()
         .filter_map(|abs_path| {
             let rel = abs_path.strip_prefix(game_dir).ok()?.to_path_buf();
             Some((abs_path, rel))
         })
         .collect();
 
-    // Mount all WADs in parallel and extract their chunk hashes
+    // Mount all WADs in parallel and extract their chunk hashes (TOC only)
     use rayon::prelude::*;
-    let mount_results: Vec<WadMountResult> = wad_paths
+    let mount_results: Vec<WadMountResult> = wad_abs_rel
         .into_par_iter()
-        .filter_map(|(abs, rel)| mount_and_extract_hashes(&abs, rel))
+        .filter_map(|(abs, rel)| mount_and_extract_hashes(abs, rel))
         .collect();
 
-    // Merge results into the hash index and content hashes
+    // Merge results into the hash index
     let mut hash_to_wads: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
-    let mut content_hashes: HashMap<u64, u64> = HashMap::new();
     let mut wad_relative_paths: Vec<Utf8PathBuf> = Vec::with_capacity(mount_results.len());
     let mut chunk_count = 0usize;
 
@@ -494,21 +502,16 @@ fn build_game_hash_index(
                 .push(result.relative_path.clone());
             chunk_count += 1;
         }
-        // Merge content hashes (first-write-wins for duplicates across WADs)
-        for (path_hash, content_hash) in result.content_hashes {
-            content_hashes.entry(path_hash).or_insert(content_hash);
-        }
     }
 
     tracing::info!(
-        "Game hash index built: {} WADs, {} total chunk entries, {} unique hashes, {} content hashes",
+        "Game hash index built: {} WADs, {} total chunk entries, {} unique hashes",
         wad_relative_paths.len(),
         chunk_count,
-        hash_to_wads.len(),
-        content_hashes.len()
+        hash_to_wads.len()
     );
 
-    Ok((hash_to_wads, wad_relative_paths, content_hashes))
+    (hash_to_wads, wad_relative_paths)
 }
 
 /// Compute SubChunkTOC path hashes for all WAD relative paths.
@@ -544,19 +547,13 @@ fn build_subchunktoc_blocked(wad_relative_paths: &[Utf8PathBuf]) -> HashSet<u64>
     blocked
 }
 
-/// Compute an xxHash3 fingerprint from all WAD file paths, sizes, and modification times.
-///
-/// Paths are sorted before hashing to ensure the fingerprint is deterministic
-/// regardless of filesystem iteration order.
-///
-/// Any change to WAD files (game patch, file corruption) will produce a different
-/// fingerprint, triggering a full overlay rebuild.
-fn calculate_game_fingerprint(data_final_dir: &Utf8Path) -> Result<u64> {
+/// Compute an xxHash3 fingerprint from pre-collected WAD paths, sizes, and modification times.
+fn calculate_game_fingerprint(wad_paths: &[Utf8PathBuf]) -> u64 {
     use xxhash_rust::xxh3::xxh3_64;
 
     let mut hasher_input = Vec::new();
 
-    for path in collect_wad_paths_sorted(data_final_dir)? {
+    for path in wad_paths {
         // Include path and metadata in fingerprint
         hasher_input.extend_from_slice(path.as_str().as_bytes());
 
@@ -571,7 +568,13 @@ fn calculate_game_fingerprint(data_final_dir: &Utf8Path) -> Result<u64> {
         }
     }
 
-    Ok(xxh3_64(&hasher_input))
+    xxh3_64(&hasher_input)
+}
+
+/// Wrapper that performs its own directory walk for cache validation in [`GameIndex::load_or_build`].
+fn calculate_game_fingerprint_from_dir(data_final_dir: &Utf8Path) -> Result<u64> {
+    let wad_paths = collect_wad_paths_sorted(data_final_dir)?;
+    Ok(calculate_game_fingerprint(&wad_paths))
 }
 
 #[cfg(test)]
@@ -643,15 +646,11 @@ mod tests {
         let mut subchunktoc_blocked = HashSet::new();
         subchunktoc_blocked.insert(0xCAFEBABE_u64);
 
-        let mut content_hashes = HashMap::new();
-        content_hashes.insert(0xDEADBEEF_u64, 0x1111_u64);
-
         let index = GameIndex {
             wad_index,
             hash_index,
             game_fingerprint: 0x123456,
             subchunktoc_blocked,
-            content_hashes,
         };
 
         // Convert to cache and back
@@ -667,8 +666,6 @@ mod tests {
         );
         assert!(restored.subchunktoc_blocked.contains(&0xCAFEBABE));
         assert!(restored.find_wad("aatrox.wad.client").is_ok());
-        assert_eq!(restored.content_hash(0xDEADBEEF), Some(0x1111));
-        assert_eq!(restored.content_hash(0x9999), None);
     }
 
     #[test]
@@ -684,7 +681,6 @@ mod tests {
             hash_index: HashMap::new(),
             game_fingerprint: 0xABCDEF,
             subchunktoc_blocked: HashSet::new(),
-            content_hashes: HashMap::new(),
         };
 
         let temp = tempfile::NamedTempFile::new().unwrap();

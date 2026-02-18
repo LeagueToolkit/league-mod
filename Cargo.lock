@@ -1728,6 +1728,7 @@ dependencies = [
  "ltk_modpkg",
  "ltk_wad",
  "rayon",
+ "rmp-serde",
  "serde",
  "serde_json",
  "tempfile",
