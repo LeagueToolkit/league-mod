@@ -21,12 +21,6 @@
 //! The index can be cached to disk as MessagePack via [`save`](GameIndex::save) /
 //! [`load_or_build`](GameIndex::load_or_build) to avoid re-mounting every WAD on
 //! subsequent builds when the game hasn't been patched.
-//!
-//! Content hashes (for detecting "lazy" mod overrides that ship unmodified copies of
-//! game files) are **not** stored in the index. Instead, they are computed on-demand
-//! via [`compute_content_hashes_batch`](GameIndex::compute_content_hashes_batch),
-//! which decompresses only the specific chunks a mod overrides rather than all ~500k
-//! chunks in the game.
 
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -252,10 +246,6 @@ impl GameIndex {
     /// Groups the requested `path_hashes` by the WAD files that contain them
     /// (using the hash index), opens each WAD once, and decompresses only the
     /// needed chunks to compute `xxh3_64(uncompressed_bytes)`.
-    ///
-    /// This replaces the old approach of pre-computing content hashes for *all*
-    /// ~500k chunks during indexing. A typical mod overrides 10-1000 chunks, so
-    /// this is orders of magnitude faster.
     ///
     /// # Arguments
     ///
