@@ -167,7 +167,7 @@ const ALWAYS_BLOCKED: &[&str] = &["scripts.wad.client"];
 pub struct OverlayBuilder {
     game_dir: Utf8PathBuf,
     overlay_root: Utf8PathBuf,
-    /// Directory for `overlay.json` and `game_index_cache.json`
+    /// Directory for `overlay.json` and `game_index.bin`
     /// (typically the parent profile directory, e.g. `profiles/default/`).
     state_dir: Utf8PathBuf,
     enabled_mods: Vec<EnabledMod>,
@@ -242,10 +242,16 @@ fn collect_single_mod_overrides(
 }
 
 /// Filter out overrides that should not be included in the overlay.
+///
+/// This performs two filtering passes:
+/// 1. SubChunkTOC entries — always stripped to prevent game corruption.
+/// 2. Lazy overrides — mod files identical to game originals, detected by
+///    computing content hashes on-demand for only the overridden chunks.
 fn filter_overrides(
     raw_overrides: &mut HashMap<u64, Vec<u8>>,
     override_target_wads: &mut HashMap<u64, Utf8PathBuf>,
     game_index: &GameIndex,
+    game_dir: &Utf8Path,
 ) {
     // Filter out SubChunkTOC entries
     let blocked = game_index.subchunktoc_blocked();
@@ -266,11 +272,14 @@ fn filter_overrides(
     }
 
     // Filter out lazy overrides — mod files identical to game originals.
-    // Comparing xxh3_64(override_bytes) against the pre-computed uncompressed
-    // content hash avoids recompressing and writing unchanged chunks.
+    // Compute content hashes on-demand for only the chunks that mods override,
+    // rather than pre-computing hashes for all ~500k chunks during indexing.
+    let override_hashes: HashSet<u64> = raw_overrides.keys().copied().collect();
+    let content_hashes = game_index.compute_content_hashes_batch(game_dir, &override_hashes);
+
     let before_lazy = raw_overrides.len();
     raw_overrides.retain(|&path_hash, bytes| {
-        if let Some(original_hash) = game_index.content_hash(path_hash) {
+        if let Some(&original_hash) = content_hashes.get(&path_hash) {
             let override_hash = xxh3_64(bytes);
             if override_hash == original_hash {
                 tracing::debug!("Filtered lazy override: {:016x}", path_hash);
@@ -298,7 +307,7 @@ impl OverlayBuilder {
     ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
     /// * `overlay_root` — Directory where patched WAD files will be written
     ///   (e.g. `profiles/default/overlay`).
-    /// * `state_dir` — Directory for `overlay.json` and `game_index_cache.json`
+    /// * `state_dir` — Directory for `overlay.json` and `game_index.bin`
     ///   (e.g. the profile folder `profiles/default/`).
     pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf, state_dir: Utf8PathBuf) -> Self {
         Self {
@@ -375,7 +384,7 @@ impl OverlayBuilder {
         std::fs::create_dir_all(self.state_dir.as_std_path())?;
 
         // Build or load cached game index
-        let cache_path = self.state_dir.join("game_index_cache.json");
+        let cache_path = self.state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
 
         // Load previous state
@@ -576,7 +585,12 @@ impl OverlayBuilder {
         );
 
         // Phase 3: Filter on raw Vec<u8> before wrapping in Arc
-        filter_overrides(&mut raw_overrides, &mut override_target_wads, game_index);
+        filter_overrides(
+            &mut raw_overrides,
+            &mut override_target_wads,
+            game_index,
+            game_dir,
+        );
 
         // Phase 4: Wrap survivors in Arc (only allocates for overrides that passed filters)
         let all_overrides: HashMap<u64, SharedBytes> = raw_overrides
@@ -798,7 +812,7 @@ impl OverlayBuilder {
     /// Remove all WAD files from the overlay directory.
     ///
     /// Deletes the `DATA/` subdirectory under `overlay_root`. State files
-    /// (`overlay.json`, `game_index_cache.json`) live in `state_dir` and are
+    /// (`overlay.json`, `game_index.bin`) live in `state_dir` and are
     /// unaffected.
     fn clean_overlay_wads(&self) -> Result<()> {
         let data_dir = self.overlay_root.join("DATA");
