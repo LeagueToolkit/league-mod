@@ -4,7 +4,7 @@ use std::path::Path;
 
 use camino::Utf8Path;
 use image::ImageFormat;
-use ltk_mod_project::{ModProject, ModProjectAuthor, default_layers};
+use ltk_mod_project::{ModMap, ModProject, ModProjectAuthor, ModTag, default_layers};
 use ltk_wad::{HexPathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 
@@ -138,6 +138,9 @@ impl<R: Read + Seek> FantomeExtractor<R> {
             description: info.description,
             authors: vec![ModProjectAuthor::Name(info.author)],
             license: None,
+            tags: info.tags.into_iter().map(ModTag::from).collect(),
+            champions: info.champions,
+            maps: info.maps.into_iter().map(ModMap::from).collect(),
             transformers: vec![],
             layers: default_layers(),
             thumbnail: None,

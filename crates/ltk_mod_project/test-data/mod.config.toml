@@ -5,6 +5,8 @@ description = "A mod for League of Legends that changes the map to the old Summo
 
 authors = ["TheKillerey", { name = "Crauzer", role = "Contributor" }]
 license = "MIT"
+tags = ["map-skin"]
+maps = ["summoners-rift"]
 [[transformers]]
 name = "tex-converter"
 patterns = ["**/*.dds", "**/*.png"]

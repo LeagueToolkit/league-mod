@@ -206,6 +206,9 @@ fn build_metadata(
                 .map(convert_project_author)
                 .collect(),
             license: convert_project_license(mod_project.license.as_ref()),
+            tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
+            champions: mod_project.champions.clone(),
+            maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
             layers: build_metadata_layers(mod_project),
         })
         .map_err(PackError::Builder)?;
@@ -541,6 +544,9 @@ mod tests {
             description: String::new(),
             authors: vec![],
             license: None,
+            tags: vec![],
+            champions: vec![],
+            maps: vec![],
             thumbnail: None,
             layers: vec![],
             transformers: vec![],
