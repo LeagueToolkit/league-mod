@@ -27,6 +27,15 @@ pub struct FantomeInfo {
     pub version: String,
     #[serde(rename = "Description")]
     pub description: String,
+    /// Tags/categories for the mod (e.g., "champion-skin", "sfx").
+    #[serde(rename = "Tags", default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Champions this mod targets (e.g., "Aatrox", "Ahri").
+    #[serde(rename = "Champions", default, skip_serializing_if = "Vec::is_empty")]
+    pub champions: Vec<String>,
+    /// Maps this mod targets (e.g., "Summoner's Rift", "Howling Abyss").
+    #[serde(rename = "Maps", default, skip_serializing_if = "Vec::is_empty")]
+    pub maps: Vec<String>,
     /// Per-layer metadata including string overrides.
     #[serde(rename = "Layers", default, skip_serializing_if = "HashMap::is_empty")]
     pub layers: HashMap<String, FantomeLayerInfo>,
@@ -183,6 +192,9 @@ fn pack_metadata<W: Write + std::io::Seek>(
         author: format_authors(&mod_project.authors),
         version: mod_project.version.clone(),
         description: mod_project.description.clone(),
+        tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
+        champions: mod_project.champions.clone(),
+        maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
         layers,
     };
 

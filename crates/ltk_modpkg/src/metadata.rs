@@ -152,6 +152,30 @@ pub struct ModpkgMetadata {
     pub authors: Vec<ModpkgAuthor>,
     pub license: ModpkgLicense,
 
+    /// Tags/categories for the mod (e.g., "champion-skin", "sfx").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        test,
+        proptest(strategy = "proptest::collection::vec(\"[a-z][a-z-]{0,20}\", 0..3)")
+    )]
+    pub tags: Vec<String>,
+
+    /// Champions this mod targets (e.g., "Aatrox", "Ahri").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        test,
+        proptest(strategy = "proptest::collection::vec(\"[A-Z][a-z]{2,10}\", 0..3)")
+    )]
+    pub champions: Vec<String>,
+
+    /// Maps this mod targets (e.g., "Summoner's Rift", "Howling Abyss").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        test,
+        proptest(strategy = "proptest::collection::vec(\"[A-Z][a-z]{2,10}\", 0..3)")
+    )]
+    pub maps: Vec<String>,
+
     /// This is purely informational and does not affect how the modpkg loader
     /// resolves layers; the canonical source of truth for layer priority is
     /// still the modpkg header.
@@ -176,6 +200,9 @@ impl Default for ModpkgMetadata {
             distributor: None,
             authors: Vec::new(),
             license: ModpkgLicense::None,
+            tags: Vec::new(),
+            champions: Vec::new(),
+            maps: Vec::new(),
             layers: Vec::new(),
         }
     }
@@ -243,6 +270,19 @@ impl ModpkgMetadata {
     /// Get the license of the mod package.
     pub fn license(&self) -> &ModpkgLicense {
         &self.license
+    }
+
+    /// Get the tags/categories of the mod package.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+    /// Get the champions this mod targets.
+    pub fn champions(&self) -> &[String] {
+        &self.champions
+    }
+    /// Get the maps this mod targets.
+    pub fn maps(&self) -> &[String] {
+        &self.maps
     }
 
     /// Get the per-layer metadata entries, if any.
@@ -322,6 +362,9 @@ mod tests {
             license: ModpkgLicense::Spdx {
                 spdx_id: "MIT".to_string(),
             },
+            tags: vec![],
+            champions: vec![],
+            maps: vec![],
             layers: vec![],
         };
         let mut cursor = Cursor::new(Vec::new());
@@ -354,6 +397,9 @@ mod tests {
             license: ModpkgLicense::Spdx {
                 spdx_id: "MIT".to_string(),
             },
+            tags: vec![],
+            champions: vec![],
+            maps: vec![],
             layers: vec![],
         };
 
@@ -436,6 +482,9 @@ mod tests {
             distributor: None,
             authors: vec![],
             license: ModpkgLicense::None,
+            tags: vec![],
+            champions: vec![],
+            maps: vec![],
             layers: vec![ModpkgLayerMetadata {
                 name: "base".to_string(),
                 priority: 0,
@@ -467,6 +516,9 @@ mod tests {
                 role: None,
             }],
             license: ModpkgLicense::None,
+            tags: vec![],
+            champions: vec![],
+            maps: vec![],
             layers: vec![
                 ModpkgLayerMetadata {
                     name: "base".to_string(),
