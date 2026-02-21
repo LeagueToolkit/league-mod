@@ -206,18 +206,32 @@ fn collect_single_mod_overrides(
         tracing::info!("Mod={} layer='{}'", enabled_mod.id, layer.name);
 
         for wad_name in &wad_names {
-            let original_wad_path = game_index.find_wad(wad_name)?;
-            let relative_game_path = original_wad_path
-                .strip_prefix(game_dir)
-                .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
-                .to_path_buf();
+            let resolved = match game_index.find_wad(wad_name) {
+                Ok(original_wad_path) => {
+                    let relative_game_path = original_wad_path
+                        .strip_prefix(game_dir)
+                        .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
+                        .to_path_buf();
 
-            tracing::info!(
-                "WAD='{}' resolved original={} relative={}",
-                wad_name,
-                original_wad_path,
-                relative_game_path
-            );
+                    tracing::info!(
+                        "WAD='{}' resolved original={} relative={}",
+                        wad_name,
+                        original_wad_path,
+                        relative_game_path
+                    );
+                    Some(relative_game_path)
+                }
+                Err(Error::WadNotFound(_)) => {
+                    tracing::warn!(
+                        "Mod='{}' references unknown WAD '{}'; \
+                         overrides will be routed by hash matching only",
+                        enabled_mod.id,
+                        wad_name
+                    );
+                    None
+                }
+                Err(other) => return Err(other),
+            };
 
             let before = mod_overrides.len();
             let override_files = enabled_mod
@@ -226,7 +240,9 @@ fn collect_single_mod_overrides(
             for (rel_path, bytes) in override_files {
                 let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
                 mod_overrides.insert(path_hash, bytes);
-                mod_target_wads.insert(path_hash, relative_game_path.clone());
+                if let Some(ref relative_game_path) = resolved {
+                    mod_target_wads.insert(path_hash, relative_game_path.clone());
+                }
             }
             let after = mod_overrides.len();
             tracing::info!(
