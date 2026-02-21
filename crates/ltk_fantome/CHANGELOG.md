@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.2.0...ltk_fantome-v0.3.0) - 2026-02-21
+
+### Added
+
+- *(ltk-mod-project)* add support for tags, champions, and maps in mod project configuration
+
 ## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.1.4...ltk_fantome-v0.2.0) - 2026-02-18
 
 ### Added
