@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.0...ltk_overlay-v0.1.1) - 2026-02-21
+
+### Fixed
+
+- *(ltk-overlay)* route overrides for unknown wad files
+
 ## [0.1.0](https://github.com/LeagueToolkit/league-mod/releases/tag/ltk_overlay-v0.1.0) - 2026-02-18
 
 ### Added
