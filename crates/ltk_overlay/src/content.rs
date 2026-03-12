@@ -61,6 +61,21 @@ pub trait ModContentProvider: Send {
         layer: &str,
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>>;
+
+    /// Read all RAW override files from the mod.
+    ///
+    /// RAW overrides are files identified by their game asset path (e.g.,
+    /// `assets/characters/aatrox/skin0.bin`) rather than being pre-organized
+    /// into WAD target directories. These files are routed to the correct WADs
+    /// at overlay build time using the GameIndex hash lookup.
+    ///
+    /// Returns `(relative_path, file_bytes)` pairs where the relative path is
+    /// the game asset path used to compute the chunk path hash.
+    ///
+    /// The default implementation returns an empty list.
+    fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Filesystem-backed mod content provider.
