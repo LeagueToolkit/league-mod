@@ -1,6 +1,6 @@
 [package]
 name = "ltk_fantome"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Helper library for working with League of Legends mods in the legacy Fantome format"
