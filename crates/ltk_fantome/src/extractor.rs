@@ -52,19 +52,7 @@ impl<R: Read + Seek> FantomeExtractor<R> {
     }
 
     /// Validate the archive structure.
-    ///
-    /// Checks for unsupported features like RAW/ directories.
     pub fn validate(&mut self) -> Result<(), FantomeExtractError> {
-        for i in 0..self.archive.len() {
-            let file = self.archive.by_index(i)?;
-            let file_name = file.name();
-
-            // Check for RAW/ directory (unsupported)
-            if file_name.starts_with("RAW/") {
-                return Err(FantomeExtractError::RawUnsupported);
-            }
-        }
-
         Ok(())
     }
 
@@ -178,6 +166,23 @@ impl<R: Read + Seek> FantomeExtractor<R> {
                         let mut outfile = File::create(&output_file_path)?;
                         std::io::copy(&mut file, &mut outfile)?;
                     }
+                }
+            } else if file_name.starts_with("RAW/") {
+                let relative_path = file_name.strip_prefix("RAW/").unwrap();
+                if relative_path.is_empty() {
+                    continue;
+                }
+
+                let output_file_path = output_dir.join("RAW").join(relative_path);
+
+                if file.is_dir() {
+                    std::fs::create_dir_all(&output_file_path)?;
+                } else {
+                    if let Some(parent) = output_file_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let mut outfile = File::create(&output_file_path)?;
+                    std::io::copy(&mut file, &mut outfile)?;
                 }
             } else if file_name == "META/README.md" {
                 // Extract README
@@ -311,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_raw_unsupported() {
+    fn test_extract_raw_files() {
         let buffer = Vec::new();
         let cursor = Cursor::new(buffer);
         let mut zip = ZipWriter::new(cursor);
@@ -323,17 +328,33 @@ mod tests {
             r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
         zip.write_all(info.as_bytes()).unwrap();
 
-        // Add RAW directory (unsupported)
+        // Add RAW directory with files
         zip.add_directory("RAW", options).unwrap();
-        zip.start_file("RAW/test.txt", options).unwrap();
-        zip.write_all(b"test").unwrap();
+        zip.start_file("RAW/assets/characters/aatrox/skin0.bin", options)
+            .unwrap();
+        zip.write_all(b"aatrox data").unwrap();
+        zip.start_file("RAW/assets/maps/map11/scene.bin", options)
+            .unwrap();
+        zip.write_all(b"map data").unwrap();
 
         let buffer = zip.finish().unwrap().into_inner();
 
         let cursor = Cursor::new(buffer);
         let mut extractor = FantomeExtractor::new(cursor).unwrap();
 
-        let result = extractor.validate();
-        assert!(matches!(result, Err(FantomeExtractError::RawUnsupported)));
+        let temp_dir = tempdir().unwrap();
+        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        assert_eq!(result.mod_project.display_name, "Test");
+
+        // Check that RAW files were extracted
+        let raw_file1 = temp_dir
+            .path()
+            .join("RAW/assets/characters/aatrox/skin0.bin");
+        assert!(raw_file1.exists());
+        assert_eq!(std::fs::read(&raw_file1).unwrap(), b"aatrox data");
+
+        let raw_file2 = temp_dir.path().join("RAW/assets/maps/map11/scene.bin");
+        assert!(raw_file2.exists());
+        assert_eq!(std::fs::read(&raw_file2).unwrap(), b"map data");
     }
 }

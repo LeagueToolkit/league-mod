@@ -17,9 +17,6 @@ pub enum FantomeExtractError {
     #[error("WAD error: {0}")]
     Wad(#[from] ltk_wad::WadError),
 
-    #[error("Fantome package contains unsupported RAW/ directory")]
-    RawUnsupported,
-
     #[error("Missing info.json metadata file")]
     MissingMetadata,
 }

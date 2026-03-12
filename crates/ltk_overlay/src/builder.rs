@@ -254,6 +254,22 @@ fn collect_single_mod_overrides(
         }
     }
 
+    // Process RAW overrides — files identified by game asset path
+    // that get routed to correct WADs via hash matching in distribute_overrides()
+    let raw_overrides = enabled_mod.content.read_raw_overrides()?;
+    if !raw_overrides.is_empty() {
+        let before = mod_overrides.len();
+        for (rel_path, bytes) in raw_overrides {
+            let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
+            mod_overrides.insert(path_hash, bytes);
+        }
+        tracing::info!(
+            "Mod={} RAW overrides added={}",
+            enabled_mod.id,
+            mod_overrides.len().saturating_sub(before)
+        );
+    }
+
     Ok((mod_overrides, mod_target_wads))
 }
 

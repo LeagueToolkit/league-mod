@@ -100,13 +100,6 @@ pub enum CliError {
     )]
     InvalidBaseLayerPriority { provided: i32 },
 
-    #[error("Fantome package contains unsupported RAW/ directory")]
-    #[diagnostic(
-        code(fantome::raw_unsupported),
-        help("RAW/ files without WAD association cannot be converted to mod project format. The mod author needs to restructure their mod to use WAD/ directories.")
-    )]
-    FantomeRawUnsupported,
-
     #[error("WAD extraction failed: {message}")]
     #[diagnostic(
         code(fantome::wad_extraction_failed),

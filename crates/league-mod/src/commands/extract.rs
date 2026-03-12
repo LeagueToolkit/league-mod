@@ -129,7 +129,6 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
 /// Map FantomeExtractError to CliError for user-friendly error messages.
 fn map_fantome_error(err: FantomeExtractError) -> CliError {
     match err {
-        FantomeExtractError::RawUnsupported => CliError::FantomeRawUnsupported,
         FantomeExtractError::Wad(e) => CliError::WadExtractionFailed {
             message: e.to_string(),
         },
