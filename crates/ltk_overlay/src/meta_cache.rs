@@ -157,7 +157,13 @@ impl OverrideMetaCache {
         }
 
         let bytes = std::fs::read(path.as_std_path()).ok()?;
-        let cache: Self = rmp_serde::from_slice(&bytes).ok()?;
+        let cache: Self = match rmp_serde::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to deserialize override meta cache: {}", e);
+                return None;
+            }
+        };
 
         if cache.version != CACHE_VERSION {
             tracing::info!(
