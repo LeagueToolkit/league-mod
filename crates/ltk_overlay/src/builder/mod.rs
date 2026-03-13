@@ -1,9 +1,9 @@
-//! Main overlay builder implementation.
+//! Main overlay builder implementation (two-pass architecture).
 //!
 //! The [`OverlayBuilder`] orchestrates the full overlay build pipeline:
-//! game indexing, override collection, cross-WAD distribution, and WAD patching.
+//! game indexing, override metadata collection, cross-WAD distribution, and WAD patching.
 //!
-//! # Build Algorithm
+//! # Two-Pass Build Algorithm
 //!
 //! 1. Validate that `game_dir/DATA/FINAL` exists.
 //! 2. Build (or load from cache) a [`GameIndex`] from all `.wad.client` files.
@@ -15,29 +15,60 @@
 //!      whose fingerprint changed. Remove stale WADs no longer needed.
 //!    - **Full rebuild**: state version or game fingerprint mismatch. Wipe all
 //!      overlay WAD files and rebuild everything from scratch.
-//! 4. For each WAD that needs rebuilding, call
-//!    [`build_patched_wad`](crate::wad_builder::build_patched_wad).
-//! 5. Persist the new [`OverlayState`] with per-WAD fingerprints.
+//! 4. **Pass 1**: Collect lightweight override metadata (hashes, sizes, source
+//!    locations) from all mods. Uses a persistent metadata cache to skip
+//!    unchanged mods entirely. Bytes are hashed and then dropped.
+//! 5. Distribute override hashes to WADs, partition into rebuild/reuse sets.
+//! 6. **Pass 2**: Re-read override bytes only for WADs that need rebuilding.
+//!    Call [`build_patched_wad`](crate::wad_builder::build_patched_wad).
+//! 7. Persist the new [`OverlayState`] with per-WAD fingerprints.
+
+mod metadata;
+mod resolve;
 
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::state::OverlayState;
-use crate::utils::{compute_wad_overrides_fingerprint, resolve_chunk_hash};
-use crate::wad_builder::build_patched_wad;
 use camino::{Utf8Path, Utf8PathBuf};
-use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use xxhash_rust::xxh3::xxh3_64;
 
 /// Shared byte buffer for override data distributed across multiple WADs.
 ///
 /// A single mod override may be distributed to many WADs (cross-WAD matching),
 /// so we share the bytes via `Arc` instead of cloning.
-type SharedBytes = Arc<[u8]>;
+pub(crate) type SharedBytes = Arc<[u8]>;
+
+/// Where an override can be re-read from in pass 2.
+#[derive(Clone, Debug)]
+pub(crate) enum OverrideSource {
+    /// Override from a WAD directory inside a layer.
+    LayerWad {
+        mod_id: String,
+        layer: String,
+        wad_name: String,
+        rel_path: Utf8PathBuf,
+    },
+    /// Override from the raw content directory.
+    Raw {
+        mod_id: String,
+        rel_path: Utf8PathBuf,
+    },
+}
+
+/// Lightweight metadata collected in pass 1 (no byte data).
+#[derive(Clone, Debug)]
+pub struct OverrideMeta {
+    pub content_hash: u64,
+    pub uncompressed_size: usize,
+    pub(crate) source: OverrideSource,
+    /// WAD path to route this override to when the game index has no match
+    /// (i.e. the override adds a new chunk not present in any game WAD).
+    /// Derived from the mod's directory structure during collection.
+    pub(crate) fallback_wad: Option<Utf8PathBuf>,
+}
 
 /// A mod to be included in the overlay build.
 ///
@@ -147,10 +178,7 @@ pub struct ModContribution {
     pub install_order: usize,
 }
 
-/// Per-mod override collection: `(path_hash -> override_bytes, path_hash -> target_wad)`.
-type ModOverrides = (HashMap<u64, Vec<u8>>, HashMap<u64, Utf8PathBuf>);
-
-type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
+pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
 /// WAD filenames that must never be patched (lowercased).
 const ALWAYS_BLOCKED: &[&str] = &["scripts.wad.client"];
@@ -173,161 +201,6 @@ pub struct OverlayBuilder {
     enabled_mods: Vec<EnabledMod>,
     blocked_wads: HashSet<String>,
     progress_callback: Option<ProgressCallback>,
-}
-
-/// Collect overrides from a single mod, processing all layers in priority order.
-///
-/// Returns `(path_hash -> override_bytes, path_hash -> relative_wad_path)`.
-fn collect_single_mod_overrides(
-    enabled_mod: &mut EnabledMod,
-    game_index: &GameIndex,
-    game_dir: &Utf8Path,
-) -> Result<ModOverrides> {
-    tracing::info!("Processing mod id={}", enabled_mod.id);
-
-    let project = enabled_mod.content.mod_project()?;
-    let mut layers = project.layers.clone();
-    layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
-
-    let mut mod_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
-    let mut mod_target_wads: HashMap<u64, Utf8PathBuf> = HashMap::new();
-
-    for layer in &layers {
-        let wad_names = enabled_mod.content.list_layer_wads(&layer.name)?;
-        if wad_names.is_empty() {
-            tracing::debug!(
-                "Mod={} layer='{}' no WADs found, skipping",
-                enabled_mod.id,
-                layer.name,
-            );
-            continue;
-        }
-
-        tracing::info!("Mod={} layer='{}'", enabled_mod.id, layer.name);
-
-        for wad_name in &wad_names {
-            let resolved = match game_index.find_wad(wad_name) {
-                Ok(original_wad_path) => {
-                    let relative_game_path = original_wad_path
-                        .strip_prefix(game_dir)
-                        .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
-                        .to_path_buf();
-
-                    tracing::info!(
-                        "WAD='{}' resolved original={} relative={}",
-                        wad_name,
-                        original_wad_path,
-                        relative_game_path
-                    );
-                    Some(relative_game_path)
-                }
-                Err(Error::WadNotFound(_)) => {
-                    tracing::warn!(
-                        "Mod='{}' references unknown WAD '{}'; \
-                         overrides will be routed by hash matching only",
-                        enabled_mod.id,
-                        wad_name
-                    );
-                    None
-                }
-                Err(other) => return Err(other),
-            };
-
-            let before = mod_overrides.len();
-            let override_files = enabled_mod
-                .content
-                .read_wad_overrides(&layer.name, wad_name)?;
-            for (rel_path, bytes) in override_files {
-                let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
-                mod_overrides.insert(path_hash, bytes);
-                if let Some(ref relative_game_path) = resolved {
-                    mod_target_wads.insert(path_hash, relative_game_path.clone());
-                }
-            }
-            let after = mod_overrides.len();
-            tracing::info!(
-                "WAD='{}' overrides added={} total_mod_overrides={}",
-                wad_name,
-                after.saturating_sub(before),
-                after
-            );
-        }
-    }
-
-    // Process RAW overrides — files identified by game asset path
-    // that get routed to correct WADs via hash matching in distribute_overrides()
-    let raw_overrides = enabled_mod.content.read_raw_overrides()?;
-    if !raw_overrides.is_empty() {
-        let before = mod_overrides.len();
-        for (rel_path, bytes) in raw_overrides {
-            let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
-            mod_overrides.insert(path_hash, bytes);
-        }
-        tracing::info!(
-            "Mod={} RAW overrides added={}",
-            enabled_mod.id,
-            mod_overrides.len().saturating_sub(before)
-        );
-    }
-
-    Ok((mod_overrides, mod_target_wads))
-}
-
-/// Filter out overrides that should not be included in the overlay.
-///
-/// This performs two filtering passes:
-/// 1. SubChunkTOC entries — always stripped to prevent game corruption.
-/// 2. Lazy overrides — mod files identical to game originals, detected by
-///    computing content hashes on-demand for only the overridden chunks.
-fn filter_overrides(
-    raw_overrides: &mut HashMap<u64, Vec<u8>>,
-    override_target_wads: &mut HashMap<u64, Utf8PathBuf>,
-    game_index: &GameIndex,
-    game_dir: &Utf8Path,
-) {
-    // Filter out SubChunkTOC entries
-    let blocked = game_index.subchunktoc_blocked();
-    let before_filter = raw_overrides.len();
-    raw_overrides.retain(|path_hash, _| {
-        let dominated = blocked.contains(path_hash);
-        if dominated {
-            tracing::debug!("Filtered SubChunkTOC override: {:016x}", path_hash);
-        }
-        !dominated
-    });
-    let filtered_count = before_filter - raw_overrides.len();
-    if filtered_count > 0 {
-        tracing::info!(
-            "Filtered {} SubChunkTOC override(s) from mod overrides",
-            filtered_count
-        );
-    }
-
-    // Filter out lazy overrides — mod files identical to game originals.
-    // Compute content hashes on-demand for only the chunks that mods override,
-    // rather than pre-computing hashes for all ~500k chunks during indexing.
-    let override_hashes: HashSet<u64> = raw_overrides.keys().copied().collect();
-    let content_hashes = game_index.compute_content_hashes_batch(game_dir, &override_hashes);
-
-    let before_lazy = raw_overrides.len();
-    raw_overrides.retain(|&path_hash, bytes| {
-        if let Some(&original_hash) = content_hashes.get(&path_hash) {
-            let override_hash = xxh3_64(bytes);
-            if override_hash == original_hash {
-                tracing::debug!("Filtered lazy override: {:016x}", path_hash);
-                return false;
-            }
-        }
-        true
-    });
-    override_target_wads.retain(|hash, _| raw_overrides.contains_key(hash));
-    let lazy_count = before_lazy - raw_overrides.len();
-    if lazy_count > 0 {
-        tracing::info!(
-            "Filtered {} lazy override(s) (identical to game originals)",
-            lazy_count
-        );
-    }
 }
 
 impl OverlayBuilder {
@@ -367,9 +240,9 @@ impl OverlayBuilder {
     /// Set additional WAD filenames to block from patching.
     ///
     /// These are merged with [`ALWAYS_BLOCKED`] at build time. Filenames
-    /// should be lowercased (e.g. `"map22.wad.client"`).
+    /// are automatically lowercased for case-insensitive matching.
     pub fn with_blocked_wads(mut self, wads: Vec<String>) -> Self {
-        self.blocked_wads = wads.into_iter().collect();
+        self.blocked_wads = wads.into_iter().map(|w| w.to_ascii_lowercase()).collect();
         self
     }
 
@@ -381,7 +254,7 @@ impl OverlayBuilder {
         self.enabled_mods = mods;
     }
 
-    /// Build the overlay with incremental rebuild support.
+    /// Build the overlay with incremental rebuild support (two-pass).
     ///
     /// 1. If the overlay state matches exactly and all WAD files exist → skip.
     /// 2. If the game fingerprint and state version match → incremental rebuild
@@ -393,15 +266,13 @@ impl OverlayBuilder {
         let effective_blocked = self.effective_blocked_wads();
 
         tracing::info!("Building overlay...");
-        tracing::info!("Game dir: {}", self.game_dir);
-        tracing::info!("Overlay root: {}", self.overlay_root);
-        tracing::info!("Enabled mods: {}", self.enabled_mods.len());
-        tracing::info!("Blocked WADs: {:?}", effective_blocked);
+        tracing::debug!("Game dir: {}", self.game_dir);
+        tracing::debug!("Overlay root: {}", self.overlay_root);
+        tracing::debug!("Enabled mods: {}", self.enabled_mods.len());
+        tracing::debug!("Blocked WADs: {:?}", effective_blocked);
 
-        // --- Stage: Indexing ---
         self.emit_progress(OverlayProgress::stage(OverlayStage::Indexing));
 
-        // Validate game directory
         let data_final_dir = self.game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
             return Err(format!(
@@ -411,11 +282,9 @@ impl OverlayBuilder {
             .into());
         }
 
-        // Ensure overlay root and state dir exist
         std::fs::create_dir_all(self.overlay_root.as_std_path())?;
         std::fs::create_dir_all(self.state_dir.as_std_path())?;
 
-        // Build or load cached game index
         let cache_path = self.state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
 
@@ -445,7 +314,6 @@ impl OverlayBuilder {
             });
         }
 
-        // --- Fast path: exact match → skip entirely ---
         if let Some(ref state) = prev_state {
             if state.matches(
                 &enabled_ids,
@@ -467,10 +335,11 @@ impl OverlayBuilder {
                         conflicts: Vec::new(),
                         build_time: start_time.elapsed(),
                     });
+                } else {
+                    tracing::info!(
+                        "Overlay: state matched but some WADs missing, doing incremental repair"
+                    );
                 }
-                tracing::info!(
-                    "Overlay: state matched but some WADs missing, doing incremental repair"
-                );
             }
         }
 
@@ -486,15 +355,13 @@ impl OverlayBuilder {
             self.clean_overlay_wads()?;
         }
 
-        // --- Stage: Collecting overrides ---
         self.emit_progress(OverlayProgress::stage(OverlayStage::CollectingOverrides));
 
-        let (all_overrides, override_target_wads) = self.collect_all_overrides(&game_index)?;
-        let mut wad_overrides =
-            self.distribute_overrides(all_overrides, &game_index, override_target_wads);
+        let all_meta = self.collect_all_override_metadata(&game_index)?;
 
-        // --- Filter blocked WADs ---
-        wad_overrides.retain(|path, _| {
+        let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
+
+        wad_hash_sets.retain(|path, _| {
             let blocked = self.is_wad_blocked(path);
             if blocked {
                 tracing::info!("Blocked WAD from patching: {}", path);
@@ -502,18 +369,18 @@ impl OverlayBuilder {
             !blocked
         });
 
-        // --- Partition WADs into rebuild / reuse ---
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
-            self.partition_wads(&wad_overrides, &prev_state, can_incremental);
+            self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
-        // --- Clean stale WADs (in old state but not in new) ---
         if can_incremental {
             if let Some(ref state) = prev_state {
                 self.clean_stale_wads(state, &new_wad_fingerprints)?;
             }
         }
 
-        // --- Stage: Patching WADs (parallel) ---
+        let wad_overrides =
+            self.resolve_overrides_for_wads(&wads_to_build, &wad_hash_sets, &all_meta)?;
+
         let built_paths = self.patch_wads_parallel(wads_to_build, wad_overrides)?;
 
         let reused_paths: Vec<Utf8PathBuf> = wads_to_reuse
@@ -521,7 +388,6 @@ impl OverlayBuilder {
             .map(|p| self.overlay_root.join(p))
             .collect();
 
-        // --- Persist overlay state ---
         let state = OverlayState::new(
             enabled_ids,
             game_index.game_fingerprint(),
@@ -530,7 +396,6 @@ impl OverlayBuilder {
         );
         state.save(&state_path)?;
 
-        // --- Stage: Complete ---
         let total_wads = built_paths.len() as u32;
         self.emit_progress(OverlayProgress {
             stage: OverlayStage::Complete,
@@ -550,7 +415,7 @@ impl OverlayBuilder {
             overlay_root: self.overlay_root.clone(),
             wads_built: built_paths,
             wads_reused: reused_paths,
-            conflicts: Vec::new(), // Phase 4
+            conflicts: Vec::new(),
             build_time: start_time.elapsed(),
         })
     }
@@ -573,114 +438,6 @@ impl OverlayBuilder {
     // Private helpers
     // -----------------------------------------------------------------------
 
-    /// Collect all mod overrides as a flat map: `path_hash -> shared bytes`.
-    ///
-    /// Also returns a map of `path_hash -> relative_wad_path` so new entries
-    /// (not in any game WAD) can be routed to the correct WAD.
-    ///
-    /// Mods are processed in **parallel** (one thread per mod). Results are merged
-    /// in reverse order so that the first mod in the list (highest priority) wins
-    /// conflicts via last-writer-wins. Layers within each mod are sorted by priority.
-    ///
-    /// Overrides are collected as raw `Vec<u8>`, filtered (SubChunkTOC + lazy),
-    /// and only then wrapped in `Arc` — avoiding Arc allocation for discarded entries.
-    fn collect_all_overrides(
-        &mut self,
-        game_index: &GameIndex,
-    ) -> Result<(HashMap<u64, SharedBytes>, HashMap<u64, Utf8PathBuf>)> {
-        // Split borrows: immutable ref to game_dir, mutable ref to enabled_mods
-        let game_dir = &self.game_dir;
-        let enabled_mods = &mut self.enabled_mods;
-
-        // Phase 1: Process each mod in parallel, collecting raw overrides per mod
-        let per_mod_results: Vec<ModOverrides> = enabled_mods
-            .par_iter_mut()
-            .map(|m| collect_single_mod_overrides(m, game_index, game_dir))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Phase 2: Merge in reverse order (last mod first → first mod wins via last-writer-wins)
-        let mut raw_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
-        let mut override_target_wads: HashMap<u64, Utf8PathBuf> = HashMap::new();
-
-        for (mod_overrides, mod_targets) in per_mod_results.into_iter().rev() {
-            for (hash, bytes) in mod_overrides {
-                raw_overrides.insert(hash, bytes);
-            }
-            for (hash, wad_path) in mod_targets {
-                override_target_wads.insert(hash, wad_path);
-            }
-        }
-
-        tracing::info!(
-            "Collected {} unique override hashes from all mods",
-            raw_overrides.len()
-        );
-
-        // Phase 3: Filter on raw Vec<u8> before wrapping in Arc
-        filter_overrides(
-            &mut raw_overrides,
-            &mut override_target_wads,
-            game_index,
-            game_dir,
-        );
-
-        // Phase 4: Wrap survivors in Arc (only allocates for overrides that passed filters)
-        let all_overrides: HashMap<u64, SharedBytes> = raw_overrides
-            .into_iter()
-            .map(|(hash, bytes)| (hash, Arc::from(bytes)))
-            .collect();
-
-        Ok((all_overrides, override_target_wads))
-    }
-
-    /// Distribute collected overrides to all affected WADs using the game hash index.
-    ///
-    /// Overrides whose path hash doesn't appear in any game WAD are routed to the
-    /// WAD indicated by the mod's directory structure (`override_target_wads`).
-    ///
-    /// Returns a map of `relative_wad_path -> { path_hash -> override_bytes }`.
-    fn distribute_overrides(
-        &self,
-        all_overrides: HashMap<u64, SharedBytes>,
-        game_index: &GameIndex,
-        override_target_wads: HashMap<u64, Utf8PathBuf>,
-    ) -> BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> {
-        let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> = BTreeMap::new();
-        let mut new_entry_count = 0usize;
-
-        for (path_hash, override_bytes) in &all_overrides {
-            if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
-                for wad_path in wad_paths {
-                    wad_overrides
-                        .entry(wad_path.clone())
-                        .or_default()
-                        .insert(*path_hash, Arc::clone(override_bytes));
-                }
-            } else if let Some(target_wad) = override_target_wads.get(path_hash) {
-                // New entry: hash doesn't exist in any game WAD.
-                // Route it to the WAD that the mod's directory structure targets.
-                wad_overrides
-                    .entry(target_wad.clone())
-                    .or_default()
-                    .insert(*path_hash, Arc::clone(override_bytes));
-                new_entry_count += 1;
-            }
-        }
-
-        if new_entry_count > 0 {
-            tracing::info!(
-                "Routed {} new entries (not in any game WAD) via mod directory structure",
-                new_entry_count
-            );
-        }
-        tracing::info!(
-            "Distributed overrides to {} affected WAD files",
-            wad_overrides.len()
-        );
-
-        wad_overrides
-    }
-
     /// Check that all WADs listed in the state actually exist on disk.
     fn validate_wads_exist(&self, state: &OverlayState) -> bool {
         for wad_path in state.wad_fingerprints.keys() {
@@ -691,53 +448,6 @@ impl OverlayBuilder {
             }
         }
         true
-    }
-
-    /// Compute per-WAD fingerprints and partition WADs into rebuild vs reuse sets.
-    ///
-    /// Returns `(wads_to_build, wads_to_reuse, new_wad_fingerprints)`.
-    /// During incremental builds, WADs whose fingerprint matches the previous state
-    /// and whose overlay file exists on disk are placed in the reuse set.
-    fn partition_wads(
-        &self,
-        wad_overrides: &BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>>,
-        prev_state: &Option<OverlayState>,
-        can_incremental: bool,
-    ) -> (Vec<Utf8PathBuf>, Vec<Utf8PathBuf>, BTreeMap<String, u64>) {
-        let new_wad_fingerprints: BTreeMap<String, u64> = wad_overrides
-            .iter()
-            .map(|(wad_path, overrides)| {
-                (
-                    wad_path.as_str().to_string(),
-                    compute_wad_overrides_fingerprint(overrides),
-                )
-            })
-            .collect();
-
-        let mut wads_to_build: Vec<Utf8PathBuf> = Vec::new();
-        let mut wads_to_reuse: Vec<Utf8PathBuf> = Vec::new();
-
-        for (wad_path_str, &new_fp) in &new_wad_fingerprints {
-            let wad_path = Utf8PathBuf::from(wad_path_str);
-            let overlay_wad = self.overlay_root.join(&wad_path);
-
-            if can_incremental {
-                if let Some(ref state) = prev_state {
-                    if let Some(old_fp) = state.wad_fingerprint(wad_path_str) {
-                        if old_fp == new_fp && overlay_wad.as_std_path().exists() {
-                            tracing::debug!("Reusing WAD: {}", wad_path);
-                            wads_to_reuse.push(wad_path);
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            tracing::debug!("Need to rebuild WAD: {}", wad_path);
-            wads_to_build.push(wad_path);
-        }
-
-        (wads_to_build, wads_to_reuse, new_wad_fingerprints)
     }
 
     /// Remove overlay WADs that were in the previous state but are no longer needed.
@@ -761,91 +471,7 @@ impl OverlayBuilder {
         Ok(())
     }
 
-    /// Patch WADs in parallel, emitting progress after each one completes.
-    ///
-    /// Consumes `wad_overrides` so each parallel task owns its data, enabling
-    /// progressive deallocation as each WAD finishes patching.
-    fn patch_wads_parallel(
-        &self,
-        wads_to_build: Vec<Utf8PathBuf>,
-        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>>,
-    ) -> Result<Vec<Utf8PathBuf>> {
-        let total_wads = wads_to_build.len() as u32;
-        let completed = AtomicU32::new(0);
-        let game_dir = &self.game_dir;
-        let overlay_root = &self.overlay_root;
-        let progress_callback = &self.progress_callback;
-
-        let emit = |progress: OverlayProgress| {
-            if let Some(callback) = progress_callback {
-                callback(progress);
-            }
-        };
-
-        emit(OverlayProgress {
-            stage: OverlayStage::PatchingWad,
-            current_file: None,
-            current: 0,
-            total: total_wads,
-        });
-
-        // Extract per-WAD overrides so each parallel task owns its data.
-        // This avoids cloning the HashMap and allows progressive deallocation
-        // as each WAD finishes patching.
-        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, SharedBytes>)> = wads_to_build
-            .into_iter()
-            .map(|path| {
-                let overrides = wad_overrides
-                    .remove(&path)
-                    .expect("WAD must be in overrides map");
-                (path, overrides)
-            })
-            .collect();
-        drop(wad_overrides); // Free remaining entries (reused WADs' overrides)
-
-        per_wad_work
-            .into_par_iter()
-            .map(|(relative_game_path, mut overrides)| {
-                let src_wad_path = game_dir.join(&relative_game_path);
-                let dst_wad_path = overlay_root.join(&relative_game_path);
-
-                tracing::info!(
-                    "Patching WAD src={} dst={} overrides={}",
-                    src_wad_path,
-                    dst_wad_path,
-                    overrides.len()
-                );
-
-                let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
-                build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
-                    overrides.remove(&hash).ok_or_else(|| {
-                        Error::Other(format!("Missing override data for hash {:016x}", hash))
-                    })
-                })?;
-
-                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                emit(OverlayProgress {
-                    stage: OverlayStage::PatchingWad,
-                    current_file: Some(
-                        relative_game_path
-                            .file_name()
-                            .unwrap_or("unknown")
-                            .to_string(),
-                    ),
-                    current: done,
-                    total: total_wads,
-                });
-
-                Ok(dst_wad_path)
-            })
-            .collect()
-    }
-
     /// Remove all WAD files from the overlay directory.
-    ///
-    /// Deletes the `DATA/` subdirectory under `overlay_root`. State files
-    /// (`overlay.json`, `game_index.bin`) live in `state_dir` and are
-    /// unaffected.
     fn clean_overlay_wads(&self) -> Result<()> {
         let data_dir = self.overlay_root.join("DATA");
         if data_dir.as_std_path().exists() {
@@ -855,9 +481,6 @@ impl OverlayBuilder {
     }
 
     /// Clean up empty parent directories after removing a stale WAD.
-    ///
-    /// Walks up from the given path toward `overlay_root`, removing empty
-    /// directories. Stops at the overlay root or the first non-empty directory.
     fn cleanup_empty_parents(&self, path: &Utf8Path) {
         let mut current = path.parent();
         while let Some(dir) = current {
@@ -868,7 +491,7 @@ impl OverlayBuilder {
                 match std::fs::read_dir(dir.as_std_path()) {
                     Ok(mut entries) => {
                         if entries.next().is_some() {
-                            break; // Not empty
+                            break;
                         }
                         let _ = std::fs::remove_dir(dir.as_std_path());
                     }
@@ -879,7 +502,7 @@ impl OverlayBuilder {
         }
     }
 
-    /// Compute the effective blocklist: [`ALWAYS_BLOCKED`] + user-configured, sorted and deduplicated.
+    /// Compute the effective blocklist: [`ALWAYS_BLOCKED`] + user-configured.
     fn effective_blocked_wads(&self) -> Vec<String> {
         let mut all: Vec<String> = ALWAYS_BLOCKED.iter().map(|s| s.to_string()).collect();
         all.extend(self.blocked_wads.iter().cloned());
@@ -935,5 +558,22 @@ mod tests {
         }]);
 
         assert_eq!(builder.enabled_mods.len(), 1);
+    }
+
+    #[test]
+    fn test_override_meta_types() {
+        let meta = OverrideMeta {
+            content_hash: 0x1234,
+            uncompressed_size: 100,
+            source: OverrideSource::LayerWad {
+                mod_id: "test-mod".to_string(),
+                layer: "base".to_string(),
+                wad_name: "Test.wad.client".to_string(),
+                rel_path: Utf8PathBuf::from("data/file.bin"),
+            },
+            fallback_wad: None,
+        };
+        assert_eq!(meta.content_hash, 0x1234);
+        assert_eq!(meta.uncompressed_size, 100);
     }
 }

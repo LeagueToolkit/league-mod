@@ -12,7 +12,7 @@
 //! crate where the archive format dependencies are available.
 
 use crate::error::Result;
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::ModProject;
 
 /// Abstracts how mod content is accessed during overlay building.
@@ -76,6 +76,34 @@ pub trait ModContentProvider: Send {
     fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         Ok(Vec::new())
     }
+
+    /// Compute a fingerprint that changes when any mod content changes.
+    ///
+    /// Used by the metadata cache to detect stale entries. Returns `None` if
+    /// the provider cannot efficiently compute a fingerprint (cache will be
+    /// skipped for this mod).
+    ///
+    /// For filesystem providers: hash of `(path, size, mtime)` tuples.
+    /// For archive providers: archive file size + mtime.
+    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+        Ok(None)
+    }
+
+    /// Read a single override file from a WAD in a layer.
+    ///
+    /// Used in pass 2 to re-read only the bytes needed for WADs being rebuilt,
+    /// rather than loading all overrides into memory at once.
+    fn read_wad_override_file(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        rel_path: &Utf8Path,
+    ) -> Result<Vec<u8>>;
+
+    /// Read a single raw override file by its relative path.
+    ///
+    /// Used in pass 2 to re-read only the bytes needed for WADs being rebuilt.
+    fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>>;
 }
 
 /// Filesystem-backed mod content provider.
@@ -180,6 +208,86 @@ impl ModContentProvider for FsModContent {
             }
         }
         Ok(results)
+    }
+
+    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+        use xxhash_rust::xxh3::xxh3_64;
+
+        let content_dir = self.mod_dir.join("content");
+        if !content_dir.as_std_path().exists() {
+            return Ok(Some(0));
+        }
+
+        // Collect (path, size, mtime) for all files under content/
+        let mut entries: Vec<(String, u64, u64)> = Vec::new();
+        let mut stack = vec![content_dir];
+
+        while let Some(dir) = stack.pop() {
+            let read_dir = match std::fs::read_dir(dir.as_std_path()) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+            for entry in read_dir {
+                let entry = entry?;
+                let path = entry.path();
+                let utf8_path = match Utf8PathBuf::from_path_buf(path) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                if utf8_path.as_std_path().is_dir() {
+                    stack.push(utf8_path);
+                    continue;
+                }
+
+                let meta = std::fs::metadata(utf8_path.as_std_path())?;
+                let size = meta.len();
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+
+                let rel = utf8_path
+                    .strip_prefix(&self.mod_dir)
+                    .unwrap_or(&utf8_path)
+                    .as_str()
+                    .replace('\\', "/");
+                entries.push((rel, size, mtime));
+            }
+        }
+
+        entries.sort();
+
+        let mut buf = Vec::with_capacity(entries.len() * 32);
+        for (path, size, mtime) in &entries {
+            buf.extend_from_slice(path.as_bytes());
+            buf.extend_from_slice(&size.to_le_bytes());
+            buf.extend_from_slice(&mtime.to_le_bytes());
+        }
+
+        Ok(Some(xxh3_64(&buf)))
+    }
+
+    fn read_wad_override_file(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        rel_path: &Utf8Path,
+    ) -> Result<Vec<u8>> {
+        let file_path = self
+            .mod_dir
+            .join("content")
+            .join(layer)
+            .join(wad_name)
+            .join(rel_path);
+        Ok(std::fs::read(file_path.as_std_path())?)
+    }
+
+    fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
+        let file_path = self.mod_dir.join("content").join(rel_path);
+        Ok(std::fs::read(file_path.as_std_path())?)
     }
 }
 
