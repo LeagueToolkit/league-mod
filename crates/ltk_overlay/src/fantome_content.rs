@@ -27,8 +27,8 @@ struct FantomeIndex {
     info_entry: Option<String>,
     /// WAD directory entries: wad_name -> list of (full_zip_path, relative_path).
     wad_dir_entries: HashMap<String, Vec<(String, String)>>,
-    /// Packed WAD file entries: wad_name -> full_zip_path.
-    packed_wad_entries: HashMap<String, String>,
+    /// Packed WAD names (WADs stored as single files, not directories).
+    packed_wad_names: Vec<String>,
     /// RAW entries: (full_zip_path, relative_path).
     raw_entries: Vec<(String, String)>,
 }
@@ -37,7 +37,7 @@ impl FantomeIndex {
     fn build<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Self {
         let mut info_entry = None;
         let mut wad_dir_entries: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut packed_wad_entries: HashMap<String, String> = HashMap::new();
+        let mut packed_wad_names: Vec<String> = Vec::new();
         let mut raw_entries: Vec<(String, String)> = Vec::new();
 
         for i in 0..archive.len() {
@@ -63,7 +63,7 @@ impl FantomeIndex {
                 let relative = relative.to_string();
                 if !relative.contains('/') && is_wad_file_name(&relative) {
                     // Packed WAD file directly under WAD/
-                    packed_wad_entries.insert(relative, name);
+                    packed_wad_names.push(relative);
                 } else if let Some(wad_name) = relative.split('/').next() {
                     if is_wad_file_name(wad_name) {
                         let rel = relative
@@ -94,14 +94,14 @@ impl FantomeIndex {
         Self {
             info_entry,
             wad_dir_entries,
-            packed_wad_entries,
+            packed_wad_names,
             raw_entries,
         }
     }
 
     fn wad_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.wad_dir_entries.keys().cloned().collect();
-        for wad_name in self.packed_wad_entries.keys() {
+        for wad_name in &self.packed_wad_names {
             if !names.contains(wad_name) {
                 names.push(wad_name.clone());
             }
@@ -120,6 +120,7 @@ pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: FantomeIndex,
     archive_path: Option<Utf8PathBuf>,
+    packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>>,
 }
 
 impl<R: Read + Seek> FantomeContent<R> {
@@ -127,10 +128,31 @@ impl<R: Read + Seek> FantomeContent<R> {
         let mut archive = ZipArchive::new(reader)
             .map_err(|e| Error::Other(format!("Failed to open fantome archive: {}", e)))?;
         let index = FantomeIndex::build(&mut archive);
+
+        // Mount all packed WADs upfront
+        let mut packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>> = HashMap::new();
+        for wad_name in &index.packed_wad_names {
+            let zip_path = format!("WAD/{}", wad_name);
+            let mut entry = archive.by_name(&zip_path).map_err(|e| {
+                Error::Other(format!("Failed to read packed WAD '{}': {}", wad_name, e))
+            })?;
+            let mut wad_data = Vec::new();
+            entry.read_to_end(&mut wad_data).map_err(|e| {
+                Error::Other(format!(
+                    "Failed to read packed WAD data '{}': {}",
+                    wad_name, e
+                ))
+            })?;
+
+            let wad = Wad::mount(Cursor::new(wad_data))?;
+            packed_wads.insert(wad_name.clone(), wad);
+        }
+
         Ok(Self {
             archive,
             index,
             archive_path: None,
+            packed_wads,
         })
     }
 
@@ -143,9 +165,10 @@ impl<R: Read + Seek> FantomeContent<R> {
 
 impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
-        let info_name = self.index.info_entry.as_ref().ok_or_else(|| {
-            Error::Other("Missing META/info.json in fantome archive".to_string())
-        })?;
+        let info_name =
+            self.index.info_entry.as_ref().ok_or_else(|| {
+                Error::Other("Missing META/info.json in fantome archive".to_string())
+            })?;
 
         let mut info_content = String::new();
         let mut info_file = self
@@ -212,9 +235,21 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
             return Ok(results);
         }
 
-        // Try packed WAD file
-        if let Some(zip_path) = self.index.packed_wad_entries.get(wad_name).cloned() {
-            return self.read_packed_wad_by_name(&zip_path);
+        // Try packed WAD — extract all chunks as hex-hash files
+        if let Some(wad) = self.packed_wads.get_mut(wad_name) {
+            let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
+            let mut results = Vec::with_capacity(path_hashes.len());
+
+            for path_hash in path_hashes {
+                let chunk = *wad.chunks().get(path_hash).ok_or_else(|| {
+                    Error::Other(format!("WAD chunk {:016x} disappeared", path_hash))
+                })?;
+                let bytes = wad.load_chunk_decompressed(&chunk)?.to_vec();
+                let hex_name = format!("{:016x}.bin", path_hash);
+                results.push((Utf8PathBuf::from(hex_name), bytes));
+            }
+
+            return Ok(results);
         }
 
         Ok(Vec::new())
@@ -263,21 +298,13 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
         }
 
         // Try packed WAD — extract specific chunk by hex hash filename
-        let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
-            .file_stem()
-            .unwrap_or("");
+        if let Some(wad) = self.packed_wads.get_mut(wad_name) {
+            let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
+                .file_stem()
+                .unwrap_or("");
 
-        if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
-            if let Ok(target_hash) = u64::from_str_radix(file_stem, 16) {
-                let packed_path = format!("WAD/{}", wad_name);
-                if let Ok(mut entry) = self.archive.by_name(&packed_path) {
-                    let mut wad_data = Vec::new();
-                    entry.read_to_end(&mut wad_data).map_err(|e| {
-                        Error::Other(format!("Failed to read packed WAD data: {}", e))
-                    })?;
-
-                    let cursor = Cursor::new(wad_data);
-                    let mut wad = Wad::mount(cursor)?;
+            if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
+                if let Ok(target_hash) = u64::from_str_radix(file_stem, 16) {
                     let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
                         Error::Other(format!(
                             "WAD chunk {:016x} not found in packed WAD",
@@ -305,9 +332,9 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
             ))
         })?;
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(|e| {
-            Error::Other(format!("Failed to read RAW ZIP entry data: {}", e))
-        })?;
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))?;
         Ok(bytes)
     }
 
@@ -316,45 +343,6 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
             Some(path) => archive_fingerprint(path),
             None => Ok(None),
         }
-    }
-}
-
-impl<R: Read + Seek + Send> FantomeContent<R> {
-    /// Read a packed WAD from the ZIP archive by name and return its entries as override files.
-    fn read_packed_wad_by_name(
-        &mut self,
-        zip_path: &str,
-    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
-        let mut entry = self
-            .archive
-            .by_name(zip_path)
-            .map_err(|e| Error::Other(format!("Failed to read packed WAD from ZIP: {}", e)))?;
-
-        let mut wad_data = Vec::new();
-        entry
-            .read_to_end(&mut wad_data)
-            .map_err(|e| Error::Other(format!("Failed to read packed WAD data: {}", e)))?;
-
-        let cursor = Cursor::new(wad_data);
-        let mut wad = Wad::mount(cursor)?;
-
-        let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
-        let mut results = Vec::with_capacity(path_hashes.len());
-
-        for path_hash in path_hashes {
-            let chunk = *wad
-                .chunks()
-                .get(path_hash)
-                .ok_or_else(|| Error::Other(format!("WAD chunk {:016x} disappeared", path_hash)))?;
-
-            let bytes = wad.load_chunk_decompressed(&chunk)?.to_vec();
-
-            // Use hex hash as filename — resolve_chunk_hash will parse it correctly
-            let hex_name = format!("{:016x}.bin", path_hash);
-            results.push((Utf8PathBuf::from(hex_name), bytes));
-        }
-
-        Ok(results)
     }
 }
 
