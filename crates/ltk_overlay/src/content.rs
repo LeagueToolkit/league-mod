@@ -14,6 +14,32 @@
 use crate::error::Result;
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::ModProject;
+use xxhash_rust::xxh3::xxh3_64;
+
+/// Compute a content fingerprint from an archive file's size and modification time.
+///
+/// This is a cheap way to detect when an archive has changed without reading its
+/// contents. Suitable for immutable archive files (`.fantome`, `.modpkg`).
+pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
+    let meta = match std::fs::metadata(path.as_std_path()) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut buf = Vec::with_capacity(16);
+    buf.extend_from_slice(&size.to_le_bytes());
+    buf.extend_from_slice(&mtime.to_le_bytes());
+
+    Ok(Some(xxh3_64(&buf)))
+}
 
 /// Abstracts how mod content is accessed during overlay building.
 ///

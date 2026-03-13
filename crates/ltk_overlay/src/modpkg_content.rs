@@ -4,7 +4,7 @@
 //! access to layer structure, WAD targets, and override file data without
 //! extracting to disk.
 
-use crate::content::ModContentProvider;
+use crate::content::{archive_fingerprint, ModContentProvider};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
@@ -15,11 +15,21 @@ use std::io::{Read, Seek};
 /// Content provider that reads directly from a mounted `.modpkg` archive.
 pub struct ModpkgContent<R: Read + Seek> {
     modpkg: Modpkg<R>,
+    archive_path: Option<Utf8PathBuf>,
 }
 
 impl<R: Read + Seek> ModpkgContent<R> {
     pub fn new(modpkg: Modpkg<R>) -> Self {
-        Self { modpkg }
+        Self {
+            modpkg,
+            archive_path: None,
+        }
+    }
+
+    /// Set the archive file path, enabling content fingerprinting for the metadata cache.
+    pub fn with_archive_path(mut self, path: Utf8PathBuf) -> Self {
+        self.archive_path = Some(path);
+        self
     }
 }
 
@@ -179,5 +189,12 @@ impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
         Err(Error::Other(
             "Modpkg format does not support raw overrides".to_string(),
         ))
+    }
+
+    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+        match &self.archive_path {
+            Some(path) => archive_fingerprint(path),
+            None => Ok(None),
+        }
     }
 }

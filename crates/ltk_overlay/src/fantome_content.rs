@@ -8,7 +8,7 @@
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
 
-use crate::content::ModContentProvider;
+use crate::content::{archive_fingerprint, ModContentProvider};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor};
@@ -25,13 +25,23 @@ use zip::ZipArchive;
 /// - **Packed WADs**: `WAD/{name}.wad.client` — complete WAD files unpacked in-memory into overrides
 pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
+    archive_path: Option<Utf8PathBuf>,
 }
 
 impl<R: Read + Seek> FantomeContent<R> {
     pub fn new(reader: R) -> Result<Self> {
         let archive = ZipArchive::new(reader)
             .map_err(|e| Error::Other(format!("Failed to open fantome archive: {}", e)))?;
-        Ok(Self { archive })
+        Ok(Self {
+            archive,
+            archive_path: None,
+        })
+    }
+
+    /// Set the archive file path, enabling content fingerprinting for the metadata cache.
+    pub fn with_archive_path(mut self, path: Utf8PathBuf) -> Self {
+        self.archive_path = Some(path);
+        self
     }
 }
 
@@ -336,6 +346,13 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
             "RAW override file not found in fantome archive: {}",
             rel_path
         )))
+    }
+
+    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+        match &self.archive_path {
+            Some(path) => archive_fingerprint(path),
+            None => Ok(None),
+        }
     }
 }
 
