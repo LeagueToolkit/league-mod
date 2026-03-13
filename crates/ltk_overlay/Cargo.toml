@@ -17,6 +17,11 @@ ltk_wad = "0.2.11"
 ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.3.0", path = "../ltk_mod_project" }
 ltk_modpkg = { version = "0.3.0", path = "../ltk_modpkg" }
+ltk_fantome = { version = "0.4.0", path = "../ltk_fantome" }
+
+# Archive reading
+zip = "2.2.0"
+slug = "0.1"
 
 # Error handling
 thiserror = "2.0"

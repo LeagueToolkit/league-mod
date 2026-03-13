@@ -36,8 +36,8 @@
 //! the builder from any particular storage format. Implementations can read from:
 //!
 //! - Filesystem directories ([`FsModContent`])
-//! - `.modpkg` archives (implemented in `ltk-manager`)
-//! - `.fantome` ZIP archives (implemented in `ltk-manager`)
+//! - `.modpkg` archives ([`ModpkgContent`])
+//! - `.fantome` ZIP archives ([`FantomeContent`])
 //!
 //! # Incremental Rebuild
 //!
@@ -88,7 +88,10 @@
 pub mod builder;
 pub mod content;
 pub mod error;
+pub mod fantome_content;
 pub mod game_index;
+pub mod meta_cache;
+pub mod modpkg_content;
 pub mod state;
 pub mod utils;
 pub mod wad_builder;
@@ -97,5 +100,7 @@ pub mod wad_builder;
 pub use builder::{EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage};
 pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};
+pub use fantome_content::FantomeContent;
 pub use game_index::GameIndex;
+pub use modpkg_content::ModpkgContent;
 pub use state::OverlayState;

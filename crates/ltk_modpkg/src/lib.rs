@@ -11,7 +11,7 @@ use std::{
 pub mod builder;
 mod chunk;
 mod decoder;
-mod error;
+pub mod error;
 mod extractor;
 mod license;
 mod metadata;

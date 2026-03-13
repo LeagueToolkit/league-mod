@@ -3,9 +3,10 @@
 //! These functions bridge the gap between how mod files are stored on disk (or in
 //! archives) and the `u64` path hashes used inside WAD files.
 
+use crate::builder::OverrideMeta;
 use crate::error::Result;
 use camino::Utf8Path;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Normalize a relative path for hash computation.
@@ -102,9 +103,44 @@ pub fn compute_wad_overrides_fingerprint<B: AsRef<[u8]>>(overrides: &HashMap<u64
         .collect();
     entries.sort_unstable_by_key(|(path_hash, _)| *path_hash);
 
-    // Hash the sorted (path_hash, content_hash) pairs
+    fingerprint_from_sorted_pairs(&entries)
+}
+
+/// Compute a deterministic fingerprint from pre-computed `(path_hash, content_hash)` pairs.
+///
+/// This is the metadata-based equivalent of [`compute_wad_overrides_fingerprint`] —
+/// it produces an identical `u64` for the same set of overrides, but uses pre-computed
+/// content hashes from the metadata cache instead of hashing raw bytes.
+///
+/// The `wad_hashes` set selects which entries from `all_meta` belong to this WAD.
+pub fn compute_wad_fingerprint_from_meta(
+    wad_hashes: &HashSet<u64>,
+    all_meta: &HashMap<u64, OverrideMeta>,
+) -> u64 {
+    if wad_hashes.is_empty() {
+        return 0;
+    }
+
+    let mut entries: Vec<(u64, u64)> = wad_hashes
+        .iter()
+        .filter_map(|&path_hash| {
+            let meta = all_meta.get(&path_hash)?;
+            Some((path_hash, meta.content_hash))
+        })
+        .collect();
+    entries.sort_unstable_by_key(|(path_hash, _)| *path_hash);
+
+    fingerprint_from_sorted_pairs(&entries)
+}
+
+/// Hash sorted `(path_hash, content_hash)` pairs into a single fingerprint.
+fn fingerprint_from_sorted_pairs(entries: &[(u64, u64)]) -> u64 {
+    if entries.is_empty() {
+        return 0;
+    }
+
     let mut buf = Vec::with_capacity(entries.len() * 16);
-    for (path_hash, content_hash) in &entries {
+    for (path_hash, content_hash) in entries {
         buf.extend_from_slice(&path_hash.to_le_bytes());
         buf.extend_from_slice(&content_hash.to_le_bytes());
     }
@@ -186,5 +222,50 @@ mod tests {
         let mut overrides = HashMap::new();
         overrides.insert(42u64, vec![1, 2, 3]);
         assert_ne!(compute_wad_overrides_fingerprint(&overrides), 0);
+    }
+
+    #[test]
+    fn test_meta_fingerprint_matches_byte_fingerprint() {
+        use crate::builder::{OverrideMeta, OverrideSource};
+
+        // Create byte-based overrides
+        let mut byte_overrides: HashMap<u64, Vec<u8>> = HashMap::new();
+        byte_overrides.insert(1u64, vec![1, 2, 3]);
+        byte_overrides.insert(2u64, vec![4, 5, 6]);
+        byte_overrides.insert(100u64, vec![7, 8, 9, 10]);
+
+        let byte_fp = compute_wad_overrides_fingerprint(&byte_overrides);
+
+        // Create equivalent metadata
+        let mut all_meta: HashMap<u64, OverrideMeta> = HashMap::new();
+        for (&path_hash, bytes) in &byte_overrides {
+            all_meta.insert(
+                path_hash,
+                OverrideMeta {
+                    content_hash: xxh3_64(bytes),
+                    uncompressed_size: bytes.len(),
+                    source: OverrideSource::Raw {
+                        mod_id: "test-mod".to_string(),
+                        rel_path: Utf8PathBuf::from("dummy"),
+                    },
+                    fallback_wad: None,
+                },
+            );
+        }
+
+        let wad_hashes: HashSet<u64> = byte_overrides.keys().copied().collect();
+        let meta_fp = compute_wad_fingerprint_from_meta(&wad_hashes, &all_meta);
+
+        assert_eq!(
+            byte_fp, meta_fp,
+            "Metadata-based fingerprint must match byte-based fingerprint"
+        );
+    }
+
+    #[test]
+    fn test_meta_fingerprint_empty() {
+        let wad_hashes: HashSet<u64> = HashSet::new();
+        let all_meta: HashMap<u64, OverrideMeta> = HashMap::new();
+        assert_eq!(compute_wad_fingerprint_from_meta(&wad_hashes, &all_meta), 0);
     }
 }
