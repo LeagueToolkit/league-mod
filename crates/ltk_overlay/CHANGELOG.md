@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.3...ltk_overlay-v0.1.4) - 2026-03-13
+
+### Added
+
+- *(ltk_overlay)* introduce FantomeIndex for efficient archive content lookups
+- *(ltk_overlay)* add content fingerprinting for archive metadata caching
+- *(ltk_overlay)* implement mod meta cache and archive content providers
+
+### Fixed
+
+- *(ltk_overlay)* cache packed wad files during content provider creation
+- *(ltk_overlay)* improve error handling for override meta cache deserialization
+
+### Other
+
+- *(ltk_overlay)* optimize file retrieval in FantomeContent by replacing index-based lookups with direct name-based access
+
 ## [0.1.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.2...ltk_overlay-v0.1.3) - 2026-03-12
 
 ### Added
