@@ -250,64 +250,39 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
             )));
         }
 
+        // Try directory-style entry first (O(1) lookup)
         let target_path = format!("WAD/{}/{}", wad_name, rel_path);
-
-        // Try directory-style entry first
-        for i in 0..self.archive.len() {
-            let file = self
-                .archive
-                .by_index(i)
-                .map_err(|e| Error::Other(format!("Failed to read archive entry: {}", e)))?;
-            let name = file.name().to_string();
-
-            if name == target_path && !file.is_dir() {
-                drop(file);
-                let mut entry = self
-                    .archive
-                    .by_index(i)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
-                let mut bytes = Vec::new();
-                entry
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
-                return Ok(bytes);
-            }
+        if let Ok(mut entry) = self.archive.by_name(&target_path) {
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
+            return Ok(bytes);
         }
 
         // Try packed WAD — extract specific chunk by hex hash filename
-        let packed_path = format!("WAD/{}", wad_name);
         let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
             .file_stem()
             .unwrap_or("");
 
         if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
             if let Ok(target_hash) = u64::from_str_radix(file_stem, 16) {
-                for i in 0..self.archive.len() {
-                    let file = self.archive.by_index(i).map_err(|e| {
-                        Error::Other(format!("Failed to read archive entry: {}", e))
+                let packed_path = format!("WAD/{}", wad_name);
+                if let Ok(mut entry) = self.archive.by_name(&packed_path) {
+                    let mut wad_data = Vec::new();
+                    entry.read_to_end(&mut wad_data).map_err(|e| {
+                        Error::Other(format!("Failed to read packed WAD data: {}", e))
                     })?;
-                    let name = file.name().to_string();
 
-                    if name == packed_path && !file.is_dir() {
-                        drop(file);
-                        let mut entry = self.archive.by_index(i).map_err(|e| {
-                            Error::Other(format!("Failed to read packed WAD from ZIP: {}", e))
-                        })?;
-                        let mut wad_data = Vec::new();
-                        entry.read_to_end(&mut wad_data).map_err(|e| {
-                            Error::Other(format!("Failed to read packed WAD data: {}", e))
-                        })?;
-
-                        let cursor = Cursor::new(wad_data);
-                        let mut wad = Wad::mount(cursor)?;
-                        let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
-                            Error::Other(format!(
-                                "WAD chunk {:016x} not found in packed WAD",
-                                target_hash
-                            ))
-                        })?;
-                        return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
-                    }
+                    let cursor = Cursor::new(wad_data);
+                    let mut wad = Wad::mount(cursor)?;
+                    let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
+                        Error::Other(format!(
+                            "WAD chunk {:016x} not found in packed WAD",
+                            target_hash
+                        ))
+                    })?;
+                    return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
                 }
             }
         }
@@ -321,31 +296,17 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
         let target_path = format!("RAW/{}", rel_path);
 
-        for i in 0..self.archive.len() {
-            let file = self
-                .archive
-                .by_index(i)
-                .map_err(|e| Error::Other(format!("Failed to read archive entry: {}", e)))?;
-            let name = file.name().to_string();
-
-            if name == target_path && !file.is_dir() {
-                drop(file);
-                let mut entry = self
-                    .archive
-                    .by_index(i)
-                    .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry: {}", e)))?;
-                let mut bytes = Vec::new();
-                entry.read_to_end(&mut bytes).map_err(|e| {
-                    Error::Other(format!("Failed to read RAW ZIP entry data: {}", e))
-                })?;
-                return Ok(bytes);
-            }
-        }
-
-        Err(Error::Other(format!(
-            "RAW override file not found in fantome archive: {}",
-            rel_path
-        )))
+        let mut entry = self.archive.by_name(&target_path).map_err(|_| {
+            Error::Other(format!(
+                "RAW override file not found in fantome archive: {}",
+                rel_path
+            ))
+        })?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| {
+            Error::Other(format!("Failed to read RAW ZIP entry data: {}", e))
+        })?;
+        Ok(bytes)
     }
 
     fn content_fingerprint(&mut self) -> Result<Option<u64>> {
