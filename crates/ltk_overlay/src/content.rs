@@ -62,7 +62,7 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 ///   [`ltk_modpkg::utils::hash_chunk_name`].
 /// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
 ///   `u64` values. This is used by packed WAD content where original paths are lost.
-pub trait ModContentProvider: Send {
+pub trait ModContentProvider: Send + Sync {
     /// Return the mod's project configuration.
     ///
     /// This provides the mod name, version, description, author list, and — most
@@ -111,7 +111,7 @@ pub trait ModContentProvider: Send {
     ///
     /// For filesystem providers: hash of `(path, size, mtime)` tuples.
     /// For archive providers: archive file size + mtime.
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         Ok(None)
     }
 
@@ -236,7 +236,7 @@ impl ModContentProvider for FsModContent {
         Ok(results)
     }
 
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         use xxhash_rust::xxh3::xxh3_64;
 
         let content_dir = self.mod_dir.join("content");

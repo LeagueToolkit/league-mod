@@ -35,13 +35,14 @@ The overlay builder follows this workflow:
 ## Usage
 
 ```rust
-use ltk_overlay::{OverlayBuilder, EnabledMod};
-use std::path::PathBuf;
+use ltk_overlay::{OverlayBuilder, EnabledMod, FsModContent};
+use camino::Utf8PathBuf;
 
-let game_dir = PathBuf::from("C:/Riot Games/League of Legends/Game");
-let overlay_root = PathBuf::from("C:/Users/.../overlay");
+let game_dir = Utf8PathBuf::from("C:/Riot Games/League of Legends/Game");
+let profile_dir = Utf8PathBuf::from("C:/Users/.../profiles/default");
+let overlay_root = profile_dir.join("overlay");
 
-let mut builder = OverlayBuilder::new(game_dir, overlay_root)
+let mut builder = OverlayBuilder::new(game_dir, overlay_root, profile_dir)
     .with_progress(|progress| {
         println!("Stage: {:?}, Progress: {}/{}",
             progress.stage, progress.current, progress.total);
@@ -50,14 +51,13 @@ let mut builder = OverlayBuilder::new(game_dir, overlay_root)
 builder.set_enabled_mods(vec![
     EnabledMod {
         id: "my-mod".to_string(),
-        mod_dir: PathBuf::from("/path/to/mod"),
-        priority: 0,
+        content: Box::new(FsModContent::new(Utf8PathBuf::from("/path/to/mod"))),
+        enabled_layers: None,
     },
 ]);
 
 let result = builder.build()?;
-println!("Built {} WADs, reused {}",
-    result.wads_built.len(), result.wads_reused.len());
+println!("Built {} WADs in {:?}", result.wads_built.len(), result.build_time);
 ```
 
 ## Integration

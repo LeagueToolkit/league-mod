@@ -163,7 +163,7 @@ impl<R: Read + Seek> FantomeContent<R> {
     }
 }
 
-impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
+impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
         let info_name =
             self.index.info_entry.as_ref().ok_or_else(|| {
@@ -338,7 +338,7 @@ impl<R: Read + Seek + Send> ModContentProvider for FantomeContent<R> {
         Ok(bytes)
     }
 
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         match &self.archive_path {
             Some(path) => archive_fingerprint(path),
             None => Ok(None),

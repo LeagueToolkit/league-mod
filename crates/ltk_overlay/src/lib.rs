@@ -77,6 +77,7 @@
 //!     EnabledMod {
 //!         id: "my-mod".to_string(),
 //!         content: Box::new(FsModContent::new(Utf8PathBuf::from("/path/to/mod"))),
+//!         enabled_layers: None,
 //!     },
 //! ]);
 //!
@@ -97,7 +98,9 @@ pub mod utils;
 pub mod wad_builder;
 
 // Re-export main public API.
-pub use builder::{EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage};
+pub use builder::{
+    EnabledMod, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage, BASE_LAYER_NAME,
+};
 pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};
 pub use fantome_content::FantomeContent;

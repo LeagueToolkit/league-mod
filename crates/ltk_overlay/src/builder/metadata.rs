@@ -6,6 +6,7 @@
 use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
+use rayon::prelude::*;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Collect override metadata from a single mod (pass 1).
@@ -27,6 +28,15 @@ pub(crate) fn collect_single_mod_metadata(
     let mut mod_meta: HashMap<u64, OverrideMeta> = HashMap::new();
 
     for layer in &layers {
+        if !enabled_mod.is_layer_active(&layer.name) {
+            tracing::debug!(
+                "Mod={} layer='{}' skipped (not in enabled_layers)",
+                enabled_mod.id,
+                layer.name,
+            );
+            continue;
+        }
+
         let wad_names = enabled_mod.content.list_layer_wads(&layer.name)?;
         if wad_names.is_empty() {
             tracing::debug!(
@@ -186,6 +196,41 @@ pub(crate) fn filter_override_metadata(
     }
 }
 
+/// Try the metadata cache for a single mod; on miss, collect fresh metadata and
+/// update the cache.
+fn collect_or_cache_mod_metadata(
+    enabled_mod: &mut EnabledMod,
+    fingerprint: Option<u64>,
+    meta_cache: &mut OverrideMetaCache,
+    game_index: &GameIndex,
+    game_dir: &Utf8Path,
+) -> Result<HashMap<u64, OverrideMeta>> {
+    // Cache hit — reconstruct from cached data without reading any files.
+    if let Some(fp) = fingerprint {
+        if let Some(cached) = meta_cache.get_mod_meta(&enabled_mod.id, fp) {
+            tracing::info!(
+                "Mod={} cache hit (fingerprint {:016x}), {} overrides",
+                enabled_mod.id,
+                fp,
+                cached.overrides.len()
+            );
+            return Ok(cached.reconstruct(&enabled_mod.id));
+        }
+    }
+
+    // Cache miss — collect fresh metadata from mod content.
+    tracing::info!("Mod={} cache miss, reading files", enabled_mod.id);
+    let mod_meta = collect_single_mod_metadata(enabled_mod, game_index, game_dir)?;
+
+    // Persist to cache for next build.
+    if let Some(fp) = fingerprint {
+        let cache_entry = CachedModMeta::from_override_meta(fp, &mod_meta);
+        meta_cache.set_mod_meta(enabled_mod.id.clone(), cache_entry);
+    }
+
+    Ok(mod_meta)
+}
+
 impl OverlayBuilder {
     /// Collect override metadata from all mods (pass 1).
     ///
@@ -206,60 +251,26 @@ impl OverlayBuilder {
         let mut meta_cache = OverrideMetaCache::load(&meta_cache_path, game_fp)
             .unwrap_or_else(|| OverrideMetaCache::new(game_fp));
 
-        // Compute content fingerprints for each mod (sequential — fingerprint
-        // computation is cheap and needs &mut on each provider).
+        // Compute content fingerprints in parallel — each mod's fingerprint is
+        // independent (filesystem stat calls or archive metadata).
         let fingerprints: Vec<Option<u64>> = self
             .enabled_mods
-            .iter_mut()
-            .enumerate()
-            .map(|(i, m)| {
-                m.content.content_fingerprint().unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "Failed to compute content fingerprint for mod '{}' (index {}): {}",
-                        m.id,
-                        i,
-                        e
-                    );
-                    None
-                })
-            })
+            .par_iter()
+            .map(|m| m.cache_fingerprint())
             .collect();
 
         // For each mod: either use cache or collect fresh metadata.
-        // We process sequentially because `enabled_mods` requires &mut access
-        // per mod and rayon can't do that with indexed access. The actual file
-        // reading within each mod (read_wad_overrides) is the heavy part, and
-        // cached mods skip it entirely.
         let mut per_mod_results: Vec<HashMap<u64, OverrideMeta>> =
             Vec::with_capacity(self.enabled_mods.len());
 
         for (idx, enabled_mod) in self.enabled_mods.iter_mut().enumerate() {
-            let fingerprint = fingerprints[idx];
-
-            // Try cache hit
-            if let Some(fp) = fingerprint {
-                if let Some(cached) = meta_cache.get_mod_meta(&enabled_mod.id, fp) {
-                    tracing::info!(
-                        "Mod={} cache hit (fingerprint {:016x}), {} overrides",
-                        enabled_mod.id,
-                        fp,
-                        cached.overrides.len()
-                    );
-                    per_mod_results.push(cached.reconstruct(&enabled_mod.id));
-                    continue;
-                }
-            }
-
-            // Cache miss — collect fresh metadata
-            tracing::info!("Mod={} cache miss, reading files", enabled_mod.id);
-            let mod_meta = collect_single_mod_metadata(enabled_mod, game_index, game_dir)?;
-
-            // Update cache
-            if let Some(fp) = fingerprint {
-                let cache_entry = CachedModMeta::from_override_meta(fp, &mod_meta);
-                meta_cache.set_mod_meta(enabled_mod.id.clone(), cache_entry);
-            }
-
+            let mod_meta = collect_or_cache_mod_metadata(
+                enabled_mod,
+                fingerprints[idx],
+                &mut meta_cache,
+                game_index,
+                game_dir,
+            )?;
             per_mod_results.push(mod_meta);
         }
 
@@ -297,6 +308,113 @@ impl OverlayBuilder {
 mod tests {
     use super::*;
     use crate::meta_cache::CachedOverride;
+    use ltk_mod_project::{ModProject, ModProjectLayer};
+    use std::sync::{Arc, Mutex};
+
+    /// Mock content provider that tracks which layers are queried.
+    struct MockModContent {
+        layers: Vec<ModProjectLayer>,
+        queried_layers: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ModContentProvider for MockModContent {
+        fn mod_project(&mut self) -> Result<ModProject> {
+            Ok(ModProject {
+                name: "test-mod".to_string(),
+                display_name: "Test Mod".to_string(),
+                version: "1.0.0".to_string(),
+                description: "test".to_string(),
+                authors: vec![],
+                license: None,
+                tags: vec![],
+                champions: vec![],
+                maps: vec![],
+                transformers: vec![],
+                layers: self.layers.clone(),
+                thumbnail: None,
+            })
+        }
+
+        fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
+            self.queried_layers.lock().unwrap().push(layer.to_string());
+            // Return empty so we don't need a real GameIndex
+            Ok(vec![])
+        }
+
+        fn read_wad_overrides(
+            &mut self,
+            _layer: &str,
+            _wad_name: &str,
+        ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+            Ok(vec![])
+        }
+
+        fn read_wad_override_file(
+            &mut self,
+            _layer: &str,
+            _wad_name: &str,
+            _rel_path: &Utf8Path,
+        ) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+
+        fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+    }
+
+    fn make_layers(names: &[&str]) -> Vec<ModProjectLayer> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ModProjectLayer {
+                name: name.to_string(),
+                priority: i as i32,
+                description: None,
+                string_overrides: HashMap::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_enabled_layers_filters_correctly() {
+        let queried = Arc::new(Mutex::new(Vec::new()));
+
+        // Build an empty GameIndex from a temp directory with DATA/FINAL
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+        let game_index = GameIndex::build(game_dir).unwrap();
+
+        // With enabled_layers = None, all layers should be queried
+        let mut mod_all = EnabledMod {
+            id: "mod1".to_string(),
+            content: Box::new(MockModContent {
+                layers: make_layers(&["base", "high_res", "extras"]),
+                queried_layers: Arc::clone(&queried),
+            }),
+            enabled_layers: None,
+        };
+        let _ = collect_single_mod_metadata(&mut mod_all, &game_index, game_dir);
+        let all_queried: Vec<String> = queried.lock().unwrap().drain(..).collect();
+        assert_eq!(all_queried, vec!["base", "high_res", "extras"]); // sorted by priority then name
+
+        // With enabled_layers = Some({"extras"}), base + extras should be queried
+        // (base is always included even if not in the set)
+        let mut mod_filtered = EnabledMod {
+            id: "mod2".to_string(),
+            content: Box::new(MockModContent {
+                layers: make_layers(&["base", "high_res", "extras"]),
+                queried_layers: Arc::clone(&queried),
+            }),
+            enabled_layers: Some(HashSet::from(["extras".to_string()])),
+        };
+        let _ = collect_single_mod_metadata(&mut mod_filtered, &game_index, game_dir);
+        let filtered_queried: Vec<String> = queried.lock().unwrap().drain(..).collect();
+        assert_eq!(filtered_queried, vec!["base", "extras"]);
+        // "high_res" should NOT appear, but "base" is always included
+    }
 
     #[test]
     fn test_reconstruct_from_cache() {
