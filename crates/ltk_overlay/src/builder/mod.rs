@@ -113,16 +113,25 @@ impl EnabledMod {
             None
         })?;
 
-        Some(match self.enabled_layers {
-            Some(ref layers) => {
-                let mut sorted: Vec<&str> = layers.iter().map(|s| s.as_str()).collect();
+        Some(match &self.enabled_layers {
+            Some(layers) => {
+                // Exclude BASE_LAYER_NAME before hashing — it's always implicitly
+                // active via is_layer_active, so {"extras"} and {"base","extras"}
+                // should produce the same fingerprint.
+                let mut sorted: Vec<&str> = layers
+                    .iter()
+                    .map(|s| s.as_str())
+                    .filter(|&s| s != BASE_LAYER_NAME)
+                    .collect();
                 sorted.sort_unstable();
+
                 // Encode as "fp\0layer1\0layer2\0..." and hash the whole buffer.
                 let mut buf = format!("{base_fp}");
                 for layer in &sorted {
                     buf.push('\0');
                     buf.push_str(layer);
                 }
+
                 xxh3_64(buf.as_bytes())
             }
             None => base_fp,
