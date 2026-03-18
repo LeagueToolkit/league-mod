@@ -539,7 +539,7 @@ impl ModpkgChunkBuilder {
     ///
     /// This will always hash the provided path string using `hash_chunk_name`.
     pub fn with_path(mut self, path: &str) -> Result<Self, ModpkgBuilderError> {
-        let path = path.to_lowercase().replace('\\', "/");
+        let path = crate::utils::normalize_chunk_path(path);
         self.path_hash = hash_chunk_name(&path);
         self.path = path;
         Ok(self)

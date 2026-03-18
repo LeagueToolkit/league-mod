@@ -161,7 +161,8 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let full_path = format!("{}/{}", wad_name, rel_path);
+        let full_path =
+            ltk_modpkg::utils::normalize_chunk_path(&format!("{}/{}", wad_name, rel_path));
 
         // Compute the path hash from the full WAD-relative path
         let path_hash = ltk_modpkg::utils::hash_chunk_name(&full_path);

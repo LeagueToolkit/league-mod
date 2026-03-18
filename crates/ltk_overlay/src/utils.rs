@@ -80,7 +80,9 @@ pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
 
     // Otherwise, compute from normalized path
     let normalized_rel = normalize_rel_path_for_hash(rel_path, bytes);
-    Ok(ltk_modpkg::utils::hash_chunk_name(&normalized_rel))
+    Ok(ltk_modpkg::utils::hash_chunk_name(
+        &ltk_modpkg::utils::normalize_chunk_path(&normalized_rel),
+    ))
 }
 
 /// Compute a deterministic fingerprint for a WAD's override set.
