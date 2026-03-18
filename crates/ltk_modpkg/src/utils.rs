@@ -42,3 +42,48 @@ pub fn hash_chunk_name(name: &str) -> u64 {
 pub fn hash_wad_name(name: &str) -> u64 {
     xxh3::xxh3_64(name.to_lowercase().as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_chunk_path_lowercases() {
+        assert_eq!(
+            normalize_chunk_path("Graves.wad.client/Data/File.bin"),
+            "graves.wad.client/data/file.bin"
+        );
+    }
+
+    #[test]
+    fn normalize_chunk_path_converts_backslashes() {
+        assert_eq!(
+            normalize_chunk_path("graves.wad.client\\data\\characters\\graves"),
+            "graves.wad.client/data/characters/graves"
+        );
+    }
+
+    #[test]
+    fn normalize_chunk_path_handles_mixed_separators() {
+        assert_eq!(
+            normalize_chunk_path("Graves.wad.client\\Data/Characters\\Graves"),
+            "graves.wad.client/data/characters/graves"
+        );
+    }
+
+    #[test]
+    fn normalize_chunk_path_noop_on_normalized() {
+        let path = "graves.wad.client/data/file.bin";
+        assert_eq!(normalize_chunk_path(path), path);
+    }
+
+    #[test]
+    fn hash_chunk_name_consistent_after_normalization() {
+        let forward = normalize_chunk_path("graves.wad.client/data/file.bin");
+        let back = normalize_chunk_path("graves.wad.client\\data\\file.bin");
+        let mixed = normalize_chunk_path("Graves.wad.client\\Data/File.bin");
+
+        assert_eq!(hash_chunk_name(&forward), hash_chunk_name(&back));
+        assert_eq!(hash_chunk_name(&forward), hash_chunk_name(&mixed));
+    }
+}
