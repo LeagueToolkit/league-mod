@@ -241,9 +241,10 @@ impl ModContentProvider for FsModContent {
                 let rel = utf8_path
                     .strip_prefix(&wad_dir)
                     .unwrap_or(&utf8_path)
-                    .to_path_buf();
+                    .as_str()
+                    .replace('\\', "/");
                 let bytes = std::fs::read(utf8_path.as_std_path())?;
-                results.push((rel, bytes));
+                results.push((Utf8PathBuf::from(rel), bytes));
             }
         }
         Ok(results)

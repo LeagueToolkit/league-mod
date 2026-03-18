@@ -94,12 +94,13 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     }
 
     fn candidate_path_hashes(path: &str) -> (u64, Option<u64>) {
-        let literal_hash = hash_chunk_name(path);
-        let filename_lower = Path::new(path)
+        let normalized = utils::normalize_chunk_path(path);
+        let literal_hash = hash_chunk_name(&normalized);
+        let filename_lower = Path::new(&normalized)
             .file_name()
             .and_then(|s| s.to_str())
             .map(str::to_lowercase)
-            .unwrap_or_else(|| path.to_lowercase());
+            .unwrap_or_else(|| normalized.to_lowercase());
 
         if utils::is_hex_chunk_name(&filename_lower) {
             if let Some(base) = filename_lower.split('.').next() {

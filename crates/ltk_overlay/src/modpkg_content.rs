@@ -161,7 +161,8 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let full_path = format!("{}/{}", wad_name, rel_path);
+        let full_path =
+            ltk_modpkg::utils::normalize_chunk_path(&format!("{}/{}", wad_name, rel_path));
 
         // Compute the path hash from the full WAD-relative path
         let path_hash = ltk_modpkg::utils::hash_chunk_name(&full_path);
@@ -196,5 +197,152 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             Some(path) => archive_fingerprint(path),
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content::ModContentProvider;
+    use ltk_modpkg::builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder};
+    use ltk_modpkg::{Modpkg, ModpkgCompression};
+    use std::io::{Cursor, Write};
+
+    /// Build a modpkg in memory with chunks whose paths use backslashes
+    /// (simulating a Windows-packed archive) and verify that the overlay
+    /// content provider can discover WADs and read overrides correctly.
+    #[test]
+    fn list_layer_wads_with_backslash_paths() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    // Simulate a path produced by Windows glob
+                    .with_path("Graves.wad.client\\data\\characters\\graves\\skin0.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base"),
+            )
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("Graves.wad.client\\assets\\texture.tex")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base"),
+            );
+
+        builder
+            .build_to_writer(&mut cursor, |_chunk, cursor| {
+                cursor.write_all(&[0xAA; 10])?;
+                Ok(())
+            })
+            .unwrap();
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+        let mut content = ModpkgContent::new(modpkg);
+
+        let wads = content.list_layer_wads("base").unwrap();
+        assert_eq!(wads.len(), 1);
+        assert_eq!(wads[0], "graves.wad.client");
+    }
+
+    #[test]
+    fn read_wad_overrides_with_backslash_paths() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+        let file_data = b"hello world";
+
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("Graves.wad.client\\data\\skin0.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base"),
+            );
+
+        builder
+            .build_to_writer(&mut cursor, |_chunk, cursor| {
+                cursor.write_all(file_data)?;
+                Ok(())
+            })
+            .unwrap();
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+        let mut content = ModpkgContent::new(modpkg);
+
+        let overrides = content
+            .read_wad_overrides("base", "graves.wad.client")
+            .unwrap();
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].0.as_str(), "data/skin0.bin");
+        assert_eq!(overrides[0].1, file_data);
+    }
+
+    #[test]
+    fn multi_layer_backslash_paths() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_layer(ModpkgLayerBuilder::new("loading-screen").with_priority(1))
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("Graves.wad.client\\data\\base_file.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base"),
+            )
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("Graves.wad.client\\data\\loading.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("loading-screen"),
+            );
+
+        builder
+            .build_to_writer(&mut cursor, |chunk, cursor| {
+                if chunk.layer() == "base" {
+                    cursor.write_all(b"base_data")?;
+                } else {
+                    cursor.write_all(b"loading_data")?;
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+        let mut content = ModpkgContent::new(modpkg);
+
+        // Both layers should find the same WAD
+        let base_wads = content.list_layer_wads("base").unwrap();
+        assert_eq!(base_wads, vec!["graves.wad.client"]);
+
+        let loading_wads = content.list_layer_wads("loading-screen").unwrap();
+        assert_eq!(loading_wads, vec!["graves.wad.client"]);
+
+        // Each layer returns only its own overrides
+        let base_overrides = content
+            .read_wad_overrides("base", "graves.wad.client")
+            .unwrap();
+        assert_eq!(base_overrides.len(), 1);
+        assert_eq!(base_overrides[0].0.as_str(), "data/base_file.bin");
+        assert_eq!(base_overrides[0].1, b"base_data");
+
+        let loading_overrides = content
+            .read_wad_overrides("loading-screen", "graves.wad.client")
+            .unwrap();
+        assert_eq!(loading_overrides.len(), 1);
+        assert_eq!(loading_overrides[0].0.as_str(), "data/loading.bin");
+        assert_eq!(loading_overrides[0].1, b"loading_data");
     }
 }

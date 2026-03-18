@@ -539,7 +539,7 @@ impl ModpkgChunkBuilder {
     ///
     /// This will always hash the provided path string using `hash_chunk_name`.
     pub fn with_path(mut self, path: &str) -> Result<Self, ModpkgBuilderError> {
-        let path = path.to_lowercase();
+        let path = crate::utils::normalize_chunk_path(path);
         self.path_hash = hash_chunk_name(&path);
         self.path = path;
         Ok(self)
@@ -788,5 +788,69 @@ mod tests {
         assert!(ModpkgChunkBuilder::new()
             .with_hashed_chunk_name("0xabcdef1234567890.dds")
             .is_err());
+    }
+
+    #[test]
+    fn with_path_normalizes_backslashes() {
+        let chunk = ModpkgChunkBuilder::new()
+            .with_path("Graves.wad.client\\data\\characters\\graves\\skin0.bin")
+            .unwrap();
+
+        assert_eq!(
+            chunk.path,
+            "graves.wad.client/data/characters/graves/skin0.bin"
+        );
+
+        // Hash should match the normalized forward-slash version
+        let forward = ModpkgChunkBuilder::new()
+            .with_path("graves.wad.client/data/characters/graves/skin0.bin")
+            .unwrap();
+
+        assert_eq!(chunk.path_hash(), forward.path_hash());
+    }
+
+    #[test]
+    fn roundtrip_backslash_paths_normalized() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+
+        // Build with a path that has backslashes (simulates Windows glob output)
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("Graves.wad.client\\Data\\skin0.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base"),
+            );
+
+        builder
+            .build_to_writer(&mut cursor, |_chunk, cursor| {
+                cursor.write_all(&[0xBB; 50])?;
+                Ok(())
+            })
+            .expect("Failed to build Modpkg");
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(&mut cursor).unwrap();
+
+        // Stored path must be normalized
+        let normalized = "graves.wad.client/data/skin0.bin";
+        let path_hash = hash_chunk_name(normalized);
+
+        assert_eq!(
+            modpkg.chunk_paths.get(&path_hash),
+            Some(&normalized.to_string()),
+            "chunk_paths should contain the normalized path"
+        );
+
+        // Chunk should be findable by the normalized hash
+        assert!(
+            modpkg
+                .chunks
+                .contains_key(&(path_hash, hash_layer_name("base"))),
+            "chunk should be retrievable with normalized path hash"
+        );
     }
 }

@@ -93,7 +93,7 @@ fn read_chunk_paths<R: Read + Seek>(
     let mut chunk_path_indices = Vec::with_capacity(chunk_paths_count as usize);
     let mut chunk_paths = HashMap::with_capacity(chunk_paths_count as usize);
     for _ in 0..chunk_paths_count {
-        let chunk_path = reader.read_str_until_nul()?;
+        let chunk_path = crate::utils::normalize_chunk_path(&reader.read_str_until_nul()?);
         let chunk_path_hash = hash_chunk_name(&chunk_path);
         chunk_path_indices.push(chunk_path_hash);
         chunk_paths.insert(chunk_path_hash, chunk_path);
