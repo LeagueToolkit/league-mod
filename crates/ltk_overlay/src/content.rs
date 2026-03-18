@@ -52,9 +52,17 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 ///
 /// # Implementing
 ///
-/// Implementations must be [`Send`] so the builder can be used across threads.
-/// Methods take `&mut self` to allow stateful readers (e.g., seeking within an
-/// archive).
+/// Implementations must be [`Send`] + [`Sync`]:
+///
+/// - **`Send`** — the builder moves providers across threads.
+/// - **`Sync`** — [`content_fingerprint`](Self::content_fingerprint) takes `&self`
+///   and may be called concurrently via `par_iter()`. This method should only read
+///   filesystem metadata (stat calls), so it should not require mutation.
+///
+/// Most content-reading methods still take `&mut self` to allow stateful readers
+/// (e.g., seeking within a ZIP archive). If an implementation needs interior
+/// mutability for `content_fingerprint`, it can use synchronization primitives
+/// like `Mutex` or `RwLock`.
 ///
 /// The returned `Vec<(PathBuf, Vec<u8>)>` from [`read_wad_overrides`](Self::read_wad_overrides)
 /// uses paths that are resolved to `u64` hashes by [`resolve_chunk_hash`](crate::utils::resolve_chunk_hash):
@@ -62,7 +70,7 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 ///   [`ltk_modpkg::utils::hash_chunk_name`].
 /// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
 ///   `u64` values. This is used by packed WAD content where original paths are lost.
-pub trait ModContentProvider: Send {
+pub trait ModContentProvider: Send + Sync {
     /// Return the mod's project configuration.
     ///
     /// This provides the mod name, version, description, author list, and — most
@@ -109,9 +117,14 @@ pub trait ModContentProvider: Send {
     /// the provider cannot efficiently compute a fingerprint (cache will be
     /// skipped for this mod).
     ///
+    /// Takes `&self` (not `&mut self`) because fingerprinting is a read-only
+    /// operation and may be called in parallel across mods. Implementations
+    /// should only inspect filesystem metadata (file sizes, modification times),
+    /// not read file contents.
+    ///
     /// For filesystem providers: hash of `(path, size, mtime)` tuples.
     /// For archive providers: archive file size + mtime.
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         Ok(None)
     }
 
@@ -236,7 +249,7 @@ impl ModContentProvider for FsModContent {
         Ok(results)
     }
 
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         use xxhash_rust::xxh3::xxh3_64;
 
         let content_dir = self.mod_dir.join("content");

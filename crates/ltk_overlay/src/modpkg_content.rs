@@ -33,7 +33,7 @@ impl<R: Read + Seek> ModpkgContent<R> {
     }
 }
 
-impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
+impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
         let metadata = self
             .modpkg
@@ -191,7 +191,7 @@ impl<R: Read + Seek + Send> ModContentProvider for ModpkgContent<R> {
         ))
     }
 
-    fn content_fingerprint(&mut self) -> Result<Option<u64>> {
+    fn content_fingerprint(&self) -> Result<Option<u64>> {
         match &self.archive_path {
             Some(path) => archive_fingerprint(path),
             None => Ok(None),

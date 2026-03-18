@@ -85,6 +85,71 @@ pub struct EnabledMod {
     /// This can be backed by a filesystem directory, a `.modpkg` archive, a
     /// `.fantome` ZIP, or any other source that implements [`ModContentProvider`].
     pub content: Box<dyn ModContentProvider>,
+    /// Optional set of layer names to include. When `Some`, only layers whose
+    /// names are in this set will be processed during overlay building. When
+    /// `None`, all layers are included (backward-compatible default).
+    pub enabled_layers: Option<HashSet<String>>,
+}
+
+/// The name of the base layer that is always included regardless of
+/// `enabled_layers` configuration. Every mod has a base layer at priority 0.
+pub const BASE_LAYER_NAME: &str = "base";
+
+impl EnabledMod {
+    /// Compute a cache fingerprint that accounts for both content changes and
+    /// the current `enabled_layers` selection.
+    ///
+    /// Returns `None` if the underlying content provider cannot compute a
+    /// fingerprint (the metadata cache will be skipped for this mod).
+    pub fn cache_fingerprint(&self) -> Option<u64> {
+        use xxhash_rust::xxh3::xxh3_64;
+
+        let base_fp = self.content.content_fingerprint().unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to compute content fingerprint for mod '{}': {}",
+                self.id,
+                e
+            );
+            None
+        })?;
+
+        Some(match &self.enabled_layers {
+            Some(layers) => {
+                // Exclude BASE_LAYER_NAME before hashing — it's always implicitly
+                // active via is_layer_active, so {"extras"} and {"base","extras"}
+                // should produce the same fingerprint.
+                let mut sorted: Vec<&str> = layers
+                    .iter()
+                    .map(|s| s.as_str())
+                    .filter(|&s| s != BASE_LAYER_NAME)
+                    .collect();
+                sorted.sort_unstable();
+
+                // Encode as "fp\0layer1\0layer2\0..." and hash the whole buffer.
+                let mut buf = format!("{base_fp}");
+                for layer in &sorted {
+                    buf.push('\0');
+                    buf.push_str(layer);
+                }
+
+                xxh3_64(buf.as_bytes())
+            }
+            None => base_fp,
+        })
+    }
+
+    /// Returns whether the given layer name should be processed for this mod.
+    ///
+    /// A layer is active when:
+    /// - `enabled_layers` is `None` (all layers enabled), OR
+    /// - The layer is the base layer ([`BASE_LAYER_NAME`]), OR
+    /// - The layer is explicitly listed in `enabled_layers`.
+    pub fn is_layer_active(&self, layer_name: &str) -> bool {
+        match &self.enabled_layers {
+            None => true,
+            Some(allowed) => layer_name == BASE_LAYER_NAME || allowed.contains(layer_name),
+        }
+    }
 }
 
 /// Progress information emitted during overlay building.
@@ -555,6 +620,7 @@ mod tests {
         builder.set_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
             content: Box::new(FsModContent::new(Utf8PathBuf::from("/mods/mod1"))),
+            enabled_layers: None,
         }]);
 
         assert_eq!(builder.enabled_mods.len(), 1);
