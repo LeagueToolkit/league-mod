@@ -21,8 +21,11 @@ pub fn hash_layer_name(name: &str) -> u64 {
 }
 
 /// Hash a chunk name using xxhash64.
+///
+/// Normalizes backslashes to forward slashes before hashing so that
+/// the same logical path produces the same hash on all platforms.
 pub fn hash_chunk_name(name: &str) -> u64 {
-    xxh64::xxh64(name.to_lowercase().as_bytes(), 0)
+    xxh64::xxh64(name.to_lowercase().replace('\\', "/").as_bytes(), 0)
 }
 
 /// Hash a wad name using xxhash3.
