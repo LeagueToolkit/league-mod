@@ -1,6 +1,6 @@
 [package]
 name = "ltk_overlay"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "WAD overlay/profile builder for League of Legends mods"
@@ -16,7 +16,7 @@ authors = ["LeagueToolkit"]
 ltk_wad = "0.2.11"
 ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.3.0", path = "../ltk_mod_project" }
-ltk_modpkg = { version = "0.3.1", path = "../ltk_modpkg" }
+ltk_modpkg = { version = "0.3.2", path = "../ltk_modpkg" }
 ltk_fantome = { version = "0.4.0", path = "../ltk_fantome" }
 
 # Archive reading

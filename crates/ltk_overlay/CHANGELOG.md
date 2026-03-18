@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.2.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.2.0...ltk_overlay-v0.2.1) - 2026-03-18
+
+### Fixed
+
+- *(ltk_modpkg)* normalize backslashes to forward slashes in chunk path handling
+
+### Other
+
+- *(ltk_modpkg)* add tests for path normalization and backslash handling
+- *(ltk_modpkg)* introduce normalize_chunk_path utility for consistent path handling
+
 ## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.4...ltk_overlay-v0.2.0) - 2026-03-18
 
 ### Added

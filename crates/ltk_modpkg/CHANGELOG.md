@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.3.1...ltk_modpkg-v0.3.2) - 2026-03-18
+
+### Fixed
+
+- *(ltk_modpkg)* normalize backslashes to forward slashes in chunk path handling
+
+### Other
+
+- *(ltk_modpkg)* add tests for path normalization and backslash handling
+- *(ltk_modpkg)* introduce normalize_chunk_path utility for consistent path handling
+
 ## [0.3.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.3.0...ltk_modpkg-v0.3.1) - 2026-03-13
 
 ### Fixed
