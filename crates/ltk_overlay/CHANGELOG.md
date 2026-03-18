@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.2.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.4...ltk_overlay-v0.2.0) - 2026-03-18
+
+### Added
+
+- *(ltk_overlay)* add support for layer filtering in mod metadata collection
+
+### Fixed
+
+- *(ltk_overlay)* exclude BASE_LAYER_NAME from layer fingerprinting to ensure consistent hashing
+
+### Other
+
+- *(ltk_overlay)* enhance documentation for ModContentProvider trait regarding thread safety and read-only operations
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.1.3...ltk_overlay-v0.1.4) - 2026-03-13
 
 ### Added
