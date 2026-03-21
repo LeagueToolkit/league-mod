@@ -248,12 +248,12 @@ impl GameIndex {
     /// the given chunk hashes exist in each game WAD, and returns the relative
     /// path of the WAD with the highest overlap count.
     pub fn find_best_matching_wad(&self, chunk_hashes: &[u64]) -> Option<Utf8PathBuf> {
-        let mut wad_overlap_counts: HashMap<Utf8PathBuf, usize> = HashMap::new();
+        let mut wad_overlap_counts: HashMap<&Utf8Path, usize> = HashMap::new();
 
         for &hash in chunk_hashes {
             if let Some(wad_paths) = self.hash_index.get(&hash) {
                 for wad_path in wad_paths {
-                    *wad_overlap_counts.entry(wad_path.clone()).or_insert(0) += 1;
+                    *wad_overlap_counts.entry(wad_path.as_path()).or_insert(0) += 1;
                 }
             }
         }
@@ -268,7 +268,7 @@ impl GameIndex {
                     count,
                     chunk_hashes.len()
                 );
-                path
+                path.to_path_buf()
             })
     }
 
