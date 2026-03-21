@@ -241,6 +241,37 @@ impl GameIndex {
         &self.subchunktoc_blocked
     }
 
+    /// Find the game WAD with the most overlapping chunk hashes.
+    ///
+    /// Used as a fallback when a mod references a WAD name that doesn't exist
+    /// in the game (e.g. "Spirit-Blossom-Rift.wad.client"). Counts how many of
+    /// the given chunk hashes exist in each game WAD, and returns the relative
+    /// path of the WAD with the highest overlap count.
+    pub fn find_best_matching_wad(&self, chunk_hashes: &[u64]) -> Option<Utf8PathBuf> {
+        let mut wad_overlap_counts: HashMap<Utf8PathBuf, usize> = HashMap::new();
+
+        for &hash in chunk_hashes {
+            if let Some(wad_paths) = self.hash_index.get(&hash) {
+                for wad_path in wad_paths {
+                    *wad_overlap_counts.entry(wad_path.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        wad_overlap_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(path, count)| {
+                tracing::info!(
+                    "Overlap detection: best match WAD={} with {} overlapping chunks out of {}",
+                    path,
+                    count,
+                    chunk_hashes.len()
+                );
+                path
+            })
+    }
+
     /// Compute content hashes on-demand for a batch of path hashes.
     ///
     /// Groups the requested `path_hashes` by the WAD files that contain them

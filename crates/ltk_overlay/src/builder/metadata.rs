@@ -50,6 +50,22 @@ pub(crate) fn collect_single_mod_metadata(
         tracing::info!("Mod={} layer='{}'", enabled_mod.id, layer.name);
 
         for wad_name in &wad_names {
+            let before = mod_meta.len();
+            let override_files = enabled_mod
+                .content
+                .read_wad_overrides(&layer.name, wad_name)?;
+
+            // Pre-compute path hashes so we can use them for overlap detection
+            let entries: Vec<(Utf8PathBuf, u64, u64, usize)> = override_files
+                .into_iter()
+                .map(|(rel_path, bytes)| {
+                    let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
+                    let content_hash = xxh3_64(&bytes);
+                    let uncompressed_size = bytes.len();
+                    Ok((rel_path, path_hash, content_hash, uncompressed_size))
+                })
+                .collect::<Result<_>>()?;
+
             let fallback_wad = match game_index.find_wad(wad_name) {
                 Ok(original_wad_path) => {
                     let relative_game_path = original_wad_path
@@ -66,26 +82,36 @@ pub(crate) fn collect_single_mod_metadata(
                     Some(relative_game_path)
                 }
                 Err(Error::WadNotFound(_)) => {
-                    tracing::warn!(
-                        "Mod='{}' references unknown WAD '{}'; \
-                         overrides will be routed by hash matching only",
-                        enabled_mod.id,
-                        wad_name
-                    );
-                    None
+                    // WAD name not found in game — use overlap detection to find
+                    // the game WAD with the most matching chunk hashes (same
+                    // approach as cslol-manager's find_by_overlap).
+                    let path_hashes: Vec<u64> = entries.iter().map(|(_, h, _, _)| *h).collect();
+                    match game_index.find_best_matching_wad(&path_hashes) {
+                        Some(best_wad) => {
+                            tracing::info!(
+                                "Mod='{}' WAD '{}' not found in game; \
+                                 overlap detection matched to '{}'",
+                                enabled_mod.id,
+                                wad_name,
+                                best_wad
+                            );
+                            Some(best_wad)
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Mod='{}' references unknown WAD '{}' with no overlapping \
+                                 game WAD; overrides will be routed by hash matching only",
+                                enabled_mod.id,
+                                wad_name
+                            );
+                            None
+                        }
+                    }
                 }
                 Err(other) => return Err(other),
             };
 
-            let before = mod_meta.len();
-            let override_files = enabled_mod
-                .content
-                .read_wad_overrides(&layer.name, wad_name)?;
-            for (rel_path, bytes) in override_files {
-                let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
-                let content_hash = xxh3_64(&bytes);
-                let uncompressed_size = bytes.len();
-                // Drop bytes — only metadata is kept
+            for (rel_path, path_hash, content_hash, uncompressed_size) in entries {
                 mod_meta.insert(
                     path_hash,
                     OverrideMeta {
