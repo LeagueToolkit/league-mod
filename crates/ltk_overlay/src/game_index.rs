@@ -51,34 +51,45 @@ struct GameIndexCache {
 /// Built by scanning `DATA/FINAL` and mounting every `.wad.client` file to
 /// record its chunk hashes. The index can be cached to disk to skip the
 /// expensive WAD-mounting step on subsequent builds when the game hasn't changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameIndex {
     /// WAD filename (lowercased) -> full filesystem paths.
     ///
     /// Most filenames map to a single path, but the structure supports duplicates
     /// so we can error on ambiguity rather than silently picking one.
-    wad_index: HashMap<String, Vec<Utf8PathBuf>>,
+    pub wad_index: HashMap<String, Vec<Utf8PathBuf>>,
 
     /// Chunk path hash -> WAD file paths (relative to game dir) that contain it.
     ///
     /// This is the core data structure for cross-WAD matching. A typical League
     /// installation has ~500k unique chunk hashes across ~200 WAD files.
-    hash_index: HashMap<u64, Vec<Utf8PathBuf>>,
+    pub hash_index: HashMap<u64, Vec<Utf8PathBuf>>,
 
     /// Fingerprint derived from WAD file sizes and modification times.
     ///
     /// Used to detect game patches — if the fingerprint changes between builds,
     /// the overlay must be fully rebuilt even if the enabled mod list hasn't changed.
-    game_fingerprint: u64,
+    pub game_fingerprint: u64,
 
     /// Path hashes for SubChunkTOC entries that mods must not override.
     ///
     /// For each `.wad.client` file, the corresponding `.wad.SubChunkTOC` path is
     /// computed and hashed. Mod overrides matching these hashes are stripped during
     /// the build to prevent mods from corrupting the game's sub-chunk loading.
-    subchunktoc_blocked: HashSet<u64>,
+    pub subchunktoc_blocked: HashSet<u64>,
 }
 
 impl GameIndex {
+    /// Create a new empty game index.
+    pub fn new() -> Self {
+        Self {
+            wad_index: HashMap::new(),
+            hash_index: HashMap::new(),
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        }
+    }
+
     /// Build a game index from the specified game directory.
     ///
     /// This scans all .wad.client files under `DATA/FINAL` and builds both indexes.
@@ -241,6 +252,37 @@ impl GameIndex {
         &self.subchunktoc_blocked
     }
 
+    /// Find the game WAD with the most overlapping chunk hashes.
+    ///
+    /// Used as a fallback when a mod references a WAD name that doesn't exist
+    /// in the game (e.g. "Spirit-Blossom-Rift.wad.client"). Counts how many of
+    /// the given chunk hashes exist in each game WAD, and returns the relative
+    /// path of the WAD with the highest overlap count.
+    pub fn find_best_matching_wad(&self, chunk_hashes: &[u64]) -> Option<Utf8PathBuf> {
+        let mut wad_overlap_counts: HashMap<&Utf8Path, usize> = HashMap::new();
+
+        for &hash in chunk_hashes {
+            if let Some(wad_paths) = self.hash_index.get(&hash) {
+                for wad_path in wad_paths {
+                    *wad_overlap_counts.entry(wad_path.as_path()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        wad_overlap_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(path, count)| {
+                tracing::info!(
+                    "Overlap detection: best match WAD={} with {} overlapping chunks out of {}",
+                    path,
+                    count,
+                    chunk_hashes.len()
+                );
+                path.to_path_buf()
+            })
+    }
+
     /// Compute content hashes on-demand for a batch of path hashes.
     ///
     /// Groups the requested `path_hashes` by the WAD files that contain them
@@ -370,6 +412,12 @@ impl GameIndex {
             hash_index: self.hash_index.clone(),
             subchunktoc_blocked: self.subchunktoc_blocked.iter().copied().collect(),
         }
+    }
+}
+
+impl Default for GameIndex {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -666,6 +714,73 @@ mod tests {
         );
         assert!(restored.subchunktoc_blocked.contains(&0xCAFEBABE));
         assert!(restored.find_wad("aatrox.wad.client").is_ok());
+    }
+
+    #[test]
+    fn test_find_best_matching_wad_returns_highest_overlap() {
+        let mut hash_index = HashMap::new();
+        for h in [1u64, 2, 3] {
+            hash_index
+                .entry(h)
+                .or_insert_with(Vec::new)
+                .push(Utf8PathBuf::from("DATA/FINAL/Champions/WadA.wad.client"));
+        }
+
+        for h in [2u64, 3, 4, 5] {
+            hash_index
+                .entry(h)
+                .or_insert_with(Vec::new)
+                .push(Utf8PathBuf::from("DATA/FINAL/Champions/WadB.wad.client"));
+        }
+
+        let index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index,
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        let result = index.find_best_matching_wad(&[2, 3, 4, 5]);
+        assert_eq!(
+            result.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Champions/WadB.wad.client"))
+        );
+
+        let result = index.find_best_matching_wad(&[1, 2, 3]);
+        assert_eq!(
+            result.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Champions/WadA.wad.client"))
+        );
+    }
+
+    #[test]
+    fn test_find_best_matching_wad_returns_none_for_no_matches() {
+        let index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index: HashMap::new(),
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        assert!(index.find_best_matching_wad(&[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn test_find_best_matching_wad_empty_input() {
+        let mut hash_index = HashMap::new();
+        hash_index.insert(
+            1u64,
+            vec![Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client")],
+        );
+
+        let index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index,
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        assert!(index.find_best_matching_wad(&[]).is_none());
     }
 
     #[test]
