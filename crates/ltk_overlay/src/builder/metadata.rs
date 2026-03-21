@@ -442,6 +442,166 @@ mod tests {
         // "high_res" should NOT appear, but "base" is always included
     }
 
+    struct OverrideMockContent {
+        layers: Vec<ModProjectLayer>,
+        /// WAD name -> list of (rel_path, bytes) overrides to return.
+        wad_overrides: HashMap<String, Vec<(Utf8PathBuf, Vec<u8>)>>,
+    }
+
+    impl ModContentProvider for OverrideMockContent {
+        fn mod_project(&mut self) -> Result<ModProject> {
+            Ok(ModProject {
+                name: "test-mod".to_string(),
+                display_name: "Test Mod".to_string(),
+                version: "1.0.0".to_string(),
+                description: "test".to_string(),
+                authors: vec![],
+                license: None,
+                tags: vec![],
+                champions: vec![],
+                maps: vec![],
+                transformers: vec![],
+                layers: self.layers.clone(),
+                thumbnail: None,
+            })
+        }
+
+        fn list_layer_wads(&mut self, _layer: &str) -> Result<Vec<String>> {
+            Ok(self.wad_overrides.keys().cloned().collect())
+        }
+
+        fn read_wad_overrides(
+            &mut self,
+            _layer: &str,
+            wad_name: &str,
+        ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+            Ok(self
+                .wad_overrides
+                .get(wad_name)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn read_wad_override_file(
+            &mut self,
+            _layer: &str,
+            _wad_name: &str,
+            _rel_path: &Utf8Path,
+        ) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+
+        fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn test_unknown_wad_uses_overlap_fallback() {
+        let mut hash_index = HashMap::new();
+        for h in [0xAAAA_u64, 0xBBBB] {
+            hash_index
+                .entry(h)
+                .or_insert_with(Vec::new)
+                .push(Utf8PathBuf::from("DATA/FINAL/Maps/MapA.wad.client"));
+        }
+
+        hash_index
+            .entry(0xAAAA)
+            .or_insert_with(Vec::new)
+            .push(Utf8PathBuf::from("DATA/FINAL/Maps/MapB.wad.client"));
+
+        let game_index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index,
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        let mut wad_overrides = HashMap::new();
+        wad_overrides.insert(
+            "Unknown.wad.client".to_string(),
+            vec![
+                (
+                    Utf8PathBuf::from("000000000000aaaa.bin"),
+                    b"data_a".to_vec(),
+                ),
+                (
+                    Utf8PathBuf::from("000000000000bbbb.bin"),
+                    b"data_b".to_vec(),
+                ),
+            ],
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+
+        let mut enabled_mod = EnabledMod {
+            id: "overlap-mod".to_string(),
+            content: Box::new(OverrideMockContent {
+                layers: make_layers(&["base"]),
+                wad_overrides,
+            }),
+            enabled_layers: None,
+        };
+
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        assert_eq!(meta.len(), 2);
+
+        let entry = &meta[&0xAAAA];
+        assert_eq!(
+            entry.fallback_wad.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Maps/MapA.wad.client")),
+            "Overlap detection should select the WAD with the most matching hashes"
+        );
+
+        let entry_b = &meta[&0xBBBB];
+        assert_eq!(
+            entry_b.fallback_wad.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Maps/MapA.wad.client")),
+        );
+    }
+
+    #[test]
+    fn test_unknown_wad_no_overlap_sets_fallback_none() {
+        let game_index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index: HashMap::new(),
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        let mut wad_overrides = HashMap::new();
+        wad_overrides.insert(
+            "Nonexistent.wad.client".to_string(),
+            vec![(Utf8PathBuf::from("000000000000cccc.bin"), b"data".to_vec())],
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+
+        let mut enabled_mod = EnabledMod {
+            id: "no-overlap-mod".to_string(),
+            content: Box::new(OverrideMockContent {
+                layers: make_layers(&["base"]),
+                wad_overrides,
+            }),
+            enabled_layers: None,
+        };
+
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+
+        assert_eq!(meta.len(), 1);
+        assert!(
+            meta[&0xCCCC].fallback_wad.is_none(),
+            "When no overlapping WAD is found, fallback_wad should be None"
+        );
+    }
+
     #[test]
     fn test_reconstruct_from_cache() {
         let cached = CachedModMeta {
