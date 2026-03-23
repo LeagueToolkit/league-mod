@@ -245,9 +245,6 @@ pub struct ModContribution {
 
 pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
-/// WAD filenames that must never be patched (lowercased).
-const ALWAYS_BLOCKED: &[&str] = &["scripts.wad.client"];
-
 /// Orchestrates the overlay build pipeline.
 ///
 /// Create a builder with [`new`](Self::new), configure it with
@@ -302,10 +299,9 @@ impl OverlayBuilder {
         self
     }
 
-    /// Set additional WAD filenames to block from patching.
+    /// Set WAD filenames to block from patching.
     ///
-    /// These are merged with [`ALWAYS_BLOCKED`] at build time. Filenames
-    /// are automatically lowercased for case-insensitive matching.
+    /// Filenames are automatically lowercased for case-insensitive matching.
     pub fn with_blocked_wads(mut self, wads: Vec<String>) -> Self {
         self.blocked_wads = wads.into_iter().map(|w| w.to_ascii_lowercase()).collect();
         self
@@ -567,10 +563,9 @@ impl OverlayBuilder {
         }
     }
 
-    /// Compute the effective blocklist: [`ALWAYS_BLOCKED`] + user-configured.
+    /// Compute the effective blocklist from user-configured blocked WADs.
     fn effective_blocked_wads(&self) -> Vec<String> {
-        let mut all: Vec<String> = ALWAYS_BLOCKED.iter().map(|s| s.to_string()).collect();
-        all.extend(self.blocked_wads.iter().cloned());
+        let mut all: Vec<String> = self.blocked_wads.iter().cloned().collect();
         all.sort();
         all.dedup();
         all
@@ -579,7 +574,7 @@ impl OverlayBuilder {
     /// Check if a WAD path is blocked from patching.
     fn is_wad_blocked(&self, wad_path: &Utf8Path) -> bool {
         let filename = wad_path.file_name().unwrap_or("").to_ascii_lowercase();
-        ALWAYS_BLOCKED.contains(&filename.as_str()) || self.blocked_wads.contains(&filename)
+        self.blocked_wads.contains(&filename)
     }
 
     /// Emit a progress event if a callback was registered.
