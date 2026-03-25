@@ -307,12 +307,13 @@ impl OverlayBuilder {
         self
     }
 
-    /// Set the ordered list of mods to include in the overlay.
+    /// Set the enabled mods for the overlay.
     ///
     /// Order matters: the first mod in the list (index 0) has the highest priority.
     /// When two mods override the same chunk, the mod closer to the front wins.
-    pub fn set_enabled_mods(&mut self, mods: Vec<EnabledMod>) {
+    pub fn with_enabled_mods(mut self, mods: Vec<EnabledMod>) -> Self {
         self.enabled_mods = mods;
+        self
     }
 
     /// Build the overlay with incremental rebuild support (two-pass).
@@ -605,14 +606,14 @@ mod tests {
     }
 
     #[test]
-    fn test_set_enabled_mods() {
-        let mut builder = OverlayBuilder::new(
+    fn test_with_enabled_mods() {
+        let builder = OverlayBuilder::new(
             Utf8PathBuf::from("/game"),
             Utf8PathBuf::from("/profile/overlay"),
             Utf8PathBuf::from("/profile"),
         );
 
-        builder.set_enabled_mods(vec![EnabledMod {
+        let builder = builder.with_enabled_mods(vec![EnabledMod {
             id: "mod1".to_string(),
             content: Box::new(FsModContent::new(Utf8PathBuf::from("/mods/mod1"))),
             enabled_layers: None,
