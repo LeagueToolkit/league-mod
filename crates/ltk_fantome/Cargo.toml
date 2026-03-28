@@ -24,7 +24,7 @@ slug = "0.1"
 camino = "1.1"
 itertools = "0.14"
 ltk_mod_project = { version = "0.3.0", path = "../ltk_mod_project" }
-ltk_wad = "0.2.6"
+ltk_wad = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.15"

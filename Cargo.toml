@@ -13,4 +13,5 @@ members = [
 
 [workspace.dependencies]
 camino = "1.1"
+ltk_wad = "0.2.13"
 sysinfo = "0.32"
