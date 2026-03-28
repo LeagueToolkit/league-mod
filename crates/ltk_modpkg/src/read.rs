@@ -17,7 +17,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     const MAGIC: [u8; 8] = *b"_modpkg_";
 
     pub fn mount_from_reader(mut source: TSource) -> Result<Self, ModpkgError> {
-        let mut reader = BufReader::new(&mut source);
+        let mut reader = BufReader::with_capacity(64 * 1024, &mut source);
 
         let magic = reader.read_u64::<LE>()?;
         if magic != u64::from_le_bytes(Self::MAGIC) {
@@ -44,6 +44,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         reader.seek(SeekFrom::Current(((8 - (position % 8)) % 8) as i64))?;
 
         let mut chunks = HashMap::new();
+        let mut chunks_by_wad_layer: HashMap<(u32, u32), Vec<(u64, u64)>> = HashMap::new();
         for _ in 0..chunk_count {
             let chunk = ModpkgChunk::read(&mut reader)?;
             let layer_hash = if chunk.layer_index == NO_LAYER_INDEX {
@@ -52,7 +53,12 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
                 layer_indices[chunk.layer_index as usize]
             };
 
-            chunks.insert((chunk.path_hash, layer_hash), chunk);
+            let key = (chunk.path_hash, layer_hash);
+            chunks_by_wad_layer
+                .entry((chunk.wad_index, chunk.layer_index))
+                .or_default()
+                .push(key);
+            chunks.insert(key, chunk);
         }
 
         drop(reader);
@@ -66,6 +72,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             wads_indices,
             wads,
             chunks,
+            chunks_by_wad_layer,
             source,
         })
     }

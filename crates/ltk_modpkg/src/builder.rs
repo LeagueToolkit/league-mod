@@ -232,24 +232,8 @@ impl ModpkgBuilder {
         layer_index_map: &HashMap<u64, u32>,
         wad_indices: &HashMap<u64, u32>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
-        // First process all meta chunks (metadata, thumbnail, etc.)
         let mut meta_chunks = self.process_meta_chunks(writer, chunk_path_indices)?;
-
-        // Build a set of path hashes for all meta chunks we just emitted,
-        // so we can skip them when processing the remaining chunks.
-        let meta_path_hashes = meta_chunks
-            .iter()
-            .map(|c| c.path_hash)
-            .collect::<HashSet<_>>();
-
-        // Then process all non-meta chunks via the generic pipeline
-        let regular_chunks: Vec<_> = self
-            .chunks
-            .values()
-            .chain(self.meta_chunks.values())
-            .filter(|chunk| !meta_path_hashes.contains(&chunk.path_hash))
-            .collect();
-
+        let regular_chunks = self.collect_regular_chunks(&meta_chunks);
         let mut processed_regular_chunks = Self::process_chunks(
             &regular_chunks,
             writer,
@@ -262,6 +246,27 @@ impl ModpkgBuilder {
         meta_chunks.append(&mut processed_regular_chunks);
 
         Ok(meta_chunks)
+    }
+
+    /// Collect all non-meta chunks, sorted by WAD name then layer.
+    ///
+    /// This groups related chunks physically in the file,
+    /// enabling more sequential I/O when reading all overrides for a WAD.
+    fn collect_regular_chunks(&self, meta_chunks: &[ModpkgChunk]) -> Vec<&ModpkgChunkBuilder> {
+        let meta_path_hashes = meta_chunks
+            .iter()
+            .map(|c| c.path_hash)
+            .collect::<HashSet<_>>();
+
+        let mut regular_chunks: Vec<_> = self
+            .chunks
+            .values()
+            .chain(self.meta_chunks.values())
+            .filter(|chunk| !meta_path_hashes.contains(&chunk.path_hash))
+            .collect();
+        regular_chunks.sort_by(|a, b| a.wad.cmp(&b.wad).then(a.layer.cmp(&b.layer)));
+
+        regular_chunks
     }
 
     fn write_chunk_toc<W: io::Write + io::Seek>(
@@ -583,6 +588,14 @@ impl ModpkgChunkBuilder {
 
     pub fn with_layer(mut self, layer: &str) -> Self {
         self.layer = layer.to_string();
+        self
+    }
+
+    /// Set the WAD association for this chunk.
+    ///
+    /// This enables efficient WAD-based lookups via the secondary index.
+    pub fn with_wad(mut self, wad: &str) -> Self {
+        self.wad = wad.to_lowercase();
         self
     }
 

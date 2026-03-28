@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
 use ltk_modpkg::Modpkg;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Content provider that reads directly from a mounted `.modpkg` archive.
@@ -83,32 +83,25 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
-        let layer_hash = ltk_modpkg::hash_layer_name(layer);
+        let layer_index = match self.modpkg.layer_index(layer) {
+            Some(idx) => idx,
+            None => return Ok(Vec::new()),
+        };
 
-        let mut wad_names: HashSet<String> = HashSet::new();
-
-        for &(path_hash, chunk_layer_hash) in self.modpkg.chunks.keys() {
-            if chunk_layer_hash != layer_hash {
-                continue;
-            }
-
-            let path = match self.modpkg.chunk_paths.get(&path_hash) {
-                Some(p) => p,
-                None => continue,
-            };
-            if path.starts_with("_meta_/") {
-                continue;
-            }
-
-            // The WAD name is the first path component (e.g., "Aatrox.wad.client/data/...")
-            if let Some(wad_name) = path.split('/').next() {
-                if wad_name.to_ascii_lowercase().ends_with(".wad.client") {
-                    wad_names.insert(wad_name.to_string());
+        let mut wad_names = Vec::new();
+        for (wad_idx, _) in self.modpkg.wads_indices.iter().enumerate() {
+            if !self
+                .modpkg
+                .chunks_for_wad_layer(wad_idx as u32, layer_index)
+                .is_empty()
+            {
+                if let Some(name) = self.modpkg.wad_name_for_index(wad_idx as u32) {
+                    wad_names.push(name.to_string());
                 }
             }
         }
 
-        Ok(wad_names.into_iter().collect())
+        Ok(wad_names)
     }
 
     fn read_wad_overrides(
@@ -116,39 +109,44 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         layer: &str,
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
-        let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let wad_prefix = format!("{}/", wad_name);
+        let layer_index = match self.modpkg.layer_index(layer) {
+            Some(idx) => idx,
+            None => return Ok(Vec::new()),
+        };
+        let wad_index = match self.modpkg.wad_index(wad_name) {
+            Some(idx) => idx,
+            None => return Ok(Vec::new()),
+        };
 
-        // Collect (path_hash, layer_hash, relative_path) for matching chunks
-        let matching: Vec<(u64, u64, String)> = self
+        // Use secondary index to get chunk keys for this WAD+layer
+        let chunk_keys: Vec<(u64, u64)> = self
             .modpkg
-            .chunks
-            .keys()
-            .filter_map(|&(path_hash, chunk_layer_hash)| {
-                if chunk_layer_hash != layer_hash {
-                    return None;
-                }
+            .chunks_for_wad_layer(wad_index, layer_index)
+            .to_vec();
+
+        if chunk_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect relative paths for each chunk (before mutable borrow for batch load)
+        let rel_paths: HashMap<u64, String> = chunk_keys
+            .iter()
+            .filter_map(|&(path_hash, _)| {
                 let path = self.modpkg.chunk_paths.get(&path_hash)?;
-                if path.starts_with("_meta_/") {
-                    return None;
-                }
-                let rel = path.strip_prefix(&wad_prefix)?;
-                Some((path_hash, chunk_layer_hash, rel.to_string()))
+                Some((path_hash, path.clone()))
             })
             .collect();
 
-        let mut results = Vec::with_capacity(matching.len());
-        for (path_hash, layer_hash, rel_path) in matching {
-            let bytes = self
-                .modpkg
-                .load_chunk_decompressed_by_hash(path_hash, layer_hash)
-                .map_err(|e| {
-                    Error::Other(format!(
-                        "Failed to decompress modpkg chunk {:016x}: {}",
-                        path_hash, e
-                    ))
-                })?;
-            results.push((Utf8PathBuf::from(rel_path), bytes.into_vec()));
+        // Batch load all chunks in offset-sorted order for sequential I/O
+        let batch = self.modpkg.load_chunks_batch(&chunk_keys).map_err(|e| {
+            Error::Other(format!("Failed to batch decompress modpkg chunks: {}", e))
+        })?;
+
+        let mut results = Vec::with_capacity(batch.len());
+        for (path_hash, _layer_hash, data) in batch {
+            if let Some(rel) = rel_paths.get(&path_hash) {
+                results.push((Utf8PathBuf::from(rel.as_str()), data.into_vec()));
+            }
         }
 
         Ok(results)
@@ -157,36 +155,27 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     fn read_wad_override_file(
         &mut self,
         layer: &str,
-        wad_name: &str,
+        _wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let full_path =
-            ltk_modpkg::utils::normalize_chunk_path(&format!("{}/{}", wad_name, rel_path));
+        let normalized = ltk_modpkg::utils::normalize_chunk_path(rel_path.as_str());
+        let path_hash = ltk_modpkg::utils::hash_chunk_name(&normalized);
 
-        // Compute the path hash from the full WAD-relative path
-        let path_hash = ltk_modpkg::utils::hash_chunk_name(&full_path);
-        if self.modpkg.chunks.contains_key(&(path_hash, layer_hash)) {
-            let bytes = self
-                .modpkg
-                .load_chunk_decompressed_by_hash(path_hash, layer_hash)
-                .map_err(|e| {
-                    Error::Other(format!(
-                        "Failed to decompress modpkg chunk {:016x}: {}",
-                        path_hash, e
-                    ))
-                })?;
-            return Ok(bytes.into_vec());
-        }
+        let bytes = self
+            .modpkg
+            .load_chunk_decompressed_by_hash(path_hash, layer_hash)
+            .map_err(|e| {
+                Error::Other(format!(
+                    "Failed to decompress modpkg chunk {:016x}: {}",
+                    path_hash, e
+                ))
+            })?;
 
-        Err(Error::Other(format!(
-            "Override file not found in modpkg: {}/{}/{}",
-            layer, wad_name, rel_path
-        )))
+        Ok(bytes.into_vec())
     }
 
     fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> Result<Vec<u8>> {
-        // Modpkg format doesn't have raw overrides — all content is organized by WAD
         Err(Error::Other(
             "Modpkg format does not support raw overrides".to_string(),
         ))
@@ -208,11 +197,8 @@ mod tests {
     use ltk_modpkg::{Modpkg, ModpkgCompression};
     use std::io::{Cursor, Write};
 
-    /// Build a modpkg in memory with chunks whose paths use backslashes
-    /// (simulating a Windows-packed archive) and verify that the overlay
-    /// content provider can discover WADs and read overrides correctly.
     #[test]
-    fn list_layer_wads_with_backslash_paths() {
+    fn list_layer_wads_with_wad_index() {
         let scratch = Vec::new();
         let mut cursor = Cursor::new(scratch);
 
@@ -220,18 +206,19 @@ mod tests {
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    // Simulate a path produced by Windows glob
-                    .with_path("Graves.wad.client\\data\\characters\\graves\\skin0.bin")
+                    .with_path("data\\characters\\graves\\skin0.bin")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
-                    .with_layer("base"),
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
             )
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\assets\\texture.tex")
+                    .with_path("assets\\texture.tex")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
-                    .with_layer("base"),
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
             );
 
         builder
@@ -251,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn read_wad_overrides_with_backslash_paths() {
+    fn read_wad_overrides_with_wad_index() {
         let scratch = Vec::new();
         let mut cursor = Cursor::new(scratch);
         let file_data = b"hello world";
@@ -260,10 +247,11 @@ mod tests {
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\data\\skin0.bin")
+                    .with_path("data\\skin0.bin")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
-                    .with_layer("base"),
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
             );
 
         builder
@@ -286,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_layer_backslash_paths() {
+    fn multi_layer_wad_index() {
         let scratch = Vec::new();
         let mut cursor = Cursor::new(scratch);
 
@@ -295,17 +283,19 @@ mod tests {
             .with_layer(ModpkgLayerBuilder::new("loading-screen").with_priority(1))
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\data\\base_file.bin")
+                    .with_path("data\\base_file.bin")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
-                    .with_layer("base"),
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
             )
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\data\\loading.bin")
+                    .with_path("data\\loading.bin")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
-                    .with_layer("loading-screen"),
+                    .with_layer("loading-screen")
+                    .with_wad("Graves.wad.client"),
             );
 
         builder
