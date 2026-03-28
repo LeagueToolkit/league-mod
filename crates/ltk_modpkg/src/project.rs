@@ -344,14 +344,47 @@ fn build_chunk_from_file(
         .strip_prefix(layer_dir)
         .map_err(|e| PackError::Io(io::Error::other(e.to_string())))?;
 
-    let chunk_builder = ModpkgChunkBuilder::new()
-        .with_path(relative_path.as_str())
+    let relative_str = relative_path.as_str();
+
+    // Detect WAD association from the directory structure.
+    // If the first path component is a WAD name (e.g., "Aatrox.wad.client"),
+    // strip it from the chunk path and track it via wad_index instead.
+    let (chunk_path, wad_name) = match relative_str.split_once('/') {
+        Some((first, rest)) if first.to_ascii_lowercase().ends_with(".wad.client") => {
+            (rest, Some(first))
+        }
+        _ => (relative_str, None),
+    };
+
+    let compression = compression_for_extension(file_path.extension());
+
+    let mut chunk_builder = ModpkgChunkBuilder::new()
+        .with_path(chunk_path)
         .map_err(PackError::Builder)?
-        .with_compression(ModpkgCompression::Zstd)
+        .with_compression(compression)
         .with_layer(&layer.name);
+
+    if let Some(wad) = wad_name {
+        chunk_builder = chunk_builder.with_wad(wad);
+    }
 
     let path_hash = chunk_builder.path_hash();
     Ok((builder.with_chunk(chunk_builder), path_hash))
+}
+
+/// Determine the best compression strategy based on file extension.
+///
+/// Pre-compressed formats (textures, audio) gain little from zstd and
+/// waste CPU time at both compression and decompression.
+fn compression_for_extension(ext: Option<&str>) -> ModpkgCompression {
+    match ext.map(|e| e.to_ascii_lowercase()).as_deref() {
+        // Pre-compressed textures and images
+        Some("dds" | "tex" | "webp" | "png" | "jpg" | "jpeg") => ModpkgCompression::None,
+        // Pre-compressed audio
+        Some("bnk" | "wpk" | "wem" | "ogg") => ModpkgCompression::None,
+        // Everything else benefits from compression
+        _ => ModpkgCompression::Zstd,
+    }
 }
 
 fn add_meta_chunks(

@@ -32,13 +32,10 @@ where
     }
 
     fn decode_zstd_chunk(&mut self, chunk: &ModpkgChunk) -> Result<Box<[u8]>, ModpkgError> {
-        self.source.seek(SeekFrom::Start(chunk.data_offset))?;
+        let compressed = self.load_chunk_raw(chunk)?;
 
-        let mut data: Vec<u8> = vec![0; chunk.uncompressed_size as usize];
-
-        zstd::Decoder::new(&mut self.source)
-            .map_err(|e| ModpkgError::Io(std::io::Error::other(e)))?
-            .read_exact(&mut data)?;
+        let data = zstd::bulk::decompress(&compressed, chunk.uncompressed_size as usize)
+            .map_err(|e| ModpkgError::Io(std::io::Error::other(e)))?;
 
         Ok(data.into_boxed_slice())
     }
