@@ -1,6 +1,0 @@
-# Package manifest for league-mod
-PackageIdentifier: LeagueToolkit.LeagueMod
-PackageVersion: 0.1.0
-DefaultLocale: en-US
-ManifestType: version
-ManifestVersion: 1.6.0
