@@ -228,6 +228,70 @@ pub struct Conflict {
     pub winner: String,
 }
 
+/// Per-mod summary of which game WAD files a mod's overrides affect.
+///
+/// Computed independently for each mod (i.e. before cross-mod merging), so
+/// the result is **load-order independent**: it represents the mod's full
+/// potential WAD footprint regardless of which other mods are enabled
+/// alongside it.
+///
+/// Reports are produced in two ways:
+///
+/// 1. As a side effect of [`OverlayBuilder::build`], which captures one report
+///    per enabled mod and exposes them via
+///    [`take_mod_wad_reports`](OverlayBuilder::take_mod_wad_reports).
+/// 2. On demand via [`OverlayBuilder::analyze_single_mod`], which runs the
+///    same per-mod analysis without writing any overlay files.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModWadReport {
+    /// Mod identifier (matches [`EnabledMod::id`]).
+    pub mod_id: String,
+    /// Game-relative WAD paths the mod's overrides land in, sorted and deduplicated.
+    pub affected_wads: Vec<Utf8PathBuf>,
+    /// Total number of override entries the mod contributes across all layers.
+    pub override_count: u32,
+    /// Content fingerprint of the mod at the time the report was computed,
+    /// from [`ModContentProvider::content_fingerprint`].
+    pub content_fingerprint: Option<u64>,
+    /// Game index fingerprint at the time the report was computed.
+    pub game_index_fingerprint: u64,
+}
+
+impl ModWadReport {
+    /// Build a report from one mod's collected override metadata.
+    ///
+    /// For each override hash, the matching set of game WADs is looked up via
+    /// [`GameIndex::find_wads_with_hash`]. Hashes that don't appear in any
+    /// game WAD fall back to the per-override `fallback_wad` recorded during
+    /// metadata collection (i.e. the WAD the mod's directory structure
+    /// pointed at).
+    pub(crate) fn from_meta(
+        mod_id: String,
+        mod_meta: &HashMap<u64, OverrideMeta>,
+        content_fingerprint: Option<u64>,
+        game_index: &GameIndex,
+    ) -> Self {
+        let mut wads: std::collections::BTreeSet<Utf8PathBuf> = std::collections::BTreeSet::new();
+        for (path_hash, meta) in mod_meta {
+            if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
+                for wp in wad_paths {
+                    wads.insert(wp.clone());
+                }
+            } else if let Some(fallback) = &meta.fallback_wad {
+                wads.insert(fallback.clone());
+            }
+        }
+
+        Self {
+            mod_id,
+            affected_wads: wads.into_iter().collect(),
+            override_count: mod_meta.len() as u32,
+            content_fingerprint,
+            game_index_fingerprint: game_index.game_fingerprint(),
+        }
+    }
+}
+
 /// Details about one mod's contribution to a conflicting chunk.
 #[derive(Debug, Clone)]
 pub struct ModContribution {
@@ -263,6 +327,9 @@ pub struct OverlayBuilder {
     enabled_mods: Vec<EnabledMod>,
     blocked_wads: HashSet<String>,
     progress_callback: Option<ProgressCallback>,
+    /// Per-mod WAD reports captured during the most recent successful
+    /// [`build`](Self::build), drained via [`take_mod_wad_reports`](Self::take_mod_wad_reports).
+    last_mod_wad_reports: Vec<ModWadReport>,
 }
 
 impl OverlayBuilder {
@@ -284,7 +351,56 @@ impl OverlayBuilder {
             enabled_mods: Vec::new(),
             blocked_wads: HashSet::new(),
             progress_callback: None,
+            last_mod_wad_reports: Vec::new(),
         }
+    }
+
+    /// Drain the per-mod WAD reports captured during the most recent successful
+    /// [`build`](Self::build).
+    ///
+    /// Each report describes one mod's full potential WAD footprint, computed
+    /// independently of load order. Returns an empty vector if no build has
+    /// run yet, or if the previous build short-circuited (e.g. exact-match skip).
+    pub fn take_mod_wad_reports(&mut self) -> Vec<ModWadReport> {
+        std::mem::take(&mut self.last_mod_wad_reports)
+    }
+
+    /// Analyze a single mod's WAD footprint without building or modifying any
+    /// overlay artifacts.
+    ///
+    /// Loads (or builds) the [`GameIndex`] from `game_dir` using the cache at
+    /// `state_dir/game_index.bin`, then runs the same per-mod metadata
+    /// collection used during a full build and resolves it into a
+    /// [`ModWadReport`]. Safe to call concurrently with [`build`](Self::build)
+    /// because it neither writes overlay state nor takes any locks held by
+    /// the build pipeline.
+    pub fn analyze_single_mod(
+        game_dir: &Utf8Path,
+        state_dir: &Utf8Path,
+        enabled_mod: &mut EnabledMod,
+    ) -> Result<ModWadReport> {
+        let data_final_dir = game_dir.join("DATA").join("FINAL");
+        if !data_final_dir.as_std_path().exists() {
+            return Err(format!(
+                "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
+                game_dir
+            )
+            .into());
+        }
+
+        std::fs::create_dir_all(state_dir.as_std_path())?;
+        let cache_path = state_dir.join("game_index.bin");
+        let game_index = GameIndex::load_or_build(game_dir, &cache_path)?;
+
+        let fingerprint = enabled_mod.cache_fingerprint();
+        let mod_meta = metadata::collect_single_mod_metadata(enabled_mod, &game_index, game_dir)?;
+
+        Ok(ModWadReport::from_meta(
+            enabled_mod.id.clone(),
+            &mod_meta,
+            fingerprint,
+            &game_index,
+        ))
     }
 
     /// Register a progress callback.
@@ -418,7 +534,8 @@ impl OverlayBuilder {
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::CollectingOverrides));
 
-        let all_meta = self.collect_all_override_metadata(&game_index)?;
+        let (all_meta, mod_wad_reports) = self.collect_all_override_metadata(&game_index)?;
+        self.last_mod_wad_reports = mod_wad_reports;
 
         let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
 
