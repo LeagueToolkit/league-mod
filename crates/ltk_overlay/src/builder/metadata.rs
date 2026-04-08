@@ -268,7 +268,7 @@ impl OverlayBuilder {
     pub(crate) fn collect_all_override_metadata(
         &mut self,
         game_index: &GameIndex,
-    ) -> Result<HashMap<u64, OverrideMeta>> {
+    ) -> Result<(HashMap<u64, OverrideMeta>, Vec<ModWadReport>)> {
         let game_dir = &self.game_dir;
         let meta_cache_path = self.state_dir.join("override_meta.bin");
         let game_fp = game_index.game_fingerprint();
@@ -300,6 +300,12 @@ impl OverlayBuilder {
             per_mod_results.push(mod_meta);
         }
 
+        // Build per-mod WAD reports while we still have the un-merged data.
+        // Reports are load-order independent because each is computed from a
+        // single mod's metadata only.
+        let mod_wad_reports =
+            self.build_mod_wad_reports(&per_mod_results, &fingerprints, game_index);
+
         // Merge in reverse order (last mod first → first mod wins via last-writer-wins)
         let mut all_meta: HashMap<u64, OverrideMeta> = HashMap::new();
 
@@ -326,7 +332,27 @@ impl OverlayBuilder {
             tracing::warn!("Failed to save override meta cache: {}", e);
         }
 
-        Ok(all_meta)
+        Ok((all_meta, mod_wad_reports))
+    }
+
+    /// Pair each enabled mod with its un-merged metadata and turn it into a
+    /// [`ModWadReport`].
+    ///
+    /// `per_mod_results` and `fingerprints` MUST be parallel to `self.enabled_mods`.
+    fn build_mod_wad_reports(
+        &self,
+        per_mod_results: &[HashMap<u64, OverrideMeta>],
+        fingerprints: &[Option<u64>],
+        game_index: &GameIndex,
+    ) -> Vec<ModWadReport> {
+        self.enabled_mods
+            .iter()
+            .zip(per_mod_results.iter())
+            .zip(fingerprints.iter())
+            .map(|((enabled_mod, mod_meta), fp)| {
+                ModWadReport::from_meta(enabled_mod.id.clone(), mod_meta, *fp, game_index)
+            })
+            .collect()
     }
 }
 
