@@ -88,6 +88,7 @@ impl DistributorInfo {
 ///
 /// let layer = ModpkgLayerMetadata {
 ///     name: "base".to_string(),
+///     display_name: None,
 ///     priority: 0,
 ///     description: Some("Base layer".to_string()),
 ///     string_overrides: HashMap::from([
@@ -103,6 +104,9 @@ impl DistributorInfo {
 pub struct ModpkgLayerMetadata {
     /// The name of the layer (e.g. "base", "chroma1").
     pub name: String,
+    /// Optional human-readable display name for the layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// The priority of the layer as stored in the modpkg header.
     pub priority: i32,
     /// Optional human-readable description of the layer.
@@ -435,6 +439,7 @@ mod tests {
     fn test_layer_string_overrides_roundtrip() {
         let layer = ModpkgLayerMetadata {
             name: "base".to_string(),
+            display_name: None,
             priority: 0,
             description: Some("Base layer".to_string()),
             string_overrides: HashMap::from([(
@@ -455,6 +460,7 @@ mod tests {
     fn test_layer_empty_overrides_skipped_in_serialization() {
         let layer = ModpkgLayerMetadata {
             name: "base".to_string(),
+            display_name: None,
             priority: 0,
             description: None,
             string_overrides: HashMap::new(),
@@ -487,6 +493,7 @@ mod tests {
             maps: vec![],
             layers: vec![ModpkgLayerMetadata {
                 name: "base".to_string(),
+                display_name: None,
                 priority: 0,
                 description: None,
                 string_overrides: HashMap::new(),
@@ -522,6 +529,7 @@ mod tests {
             layers: vec![
                 ModpkgLayerMetadata {
                     name: "base".to_string(),
+                    display_name: None,
                     priority: 0,
                     description: None,
                     string_overrides: HashMap::from([(
@@ -531,6 +539,7 @@ mod tests {
                 },
                 ModpkgLayerMetadata {
                     name: "chroma1".to_string(),
+                    display_name: Some("Pink chroma".to_string()),
                     priority: 10,
                     description: Some("Pink chroma".to_string()),
                     string_overrides: HashMap::from([(

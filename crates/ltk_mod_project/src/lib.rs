@@ -156,6 +156,12 @@ pub struct ModProjectLayer {
     /// Example: `base`, `high_res_textures`, `gameplay_overhaul`
     pub name: String,
 
+    /// Optional human-readable display name for the layer
+    ///
+    /// Example: `Base`, `High Res Textures`, `Gameplay Overhaul`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
     /// The priority of the layer
     /// Higher priority layers override lower priority layers when they modify the same files
     /// Default is 0 for the base layer
@@ -215,6 +221,7 @@ impl ModProjectLayer {
     pub fn base() -> Self {
         Self {
             name: "base".to_string(),
+            display_name: None,
             priority: 0,
             description: Some("Base layer of the mod".to_string()),
             string_overrides: HashMap::new(),
@@ -226,6 +233,7 @@ impl ModProjectLayer {
 pub fn default_layers() -> Vec<ModProjectLayer> {
     vec![ModProjectLayer {
         name: "base".to_string(),
+        display_name: None,
         priority: 0,
         description: Some("Base layer of the mod".to_string()),
         string_overrides: HashMap::new(),
@@ -264,12 +272,14 @@ mod tests {
             layers: vec![
                 ModProjectLayer {
                     name: "base".to_string(),
+                    display_name: None,
                     priority: 0,
                     description: Some("Base layer of the mod".to_string()),
                     string_overrides: HashMap::new(),
                 },
                 ModProjectLayer {
                     name: "chroma1".to_string(),
+                    display_name: Some("Chroma 1".to_string()),
                     priority: 20,
                     description: Some("Chroma 1".to_string()),
                     string_overrides: HashMap::new(),

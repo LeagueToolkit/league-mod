@@ -48,6 +48,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
                 let meta_layer = metadata.layers.iter().find(|ml| ml.name == l.name);
                 ModProjectLayer {
                     name: l.name.clone(),
+                    display_name: meta_layer.and_then(|ml| ml.display_name.clone()),
                     priority: l.priority,
                     description: meta_layer.and_then(|ml| ml.description.clone()),
                     string_overrides: meta_layer
