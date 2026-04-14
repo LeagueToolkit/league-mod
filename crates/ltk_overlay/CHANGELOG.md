@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.2.7](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.2.6...ltk_overlay-v0.2.7) - 2026-04-14
+
+### Other
+
+- updated the following local packages: ltk_mod_project, ltk_modpkg, ltk_fantome
+
 ## [0.2.6](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.2.5...ltk_overlay-v0.2.6) - 2026-04-14
 
 ### Added
