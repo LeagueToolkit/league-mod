@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.3.0...ltk_mod_project-v0.4.0) - 2026-04-14
+
+### Added
+
+- *(ltk_mod_project, ltk_fantome, ltk_modpkg, ltk_overlay)* add display_name to mod project layer struct
+
 ## [0.3.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.2.0...ltk_mod_project-v0.3.0) - 2026-02-21
 
 ### Added
