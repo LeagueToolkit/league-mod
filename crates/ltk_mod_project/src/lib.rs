@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 
 fn serde_fmt<T: Serialize>(value: &T, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let json = serde_json::to_string(value).map_err(|_| fmt::Error)?;
@@ -85,8 +86,30 @@ impl From<String> for ModMap {
     }
 }
 
+/// Config file names to search for, in priority order.
+const CONFIG_FILE_NAMES: [&str; 2] = ["mod.config.json", "mod.config.toml"];
+
+/// Error returned when loading a mod project configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum ModProjectError {
+    #[error("Config file not found in {0} (expected mod.config.json or mod.config.toml)")]
+    ConfigNotFound(std::path::PathBuf),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Failed to parse JSON config: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Failed to parse TOML config: {0}")]
+    Toml(#[from] toml::de::Error),
+
+    #[error("Unsupported config file extension: {0}")]
+    UnsupportedExtension(String),
+}
+
 /// Describes a mod project configuration file
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ModProject {
     /// The name of the mod
     /// Must not contain spaces or special characters except for underscores and hyphens
@@ -147,6 +170,44 @@ pub struct ModProject {
     pub thumbnail: Option<String>,
 }
 
+impl ModProject {
+    /// Load a mod project from a project directory.
+    ///
+    /// Searches for `mod.config.json` (preferred) or `mod.config.toml` in the
+    /// given directory and parses the first one found.
+    pub fn load(project_dir: &Path) -> Result<Self, ModProjectError> {
+        for name in CONFIG_FILE_NAMES {
+            let path = project_dir.join(name);
+            if path.exists() {
+                return Self::load_from_file(&path);
+            }
+        }
+        Err(ModProjectError::ConfigNotFound(project_dir.to_owned()))
+    }
+
+    /// Load a mod project from a specific config file path.
+    ///
+    /// The format is determined by the file extension (`.json` or `.toml`).
+    pub fn load_from_file(path: &Path) -> Result<Self, ModProjectError> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+
+        match ext {
+            "json" => {
+                let file = std::fs::File::open(path)?;
+                Ok(serde_json::from_reader(file)?)
+            }
+            "toml" => {
+                let content = std::fs::read_to_string(path)?;
+                Ok(toml::from_str(&content)?)
+            }
+            other => Err(ModProjectError::UnsupportedExtension(other.to_string())),
+        }
+    }
+}
+
 /// Represents a layer in a mod project
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ModProjectLayer {
@@ -178,14 +239,14 @@ pub struct ModProjectLayer {
     pub string_overrides: HashMap<String, HashMap<String, String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum ModProjectAuthor {
     Name(String),
     Role { name: String, role: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum ModProjectLicense {
     Spdx(String),

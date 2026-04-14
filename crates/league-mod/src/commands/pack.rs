@@ -80,7 +80,7 @@ fn pack_to_modpkg(
     let output_path = output_dir.join(&modpkg_file_name);
 
     // Use the shared packing logic from ltk_modpkg
-    modpkg_project::pack_from_project(project_root, &output_path, &mod_project)
+    modpkg_project::pack_from_project_with_config(project_root, &output_path, &mod_project)
         .map_err(|e| convert_pack_error(e, project_root))?;
 
     println_pad!(
