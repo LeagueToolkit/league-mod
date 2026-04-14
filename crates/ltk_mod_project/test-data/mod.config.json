@@ -21,6 +21,7 @@
     },
     {
       "name": "chroma1",
+      "display_name": "Chroma 1",
       "priority": 20,
       "description": "Chroma 1"
     }

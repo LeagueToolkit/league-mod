@@ -37,25 +37,32 @@ pub fn info_mod_package(args: InfoModPackageArgs) -> miette::Result<()> {
 
     println_pad!("\n{}", "🏗️  Layers:".bright_magenta().bold());
     for layer in modpkg.layers.values() {
-        // Try to find a matching layer metadata entry (to show description, if present).
-        let layer_description = metadata
-            .layers
-            .iter()
-            .find(|lm| lm.name == layer.name)
-            .and_then(|lm| lm.description.as_deref());
+        // Try to find a matching layer metadata entry (to show display_name/description).
+        let layer_meta = metadata.layers.iter().find(|lm| lm.name == layer.name);
+        let layer_display_name = layer_meta.and_then(|lm| lm.display_name.as_deref());
+        let layer_description = layer_meta.and_then(|lm| lm.description.as_deref());
+
+        let name_display = match layer_display_name {
+            Some(display_name) => format!(
+                "{} ({})",
+                display_name.bright_cyan().bold(),
+                layer.name.dimmed()
+            ),
+            None => format!("{}", layer.name.bright_cyan().bold()),
+        };
 
         match layer_description {
             Some(desc) => println_pad!(
                 "   {} {} {} - {}",
                 "•".bright_cyan(),
-                layer.name.bright_cyan().bold(),
+                name_display,
                 format!("(priority: {})", layer.priority).dimmed(),
                 desc.bright_white()
             ),
             None => println_pad!(
                 "   {} {} {}",
                 "•".bright_cyan(),
-                layer.name.bright_cyan().bold(),
+                name_display,
                 format!("(priority: {})", layer.priority).dimmed()
             ),
         }

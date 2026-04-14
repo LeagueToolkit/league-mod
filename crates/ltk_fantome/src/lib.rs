@@ -46,6 +46,12 @@ pub struct FantomeInfo {
 pub struct FantomeLayerInfo {
     #[serde(rename = "Name")]
     pub name: String,
+    #[serde(
+        rename = "DisplayName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub display_name: Option<String>,
     #[serde(rename = "Priority")]
     pub priority: i32,
     /// String overrides for this layer, organized by locale.
@@ -245,6 +251,7 @@ fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLaye
                 layer.name.clone(),
                 FantomeLayerInfo {
                     name: layer.name.clone(),
+                    display_name: layer.display_name.clone(),
                     priority: layer.priority,
                     string_overrides: layer.string_overrides.clone(),
                 },

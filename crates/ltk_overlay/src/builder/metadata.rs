@@ -421,6 +421,7 @@ mod tests {
             .enumerate()
             .map(|(i, name)| ModProjectLayer {
                 name: name.to_string(),
+                display_name: None,
                 priority: i as i32,
                 description: None,
                 string_overrides: HashMap::new(),

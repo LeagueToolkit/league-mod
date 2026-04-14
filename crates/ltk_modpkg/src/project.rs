@@ -250,6 +250,7 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
 
     // Base layer: always present, even if omitted from config
     let base_from_config = mod_project.layers.iter().find(|l| l.name == "base");
+    let base_display_name = base_from_config.and_then(|l| l.display_name.clone());
     let base_description = base_from_config
         .and_then(|l| l.description.clone())
         .or_else(|| Some("Base layer of the mod".to_string()));
@@ -259,6 +260,7 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
 
     layers.push(ModpkgLayerMetadata {
         name: "base".to_string(),
+        display_name: base_display_name,
         priority: 0,
         description: base_description,
         string_overrides: base_string_overrides,
@@ -268,6 +270,7 @@ fn build_metadata_layers(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
     for layer in mod_project.layers.iter().filter(|l| l.name != "base") {
         layers.push(ModpkgLayerMetadata {
             name: layer.name.clone(),
+            display_name: layer.display_name.clone(),
             priority: layer.priority,
             description: layer.description.clone(),
             string_overrides: layer.string_overrides.clone(),
