@@ -99,8 +99,8 @@ pub mod wad_builder;
 
 // Re-export main public API.
 pub use builder::{
-    EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder, OverlayProgress, OverlayStage,
-    BASE_LAYER_NAME,
+    AffectedWad, EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder, OverlayProgress,
+    OverlayStage, BASE_LAYER_NAME,
 };
 pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};

@@ -106,10 +106,10 @@ impl SignerKeys {
                     result.add_cert_der(&cert_x509)?
                 }
                 // CRLs
-                p12::SafeBagKind::OtherBagKind(other_bag) => {
-                    if is_crl_oid(other_bag.bag_id.as_ref()) {
-                        result.add_crl_der(&other_bag.bag_value)?;
-                    }
+                p12::SafeBagKind::OtherBagKind(other_bag)
+                    if is_crl_oid(other_bag.bag_id.as_ref()) =>
+                {
+                    result.add_crl_der(&other_bag.bag_value)?;
                 }
                 _ => {}
             }
