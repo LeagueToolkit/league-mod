@@ -228,6 +228,23 @@ pub struct Conflict {
     pub winner: String,
 }
 
+/// One game WAD a mod's overrides land in, paired with how many land there.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AffectedWad {
+    /// Game-relative WAD path, e.g. `DATA/FINAL/Champions/Aatrox.wad.client`.
+    pub path: Box<str>,
+    /// Number of the mod's distinct overrides that land in this WAD.
+    ///
+    /// A single override whose chunk hash exists in several game WADs — e.g. a
+    /// champion *base* chunk that the game physically duplicates into every map
+    /// WAD — contributes to each WAD's count. Summed across a report's WADs this
+    /// therefore exceeds [`ModWadReport::override_count`] when a mod's content
+    /// spills across WADs. The asymmetry (a large count in the mod's real target
+    /// WAD, small equal counts in the WADs it bleeds into) is what distinguishes
+    /// a genuine edit from incidental spillover.
+    pub override_count: u32,
+}
+
 /// Per-mod summary of which game WAD files a mod's overrides affect.
 ///
 /// Computed independently for each mod (i.e. before cross-mod merging), so
@@ -246,9 +263,13 @@ pub struct Conflict {
 pub struct ModWadReport {
     /// Mod identifier (matches [`EnabledMod::id`]).
     pub mod_id: String,
-    /// Game-relative WAD paths the mod's overrides land in, sorted and deduplicated.
-    pub affected_wads: Vec<Utf8PathBuf>,
-    /// Total number of override entries the mod contributes across all layers.
+    /// The game WADs the mod's overrides land in, each with its per-WAD override
+    /// count. Sorted by [`AffectedWad::path`] and deduplicated. Use
+    /// [`wad_paths`](Self::wad_paths) for the paths alone.
+    pub affected_wads: Vec<AffectedWad>,
+    /// Total number of distinct override entries the mod contributes across all
+    /// layers. Less than the sum of the per-WAD counts when overrides spill
+    /// across WADs (see [`AffectedWad::override_count`]).
     pub override_count: u32,
     /// Content fingerprint of the mod at the time the report was computed,
     /// from [`ModContentProvider::content_fingerprint`].
@@ -258,33 +279,44 @@ pub struct ModWadReport {
 }
 
 impl ModWadReport {
+    /// The affected WAD path strings in report order, without the per-WAD counts.
+    pub fn wad_paths(&self) -> impl Iterator<Item = &str> {
+        self.affected_wads.iter().map(|w| w.path.as_ref())
+    }
+
     /// Build a report from one mod's collected override metadata.
     ///
     /// For each override hash, the matching set of game WADs is looked up via
     /// [`GameIndex::find_wads_with_hash`]. Hashes that don't appear in any
     /// game WAD fall back to the per-override `fallback_wad` recorded during
     /// metadata collection (i.e. the WAD the mod's directory structure
-    /// pointed at).
+    /// pointed at). A hash present in several WADs counts toward each.
     pub(crate) fn from_meta(
         mod_id: String,
         mod_meta: &HashMap<u64, OverrideMeta>,
         content_fingerprint: Option<u64>,
         game_index: &GameIndex,
     ) -> Self {
-        let mut wads: std::collections::BTreeSet<Utf8PathBuf> = std::collections::BTreeSet::new();
+        let mut counts: BTreeMap<Utf8PathBuf, u32> = BTreeMap::new();
         for (path_hash, meta) in mod_meta {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wp in wad_paths {
-                    wads.insert(wp.clone());
+                    *counts.entry(wp.clone()).or_insert(0) += 1;
                 }
             } else if let Some(fallback) = &meta.fallback_wad {
-                wads.insert(fallback.clone());
+                *counts.entry(fallback.clone()).or_insert(0) += 1;
             }
         }
 
         Self {
             mod_id,
-            affected_wads: wads.into_iter().collect(),
+            affected_wads: counts
+                .into_iter()
+                .map(|(path, override_count)| AffectedWad {
+                    path: path.into_string().into_boxed_str(),
+                    override_count,
+                })
+                .collect(),
             override_count: mod_meta.len() as u32,
             content_fingerprint,
             game_index_fingerprint: game_index.game_fingerprint(),
@@ -753,5 +785,98 @@ mod tests {
         };
         assert_eq!(meta.content_hash, 0x1234);
         assert_eq!(meta.uncompressed_size, 100);
+    }
+
+    fn dummy_meta() -> OverrideMeta {
+        OverrideMeta {
+            content_hash: 0,
+            uncompressed_size: 0,
+            source: OverrideSource::LayerWad {
+                mod_id: "m".to_string(),
+                layer: "base".to_string(),
+                wad_name: "Aatrox.wad.client".to_string(),
+                rel_path: Utf8PathBuf::from("data/x.bin"),
+            },
+            fallback_wad: None,
+        }
+    }
+
+    fn game_index_with_hashes(hashes: HashMap<u64, Vec<Utf8PathBuf>>) -> GameIndex {
+        GameIndex {
+            wad_index: HashMap::new(),
+            hash_index: hashes,
+            game_fingerprint: 7,
+            subchunktoc_blocked: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn from_meta_counts_overrides_per_wad() {
+        let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
+        let map11 = Utf8PathBuf::from("DATA/FINAL/Maps/Shipping/Map11/Base/Map11.wad.client");
+        let map12 = Utf8PathBuf::from("DATA/FINAL/Maps/Shipping/Map12/Base/Map12.wad.client");
+
+        // 0xBA5E is a champion base chunk the game duplicates into both map WADs
+        // (spillover); 0x5C1 (a skin chunk) lives only in the champion WAD.
+        let mut hash_index: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
+        hash_index.insert(0xBA5E, vec![aatrox.clone(), map11.clone(), map12.clone()]);
+        hash_index.insert(0x5C1, vec![aatrox.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        let mut mod_meta: HashMap<u64, OverrideMeta> = HashMap::new();
+        mod_meta.insert(0xBA5E, dummy_meta());
+        mod_meta.insert(0x5C1, dummy_meta());
+
+        let report =
+            ModWadReport::from_meta("aatrox-skin".to_string(), &mod_meta, None, &game_index);
+
+        // Champion WAD holds both overrides; each map holds only the spilled base
+        // chunk — the asymmetry that lets a consumer pick the champion as primary.
+        // Entries are sorted by path and deduplicated.
+        assert_eq!(
+            report.affected_wads,
+            vec![
+                AffectedWad {
+                    path: aatrox.as_str().into(),
+                    override_count: 2,
+                },
+                AffectedWad {
+                    path: map11.as_str().into(),
+                    override_count: 1,
+                },
+                AffectedWad {
+                    path: map12.as_str().into(),
+                    override_count: 1,
+                },
+            ]
+        );
+        // wad_paths() drops the counts.
+        assert_eq!(
+            report.wad_paths().collect::<Vec<_>>(),
+            vec![aatrox.as_str(), map11.as_str(), map12.as_str()]
+        );
+        // override_count is distinct overrides, not the per-WAD sum (which is 4).
+        assert_eq!(report.override_count, 2);
+        assert_eq!(report.game_index_fingerprint, 7);
+    }
+
+    #[test]
+    fn from_meta_uses_fallback_wad_when_no_game_match() {
+        let custom = Utf8PathBuf::from("DATA/FINAL/Champions/NewChamp.wad.client");
+        let game_index = game_index_with_hashes(HashMap::new());
+
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(custom.clone());
+        let mut mod_meta = HashMap::new();
+        mod_meta.insert(0xABCD, meta);
+
+        let report = ModWadReport::from_meta("new".to_string(), &mod_meta, None, &game_index);
+        assert_eq!(
+            report.affected_wads,
+            vec![AffectedWad {
+                path: custom.as_str().into(),
+                override_count: 1,
+            }]
+        );
     }
 }
