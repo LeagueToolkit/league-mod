@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/LeagueToolkit/league-mod/compare/ltk_pki-v0.1.4...ltk_pki-v0.1.5) - 2026-06-10
+
+### Added
+
+- *(ltk_overlay)* add AffectedWad struct to track mod overrides per WAD
+
 ## [0.1.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_pki-v0.1.3...ltk_pki-v0.1.4) - 2026-02-18
 
 ### Added
