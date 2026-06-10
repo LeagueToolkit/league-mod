@@ -14,8 +14,33 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor};
 use ltk_wad::Wad;
 use std::collections::HashMap;
-use std::io::{Cursor, Read, Seek};
+use std::io::{self, Cursor, Read, Seek};
+use zip::read::ZipFile;
 use zip::ZipArchive;
+
+/// Read a ZIP entry's uncompressed bytes, bypassing the zip crate's CRC32 check.
+///
+/// Some Fantome tools write bad CRC32 values, making `read_to_end` reject the
+/// archive with "Invalid checksum". The check only fires on the trailing EOF
+/// `read()`, which `Take(size)` never issues. Streaming via `Take` also avoids a
+/// huge up-front allocation if `uncompressed_size` is bogus. Integrity is not
+/// verified; a short read is still reported as an error.
+fn read_zip_entry_bytes(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
+    let size = entry.size();
+    let mut data = Vec::new();
+
+    entry.take(size).read_to_end(&mut data)?;
+
+    let got = data.len() as u64;
+    if got != size {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("ZIP entry truncated: declared {size} bytes, only {got} available"),
+        ));
+    }
+
+    Ok(data)
+}
 
 /// Pre-computed index of a fantome archive's contents.
 ///
@@ -136,8 +161,7 @@ impl<R: Read + Seek> FantomeContent<R> {
             let mut entry = archive.by_name(&zip_path).map_err(|e| {
                 Error::Other(format!("Failed to read packed WAD '{}': {}", wad_name, e))
             })?;
-            let mut wad_data = Vec::new();
-            entry.read_to_end(&mut wad_data).map_err(|e| {
+            let wad_data = read_zip_entry_bytes(&mut entry).map_err(|e| {
                 Error::Other(format!(
                     "Failed to read packed WAD data '{}': {}",
                     wad_name, e
@@ -170,14 +194,14 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 Error::Other("Missing META/info.json in fantome archive".to_string())
             })?;
 
-        let mut info_content = String::new();
         let mut info_file = self
             .archive
             .by_name(info_name)
             .map_err(|e| Error::Other(format!("Failed to read info.json: {}", e)))?;
-        info_file
-            .read_to_string(&mut info_content)
+        let info_bytes = read_zip_entry_bytes(&mut info_file)
             .map_err(|e| Error::Other(format!("Failed to read info.json content: {}", e)))?;
+        let info_content = String::from_utf8(info_bytes)
+            .map_err(|e| Error::Other(format!("info.json is not valid UTF-8: {}", e)))?;
 
         let info_content = info_content.trim_start_matches('\u{feff}').trim();
         let info: ltk_fantome::FantomeInfo = serde_json::from_str(info_content)
@@ -225,9 +249,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                     .archive
                     .by_name(zip_path)
                     .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
-                let mut bytes = Vec::new();
-                entry
-                    .read_to_end(&mut bytes)
+                let bytes = read_zip_entry_bytes(&mut entry)
                     .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
                 results.push((Utf8PathBuf::from(rel_path), bytes));
             }
@@ -264,9 +286,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 .archive
                 .by_name(zip_path)
                 .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry: {}", e)))?;
-            let mut bytes = Vec::new();
-            entry
-                .read_to_end(&mut bytes)
+            let bytes = read_zip_entry_bytes(&mut entry)
                 .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))?;
             results.push((Utf8PathBuf::from(rel_path), bytes));
         }
@@ -290,9 +310,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         // Try directory-style entry first (O(1) lookup)
         let target_path = format!("WAD/{}/{}", wad_name, rel_path);
         if let Ok(mut entry) = self.archive.by_name(&target_path) {
-            let mut bytes = Vec::new();
-            entry
-                .read_to_end(&mut bytes)
+            let bytes = read_zip_entry_bytes(&mut entry)
                 .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
             return Ok(bytes);
         }
@@ -331,11 +349,8 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 rel_path
             ))
         })?;
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))?;
-        Ok(bytes)
+        read_zip_entry_bytes(&mut entry)
+            .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
@@ -368,6 +383,77 @@ mod tests {
         let mut cursor = zip.finish().unwrap();
         cursor.set_position(0);
         cursor
+    }
+
+    /// Build a ZIP (entries are Deflated) and overwrite every CRC32 field with
+    /// `0xDEADBEEF`, simulating Fantome creators that emit incorrect CRCs.
+    ///
+    /// The blind signature scan should hit exactly one local and one central
+    /// header per entry; asserting the count catches a signature that spuriously
+    /// matched inside compressed data (which would clobber unrelated bytes).
+    fn make_fantome_zip_corrupt_crc(entries: &[(&str, &[u8])]) -> Cursor<Vec<u8>> {
+        let cursor = make_fantome_zip(entries);
+        let mut bytes = cursor.into_inner();
+
+        let mut local_patched = 0usize;
+        let mut central_patched = 0usize;
+        let mut i = 0usize;
+        while i + 4 <= bytes.len() {
+            let sig = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+            match sig {
+                // Local file header: CRC32 is at +14
+                0x0403_4b50 => {
+                    if i + 18 <= bytes.len() {
+                        bytes[i + 14..i + 18].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+                        local_patched += 1;
+                    }
+                    i += 4;
+                }
+                // Central directory header: CRC32 is at +16
+                0x0201_4b50 => {
+                    if i + 20 <= bytes.len() {
+                        bytes[i + 16..i + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+                        central_patched += 1;
+                    }
+                    i += 4;
+                }
+                _ => i += 1,
+            }
+        }
+
+        assert_eq!(
+            local_patched,
+            entries.len(),
+            "expected exactly one local-header CRC per entry (spurious/missing signature match)"
+        );
+        assert_eq!(
+            central_patched,
+            entries.len(),
+            "expected exactly one central-header CRC per entry (spurious/missing signature match)"
+        );
+
+        Cursor::new(bytes)
+    }
+
+    /// Build a minimal in-memory packed WAD containing a single uncompressed
+    /// chunk, for exercising the packed-WAD code paths.
+    fn make_packed_wad_bytes(payload: &[u8]) -> Vec<u8> {
+        use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+
+        let payload = payload.to_vec();
+        let mut cursor = Cursor::new(Vec::new());
+        WadBuilder::default()
+            .with_chunk(
+                WadChunkBuilder::default()
+                    .with_path("packed/file.bin")
+                    .with_force_compression(WadChunkCompression::None),
+            )
+            .build_to_writer(&mut cursor, move |_hash, c| {
+                c.write_all(&payload)?;
+                Ok(())
+            })
+            .expect("build packed WAD");
+        cursor.into_inner()
     }
 
     fn make_info_json(name: &str) -> Vec<u8> {
@@ -528,6 +614,60 @@ mod tests {
             .read_wad_override_file("base", "Aatrox.wad.client", Utf8Path::new("file1.bin"))
             .unwrap();
         assert_eq!(bytes, b"data1");
+    }
+
+    #[test]
+    fn loads_archive_with_bad_crc32() {
+        // Some Fantome creators emit incorrect CRC32 values in the ZIP central
+        // directory. The zip crate's CRC check would otherwise reject these
+        // archives with "Invalid checksum" — verify we tolerate that and read
+        // the underlying data correctly.
+        let cursor = make_fantome_zip_corrupt_crc(&[
+            ("META/info.json", &make_info_json("Bad CRC Mod")),
+            ("WAD/Aatrox.wad.client/file1.bin", b"data1"),
+            ("RAW/assets/raw1.bin", b"raw_data"),
+        ]);
+        let mut content = FantomeContent::new(cursor).expect("FantomeContent::new");
+
+        let project = content.mod_project().expect("mod_project");
+        assert_eq!(project.display_name, "Bad CRC Mod");
+
+        let overrides = content
+            .read_wad_overrides("base", "Aatrox.wad.client")
+            .expect("read_wad_overrides");
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].1, b"data1");
+
+        let raw = content.read_raw_overrides().expect("read_raw_overrides");
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].1, b"raw_data");
+    }
+
+    #[test]
+    fn loads_packed_wad_with_bad_crc32() {
+        // A packed WAD is mounted via Wad::mount during FantomeContent::new — the
+        // downstream "WAD mounting" path the fix targets. Verify it and the packed
+        // branch of read_wad_override_file tolerate a corrupt CRC.
+        const PACKED_PAYLOAD: &[u8] = b"packed_payload_bytes";
+        let wad_bytes = make_packed_wad_bytes(PACKED_PAYLOAD);
+        let cursor = make_fantome_zip_corrupt_crc(&[
+            ("META/info.json", &make_info_json("Packed Bad CRC")),
+            ("WAD/Packed.wad.client", &wad_bytes),
+        ]);
+        let mut content = FantomeContent::new(cursor).expect("FantomeContent::new");
+
+        let overrides = content
+            .read_wad_overrides("base", "Packed.wad.client")
+            .expect("read_wad_overrides");
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].1, PACKED_PAYLOAD);
+
+        // Packed chunks are exposed as hex-hash filenames; round-trip a lookup.
+        let hex_name = overrides[0].0.clone();
+        let single = content
+            .read_wad_override_file("base", "Packed.wad.client", &hex_name)
+            .expect("read_wad_override_file");
+        assert_eq!(single, PACKED_PAYLOAD);
     }
 
     #[test]
