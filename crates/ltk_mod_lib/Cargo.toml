@@ -1,0 +1,34 @@
+[package]
+name = "ltk_mod_lib"
+version = "0.1.0"
+edition = "2021"
+description = "Mod library management for LeagueToolkit — install, profiles, overlay orchestration"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+readme = "../../README.md"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
+
+[dependencies]
+ltk_overlay = { version = "0.2.3", path = "../ltk_overlay" }
+ltk_modpkg = { version = "0.3.2", path = "../ltk_modpkg", features = ["project"] }
+ltk_mod_project = { version = "0.3.0", path = "../ltk_mod_project" }
+ltk_fantome = { version = "0.4.0", path = "../ltk_fantome" }
+ltk_mod_core = { version = "0.1.0", path = "../ltk_mod_core" }
+
+camino = { workspace = true }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+slug = "0.1"
+zip = "2"
+tracing = "0.1"
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
