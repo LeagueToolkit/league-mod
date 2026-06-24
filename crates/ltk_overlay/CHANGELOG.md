@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.2.9](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.2.8...ltk_overlay-v0.2.9) - 2026-06-24
+
+### Fixed
+
+- *(ltk_overlay)* support non-conventional fantome folder casings
+
 ## [0.2.8](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.2.7...ltk_overlay-v0.2.8) - 2026-06-10
 
 ### Added
