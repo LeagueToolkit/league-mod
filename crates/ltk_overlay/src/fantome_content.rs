@@ -50,10 +50,11 @@ fn read_zip_entry_bytes(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
 struct FantomeIndex {
     /// The exact entry name for META/info.json (case-insensitive match).
     info_entry: Option<String>,
-    /// WAD directory entries: wad_name -> list of (full_zip_path, relative_path).
+    /// Lowercase WAD name -> [(full_zip_path, relative_path)]. Lowercase keys
+    /// make lookups case-insensitive; the stored path keeps the real casing.
     wad_dir_entries: HashMap<String, Vec<(String, String)>>,
-    /// Packed WAD names (WADs stored as single files, not directories).
-    packed_wad_names: Vec<String>,
+    /// Lowercase WAD name -> full_zip_path, for WADs stored as single files.
+    packed_wad_paths: HashMap<String, String>,
     /// RAW entries: (full_zip_path, relative_path).
     raw_entries: Vec<(String, String)>,
 }
@@ -62,7 +63,7 @@ impl FantomeIndex {
     fn build<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Self {
         let mut info_entry = None;
         let mut wad_dir_entries: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut packed_wad_names: Vec<String> = Vec::new();
+        let mut packed_wad_paths: HashMap<String, String> = HashMap::new();
         let mut raw_entries: Vec<(String, String)> = Vec::new();
 
         for i in 0..archive.len() {
@@ -74,21 +75,21 @@ impl FantomeIndex {
             drop(file);
 
             // META/info.json (case-insensitive)
-            if info_entry.is_none() && name.to_lowercase() == "meta/info.json" {
+            if info_entry.is_none() && name.eq_ignore_ascii_case("META/info.json") {
                 info_entry = Some(name.clone());
                 continue;
             }
 
-            // WAD/ entries
-            if let Some(relative) = name.strip_prefix("WAD/") {
+            // WAD/ entries (prefix matched case-insensitively, e.g. `wad/`)
+            if let Some(relative) = strip_prefix_ci(&name, "WAD/") {
                 if relative.is_empty() || is_dir {
                     continue;
                 }
 
-                let relative = relative.to_string();
-                if !relative.contains('/') && is_wad_file_name(&relative) {
-                    // Packed WAD file directly under WAD/
-                    packed_wad_names.push(relative);
+                if !relative.contains('/') && is_wad_file_name(relative) {
+                    // Packed WAD file directly under WAD/.
+                    let key = relative.to_ascii_lowercase();
+                    packed_wad_paths.insert(key, name);
                 } else if let Some(wad_name) = relative.split('/').next() {
                     if is_wad_file_name(wad_name) {
                         let rel = relative
@@ -96,19 +97,18 @@ impl FantomeIndex {
                             .and_then(|s| s.strip_prefix('/'))
                             .unwrap_or("");
                         if !rel.is_empty() {
+                            // Own the key/rel so `name` is free to move below.
+                            let key = wad_name.to_ascii_lowercase();
                             let rel = rel.to_string();
-                            wad_dir_entries
-                                .entry(wad_name.to_string())
-                                .or_default()
-                                .push((name, rel));
+                            wad_dir_entries.entry(key).or_default().push((name, rel));
                         }
                     }
                 }
                 continue;
             }
 
-            // RAW/ entries
-            if let Some(relative) = name.strip_prefix("RAW/") {
+            // RAW/ entries (prefix matched case-insensitively)
+            if let Some(relative) = strip_prefix_ci(&name, "RAW/") {
                 if !relative.is_empty() && !is_dir {
                     let relative = relative.to_string();
                     raw_entries.push((name, relative));
@@ -119,14 +119,15 @@ impl FantomeIndex {
         Self {
             info_entry,
             wad_dir_entries,
-            packed_wad_names,
+            packed_wad_paths,
             raw_entries,
         }
     }
 
+    /// All WAD names in the archive, as lowercase keys.
     fn wad_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.wad_dir_entries.keys().cloned().collect();
-        for wad_name in &self.packed_wad_names {
+        for wad_name in self.packed_wad_paths.keys() {
             if !names.contains(wad_name) {
                 names.push(wad_name.clone());
             }
@@ -154,22 +155,21 @@ impl<R: Read + Seek> FantomeContent<R> {
             .map_err(|e| Error::Other(format!("Failed to open fantome archive: {}", e)))?;
         let index = FantomeIndex::build(&mut archive);
 
-        // Mount all packed WADs upfront
+        // Mount all packed WADs upfront, reading via the stored entry path.
         let mut packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>> = HashMap::new();
-        for wad_name in &index.packed_wad_names {
-            let zip_path = format!("WAD/{}", wad_name);
-            let mut entry = archive.by_name(&zip_path).map_err(|e| {
-                Error::Other(format!("Failed to read packed WAD '{}': {}", wad_name, e))
+        for (wad_key, zip_path) in &index.packed_wad_paths {
+            let mut entry = archive.by_name(zip_path).map_err(|e| {
+                Error::Other(format!("Failed to read packed WAD '{}': {}", zip_path, e))
             })?;
             let wad_data = read_zip_entry_bytes(&mut entry).map_err(|e| {
                 Error::Other(format!(
                     "Failed to read packed WAD data '{}': {}",
-                    wad_name, e
+                    zip_path, e
                 ))
             })?;
 
             let wad = Wad::mount(Cursor::new(wad_data))?;
-            packed_wads.insert(wad_name.clone(), wad);
+            packed_wads.insert(wad_key.clone(), wad);
         }
 
         Ok(Self {
@@ -239,8 +239,10 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             return Ok(Vec::new());
         }
 
+        let wad_key = wad_name.to_ascii_lowercase();
+
         // Try directory-style entries first
-        if let Some(entries) = self.index.wad_dir_entries.get(wad_name) {
+        if let Some(entries) = self.index.wad_dir_entries.get(&wad_key) {
             let entry_names: Vec<(String, String)> = entries.clone();
             let mut results = Vec::with_capacity(entry_names.len());
 
@@ -258,7 +260,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         // Try packed WAD — extract all chunks as hex-hash files
-        if let Some(wad) = self.packed_wads.get_mut(wad_name) {
+        if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
             let mut results = Vec::with_capacity(path_hashes.len());
 
@@ -307,16 +309,33 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             )));
         }
 
-        // Try directory-style entry first (O(1) lookup)
-        let target_path = format!("WAD/{}/{}", wad_name, rel_path);
-        if let Ok(mut entry) = self.archive.by_name(&target_path) {
+        let wad_key = wad_name.to_ascii_lowercase();
+
+        // Look up the stored entry path rather than reconstructing it, since the
+        // archive's real casing (e.g. a lowercase `wad/` folder) may differ.
+        let want = rel_path.as_str().replace('\\', "/");
+        let zip_path = self
+            .index
+            .wad_dir_entries
+            .get(&wad_key)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|(_, rel)| rel.replace('\\', "/") == want)
+                    .map(|(zip_path, _)| zip_path.clone())
+            });
+        if let Some(zip_path) = zip_path {
+            let mut entry = self
+                .archive
+                .by_name(&zip_path)
+                .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
             let bytes = read_zip_entry_bytes(&mut entry)
                 .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
             return Ok(bytes);
         }
 
         // Try packed WAD — extract specific chunk by hex hash filename
-        if let Some(wad) = self.packed_wads.get_mut(wad_name) {
+        if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
                 .file_stem()
                 .unwrap_or("");
@@ -341,12 +360,26 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
     }
 
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
-        let target_path = format!("RAW/{}", rel_path);
+        // Look up the stored entry path (the `RAW/` folder may be cased differently).
+        let want = rel_path.as_str().replace('\\', "/");
+        let zip_path = self
+            .index
+            .raw_entries
+            .iter()
+            .find(|(_, rel)| rel.replace('\\', "/") == want)
+            .map(|(zip_path, _)| zip_path.clone());
 
-        let mut entry = self.archive.by_name(&target_path).map_err(|_| {
+        let zip_path = zip_path.ok_or_else(|| {
             Error::Other(format!(
                 "RAW override file not found in fantome archive: {}",
                 rel_path
+            ))
+        })?;
+
+        let mut entry = self.archive.by_name(&zip_path).map_err(|e| {
+            Error::Other(format!(
+                "Failed to read RAW ZIP entry '{}': {}",
+                zip_path, e
             ))
         })?;
         read_zip_entry_bytes(&mut entry)
@@ -364,6 +397,16 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
 fn is_wad_file_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".wad.client") || lower.ends_with(".wad") || lower.ends_with(".wad.mobile")
+}
+
+/// Strip a leading ASCII prefix case-insensitively, returning the remainder.
+fn strip_prefix_ci<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = name.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(&name[prefix.len()..])
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -530,7 +573,91 @@ mod tests {
         let mut content = FantomeContent::new(cursor).unwrap();
         let wads = content.list_layer_wads("base").unwrap();
         assert_eq!(wads.len(), 1);
-        assert!(wads.contains(&"Aatrox.wad.client".to_string()));
+        // WAD names are canonicalized to lowercase for case-insensitive matching.
+        assert!(wads.contains(&"aatrox.wad.client".to_string()));
+    }
+
+    #[test]
+    fn read_wad_overrides_lowercase_wad_folder() {
+        // Some creators package content under a lowercase `wad/` folder. The
+        // archive scanner must recognize it case-insensitively, otherwise the
+        // mod's entire WAD content is silently dropped and it never loads.
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Lowercase")),
+            ("wad/Aatrox.wad.client/file1.bin", b"data1"),
+            ("wad/Aatrox.wad.client/sub/file2.bin", b"data2"),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        let wads = content.list_layer_wads("base").unwrap();
+        assert_eq!(wads, vec!["aatrox.wad.client"]);
+
+        let overrides = content
+            .read_wad_overrides("base", "Aatrox.wad.client")
+            .unwrap();
+        assert_eq!(overrides.len(), 2);
+        let paths: Vec<&str> = overrides.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(paths.contains(&"file1.bin"));
+        assert!(paths.contains(&"sub/file2.bin"));
+
+        // Pass-2 single-file read must also resolve via the lowercase folder.
+        let bytes = content
+            .read_wad_override_file("base", "aatrox.wad.client", Utf8Path::new("file1.bin"))
+            .unwrap();
+        assert_eq!(bytes, b"data1");
+    }
+
+    #[test]
+    fn read_raw_overrides_lowercase_raw_folder() {
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Lowercase")),
+            ("raw/assets/characters/aatrox/skin0.bin", b"raw_data"),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        let overrides = content.read_raw_overrides().unwrap();
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(
+            overrides[0].0.as_str(),
+            "assets/characters/aatrox/skin0.bin"
+        );
+        assert_eq!(overrides[0].1, b"raw_data");
+
+        let bytes = content
+            .read_raw_override_file(Utf8Path::new("assets/characters/aatrox/skin0.bin"))
+            .unwrap();
+        assert_eq!(bytes, b"raw_data");
+    }
+
+    #[test]
+    fn read_wad_overrides_lowercase_packed_wad_folder() {
+        // Packed WAD directly under a lowercase `wad/` folder.
+        let wad_bytes = make_packed_wad_bytes(b"packed");
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Lowercase Packed")),
+            ("wad/Packed.wad.client", &wad_bytes),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        let wads = content.list_layer_wads("base").unwrap();
+        assert_eq!(wads, vec!["packed.wad.client"]);
+
+        let overrides = content
+            .read_wad_overrides("base", "Packed.wad.client")
+            .unwrap();
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].1, b"packed");
+    }
+
+    #[test]
+    fn strip_prefix_ci_matches_case_insensitively() {
+        assert_eq!(strip_prefix_ci("WAD/foo", "WAD/"), Some("foo"));
+        assert_eq!(strip_prefix_ci("wad/foo", "WAD/"), Some("foo"));
+        assert_eq!(strip_prefix_ci("Wad/foo", "WAD/"), Some("foo"));
+        assert_eq!(strip_prefix_ci("RAW/foo", "RAW/"), Some("foo"));
+        assert_eq!(strip_prefix_ci("raw/foo", "RAW/"), Some("foo"));
+        assert_eq!(strip_prefix_ci("META/foo", "WAD/"), None);
+        assert_eq!(strip_prefix_ci("wa", "WAD/"), None);
     }
 
     #[test]
