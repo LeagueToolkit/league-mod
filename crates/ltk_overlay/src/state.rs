@@ -12,6 +12,7 @@
 //!   wiped and rebuilt from scratch.
 
 use crate::error::Result;
+use crate::linked_bins::LinkedBinOffender;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -68,6 +69,12 @@ pub struct OverlayState {
     /// need to be re-patched.
     #[serde(default)]
     pub wad_fingerprints: BTreeMap<String, u64>,
+
+    /// Mods whose property-bins reference unresolved linked dependencies, as
+    /// computed during the last build. Persisted so the exact-match skip path can
+    /// re-surface the same advisory without recomputing.
+    #[serde(default)]
+    pub linked_bin_offenders: Vec<LinkedBinOffender>,
 }
 
 impl Default for OverlayState {
@@ -78,6 +85,7 @@ impl Default for OverlayState {
             game_fingerprint: 0,
             blocked_wads: Vec::new(),
             wad_fingerprints: BTreeMap::new(),
+            linked_bin_offenders: Vec::new(),
         }
     }
 }
@@ -103,6 +111,7 @@ impl OverlayState {
             game_fingerprint,
             blocked_wads,
             wad_fingerprints,
+            linked_bin_offenders: Vec::new(),
         }
     }
 

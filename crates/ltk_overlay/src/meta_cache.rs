@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// Current cache format version. Bump when the serialized format changes.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 /// Serializable cache entry for a single override.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -32,6 +32,10 @@ pub struct CachedOverride {
     pub source_wad_name: Option<String>,
     /// Relative file path within the WAD dir or raw content dir.
     pub source_rel_path: String,
+    /// Linked-file dependency paths if this override is a property-bin; empty
+    /// otherwise. Cached so unchanged mods need no re-parse for the linked-bin check.
+    #[serde(default)]
+    pub linked_bins: Vec<String>,
 }
 
 /// Cached metadata for a single mod.
@@ -75,6 +79,7 @@ impl CachedModMeta {
                     uncompressed_size: entry.uncompressed_size,
                     source,
                     fallback_wad: entry.target_wad.as_ref().map(Utf8PathBuf::from),
+                    linked_bins: entry.linked_bins.clone(),
                 },
             );
         }
@@ -114,6 +119,7 @@ impl CachedModMeta {
                     source_layer,
                     source_wad_name,
                     source_rel_path,
+                    linked_bins: meta.linked_bins.clone(),
                 }
             })
             .collect();
@@ -252,6 +258,7 @@ mod tests {
                     source_layer: Some("base".to_string()),
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
+                    linked_bins: Vec::new(),
                 }],
             },
         );

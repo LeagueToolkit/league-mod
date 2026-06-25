@@ -29,6 +29,7 @@ mod resolve;
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
+use crate::linked_bins::{collect_linked_bin_offenders, LinkedBinOffender};
 use crate::state::OverlayState;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -58,6 +59,16 @@ pub(crate) enum OverrideSource {
     },
 }
 
+impl OverrideSource {
+    /// The id of the mod this override came from.
+    pub(crate) fn mod_id(&self) -> &str {
+        match self {
+            OverrideSource::LayerWad { mod_id, .. } => mod_id,
+            OverrideSource::Raw { mod_id, .. } => mod_id,
+        }
+    }
+}
+
 /// Lightweight metadata collected in pass 1 (no byte data).
 #[derive(Clone, Debug)]
 pub struct OverrideMeta {
@@ -68,6 +79,10 @@ pub struct OverrideMeta {
     /// (i.e. the override adds a new chunk not present in any game WAD).
     /// Derived from the mod's directory structure during collection.
     pub(crate) fallback_wad: Option<Utf8PathBuf>,
+    /// Linked-file dependency paths declared by this override when it is a League
+    /// property-bin (`PROP`/`PTCH`); empty otherwise. Parsed once in pass 1 and
+    /// cached so the linked-bin pre-flight needs no re-decompression.
+    pub(crate) linked_bins: Vec<String>,
 }
 
 /// A mod to be included in the overlay build.
@@ -362,6 +377,10 @@ pub struct OverlayBuilder {
     /// Per-mod WAD reports captured during the most recent successful
     /// [`build`](Self::build), drained via [`take_mod_wad_reports`](Self::take_mod_wad_reports).
     last_mod_wad_reports: Vec<ModWadReport>,
+    /// Mods with unresolved property-bin linked dependencies from the most recent
+    /// [`build`](Self::build), drained via
+    /// [`take_linked_bin_offenders`](Self::take_linked_bin_offenders).
+    last_linked_bin_offenders: Vec<LinkedBinOffender>,
 }
 
 impl OverlayBuilder {
@@ -384,6 +403,7 @@ impl OverlayBuilder {
             blocked_wads: HashSet::new(),
             progress_callback: None,
             last_mod_wad_reports: Vec::new(),
+            last_linked_bin_offenders: Vec::new(),
         }
     }
 
@@ -395,6 +415,17 @@ impl OverlayBuilder {
     /// run yet, or if the previous build short-circuited (e.g. exact-match skip).
     pub fn take_mod_wad_reports(&mut self) -> Vec<ModWadReport> {
         std::mem::take(&mut self.last_mod_wad_reports)
+    }
+
+    /// Drain the linked-bin offenders detected during the most recent
+    /// [`build`](Self::build).
+    ///
+    /// Each entry is a mod whose property-bins reference linked dependencies that
+    /// are absent from the overlay WAD they land in. Returns an empty vector when
+    /// the last build found none. On an exact-match skip the offenders from the
+    /// previous build are restored from the persisted overlay state.
+    pub fn take_linked_bin_offenders(&mut self) -> Vec<LinkedBinOffender> {
+        std::mem::take(&mut self.last_linked_bin_offenders)
     }
 
     /// Analyze a single mod's WAD footprint without building or modifying any
@@ -472,6 +503,9 @@ impl OverlayBuilder {
     pub fn build(&mut self) -> Result<OverlayBuildResult> {
         let start_time = std::time::Instant::now();
 
+        // Reset per-build outputs; each return path sets these as appropriate.
+        self.last_linked_bin_offenders = Vec::new();
+
         let effective_blocked = self.effective_blocked_wads();
 
         tracing::info!("Building overlay...");
@@ -531,6 +565,7 @@ impl OverlayBuilder {
             ) {
                 if self.validate_wads_exist(state) {
                     tracing::info!("Overlay: exact match, skipping build");
+                    self.last_linked_bin_offenders = state.linked_bin_offenders.clone();
                     self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
                     let reused: Vec<Utf8PathBuf> = state
                         .wad_fingerprints
@@ -579,6 +614,18 @@ impl OverlayBuilder {
             !blocked
         });
 
+        // Validate property-bin linked dependencies against the overlay WADs we are
+        // about to write. Runs over every enabled mod's overrides (built and reused
+        // alike) since distribution precedes the rebuild/reuse partition.
+        self.last_linked_bin_offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
+        if !self.last_linked_bin_offenders.is_empty() {
+            tracing::info!(
+                "Linked-bin check: {} mod(s) reference unresolved linked bins",
+                self.last_linked_bin_offenders.len()
+            );
+        }
+
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
             self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
@@ -598,12 +645,13 @@ impl OverlayBuilder {
             .map(|p| self.overlay_root.join(p))
             .collect();
 
-        let state = OverlayState::new(
+        let mut state = OverlayState::new(
             enabled_ids,
             game_index.game_fingerprint(),
             effective_blocked,
             new_wad_fingerprints,
         );
+        state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
         state.save(&state_path)?;
 
         let total_wads = built_paths.len() as u32;
@@ -782,6 +830,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/file.bin"),
             },
             fallback_wad: None,
+            linked_bins: Vec::new(),
         };
         assert_eq!(meta.content_hash, 0x1234);
         assert_eq!(meta.uncompressed_size, 100);
@@ -798,6 +847,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/x.bin"),
             },
             fallback_wad: None,
+            linked_bins: Vec::new(),
         }
     }
 
