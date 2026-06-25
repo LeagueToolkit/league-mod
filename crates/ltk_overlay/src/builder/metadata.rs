@@ -56,13 +56,21 @@ pub(crate) fn collect_single_mod_metadata(
                 .read_wad_overrides(&layer.name, wad_name)?;
 
             // Pre-compute path hashes so we can use them for overlap detection
-            let entries: Vec<(Utf8PathBuf, u64, u64, usize)> = override_files
+            let entries: Vec<(Utf8PathBuf, u64, u64, usize, Vec<String>)> = override_files
                 .into_iter()
                 .map(|(rel_path, bytes)| {
                     let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
                     let content_hash = xxh3_64(&bytes);
                     let uncompressed_size = bytes.len();
-                    Ok((rel_path, path_hash, content_hash, uncompressed_size))
+                    let linked_bins =
+                        crate::linked_bins::parse_linked_bins(&bytes).unwrap_or_default();
+                    Ok((
+                        rel_path,
+                        path_hash,
+                        content_hash,
+                        uncompressed_size,
+                        linked_bins,
+                    ))
                 })
                 .collect::<Result<_>>()?;
 
@@ -85,7 +93,7 @@ pub(crate) fn collect_single_mod_metadata(
                     // WAD name not found in game — use overlap detection to find
                     // the game WAD with the most matching chunk hashes (same
                     // approach as cslol-manager's find_by_overlap).
-                    let path_hashes: Vec<u64> = entries.iter().map(|(_, h, _, _)| *h).collect();
+                    let path_hashes: Vec<u64> = entries.iter().map(|(_, h, _, _, _)| *h).collect();
                     match game_index.find_best_matching_wad(&path_hashes) {
                         Some(best_wad) => {
                             tracing::info!(
@@ -111,7 +119,7 @@ pub(crate) fn collect_single_mod_metadata(
                 Err(other) => return Err(other),
             };
 
-            for (rel_path, path_hash, content_hash, uncompressed_size) in entries {
+            for (rel_path, path_hash, content_hash, uncompressed_size, linked_bins) in entries {
                 mod_meta.insert(
                     path_hash,
                     OverrideMeta {
@@ -124,6 +132,7 @@ pub(crate) fn collect_single_mod_metadata(
                             rel_path,
                         },
                         fallback_wad: fallback_wad.clone(),
+                        linked_bins,
                     },
                 );
             }
@@ -146,6 +155,7 @@ pub(crate) fn collect_single_mod_metadata(
             let path_hash = resolve_chunk_hash(&rel_path, &bytes)?;
             let content_hash = xxh3_64(&bytes);
             let uncompressed_size = bytes.len();
+            let linked_bins = crate::linked_bins::parse_linked_bins(&bytes).unwrap_or_default();
             mod_meta.insert(
                 path_hash,
                 OverrideMeta {
@@ -156,6 +166,7 @@ pub(crate) fn collect_single_mod_metadata(
                         rel_path,
                     },
                     fallback_wad: None,
+                    linked_bins,
                 },
             );
         }
@@ -642,6 +653,7 @@ mod tests {
                     source_layer: Some("base".to_string()),
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
+                    linked_bins: vec!["data/characters/test/test.bin".to_string()],
                 },
                 CachedOverride {
                     path_hash: 0xABCD,
@@ -651,6 +663,7 @@ mod tests {
                     source_layer: None,
                     source_wad_name: None,
                     source_rel_path: "assets/raw/file.bin".to_string(),
+                    linked_bins: Vec::new(),
                 },
             ],
         };
@@ -664,5 +677,10 @@ mod tests {
             Some(Utf8Path::new("DATA/FINAL/test.wad.client"))
         );
         assert!(meta[&0xABCD].fallback_wad.is_none());
+        assert_eq!(
+            meta[&0x1234].linked_bins,
+            vec!["data/characters/test/test.bin".to_string()]
+        );
+        assert!(meta[&0xABCD].linked_bins.is_empty());
     }
 }
