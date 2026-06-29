@@ -271,7 +271,9 @@ impl GameIndex {
 
         wad_overlap_counts
             .into_iter()
-            .max_by_key(|(_, count)| *count)
+            .max_by(|(path_a, count_a), (path_b, count_b)| {
+                count_a.cmp(count_b).then_with(|| path_b.cmp(path_a))
+            })
             .map(|(path, count)| {
                 tracing::info!(
                     "Overlap detection: best match WAD={} with {} overlapping chunks out of {}",
@@ -302,6 +304,11 @@ impl GameIndex {
         use xxhash_rust::xxh3::xxh3_64;
 
         // Group requested hashes by WAD file (pick the first WAD for each hash).
+        //
+        // Picking any single WAD is correct even when a hash lives in several WADs: the game
+        // requires a chunk shared across multiple WADs to be byte-identical in every one of
+        // them (mismatched copies of a shared chunk crash the client), so all WADs containing
+        // a given path hash hold the same content. The first WAD is representative of the rest.
         let mut wad_to_hashes: HashMap<&Utf8PathBuf, Vec<u64>> = HashMap::new();
         for &ph in path_hashes {
             if let Some(wad_paths) = self.hash_index.get(&ph) {

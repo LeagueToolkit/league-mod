@@ -67,6 +67,14 @@ impl OverrideSource {
             OverrideSource::Raw { mod_id, .. } => mod_id,
         }
     }
+
+    /// The relative path this override was read from (for diagnostics).
+    pub(crate) fn rel_path(&self) -> &Utf8Path {
+        match self {
+            OverrideSource::LayerWad { rel_path, .. } => rel_path.as_path(),
+            OverrideSource::Raw { rel_path, .. } => rel_path.as_path(),
+        }
+    }
 }
 
 /// Lightweight metadata collected in pass 1 (no byte data).

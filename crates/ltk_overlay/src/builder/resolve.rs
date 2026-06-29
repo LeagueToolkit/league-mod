@@ -21,6 +21,7 @@ impl OverlayBuilder {
     ) -> BTreeMap<Utf8PathBuf, HashSet<u64>> {
         let mut wad_hash_sets: BTreeMap<Utf8PathBuf, HashSet<u64>> = BTreeMap::new();
         let mut new_entry_count = 0usize;
+        let mut dropped_count = 0usize;
 
         for (&path_hash, meta) in all_meta {
             if let Some(wad_paths) = game_index.find_wads_with_hash(path_hash) {
@@ -36,6 +37,15 @@ impl OverlayBuilder {
                     .or_default()
                     .insert(path_hash);
                 new_entry_count += 1;
+            } else {
+                dropped_count += 1;
+                tracing::debug!(
+                    "Override {:016x} from mod '{}' ('{}') matches no game WAD and has no \
+                     fallback target; skipping",
+                    path_hash,
+                    meta.source.mod_id(),
+                    meta.source.rel_path(),
+                );
             }
         }
 
@@ -43,6 +53,13 @@ impl OverlayBuilder {
             tracing::info!(
                 "Routed {} new entries (not in any game WAD) via mod directory structure",
                 new_entry_count
+            );
+        }
+        if dropped_count > 0 {
+            tracing::warn!(
+                "{} override(s) could not be routed to any game WAD (no hash match and no \
+                 fallback target) and were skipped - that mod content will not appear in-game",
+                dropped_count
             );
         }
         tracing::info!(
