@@ -23,7 +23,8 @@ use camino::Utf8Path;
 use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
 use std::collections::HashSet;
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Size of a single v3.4 WAD TOC entry.
@@ -80,10 +81,10 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
-    // Load original WAD
-    let file = std::fs::File::open(src_wad_path.as_std_path())?;
-    let mut wad = Wad::mount(file)?;
-    let chunks = wad.chunks().clone();
+    let file = File::open(src_wad_path.as_std_path())?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let wad = Wad::mount(Cursor::new(&mmap[..]))?;
+    let chunks = wad.chunks();
 
     // Collect new entry hashes (in overrides but not in the original WAD)
     let mut new_hashes: Vec<u64> = override_hashes
@@ -172,12 +173,15 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 
             compressed.len()
         } else {
-            // Pass-through: read raw compressed bytes and copy them unchanged
+            // Pass-through: copy the raw compressed bytes straight from the source.
             let orig = chunks
                 .get(path_hash)
                 .ok_or_else(|| Error::Other(format!("Missing base chunk {:016x}", path_hash)))?;
-            let raw = wad.load_chunk_raw(orig)?;
-            writer.write_all(&raw)?;
+            let end = orig.data_offset + orig.compressed_size;
+            let raw = mmap.get(orig.data_offset..end).ok_or_else(|| {
+                Error::Other(format!("Base chunk {:016x} data out of bounds", path_hash))
+            })?;
+            writer.write_all(raw)?;
 
             final_chunks.push(WadChunk {
                 path_hash,
