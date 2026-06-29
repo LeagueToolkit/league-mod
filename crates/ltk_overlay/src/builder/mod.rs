@@ -637,16 +637,16 @@ impl OverlayBuilder {
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
             self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
+        let wad_overrides =
+            self.resolve_overrides_for_wads(&wads_to_build, &wad_hash_sets, &all_meta)?;
+
+        let built_paths = self.patch_wads_parallel(wads_to_build, wad_overrides)?;
+
         if can_incremental {
             if let Some(ref state) = prev_state {
                 self.clean_stale_wads(state, &new_wad_fingerprints)?;
             }
         }
-
-        let wad_overrides =
-            self.resolve_overrides_for_wads(&wads_to_build, &wad_hash_sets, &all_meta)?;
-
-        let built_paths = self.patch_wads_parallel(wads_to_build, wad_overrides)?;
 
         let reused_paths: Vec<Utf8PathBuf> = wads_to_reuse
             .iter()
