@@ -22,22 +22,20 @@ use zip::ZipArchive;
 ///
 /// Some Fantome tools write bad CRC32 values, making `read_to_end` reject the
 /// archive with "Invalid checksum". The check only fires on the trailing EOF
-/// `read()`, which `Take(size)` never issues. Streaming via `Take` also avoids a
-/// huge up-front allocation if `uncompressed_size` is bogus. Integrity is not
-/// verified; a short read is still reported as an error.
+/// `read()`, which `Take(size)` never issues. `Take` also caps the read at the
+/// declared `uncompressed_size` so a bogus (huge) size can't drive an unbounded
+/// allocation — we use `Vec::new()` (not `with_capacity`) for the same reason.
+///
+/// Integrity is intentionally **not** verified (that's the whole point of this
+/// helper). We also do not require the byte count to equal the declared size:
+/// some packers over-declare it, and rejecting those would discard data that is
+/// fully present and usable. Genuine corruption of the compressed stream still
+/// surfaces as a decompression error from `read_to_end`.
 fn read_zip_entry_bytes(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
     let size = entry.size();
     let mut data = Vec::new();
 
     entry.take(size).read_to_end(&mut data)?;
-
-    let got = data.len() as u64;
-    if got != size {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!("ZIP entry truncated: declared {size} bytes, only {got} available"),
-        ));
-    }
 
     Ok(data)
 }
