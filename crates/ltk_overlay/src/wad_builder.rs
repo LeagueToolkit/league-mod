@@ -147,6 +147,14 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
     let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
 
     for &path_hash in &ordered {
+        if data_offset > u32::MAX as u64 {
+            return Err(Error::Other(format!(
+                "Patched WAD exceeds the 4 GiB limit of the WAD v3.4 format \
+                 (chunk {:016x} would start at offset {})",
+                path_hash, data_offset
+            )));
+        }
+
         let bytes_written = if override_hashes.contains(&path_hash) {
             let override_bytes = resolve_override(path_hash)?;
             let override_data = override_bytes.as_ref();
@@ -155,6 +163,17 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
             let kind = LeagueFileKind::identify_from_bytes(override_data);
             let compression = kind.ideal_compression();
             let compressed = compress_by_type(override_data, compression)?;
+
+            if compressed.len() > u32::MAX as usize || override_data.len() > u32::MAX as usize {
+                return Err(Error::Other(format!(
+                    "Override chunk {:016x} is too large for the WAD v3.4 format \
+                     (compressed {} / uncompressed {} bytes)",
+                    path_hash,
+                    compressed.len(),
+                    override_data.len()
+                )));
+            }
+
             let compressed_checksum = xxh3_64(&compressed);
 
             writer.write_all(&compressed)?;
