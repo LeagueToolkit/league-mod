@@ -26,6 +26,12 @@ use std::collections::HashSet;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use xxhash_rust::xxh3::xxh3_64;
 
+/// Size of a single v3.4 WAD TOC entry.
+const TOC_ENTRY_SIZE: usize = 32;
+
+/// Write buffer size for the output WAD
+const WRITE_BUFFER_SIZE: usize = 1 << 20; // 1 MiB
+
 /// Build statistics returned by [`build_patched_wad`].
 #[derive(Debug, Clone)]
 pub struct PatchedWadStats {
@@ -111,7 +117,10 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
         std::fs::create_dir_all(parent.as_std_path())?;
     }
 
-    let mut writer = BufWriter::new(std::fs::File::create(dst_wad_path.as_std_path())?);
+    let mut writer = BufWriter::with_capacity(
+        WRITE_BUFFER_SIZE,
+        std::fs::File::create(dst_wad_path.as_std_path())?,
+    );
 
     // Write header
     writer.write_u16::<LE>(0x5752)?; // "RW" magic
@@ -125,19 +134,19 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
     // Write chunk count
     writer.write_u32::<LE>(ordered.len() as u32)?;
 
-    // Write dummy TOC (32 bytes per chunk) — will be overwritten later
+    // Write dummy TOC (TOC_ENTRY_SIZE bytes per chunk) — overwritten with real offsets later.
     let toc_offset = writer.stream_position()?;
     for _ in &ordered {
-        writer.write_all(&[0u8; 32])?;
+        writer.write_all(&[0u8; TOC_ENTRY_SIZE])?;
     }
+
+    let mut data_offset: u64 = toc_offset + (ordered.len() as u64) * TOC_ENTRY_SIZE as u64;
 
     // Write chunk data and build final TOC entries
     let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
 
     for &path_hash in &ordered {
-        let data_offset = writer.stream_position()? as usize;
-
-        if override_hashes.contains(&path_hash) {
+        let bytes_written = if override_hashes.contains(&path_hash) {
             let override_bytes = resolve_override(path_hash)?;
             let override_data = override_bytes.as_ref();
             overrides_applied += 1;
@@ -151,7 +160,7 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 
             final_chunks.push(WadChunk {
                 path_hash,
-                data_offset,
+                data_offset: data_offset as usize,
                 compressed_size: compressed.len(),
                 uncompressed_size: override_data.len(),
                 compression_type: compression,
@@ -160,6 +169,8 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
                 start_frame: 0,
                 checksum: compressed_checksum,
             });
+
+            compressed.len()
         } else {
             // Pass-through: read raw compressed bytes and copy them unchanged
             let orig = chunks
@@ -170,7 +181,7 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 
             final_chunks.push(WadChunk {
                 path_hash,
-                data_offset,
+                data_offset: data_offset as usize,
                 compressed_size: orig.compressed_size,
                 uncompressed_size: orig.uncompressed_size,
                 compression_type: orig.compression_type,
@@ -179,7 +190,11 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
                 start_frame: orig.start_frame,
                 checksum: orig.checksum,
             });
-        }
+
+            raw.len()
+        };
+
+        data_offset += bytes_written as u64;
     }
 
     // Seek back and write final TOC
