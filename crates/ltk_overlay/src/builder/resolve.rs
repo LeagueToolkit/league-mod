@@ -215,6 +215,7 @@ impl OverlayBuilder {
     ) -> Result<Vec<Utf8PathBuf>> {
         let total_wads = wads_to_build.len() as u32;
         let completed = AtomicU32::new(0);
+        let reported = AtomicU32::new(0);
         let game_dir = &self.game_dir;
         let overlay_root = &self.overlay_root;
         let progress_callback = &self.progress_callback;
@@ -263,6 +264,7 @@ impl OverlayBuilder {
                 })?;
 
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                let current = reported.fetch_max(done, Ordering::Relaxed).max(done);
                 emit(OverlayProgress {
                     stage: OverlayStage::PatchingWad,
                     current_file: Some(
@@ -271,7 +273,7 @@ impl OverlayBuilder {
                             .unwrap_or("unknown")
                             .to_string(),
                     ),
-                    current: done,
+                    current,
                     total: total_wads,
                 });
 
