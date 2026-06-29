@@ -25,7 +25,10 @@
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+};
 use walkdir::WalkDir;
 
 /// Version tag for the cache format.
@@ -300,9 +303,6 @@ impl GameIndex {
         game_dir: &Utf8Path,
         path_hashes: &HashSet<u64>,
     ) -> HashMap<u64, u64> {
-        use ltk_wad::Wad;
-        use xxhash_rust::xxh3::xxh3_64;
-
         // Group requested hashes by WAD file (pick the first WAD for each hash).
         //
         // Picking any single WAD is correct even when a hash lives in several WADs: the game
@@ -318,56 +318,22 @@ impl GameIndex {
             }
         }
 
-        let mut result: HashMap<u64, u64> = HashMap::with_capacity(path_hashes.len());
+        use rayon::prelude::*;
 
-        for (wad_rel_path, hashes) in &wad_to_hashes {
-            let abs_path = game_dir.join(wad_rel_path);
-            let needed: HashSet<u64> = hashes.iter().copied().collect();
-
-            let file = match std::fs::File::open(abs_path.as_std_path()) {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("Failed to open WAD '{}': {}", abs_path, e);
-                    continue;
-                }
-            };
-
-            let mut wad = match Wad::mount(file) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("Failed to mount WAD '{}': {}", abs_path, e);
-                    continue;
-                }
-            };
-
-            let chunks: Vec<_> = wad
-                .chunks()
-                .iter()
-                .filter(|c| needed.contains(&c.path_hash))
-                .cloned()
-                .collect();
-
-            for chunk in &chunks {
-                match wad.load_chunk_decompressed(chunk) {
-                    Ok(data) => {
-                        result.insert(chunk.path_hash, xxh3_64(&data));
-                    }
-                    Err(e) => {
-                        tracing::trace!(
-                            "Failed to decompress chunk {:016x} in '{}': {}",
-                            chunk.path_hash,
-                            abs_path,
-                            e
-                        );
-                    }
-                }
-            }
-        }
+        let num_wads = wad_to_hashes.len();
+        let result: HashMap<u64, u64> = wad_to_hashes
+            .into_par_iter()
+            .flat_map_iter(|(wad_rel_path, hashes)| {
+                let abs_path = game_dir.join(wad_rel_path);
+                let needed: HashSet<u64> = hashes.into_iter().collect();
+                content_hashes_for_wad(&abs_path, &needed)
+            })
+            .collect();
 
         tracing::info!(
             "Computed {} content hashes on-demand (from {} WADs)",
             result.len(),
-            wad_to_hashes.len()
+            num_wads
         );
 
         result
@@ -519,6 +485,55 @@ fn mount_and_extract_hashes(
         relative_path,
         chunk_hashes,
     })
+}
+
+/// Decompress the `wanted` chunks from a single game WAD and return their
+/// `(path_hash, content_hash)` pairs.
+///
+/// Errors opening or mounting the WAD, or decompressing an individual chunk, are logged and
+/// skipped — the WAD contributes whatever it could read (an empty vec if it can't be opened or
+/// mounted). Used by [`GameIndex::compute_content_hashes_batch`].
+fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<u64>) -> Vec<(u64, u64)> {
+    use ltk_wad::Wad;
+    use xxhash_rust::xxh3::xxh3_64;
+
+    let file = match File::open(abs_path.as_std_path()) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!("Failed to open WAD '{}': {}", abs_path, e);
+            return Vec::new();
+        }
+    };
+
+    let mut wad = match Wad::mount(file) {
+        Ok(wad) => wad,
+        Err(e) => {
+            tracing::warn!("Failed to mount WAD '{}': {}", abs_path, e);
+            return Vec::new();
+        }
+    };
+
+    let chunks: Vec<_> = wad
+        .chunks()
+        .iter()
+        .filter(|c| wanted.contains(&c.path_hash))
+        .cloned()
+        .collect();
+
+    let mut hashes = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
+        match wad.load_chunk_decompressed(chunk) {
+            Ok(data) => hashes.push((chunk.path_hash, xxh3_64(&data))),
+            Err(e) => tracing::trace!(
+                "Failed to decompress chunk {:016x} in '{}': {}",
+                chunk.path_hash,
+                abs_path,
+                e
+            ),
+        }
+    }
+
+    hashes
 }
 
 /// Mount every WAD file and build a reverse index: `chunk_path_hash -> [relative_wad_paths]`.
