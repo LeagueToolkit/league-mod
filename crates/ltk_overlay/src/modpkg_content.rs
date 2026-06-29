@@ -129,14 +129,24 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             return Ok(Vec::new());
         }
 
-        // Collect relative paths for each chunk (before mutable borrow for batch load)
-        let rel_paths: HashMap<u64, String> = chunk_keys
-            .iter()
-            .filter_map(|&(path_hash, _)| {
-                let path = self.modpkg.chunk_paths.get(&path_hash)?;
-                Some((path_hash, path.clone()))
-            })
-            .collect();
+        // Collect relative paths for each chunk (before mutable borrow for batch load).
+        let mut rel_paths: HashMap<u64, String> = HashMap::with_capacity(chunk_keys.len());
+        for &(path_hash, _) in &chunk_keys {
+            match self.modpkg.chunk_paths.get(&path_hash) {
+                Some(path) => {
+                    rel_paths.insert(path_hash, path.clone());
+                }
+                None => {
+                    tracing::warn!(
+                        "modpkg chunk {:016x} (layer='{}', wad='{}') has no recorded path; \
+                         the override will be skipped",
+                        path_hash,
+                        layer,
+                        wad_name
+                    );
+                }
+            }
+        }
 
         // Batch load all chunks in offset-sorted order for sequential I/O
         let batch = self.modpkg.load_chunks_batch(&chunk_keys).map_err(|e| {

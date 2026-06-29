@@ -177,6 +177,32 @@ pub(crate) fn collect_single_mod_metadata(
         );
     }
 
+    // Route any overrides that still have no fallback target — e.g. RAW files introducing
+    // brand-new assets, or WAD-layer overrides whose own chunks didn't overlap any game WAD
+    // — to the game WAD that the majority of THIS mod's chunks map to. Without this they
+    // would be dropped at distribution time; placing them alongside the bulk of the mod's
+    // content is the same overlap heuristic already used to resolve unknown WAD names.
+    let unroutable = mod_meta
+        .values()
+        .filter(|meta| meta.fallback_wad.is_none())
+        .count();
+    if unroutable > 0 {
+        let all_hashes: Vec<u64> = mod_meta.keys().copied().collect();
+        if let Some(dominant_wad) = game_index.find_best_matching_wad(&all_hashes) {
+            tracing::info!(
+                "Mod={} routing {} override(s) with no WAD match to dominant WAD '{}'",
+                enabled_mod.id,
+                unroutable,
+                dominant_wad
+            );
+            for meta in mod_meta.values_mut() {
+                if meta.fallback_wad.is_none() {
+                    meta.fallback_wad = Some(dominant_wad.clone());
+                }
+            }
+        }
+    }
+
     Ok(mod_meta)
 }
 
@@ -637,6 +663,58 @@ mod tests {
         assert!(
             meta[&0xCCCC].fallback_wad.is_none(),
             "When no overlapping WAD is found, fallback_wad should be None"
+        );
+    }
+
+    #[test]
+    fn test_unroutable_override_routed_to_dominant_wad() {
+        // Game has one chunk (0xAAAA) living in Ahri.wad.
+        let mut hash_index = HashMap::new();
+        hash_index.insert(
+            0xAAAA_u64,
+            vec![Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client")],
+        );
+        let game_index = GameIndex {
+            wad_index: HashMap::new(),
+            hash_index,
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        // The mod overrides a known chunk (0xAAAA, maps to Ahri.wad) and ships a brand-new
+        // asset (0xCCCC) under an unknown WAD that overlaps nothing on its own.
+        let mut wad_overrides = HashMap::new();
+        wad_overrides.insert(
+            "Ahri.wad.client".to_string(),
+            vec![(Utf8PathBuf::from("000000000000aaaa.bin"), b"a".to_vec())],
+        );
+        wad_overrides.insert(
+            "BrandNew.wad.client".to_string(),
+            vec![(Utf8PathBuf::from("000000000000cccc.bin"), b"c".to_vec())],
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+
+        let mut enabled_mod = EnabledMod {
+            id: "dominant-mod".to_string(),
+            content: Box::new(OverrideMockContent {
+                layers: make_layers(&["base"]),
+                wad_overrides,
+            }),
+            enabled_layers: None,
+        };
+
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+
+        let ahri = Utf8Path::new("DATA/FINAL/Champions/Ahri.wad.client");
+        assert_eq!(meta[&0xAAAA].fallback_wad.as_deref(), Some(ahri));
+        assert_eq!(
+            meta[&0xCCCC].fallback_wad.as_deref(),
+            Some(ahri),
+            "Override with no WAD match should be routed to the mod's dominant WAD"
         );
     }
 
