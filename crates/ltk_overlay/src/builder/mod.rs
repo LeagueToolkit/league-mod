@@ -31,6 +31,7 @@ use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::linked_bins::{collect_linked_bin_offenders, LinkedBinOffender};
 use crate::state::OverlayState;
+use crate::strings::{self, StringOverrideMode, StringPatchPlan};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -57,7 +58,17 @@ pub(crate) enum OverrideSource {
         mod_id: String,
         rel_path: Utf8PathBuf,
     },
+    /// Synthetic override produced by the string-override engine: the patched
+    /// `lol.stringtable` for one locale (encoded in the chunk path). Its bytes
+    /// are generated at resolve time (base chunk + key-level overrides) rather
+    /// than re-read from a provider, so this variant never enters the per-mod
+    /// metadata cache.
+    StringPatch { chunk_path: Utf8PathBuf },
 }
+
+/// Pseudo mod id reported for [`OverrideSource::StringPatch`] entries, which
+/// aggregate overrides from several mods.
+pub(crate) const STRING_PATCH_MOD_ID: &str = "string-overrides";
 
 impl OverrideSource {
     /// The id of the mod this override came from.
@@ -65,6 +76,7 @@ impl OverrideSource {
         match self {
             OverrideSource::LayerWad { mod_id, .. } => mod_id,
             OverrideSource::Raw { mod_id, .. } => mod_id,
+            OverrideSource::StringPatch { .. } => STRING_PATCH_MOD_ID,
         }
     }
 
@@ -73,6 +85,7 @@ impl OverrideSource {
         match self {
             OverrideSource::LayerWad { rel_path, .. } => rel_path.as_path(),
             OverrideSource::Raw { rel_path, .. } => rel_path.as_path(),
+            OverrideSource::StringPatch { chunk_path, .. } => chunk_path.as_path(),
         }
     }
 }
@@ -217,7 +230,8 @@ pub enum OverlayStage {
     CollectingOverrides,
     /// Building a patched WAD file in the overlay directory.
     PatchingWad,
-    /// Applying string table overrides (reserved for future use).
+    /// Merging string overrides from all enabled mods and planning stringtable
+    /// patches for the target locales.
     ApplyingStringOverrides,
     /// Build finished successfully.
     Complete,
@@ -381,6 +395,7 @@ pub struct OverlayBuilder {
     state_dir: Utf8PathBuf,
     enabled_mods: Vec<EnabledMod>,
     blocked_wads: HashSet<String>,
+    string_override_mode: StringOverrideMode,
     progress_callback: Option<ProgressCallback>,
     /// Per-mod WAD reports captured during the most recent successful
     /// [`build`](Self::build), drained via [`take_mod_wad_reports`](Self::take_mod_wad_reports).
@@ -409,6 +424,7 @@ impl OverlayBuilder {
             state_dir,
             enabled_mods: Vec::new(),
             blocked_wads: HashSet::new(),
+            string_override_mode: StringOverrideMode::Disabled,
             progress_callback: None,
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
@@ -494,6 +510,16 @@ impl OverlayBuilder {
         self
     }
 
+    /// Configure which locales mods' string overrides are applied to.
+    ///
+    /// Defaults to [`StringOverrideMode::Disabled`], in which case
+    /// `ModProjectLayer::string_overrides` metadata is carried through but never
+    /// applied to the game's stringtables.
+    pub fn with_string_overrides(mut self, mode: StringOverrideMode) -> Self {
+        self.string_override_mode = mode;
+        self
+    }
+
     /// Set the ordered list of mods to include in the overlay.
     ///
     /// Order matters: the first mod in the list (index 0) has the highest priority.
@@ -539,6 +565,10 @@ impl OverlayBuilder {
         let cache_path = self.state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
 
+        // Resolved locale targets are part of the build configuration: they enter
+        // the state comparison so toggling the mode invalidates the exact-match skip.
+        let target_locales = self.string_override_mode.resolve_locales(&game_index);
+
         // Load previous state
         let state_path = self.state_dir.join("overlay.json");
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
@@ -552,6 +582,7 @@ impl OverlayBuilder {
                 Vec::new(),
                 game_index.game_fingerprint(),
                 effective_blocked.clone(),
+                target_locales.clone(),
                 BTreeMap::new(),
             );
             state.save(&state_path)?;
@@ -570,6 +601,7 @@ impl OverlayBuilder {
                 &enabled_ids,
                 game_index.game_fingerprint(),
                 &effective_blocked,
+                &target_locales,
             ) {
                 if self.validate_wads_exist(state) {
                     tracing::info!("Overlay: exact match, skipping build");
@@ -609,8 +641,11 @@ impl OverlayBuilder {
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::CollectingOverrides));
 
-        let (all_meta, mod_wad_reports) = self.collect_all_override_metadata(&game_index)?;
+        let (mut all_meta, mod_wad_reports) = self.collect_all_override_metadata(&game_index)?;
         self.last_mod_wad_reports = mod_wad_reports;
+
+        let string_plans =
+            self.build_string_patch_plans(&game_index, &target_locales, &mut all_meta)?;
 
         let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
 
@@ -637,8 +672,12 @@ impl OverlayBuilder {
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
             self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
-        let wad_overrides =
-            self.resolve_overrides_for_wads(&wads_to_build, &wad_hash_sets, &all_meta)?;
+        let wad_overrides = self.resolve_overrides_for_wads(
+            &wads_to_build,
+            &wad_hash_sets,
+            &all_meta,
+            &string_plans,
+        )?;
 
         let built_paths = self.patch_wads_parallel(wads_to_build, wad_overrides)?;
 
@@ -657,6 +696,7 @@ impl OverlayBuilder {
             enabled_ids,
             game_index.game_fingerprint(),
             effective_blocked,
+            target_locales,
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
@@ -703,6 +743,84 @@ impl OverlayBuilder {
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /// Merge string overrides from all enabled mods and inject one synthetic
+    /// override entry per target locale into `all_meta` (pass 1).
+    ///
+    /// Returns the patch plans keyed by stringtable chunk hash. Only the plan
+    /// (merged override map + fingerprint) is computed here — the base table is
+    /// read and patched lazily in pass 2, and only for WADs being rebuilt, so
+    /// unchanged overrides never touch the game stringtable on incremental builds.
+    fn build_string_patch_plans(
+        &mut self,
+        game_index: &GameIndex,
+        target_locales: &[String],
+        all_meta: &mut HashMap<u64, OverrideMeta>,
+    ) -> Result<HashMap<u64, StringPatchPlan>> {
+        let mut plans = HashMap::new();
+        if target_locales.is_empty() {
+            return Ok(plans);
+        }
+
+        let per_locale =
+            strings::collect_effective_overrides(&mut self.enabled_mods, target_locales)?;
+        if per_locale.is_empty() {
+            return Ok(plans);
+        }
+
+        self.emit_progress(OverlayProgress::stage(
+            OverlayStage::ApplyingStringOverrides,
+        ));
+
+        for (locale, overrides) in per_locale {
+            let wad_name = format!("Global.{locale}.wad.client");
+            let wad_abs_path = match game_index.find_wad(&wad_name) {
+                Ok(path) => path.clone(),
+                Err(Error::WadNotFound(_)) => {
+                    tracing::warn!(
+                        "String overrides target locale '{}' but the game has no '{}'; skipping",
+                        locale,
+                        wad_name
+                    );
+                    continue;
+                }
+                Err(other) => return Err(other),
+            };
+            let wad_rel_path = wad_abs_path
+                .strip_prefix(&self.game_dir)
+                .map_err(|_| format!("WAD path is not under Game/: {}", wad_abs_path))?
+                .to_path_buf();
+
+            let chunk_hash = strings::stringtable_chunk_hash(&locale);
+            // A mod-shipped whole stringtable becomes the patch base instead of
+            // competing with the synthetic entry for the same chunk hash.
+            let base = all_meta.remove(&chunk_hash);
+
+            tracing::info!(
+                "String overrides: {} entries for locale '{}' -> {} (base: {})",
+                overrides.len(),
+                locale,
+                wad_rel_path,
+                if base.is_some() {
+                    "mod-provided stringtable"
+                } else {
+                    "game stringtable"
+                },
+            );
+
+            let plan = StringPatchPlan {
+                locale,
+                chunk_hash,
+                wad_rel_path,
+                overrides,
+                base,
+            };
+            all_meta.insert(chunk_hash, plan.to_override_meta());
+            plans.insert(chunk_hash, plan);
+        }
+
+        Ok(plans)
+    }
 
     /// Check that all WADs listed in the state actually exist on disk.
     fn validate_wads_exist(&self, state: &OverlayState) -> bool {

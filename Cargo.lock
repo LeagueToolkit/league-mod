@@ -1728,6 +1728,7 @@ dependencies = [
  "ltk_file",
  "ltk_mod_project",
  "ltk_modpkg",
+ "ltk_rst",
  "ltk_wad",
  "memmap2",
  "rayon",
@@ -1786,6 +1787,16 @@ dependencies = [
  "byteorder",
  "glam",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ltk_rst"
+version = "0.1.0"
+source = "git+https://github.com/LeagueToolkit/league-toolkit.git?branch=rst-api-rework#d033293b1bf5e7108615bf00830d49da238c64b5"
+dependencies = [
+ "byteorder",
+ "thiserror 1.0.69",
+ "xxhash-rust",
 ]
 
 [[package]]

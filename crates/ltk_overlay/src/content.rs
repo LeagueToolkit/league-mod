@@ -253,13 +253,30 @@ impl ModContentProvider for FsModContent {
     fn content_fingerprint(&self) -> Result<Option<u64>> {
         use xxhash_rust::xxh3::xxh3_64;
 
+        // Collect (path, size, mtime) for all files under content/, plus the
+        // project config — string overrides live in mod.config.json/.toml, so
+        // config edits must change the fingerprint even when content/ doesn't.
+        let mut entries: Vec<(String, u64, u64)> = Vec::new();
+
+        for config_name in ["mod.config.json", "mod.config.toml"] {
+            let config_path = self.mod_dir.join(config_name);
+            let Ok(meta) = std::fs::metadata(config_path.as_std_path()) else {
+                continue;
+            };
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            entries.push((config_name.to_string(), meta.len(), mtime));
+        }
+
         let content_dir = self.mod_dir.join("content");
-        if !content_dir.as_std_path().exists() {
+        if !content_dir.as_std_path().exists() && entries.is_empty() {
             return Ok(Some(0));
         }
 
-        // Collect (path, size, mtime) for all files under content/
-        let mut entries: Vec<(String, u64, u64)> = Vec::new();
         let mut stack = vec![content_dir];
 
         while let Some(dir) = stack.pop() {
