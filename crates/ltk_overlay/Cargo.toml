@@ -18,6 +18,8 @@ ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.4.1", path = "../ltk_mod_project" }
 ltk_modpkg = { version = "0.5.0", path = "../ltk_modpkg" }
 ltk_fantome = { version = "0.5.1", path = "../ltk_fantome" }
+# TODO(release): switch to the crates.io release once league-toolkit PR #138 ships as ltk_rst 0.2.0.
+ltk_rst = { git = "https://github.com/LeagueToolkit/league-toolkit.git", branch = "rst-api-rework" }
 
 # Archive reading
 zip = "2.2.0"

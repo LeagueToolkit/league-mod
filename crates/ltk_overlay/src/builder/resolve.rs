@@ -121,11 +121,16 @@ impl OverlayBuilder {
     /// Groups needed overrides by source mod, reads each file once via the
     /// targeted `read_wad_override_file` / `read_raw_override_file` methods,
     /// wraps bytes in `Arc` for cross-WAD sharing, and distributes to per-WAD maps.
+    ///
+    /// [`OverrideSource::StringPatch`] entries have no provider to re-read from;
+    /// their bytes are generated here from the matching plan in `string_plans`
+    /// (base stringtable + key-level overrides).
     pub(crate) fn resolve_overrides_for_wads(
         &mut self,
         wads_to_build: &[Utf8PathBuf],
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
         all_meta: &HashMap<u64, OverrideMeta>,
+        string_plans: &HashMap<u64, StringPatchPlan>,
     ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>>> {
         // Collect all unique path_hashes needed across WADs to build
         let needed_hashes: HashSet<u64> = wads_to_build
@@ -138,13 +143,18 @@ impl OverlayBuilder {
             return Ok(BTreeMap::new());
         }
 
-        // Group needed hashes by source mod ID
+        // Group needed hashes by source mod ID; string patches resolve separately.
         let mut by_mod: HashMap<&str, Vec<u64>> = HashMap::new();
+        let mut string_patch_hashes: Vec<u64> = Vec::new();
         for &path_hash in &needed_hashes {
             if let Some(meta) = all_meta.get(&path_hash) {
                 let mod_id = match &meta.source {
                     OverrideSource::LayerWad { mod_id, .. } => mod_id.as_str(),
                     OverrideSource::Raw { mod_id, .. } => mod_id.as_str(),
+                    OverrideSource::StringPatch { .. } => {
+                        string_patch_hashes.push(path_hash);
+                        continue;
+                    }
                 };
                 by_mod.entry(mod_id).or_default().push(path_hash);
             }
@@ -182,9 +192,23 @@ impl OverlayBuilder {
                     OverrideSource::Raw { rel_path, .. } => {
                         provider.read_raw_override_file(rel_path)?
                     }
+                    OverrideSource::StringPatch { .. } => {
+                        unreachable!("StringPatch sources are filtered out of the by-mod grouping")
+                    }
                 };
                 resolved.insert(path_hash, Arc::from(bytes));
             }
+        }
+
+        for path_hash in string_patch_hashes {
+            let plan = string_plans.get(&path_hash).ok_or_else(|| {
+                Error::Other(format!(
+                    "Missing string patch plan for chunk {:016x}",
+                    path_hash
+                ))
+            })?;
+            let bytes = self.resolve_string_patch(plan)?;
+            resolved.insert(path_hash, Arc::from(bytes));
         }
 
         // Distribute resolved bytes to per-WAD maps
@@ -202,6 +226,47 @@ impl OverlayBuilder {
         }
 
         Ok(wad_overrides)
+    }
+
+    /// Generate the patched stringtable bytes for one plan (pass 2).
+    ///
+    /// The base is either the winning mod-shipped stringtable chunk (re-read via
+    /// its provider, like any other override) or the game's own chunk,
+    /// decompressed from the source WAD.
+    fn resolve_string_patch(&mut self, plan: &StringPatchPlan) -> Result<Vec<u8>> {
+        let base_bytes = match &plan.base {
+            Some(base_meta) => {
+                let mod_id = base_meta.source.mod_id();
+                let idx = self
+                    .enabled_mods
+                    .iter()
+                    .position(|m| m.id == mod_id)
+                    .ok_or_else(|| {
+                        Error::Other(format!(
+                            "Stringtable base override references unknown mod '{}'",
+                            mod_id
+                        ))
+                    })?;
+                let provider = &mut self.enabled_mods[idx].content;
+                match &base_meta.source {
+                    OverrideSource::LayerWad {
+                        layer,
+                        wad_name,
+                        rel_path,
+                        ..
+                    } => provider.read_wad_override_file(layer, wad_name, rel_path)?,
+                    OverrideSource::Raw { rel_path, .. } => {
+                        provider.read_raw_override_file(rel_path)?
+                    }
+                    OverrideSource::StringPatch { .. } => {
+                        unreachable!("a string patch cannot be its own base")
+                    }
+                }
+            }
+            None => strings::read_game_chunk(&self.game_dir, &plan.wad_rel_path, plan.chunk_hash)?,
+        };
+
+        plan.apply(&base_bytes)
     }
 
     /// Patch WADs in parallel, emitting progress after each one completes.

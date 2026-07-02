@@ -60,6 +60,13 @@ pub struct OverlayState {
     #[serde(default)]
     pub blocked_wads: Vec<String>,
 
+    /// Sorted list of lowercased locales string overrides were applied to
+    /// (empty when string overrides are disabled). Changing the target locales
+    /// (e.g. switching the client language or toggling "all locales") must
+    /// invalidate the exact-match skip, so it participates in [`matches`](Self::matches).
+    #[serde(default)]
+    pub string_override_locales: Vec<String>,
+
     /// Per-WAD override fingerprints from the last build.
     ///
     /// Key: relative WAD path (e.g. `"DATA/FINAL/Champions/Aatrox.wad.client"`).
@@ -84,6 +91,7 @@ impl Default for OverlayState {
             enabled_mods: Vec::new(),
             game_fingerprint: 0,
             blocked_wads: Vec::new(),
+            string_override_locales: Vec::new(),
             wad_fingerprints: BTreeMap::new(),
             linked_bin_offenders: Vec::new(),
         }
@@ -98,11 +106,13 @@ impl OverlayState {
     /// * `enabled_mods` - List of enabled mod IDs in order
     /// * `game_fingerprint` - Fingerprint of the game directory
     /// * `blocked_wads` - Sorted list of lowercased blocked WAD filenames
+    /// * `string_override_locales` - Sorted list of lowercased string-override target locales
     /// * `wad_fingerprints` - Per-WAD override fingerprints
     pub fn new(
         enabled_mods: Vec<String>,
         game_fingerprint: u64,
         blocked_wads: Vec<String>,
+        string_override_locales: Vec<String>,
         wad_fingerprints: BTreeMap<String, u64>,
     ) -> Self {
         Self {
@@ -110,6 +120,7 @@ impl OverlayState {
             enabled_mods,
             game_fingerprint,
             blocked_wads,
+            string_override_locales,
             wad_fingerprints,
             linked_bin_offenders: Vec::new(),
         }
@@ -158,6 +169,7 @@ impl OverlayState {
     /// - Enabled mods list matches exactly (same IDs, same order)
     /// - Game fingerprint matches
     /// - Blocked WADs list matches
+    /// - String-override target locales match
     ///
     /// When this returns `true` and all WAD files exist on disk, the build can
     /// be skipped entirely.
@@ -167,16 +179,19 @@ impl OverlayState {
     /// * `enabled_mod_ids` - Current list of enabled mod IDs
     /// * `game_fingerprint` - Current game fingerprint
     /// * `blocked_wads` - Current sorted list of blocked WAD filenames
+    /// * `string_override_locales` - Current sorted list of string-override target locales
     pub fn matches(
         &self,
         enabled_mod_ids: &[String],
         game_fingerprint: u64,
         blocked_wads: &[String],
+        string_override_locales: &[String],
     ) -> bool {
         self.version == CURRENT_VERSION
             && self.enabled_mods == enabled_mod_ids
             && self.game_fingerprint == game_fingerprint
             && self.blocked_wads == blocked_wads
+            && self.string_override_locales == string_override_locales
     }
 
     /// Check if this state supports incremental rebuilding.
@@ -224,7 +239,13 @@ mod tests {
     #[test]
     fn test_new_state() {
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), BTreeMap::new());
+        let state = OverlayState::new(
+            mods.clone(),
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
 
         assert_eq!(state.version, CURRENT_VERSION);
         assert_eq!(state.enabled_mods, mods);
@@ -242,7 +263,13 @@ mod tests {
         );
         wad_fps.insert("DATA/FINAL/Maps/Map11.wad.client".to_string(), 0xCAFEBABE);
 
-        let state = OverlayState::new(vec!["mod1".to_string()], 0x123, Vec::new(), wad_fps);
+        let state = OverlayState::new(
+            vec!["mod1".to_string()],
+            0x123,
+            Vec::new(),
+            Vec::new(),
+            wad_fps,
+        );
         assert_eq!(state.wad_fingerprints.len(), 2);
         assert_eq!(
             state.wad_fingerprint("DATA/FINAL/Champions/Aatrox.wad.client"),
@@ -258,9 +285,15 @@ mod tests {
     #[test]
     fn test_matches_identical() {
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), BTreeMap::new());
+        let state = OverlayState::new(
+            mods.clone(),
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
 
-        assert!(state.matches(&mods, 0x123456, &[]));
+        assert!(state.matches(&mods, 0x123456, &[], &[]));
     }
 
     #[test]
@@ -269,11 +302,12 @@ mod tests {
             vec!["mod1".to_string()],
             0x123456,
             Vec::new(),
+            Vec::new(),
             BTreeMap::new(),
         );
         let other_mods = vec!["mod2".to_string()];
 
-        assert!(!state.matches(&other_mods, 0x123456, &[]));
+        assert!(!state.matches(&other_mods, 0x123456, &[], &[]));
     }
 
     #[test]
@@ -282,31 +316,38 @@ mod tests {
             vec!["mod1".to_string(), "mod2".to_string()],
             0x123456,
             Vec::new(),
+            Vec::new(),
             BTreeMap::new(),
         );
         let other_mods = vec!["mod2".to_string(), "mod1".to_string()];
 
-        assert!(!state.matches(&other_mods, 0x123456, &[]));
+        assert!(!state.matches(&other_mods, 0x123456, &[], &[]));
     }
 
     #[test]
     fn test_matches_different_fingerprint() {
         let mods = vec!["mod1".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), BTreeMap::new());
+        let state = OverlayState::new(
+            mods.clone(),
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
 
-        assert!(!state.matches(&mods, 0x789ABC, &[]));
+        assert!(!state.matches(&mods, 0x789ABC, &[], &[]));
     }
 
     #[test]
     fn test_matches_different_blocked_wads() {
         let mods = vec!["mod1".to_string()];
         let blocked = vec!["map22.wad.client".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, blocked, BTreeMap::new());
+        let state = OverlayState::new(mods.clone(), 0x123456, blocked, Vec::new(), BTreeMap::new());
 
         // Different blocked_wads should not match
-        assert!(!state.matches(&mods, 0x123456, &[]));
+        assert!(!state.matches(&mods, 0x123456, &[], &[]));
         // Same blocked_wads should match
-        assert!(state.matches(&mods, 0x123456, &["map22.wad.client".to_string()]));
+        assert!(state.matches(&mods, 0x123456, &["map22.wad.client".to_string()], &[]));
     }
 
     #[test]
@@ -314,6 +355,7 @@ mod tests {
         let state = OverlayState::new(
             vec!["mod1".to_string()],
             0x123456,
+            Vec::new(),
             Vec::new(),
             BTreeMap::new(),
         );
@@ -335,7 +377,7 @@ mod tests {
         assert!(state.blocked_wads.is_empty());
         assert!(state.wad_fingerprints.is_empty());
         assert!(!state.supports_incremental(1234));
-        assert!(!state.matches(&[String::from("mod1")], 1234, &[]));
+        assert!(!state.matches(&[String::from("mod1")], 1234, &[], &[]));
     }
 
     #[test]
@@ -347,7 +389,7 @@ mod tests {
         wad_fps.insert("DATA/FINAL/test.wad.client".to_string(), 0xABC);
 
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), wad_fps);
+        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), Vec::new(), wad_fps);
 
         // Save
         state.save(path).unwrap();
@@ -387,6 +429,7 @@ mod tests {
             vec!["mod1".to_string()],
             0x123456,
             Vec::new(),
+            Vec::new(),
             BTreeMap::new(),
         );
         let json = serde_json::to_string(&state).unwrap();
@@ -395,6 +438,31 @@ mod tests {
         assert!(json.contains("\"enabledMods\""));
         assert!(json.contains("\"gameFingerprint\""));
         assert!(json.contains("\"blockedWads\""));
+        assert!(json.contains("\"stringOverrideLocales\""));
         assert!(json.contains("\"wadFingerprints\""));
+    }
+
+    #[test]
+    fn test_matches_different_string_override_locales() {
+        let mods = vec!["mod1".to_string()];
+        let locales = vec!["en_us".to_string()];
+        let state = OverlayState::new(
+            mods.clone(),
+            0x123456,
+            Vec::new(),
+            locales.clone(),
+            BTreeMap::new(),
+        );
+
+        assert!(state.matches(&mods, 0x123456, &[], &locales));
+        // Toggling the target locales must invalidate the exact-match skip.
+        assert!(!state.matches(&mods, 0x123456, &[], &[]));
+        assert!(!state.matches(&mods, 0x123456, &[], &["ko_kr".to_string()]));
+
+        // A pre-feature state file (no stringOverrideLocales) defaults to empty,
+        // so existing users without string overrides keep their skip path.
+        let v4_json = r#"{"version":4,"enabledMods":["mod1"],"gameFingerprint":1234}"#;
+        let old: OverlayState = serde_json::from_str(v4_json).unwrap();
+        assert!(old.matches(&mods, 1234, &[], &[]));
     }
 }

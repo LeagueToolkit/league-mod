@@ -11,7 +11,7 @@
 use crate::content::{archive_fingerprint, ModContentProvider};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor};
+use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor, ModProjectLayer};
 use ltk_wad::Wad;
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
@@ -205,6 +205,28 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         let info: ltk_fantome::FantomeInfo = serde_json::from_str(info_content)
             .map_err(|e| Error::Other(format!("Failed to parse fantome info.json: {}", e)))?;
 
+        // Map declared layers so per-layer string overrides survive; fantome WAD
+        // content itself is still base-layer only.
+        let mut layers: Vec<ModProjectLayer> = info
+            .layers
+            .iter()
+            .map(|(key, layer)| ModProjectLayer {
+                name: if layer.name.is_empty() {
+                    key.clone()
+                } else {
+                    layer.name.clone()
+                },
+                display_name: layer.display_name.clone(),
+                priority: layer.priority,
+                description: None,
+                string_overrides: layer.string_overrides.clone(),
+            })
+            .collect();
+        layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+        if !layers.iter().any(|l| l.name == "base") {
+            layers = default_layers().into_iter().chain(layers).collect();
+        }
+
         Ok(ModProject {
             name: slug::slugify(&info.name),
             display_name: info.name,
@@ -216,7 +238,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             champions: Vec::new(),
             maps: Vec::new(),
             transformers: Vec::new(),
-            layers: default_layers(),
+            layers,
             thumbnail: None,
         })
     }

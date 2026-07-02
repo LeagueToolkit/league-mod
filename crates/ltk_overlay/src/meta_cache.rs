@@ -109,6 +109,11 @@ impl CachedModMeta {
                     OverrideSource::Raw { rel_path, .. } => {
                         (None, None, rel_path.as_str().to_string())
                     }
+                    // Synthetic string patches are injected after per-mod
+                    // collection, so they never reach the per-mod cache.
+                    OverrideSource::StringPatch { .. } => {
+                        unreachable!("StringPatch overrides are not cached per-mod")
+                    }
                 };
 
                 CachedOverride {
