@@ -360,23 +360,30 @@ impl ModpkgBuilder {
         })
     }
 
+    /// Maximum size of the compressed data relative to the original, in percent,
+    /// for compression to be considered worthwhile. Chunks that don't compress
+    /// below this threshold (already-compressed content like Vorbis audio or
+    /// JPEG/WebP images) are stored uncompressed.
+    const MAX_COMPRESSED_SIZE_PERCENT: u64 = 95;
+
     fn compress_chunk_data(
         data: &[u8],
         compression: ModpkgCompression,
     ) -> Result<(Vec<u8>, ModpkgCompression), ModpkgBuilderError> {
-        let mut compressed_data = Vec::new();
         match compression {
-            ModpkgCompression::None => {
-                compressed_data = data.to_vec();
-            }
+            ModpkgCompression::None => Ok((data.to_vec(), ModpkgCompression::None)),
             ModpkgCompression::Zstd => {
-                let mut encoder = zstd::Encoder::new(BufWriter::new(&mut compressed_data), 3)?;
-                encoder.write_all(data)?;
-                encoder.finish()?;
-            }
-        };
+                let compressed = zstd::bulk::compress(data, 3)?;
 
-        Ok((compressed_data, compression))
+                if (compressed.len() as u64) * 100
+                    >= (data.len() as u64) * Self::MAX_COMPRESSED_SIZE_PERCENT
+                {
+                    Ok((data.to_vec(), ModpkgCompression::None))
+                } else {
+                    Ok((compressed, ModpkgCompression::Zstd))
+                }
+            }
+        }
     }
 
     fn collect_unique_layers(&self) -> (Vec<String>, HashMap<u64, u32>) {
@@ -471,6 +478,14 @@ impl ModpkgBuilder {
         wad_indices: &HashMap<u64, u32>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
         let mut final_chunks = Vec::new();
+
+        // Identical chunk content is stored once: chunks whose data matches an
+        // already written chunk point at the first copy's `data_offset`. The
+        // stored form (and thus the recorded compression) is that of the first
+        // occurrence, regardless of what compression later duplicates requested.
+        let mut written_by_content: HashMap<(u64, u64), (u64, u64, u64, ModpkgCompression)> =
+            HashMap::new();
+
         for chunk_builder in chunks {
             let mut data_writer = Cursor::new(Vec::new());
             provide_chunk_data(chunk_builder, &mut data_writer)?;
@@ -479,14 +494,32 @@ impl ModpkgBuilder {
             let uncompressed_size = uncompressed_data.len();
             let uncompressed_checksum = xxh3_64(uncompressed_data);
 
-            let (compressed_data, compression) =
-                Self::compress_chunk_data(uncompressed_data, chunk_builder.compression)?;
+            let content_key = (uncompressed_checksum, uncompressed_size as u64);
+            let (data_offset, compressed_size, compressed_checksum, compression) =
+                match written_by_content.get(&content_key) {
+                    Some(&existing) => existing,
+                    None => {
+                        let (compressed_data, compression) = Self::compress_chunk_data(
+                            uncompressed_data,
+                            chunk_builder.compression,
+                        )?;
 
-            let compressed_size = compressed_data.len();
-            let compressed_checksum = xxh3_64(&compressed_data);
+                        let compressed_size = compressed_data.len() as u64;
+                        let compressed_checksum = xxh3_64(&compressed_data);
 
-            let data_offset = writer.stream_position()?;
-            writer.write_all(&compressed_data)?;
+                        let data_offset = writer.stream_position()?;
+                        writer.write_all(&compressed_data)?;
+
+                        let written = (
+                            data_offset,
+                            compressed_size,
+                            compressed_checksum,
+                            compression,
+                        );
+                        written_by_content.insert(content_key, written);
+                        written
+                    }
+                };
 
             let path_hash = chunk_builder.path_hash;
             let layer_index = if chunk_builder.layer.is_empty() {
@@ -510,7 +543,7 @@ impl ModpkgBuilder {
                 path_hash,
                 data_offset,
                 compression,
-                compressed_size: compressed_size as u64,
+                compressed_size,
                 uncompressed_size: uncompressed_size as u64,
                 compressed_checksum,
                 uncompressed_checksum,
@@ -581,6 +614,12 @@ impl ModpkgChunkBuilder {
         Ok(self)
     }
 
+    /// Request a compression type for the chunk's data.
+    ///
+    /// This is an upper bound rather than a guarantee: the builder stores the
+    /// chunk uncompressed when compression does not meaningfully reduce its
+    /// size (e.g. already-compressed audio or image formats). The chunk's TOC
+    /// entry always records the form actually stored.
     pub fn with_compression(mut self, compression: ModpkgCompression) -> Self {
         self.compression = compression;
         self
@@ -801,6 +840,142 @@ mod tests {
         assert!(ModpkgChunkBuilder::new()
             .with_hashed_chunk_name("0xabcdef1234567890.dds")
             .is_err());
+    }
+
+    #[test]
+    fn incompressible_chunk_falls_back_to_raw_storage() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+
+        // Xorshift-generated noise doesn't compress, so the builder must
+        // ignore the requested Zstd compression and store the bytes raw.
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let noise: Vec<u8> = (0..4096)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("noise.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::Zstd)
+                    .with_layer("base"),
+            );
+
+        let noise_clone = noise.clone();
+        builder
+            .build_to_writer(&mut cursor, move |_, cursor| {
+                cursor.write_all(&noise_clone)?;
+                Ok(())
+            })
+            .expect("Failed to build Modpkg");
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        let chunk = *modpkg
+            .chunks
+            .get(&(hash_chunk_name("noise.bin"), hash_layer_name("base")))
+            .unwrap();
+        assert_eq!(chunk.compression, ModpkgCompression::None);
+        assert_eq!(chunk.compressed_size, chunk.uncompressed_size);
+
+        let loaded = modpkg
+            .load_chunk_decompressed_by_path("noise.bin", Some("base"))
+            .unwrap();
+        assert_eq!(&loaded[..], &noise[..]);
+    }
+
+    #[test]
+    fn identical_chunk_content_is_stored_once() {
+        let scratch = Vec::new();
+        let mut cursor = Cursor::new(scratch);
+
+        let shared_data = vec![0xAB; 10_000];
+        let unique_data = vec![0xCD; 10_000];
+
+        let builder = ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("a.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::Zstd)
+                    .with_layer("base"),
+            )
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("b.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::Zstd)
+                    .with_layer("base"),
+            )
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("c.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::Zstd)
+                    .with_layer("base"),
+            );
+
+        let (shared_clone, unique_clone) = (shared_data.clone(), unique_data.clone());
+        builder
+            .build_to_writer(&mut cursor, move |chunk, cursor| {
+                if chunk.path == "c.bin" {
+                    cursor.write_all(&unique_clone)?;
+                } else {
+                    cursor.write_all(&shared_clone)?;
+                }
+                Ok(())
+            })
+            .expect("Failed to build Modpkg");
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        let base = hash_layer_name("base");
+        let a = *modpkg
+            .chunks
+            .get(&(hash_chunk_name("a.bin"), base))
+            .unwrap();
+        let b = *modpkg
+            .chunks
+            .get(&(hash_chunk_name("b.bin"), base))
+            .unwrap();
+        let c = *modpkg
+            .chunks
+            .get(&(hash_chunk_name("c.bin"), base))
+            .unwrap();
+
+        // a and b share content: written once, both TOC entries point at it
+        assert_eq!(a.data_offset, b.data_offset);
+        assert_eq!(a.compressed_size, b.compressed_size);
+        assert_eq!(a.compressed_checksum, b.compressed_checksum);
+
+        // c has different content and its own data
+        assert_ne!(c.data_offset, a.data_offset);
+        assert_ne!(c.uncompressed_checksum, a.uncompressed_checksum);
+
+        // All three decode to the bytes their TOC entries promise
+        let loaded_a = modpkg
+            .load_chunk_decompressed_by_path("a.bin", Some("base"))
+            .unwrap();
+        let loaded_b = modpkg
+            .load_chunk_decompressed_by_path("b.bin", Some("base"))
+            .unwrap();
+        let loaded_c = modpkg
+            .load_chunk_decompressed_by_path("c.bin", Some("base"))
+            .unwrap();
+        assert_eq!(&loaded_a[..], &shared_data[..]);
+        assert_eq!(&loaded_b[..], &shared_data[..]);
+        assert_eq!(&loaded_c[..], &unique_data[..]);
     }
 
     #[test]

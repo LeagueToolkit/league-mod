@@ -61,8 +61,6 @@ struct ChunkEntry {
     wad_name: Option<String>,
     /// Absolute path to the source file on disk.
     file_path: Utf8PathBuf,
-    /// Compression strategy based on file extension.
-    compression: ModpkgCompression,
 }
 
 impl ProjectPacker {
@@ -238,13 +236,11 @@ impl ProjectPacker {
         wad_name: Option<String>,
         file_path: Utf8PathBuf,
     ) {
-        let compression = compression_for_extension(file_path.extension());
         self.chunks.push(ChunkEntry {
             rel_path,
             layer_name: layer.name.clone(),
             wad_name,
             file_path,
-            compression,
         });
     }
 
@@ -295,7 +291,7 @@ impl ProjectPacker {
             let mut cb = ModpkgChunkBuilder::new()
                 .with_path(&entry.rel_path)
                 .map_err(PackError::Builder)?
-                .with_compression(entry.compression)
+                .with_compression(requested_compression(entry.file_path.extension()))
                 .with_layer(&entry.layer_name);
 
             if let Some(wad) = &entry.wad_name {
@@ -468,14 +464,16 @@ fn strip_prefix(path: &Utf8Path, base: &Utf8Path) -> Result<String, PackError> {
     Ok(rel.as_str().replace('\\', "/"))
 }
 
-/// Determine the best compression strategy based on file extension.
+/// Compression to request for a content file.
 ///
-/// Pre-compressed formats (textures, audio) gain little from zstd and
-/// waste CPU time at both compression and decompression.
-pub(super) fn compression_for_extension(ext: Option<&str>) -> ModpkgCompression {
+/// Wwise audio containers (`.bnk`/`.wpk`) are always stored uncompressed,
+/// mirroring how the overlay builder treats them in game WADs. Everything
+/// else requests Zstd; the builder stores a chunk raw when compression
+/// doesn't meaningfully reduce its size, so already-compressed formats
+/// need no special-casing here.
+pub(super) fn requested_compression(ext: Option<&str>) -> ModpkgCompression {
     match ext.map(|e| e.to_ascii_lowercase()).as_deref() {
-        Some("dds" | "tex" | "webp" | "png" | "jpg" | "jpeg") => ModpkgCompression::None,
-        Some("bnk" | "wpk" | "wem" | "ogg") => ModpkgCompression::None,
+        Some("bnk" | "wpk") => ModpkgCompression::None,
         _ => ModpkgCompression::Zstd,
     }
 }

@@ -1,4 +1,4 @@
-use super::packer::{compression_for_extension, is_valid_slug};
+use super::packer::{is_valid_slug, requested_compression};
 use super::*;
 use crate::{Modpkg, ModpkgCompression};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -311,32 +311,16 @@ fn test_is_valid_slug() {
 }
 
 #[test]
-fn test_compression_for_extension() {
-    assert_eq!(
-        compression_for_extension(Some("dds")),
-        ModpkgCompression::None
-    );
-    assert_eq!(
-        compression_for_extension(Some("DDS")),
-        ModpkgCompression::None
-    );
-    assert_eq!(
-        compression_for_extension(Some("bnk")),
-        ModpkgCompression::None
-    );
-    assert_eq!(
-        compression_for_extension(Some("wem")),
-        ModpkgCompression::None
-    );
-    assert_eq!(
-        compression_for_extension(Some("bin")),
-        ModpkgCompression::Zstd
-    );
-    assert_eq!(
-        compression_for_extension(Some("anm")),
-        ModpkgCompression::Zstd
-    );
-    assert_eq!(compression_for_extension(None), ModpkgCompression::Zstd);
+fn test_requested_compression() {
+    // Wwise audio containers are never compressed
+    assert_eq!(requested_compression(Some("bnk")), ModpkgCompression::None);
+    assert_eq!(requested_compression(Some("WPK")), ModpkgCompression::None);
+
+    // Everything else requests Zstd (the builder falls back to raw storage
+    // per chunk when compression doesn't pay)
+    assert_eq!(requested_compression(Some("dds")), ModpkgCompression::Zstd);
+    assert_eq!(requested_compression(Some("bin")), ModpkgCompression::Zstd);
+    assert_eq!(requested_compression(None), ModpkgCompression::Zstd);
 }
 
 // -- test helpers ----------------------------------------------------------
