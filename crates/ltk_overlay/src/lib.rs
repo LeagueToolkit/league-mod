@@ -95,8 +95,12 @@ pub mod linked_bins;
 pub mod meta_cache;
 pub mod modpkg_content;
 pub mod state;
+pub mod strings;
 pub mod utils;
 pub mod wad_builder;
+
+#[cfg(test)]
+mod strings_integration_tests;
 
 // Re-export main public API.
 pub use builder::{
@@ -110,3 +114,4 @@ pub use game_index::GameIndex;
 pub use linked_bins::LinkedBinOffender;
 pub use modpkg_content::ModpkgContent;
 pub use state::OverlayState;
+pub use strings::StringOverrideMode;

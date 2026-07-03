@@ -208,9 +208,12 @@ pub(crate) fn collect_single_mod_metadata(
 
 /// Filter out override metadata that should not be included in the overlay.
 ///
-/// This performs two filtering passes:
+/// This performs three filtering passes:
 /// 1. SubChunkTOC entries — always stripped to prevent game corruption.
-/// 2. Lazy overrides — mod files identical to game originals, detected by
+/// 2. Stringtable chunks — mods must not ship `lol.stringtable` overrides;
+///    layer `string_overrides` are the only supported way to modify game
+///    strings, and the game's own stringtable is always the patch base.
+/// 3. Lazy overrides — mod files identical to game originals, detected by
 ///    comparing pre-computed content hashes against game originals.
 pub(crate) fn filter_override_metadata(
     all_meta: &mut HashMap<u64, OverrideMeta>,
@@ -234,6 +237,23 @@ pub(crate) fn filter_override_metadata(
             filtered_count
         );
     }
+
+    // Reject mod-shipped stringtable chunks. The game's stringtable is always
+    // the base for string patching; layer `string_overrides` are the only
+    // supported way to modify game strings.
+    let stringtable_blocked = crate::strings::blocked_stringtable_hashes(game_index);
+    all_meta.retain(|path_hash, meta| {
+        let blocked = stringtable_blocked.contains(path_hash);
+        if blocked {
+            tracing::warn!(
+                "Mod '{}' ships a stringtable chunk ('{}'); rejecting it - use layer \
+                 string_overrides to modify game strings",
+                meta.source.mod_id(),
+                meta.source.rel_path(),
+            );
+        }
+        !blocked
+    });
 
     // Filter out lazy overrides — mod files identical to game originals.
     // Use pre-computed content_hash from metadata instead of re-reading bytes.
@@ -397,6 +417,7 @@ impl OverlayBuilder {
 mod tests {
     use super::*;
     use crate::meta_cache::CachedOverride;
+    use indexmap::IndexMap;
     use ltk_mod_project::{ModProject, ModProjectLayer};
     use std::sync::{Arc, Mutex};
 
@@ -461,7 +482,7 @@ mod tests {
                 display_name: None,
                 priority: i as i32,
                 description: None,
-                string_overrides: HashMap::new(),
+                string_overrides: IndexMap::new(),
             })
             .collect()
     }
@@ -716,6 +737,55 @@ mod tests {
             Some(ahri),
             "Override with no WAD match should be routed to the mod's dominant WAD"
         );
+    }
+
+    #[test]
+    fn test_filter_rejects_mod_shipped_stringtable_chunks() {
+        let mut wad_index = HashMap::new();
+        wad_index.insert(
+            "global.en_us.wad.client".to_string(),
+            vec![Utf8PathBuf::from(
+                "DATA/FINAL/Localized/Global.en_US.wad.client",
+            )],
+        );
+        let game_index = GameIndex {
+            wad_index,
+            hash_index: HashMap::new(),
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        };
+
+        let raw_meta = |rel_path: &str| OverrideMeta {
+            content_hash: 1,
+            uncompressed_size: 1,
+            source: OverrideSource::Raw {
+                mod_id: "strings-shipper".to_string(),
+                rel_path: Utf8PathBuf::from(rel_path),
+            },
+            fallback_wad: None,
+            linked_bins: Vec::new(),
+        };
+
+        let stringtable_hash = crate::strings::stringtable_chunk_hash("en_us");
+        let mut all_meta = HashMap::new();
+        all_meta.insert(
+            stringtable_hash,
+            raw_meta("data/menu/en_us/lol.stringtable"),
+        );
+        all_meta.insert(0xAAAA, raw_meta("assets/other.bin"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+
+        filter_override_metadata(&mut all_meta, &game_index, game_dir);
+
+        assert!(
+            !all_meta.contains_key(&stringtable_hash),
+            "Mod-shipped stringtable chunks must be rejected"
+        );
+        assert!(all_meta.contains_key(&0xAAAA));
     }
 
     #[test]

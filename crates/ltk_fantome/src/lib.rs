@@ -1,5 +1,6 @@
 use eyre::Result;
 use image::ImageFormat;
+use indexmap::IndexMap;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -60,9 +61,9 @@ pub struct FantomeLayerInfo {
     #[serde(
         rename = "StringOverrides",
         default,
-        skip_serializing_if = "HashMap::is_empty"
+        skip_serializing_if = "IndexMap::is_empty"
     )]
-    pub string_overrides: HashMap<String, HashMap<String, String>>,
+    pub string_overrides: IndexMap<String, IndexMap<String, String>>,
 }
 
 /// Create a standard Fantome file name from a mod project.

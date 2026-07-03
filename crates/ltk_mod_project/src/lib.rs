@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -235,8 +236,8 @@ pub struct ModProjectLayer {
     /// String overrides for this layer, organized by locale.
     /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
     /// Inner map: field name (from lol.stringtable) -> new string value
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub string_overrides: HashMap<String, HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub string_overrides: IndexMap<String, IndexMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -285,7 +286,7 @@ impl ModProjectLayer {
             display_name: None,
             priority: 0,
             description: Some("Base layer of the mod".to_string()),
-            string_overrides: HashMap::new(),
+            string_overrides: IndexMap::new(),
         }
     }
 }
@@ -297,7 +298,7 @@ pub fn default_layers() -> Vec<ModProjectLayer> {
         display_name: None,
         priority: 0,
         description: Some("Base layer of the mod".to_string()),
-        string_overrides: HashMap::new(),
+        string_overrides: IndexMap::new(),
     }]
 }
 
@@ -336,14 +337,14 @@ mod tests {
                     display_name: None,
                     priority: 0,
                     description: Some("Base layer of the mod".to_string()),
-                    string_overrides: HashMap::new(),
+                    string_overrides: IndexMap::new(),
                 },
                 ModProjectLayer {
                     name: "chroma1".to_string(),
                     display_name: Some("Chroma 1".to_string()),
                     priority: 20,
                     description: Some("Chroma 1".to_string()),
-                    string_overrides: HashMap::new(),
+                    string_overrides: IndexMap::new(),
                 },
             ],
             thumbnail: None,

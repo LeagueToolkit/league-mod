@@ -1627,6 +1627,7 @@ dependencies = [
  "camino",
  "eyre",
  "image",
+ "indexmap",
  "itertools",
  "ltk_mod_project",
  "ltk_wad",
@@ -1687,6 +1688,7 @@ dependencies = [
 name = "ltk_mod_project"
 version = "0.4.1"
 dependencies = [
+ "indexmap",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1702,6 +1704,7 @@ dependencies = [
  "camino",
  "glob",
  "image",
+ "indexmap",
  "itertools",
  "ltk_io_ext 0.2.1",
  "ltk_mod_project",
@@ -1724,10 +1727,12 @@ version = "0.3.1"
 dependencies = [
  "byteorder",
  "camino",
+ "indexmap",
  "ltk_fantome",
  "ltk_file",
  "ltk_mod_project",
  "ltk_modpkg",
+ "ltk_rst",
  "ltk_wad",
  "memmap2",
  "rayon",
@@ -1786,6 +1791,18 @@ dependencies = [
  "byteorder",
  "glam",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ltk_rst"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c47f87ae3e31064792f6f7a8b8d56da0ef9a83d92b419cce97f4d37a078a8110"
+dependencies = [
+ "byteorder",
+ "num_enum",
+ "thiserror 1.0.69",
+ "xxhash-rust",
 ]
 
 [[package]]

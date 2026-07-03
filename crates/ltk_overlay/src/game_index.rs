@@ -250,6 +250,28 @@ impl GameIndex {
         self.game_fingerprint
     }
 
+    /// Locales that have a `Global.{locale}.wad.client` in the game, paired with
+    /// the WAD's absolute path. Locales are lowercase (e.g. `"en_us"`), sorted,
+    /// and exclude the non-localized `Global.wad.client`.
+    pub fn localized_global_wads(&self) -> Vec<(String, &Utf8PathBuf)> {
+        let mut out: Vec<(String, &Utf8PathBuf)> = self
+            .wad_index
+            .iter()
+            .filter_map(|(name, paths)| {
+                let locale = name.strip_prefix("global.")?.strip_suffix(".wad.client")?;
+                if locale.is_empty() || locale.contains('.') {
+                    return None;
+                }
+                match paths.as_slice() {
+                    [single] => Some((locale.to_string(), single)),
+                    _ => None,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Get the set of SubChunkTOC path hashes that mods must not override.
     pub fn subchunktoc_blocked(&self) -> &HashSet<u64> {
         &self.subchunktoc_blocked
