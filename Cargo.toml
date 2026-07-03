@@ -14,5 +14,5 @@ members = [
 [workspace.dependencies]
 camino = "1.1"
 indexmap = { version = "2", features = ["serde"] }
-ltk_wad = "0.2.13"
+ltk_wad = "0.3.0"
 sysinfo = "0.32"
