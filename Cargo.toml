@@ -8,7 +8,6 @@ members = [
     "crates/ltk_modpkg",
     "crates/ltk_mod_project",
     "crates/ltk_overlay",
-    "crates/ltk_pki",
 ]
 
 [workspace.dependencies]
