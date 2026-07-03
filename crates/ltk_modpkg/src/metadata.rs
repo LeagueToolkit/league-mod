@@ -4,9 +4,9 @@ use crate::{
     license::ModpkgLicense,
     Modpkg,
 };
+use indexmap::IndexMap;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
 
 /// The path to the info.msgpack chunk.
@@ -80,10 +80,10 @@ impl DistributorInfo {
 /// # Example
 ///
 /// ```
-/// use std::collections::HashMap;
+/// use indexmap::IndexMap;
 /// use ltk_modpkg::ModpkgLayerMetadata;
 ///
-/// let mut en_us_overrides = HashMap::new();
+/// let mut en_us_overrides = IndexMap::new();
 /// en_us_overrides.insert("game_character_displayname_Ahri".to_string(), "Fox Spirit".to_string());
 ///
 /// let layer = ModpkgLayerMetadata {
@@ -91,7 +91,7 @@ impl DistributorInfo {
 ///     display_name: None,
 ///     priority: 0,
 ///     description: Some("Base layer".to_string()),
-///     string_overrides: HashMap::from([
+///     string_overrides: IndexMap::from([
 ///         ("en_us".to_string(), en_us_overrides),
 ///     ]),
 /// };
@@ -120,16 +120,21 @@ pub struct ModpkgLayerMetadata {
     /// Only the overrides are stored — not the full stringtable — so the
     /// mod stays compatible across game patches.
     /// Empty maps are omitted during serialization.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    #[cfg_attr(
-        test,
-        proptest(strategy = "proptest::collection::hash_map(\
-                \"[a-z]{2}_[a-z]{2}\", \
-                proptest::collection::hash_map(\"[a-z_]{1,30}\", \"[a-zA-Z0-9 ]{0,50}\", 0..3), \
-                0..2\
-            )")
-    )]
-    pub string_overrides: HashMap<String, HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    #[cfg_attr(test, proptest(strategy = "string_overrides_strategy()"))]
+    pub string_overrides: IndexMap<String, IndexMap<String, String>>,
+}
+
+/// Proptest strategy for [`ModpkgLayerMetadata::string_overrides`].
+#[cfg(test)]
+fn string_overrides_strategy(
+) -> impl proptest::strategy::Strategy<Value = IndexMap<String, IndexMap<String, String>>> {
+    use proptest::strategy::Strategy;
+
+    let bucket = proptest::collection::vec(("[a-z_]{1,30}", "[a-zA-Z0-9 ]{0,50}"), 0..3)
+        .prop_map(|entries| entries.into_iter().collect::<IndexMap<_, _>>());
+    proptest::collection::vec(("[a-z]{2}_[a-z]{2}", bucket), 0..2)
+        .prop_map(|buckets| buckets.into_iter().collect())
 }
 
 /// The metadata of a mod package.
@@ -324,7 +329,7 @@ mod tests {
 
     proptest! {
         // Reduce test cases for CI performance (8 instead of default 256)
-        // The nested HashMap structure makes this test slow
+        // The nested map structure makes this test slow
         #![proptest_config(ProptestConfig::with_cases(8))]
 
         #[test]
@@ -442,9 +447,9 @@ mod tests {
             display_name: None,
             priority: 0,
             description: Some("Base layer".to_string()),
-            string_overrides: HashMap::from([(
+            string_overrides: IndexMap::from([(
                 "en_us".to_string(),
-                HashMap::from([
+                IndexMap::from([
                     ("field_a".to_string(), "New Value A".to_string()),
                     ("field_b".to_string(), "New Value B".to_string()),
                 ]),
@@ -463,7 +468,7 @@ mod tests {
             display_name: None,
             priority: 0,
             description: None,
-            string_overrides: HashMap::new(),
+            string_overrides: IndexMap::new(),
         };
 
         let encoded = rmp_serde::to_vec_named(&layer).unwrap();
@@ -496,7 +501,7 @@ mod tests {
                 display_name: None,
                 priority: 0,
                 description: None,
-                string_overrides: HashMap::new(),
+                string_overrides: IndexMap::new(),
             }],
         };
 
@@ -532,9 +537,9 @@ mod tests {
                     display_name: None,
                     priority: 0,
                     description: None,
-                    string_overrides: HashMap::from([(
+                    string_overrides: IndexMap::from([(
                         "en_us".to_string(),
-                        HashMap::from([("game_stat_name".to_string(), "Custom Stat".to_string())]),
+                        IndexMap::from([("game_stat_name".to_string(), "Custom Stat".to_string())]),
                     )]),
                 },
                 ModpkgLayerMetadata {
@@ -542,9 +547,9 @@ mod tests {
                     display_name: Some("Pink chroma".to_string()),
                     priority: 10,
                     description: Some("Pink chroma".to_string()),
-                    string_overrides: HashMap::from([(
+                    string_overrides: IndexMap::from([(
                         "en_us".to_string(),
-                        HashMap::from([
+                        IndexMap::from([
                             ("champion_name".to_string(), "Custom Name".to_string()),
                             ("ability_desc".to_string(), "Custom Description".to_string()),
                         ]),

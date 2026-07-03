@@ -2,8 +2,8 @@ use super::packer::{compression_for_extension, is_valid_slug};
 use super::*;
 use crate::{Modpkg, ModpkgCompression};
 use camino::{Utf8Path, Utf8PathBuf};
+use indexmap::IndexMap;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Cursor;
 
@@ -21,7 +21,7 @@ fn new_rejects_invalid_layer_slug() {
         display_name: None,
         priority: 1,
         description: None,
-        string_overrides: HashMap::new(),
+        string_overrides: IndexMap::new(),
     }]);
 
     let err = ProjectPacker::with_mod_project(project, root.clone()).unwrap_err();
@@ -43,7 +43,7 @@ fn new_rejects_base_layer_with_wrong_priority() {
         display_name: None,
         priority: 5,
         description: None,
-        string_overrides: HashMap::new(),
+        string_overrides: IndexMap::new(),
     }]);
 
     let err = ProjectPacker::with_mod_project(project, root.clone()).unwrap_err();
@@ -68,7 +68,7 @@ fn new_rejects_missing_layer_directory() {
             display_name: None,
             priority: 1,
             description: None,
-            string_overrides: HashMap::new(),
+            string_overrides: IndexMap::new(),
         },
     ]);
 
@@ -190,7 +190,7 @@ fn pack_multi_wad_multi_layer() {
             display_name: None,
             priority: 1,
             description: None,
-            string_overrides: HashMap::new(),
+            string_overrides: IndexMap::new(),
         },
     ]);
 

@@ -18,6 +18,8 @@ ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.4.1", path = "../ltk_mod_project" }
 ltk_modpkg = { version = "0.5.0", path = "../ltk_modpkg" }
 ltk_fantome = { version = "0.5.1", path = "../ltk_fantome" }
+indexmap = { workspace = true }
+ltk_rst = "0.2.0"
 
 # Archive reading
 zip = "2.2.0"
