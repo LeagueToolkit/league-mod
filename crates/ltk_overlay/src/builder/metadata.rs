@@ -6,7 +6,6 @@
 use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
-use rayon::prelude::*;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Collect override metadata from a single mod (pass 1).
@@ -262,11 +261,11 @@ pub(crate) fn filter_override_metadata(
 
     let before_lazy = all_meta.len();
     all_meta.retain(|&path_hash, meta| {
-        if let Some(&original_hash) = content_hashes.get(&path_hash) {
-            if meta.content_hash == original_hash {
-                tracing::debug!("Filtered lazy override: {:016x}", path_hash);
-                return false;
-            }
+        if let Some(&original_hash) = content_hashes.get(&path_hash)
+            && meta.content_hash == original_hash
+        {
+            tracing::debug!("Filtered lazy override: {:016x}", path_hash);
+            return false;
         }
         true
     });
@@ -289,16 +288,16 @@ fn collect_or_cache_mod_metadata(
     game_dir: &Utf8Path,
 ) -> Result<HashMap<u64, OverrideMeta>> {
     // Cache hit — reconstruct from cached data without reading any files.
-    if let Some(fp) = fingerprint {
-        if let Some(cached) = meta_cache.get_mod_meta(&enabled_mod.id, fp) {
-            tracing::info!(
-                "Mod={} cache hit (fingerprint {:016x}), {} overrides",
-                enabled_mod.id,
-                fp,
-                cached.overrides.len()
-            );
-            return Ok(cached.reconstruct(&enabled_mod.id));
-        }
+    if let Some(fp) = fingerprint
+        && let Some(cached) = meta_cache.get_mod_meta(&enabled_mod.id, fp)
+    {
+        tracing::info!(
+            "Mod={} cache hit (fingerprint {:016x}), {} overrides",
+            enabled_mod.id,
+            fp,
+            cached.overrides.len()
+        );
+        return Ok(cached.reconstruct(&enabled_mod.id));
     }
 
     // Cache miss — collect fresh metadata from mod content.
@@ -325,7 +324,10 @@ impl OverlayBuilder {
     pub(crate) fn collect_all_override_metadata(
         &mut self,
         game_index: &GameIndex,
+        fingerprints: &[Option<u64>],
     ) -> Result<(HashMap<u64, OverrideMeta>, Vec<ModWadReport>)> {
+        debug_assert_eq!(fingerprints.len(), self.enabled_mods.len());
+
         let game_dir = &self.game_dir;
         let meta_cache_path = self.state_dir.join("override_meta.bin");
         let game_fp = game_index.game_fingerprint();
@@ -333,14 +335,6 @@ impl OverlayBuilder {
         // Load persistent metadata cache (invalidated when game is patched)
         let mut meta_cache = OverrideMetaCache::load(&meta_cache_path, game_fp)
             .unwrap_or_else(|| OverrideMetaCache::new(game_fp));
-
-        // Compute content fingerprints in parallel — each mod's fingerprint is
-        // independent (filesystem stat calls or archive metadata).
-        let fingerprints: Vec<Option<u64>> = self
-            .enabled_mods
-            .par_iter()
-            .map(|m| m.cache_fingerprint())
-            .collect();
 
         // For each mod: either use cache or collect fresh metadata.
         let mut per_mod_results: Vec<HashMap<u64, OverrideMeta>> =
@@ -357,11 +351,8 @@ impl OverlayBuilder {
             per_mod_results.push(mod_meta);
         }
 
-        // Build per-mod WAD reports while we still have the un-merged data.
-        // Reports are load-order independent because each is computed from a
-        // single mod's metadata only.
         let mod_wad_reports =
-            self.build_mod_wad_reports(&per_mod_results, &fingerprints, game_index);
+            self.build_mod_wad_reports(&per_mod_results, fingerprints, game_index);
 
         // Merge in reverse order (last mod first → first mod wins via last-writer-wins)
         let mut all_meta: HashMap<u64, OverrideMeta> = HashMap::new();

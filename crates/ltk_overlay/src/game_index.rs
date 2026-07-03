@@ -333,10 +333,10 @@ impl GameIndex {
         // a given path hash hold the same content. The first WAD is representative of the rest.
         let mut wad_to_hashes: HashMap<&Utf8PathBuf, Vec<u64>> = HashMap::new();
         for &ph in path_hashes {
-            if let Some(wad_paths) = self.hash_index.get(&ph) {
-                if let Some(first_wad) = wad_paths.first() {
-                    wad_to_hashes.entry(first_wad).or_default().push(ph);
-                }
+            if let Some(wad_paths) = self.hash_index.get(&ph)
+                && let Some(first_wad) = wad_paths.first()
+            {
+                wad_to_hashes.entry(first_wad).or_default().push(ph);
             }
         }
 
@@ -652,10 +652,10 @@ fn calculate_game_fingerprint(wad_paths: &[Utf8PathBuf]) -> u64 {
         if let Ok(metadata) = std::fs::metadata(path.as_std_path()) {
             // Include file size and modification time
             hasher_input.extend_from_slice(&metadata.len().to_le_bytes());
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    hasher_input.extend_from_slice(&duration.as_secs().to_le_bytes());
-                }
+            if let Ok(modified) = metadata.modified()
+                && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher_input.extend_from_slice(&duration.as_secs().to_le_bytes());
             }
         }
     }

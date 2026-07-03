@@ -4,10 +4,11 @@
 //! `overlay.json` inside the overlay directory. On the next build, the builder
 //! loads this file and compares it against the current configuration:
 //!
-//! - **Exact match** (same version, mods, game fingerprint, and per-WAD
-//!   fingerprints): the build is skipped entirely.
-//! - **Incremental** (same version and game fingerprint, but different mods):
-//!   only WADs whose override fingerprints changed are rebuilt.
+//! - **Exact match** (same version, mods, per-mod content fingerprints, game
+//!   fingerprint, blocked WADs, and string-override locales): the build is
+//!   skipped entirely.
+//! - **Incremental** (same version and game fingerprint, but different mods or
+//!   mod content): only WADs whose override fingerprints changed are rebuilt.
 //! - **Full rebuild** (version or game fingerprint mismatch): the overlay is
 //!   wiped and rebuilt from scratch.
 
@@ -20,19 +21,23 @@ use std::collections::BTreeMap;
 /// Current schema version. Bump this when the state format changes
 /// incompatibly — any state file with a different version triggers a full
 /// rebuild.
-const CURRENT_VERSION: u32 = 4;
+const CURRENT_VERSION: u32 = 5;
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
 ///
 /// Used to determine whether the existing overlay can be reused, incrementally
 /// updated, or needs a full rebuild.
 ///
-/// # JSON format (v4)
+/// # JSON format (v5)
 ///
 /// ```json
 /// {
-///   "version": 4,
+///   "version": 5,
 ///   "enabledMods": ["mod-a", "mod-b"],
+///   "modFingerprints": {
+///     "mod-a": 1122334455,
+///     "mod-b": 5544332211
+///   },
 ///   "gameFingerprint": 1234567890,
 ///   "blockedWads": ["scripts.wad.client"],
 ///   "wadFingerprints": {
@@ -43,13 +48,26 @@ const CURRENT_VERSION: u32 = 4;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
-    /// Schema version (current: `4`). Used for forward compatibility — if a
+    /// Schema version (current: `5`). Used for forward compatibility — if a
     /// future version changes the format, old overlays won't match.
     pub version: u32,
 
     /// Ordered list of enabled mod IDs at the time the overlay was built.
     /// Order matters because it determines conflict resolution.
     pub enabled_mods: Vec<String>,
+
+    /// Per-mod content fingerprints at the time the overlay was built, from
+    /// [`EnabledMod::cache_fingerprint`](crate::EnabledMod::cache_fingerprint).
+    ///
+    /// Mod IDs alone are not enough for the exact-match skip: mutable content
+    /// sources (a workshop project directory, an archive replaced in place)
+    /// keep their ID when their content changes. Comparing fingerprints in
+    /// [`matches`](Self::matches) makes content edits invalidate the skip.
+    ///
+    /// Mods whose provider could not compute a fingerprint are absent from the
+    /// map, which makes the exact-match comparison fail conservatively.
+    #[serde(default)]
+    pub mod_fingerprints: BTreeMap<String, u64>,
 
     /// xxHash3 fingerprint of the game directory's WAD files.
     /// Changes when the game is patched (file sizes/timestamps differ).
@@ -89,6 +107,7 @@ impl Default for OverlayState {
         Self {
             version: CURRENT_VERSION,
             enabled_mods: Vec::new(),
+            mod_fingerprints: BTreeMap::new(),
             game_fingerprint: 0,
             blocked_wads: Vec::new(),
             string_override_locales: Vec::new(),
@@ -104,12 +123,14 @@ impl OverlayState {
     /// # Arguments
     ///
     /// * `enabled_mods` - List of enabled mod IDs in order
+    /// * `mod_fingerprints` - Per-mod content fingerprints (mods without one are absent)
     /// * `game_fingerprint` - Fingerprint of the game directory
     /// * `blocked_wads` - Sorted list of lowercased blocked WAD filenames
     /// * `string_override_locales` - Sorted list of lowercased string-override target locales
     /// * `wad_fingerprints` - Per-WAD override fingerprints
     pub fn new(
         enabled_mods: Vec<String>,
+        mod_fingerprints: BTreeMap<String, u64>,
         game_fingerprint: u64,
         blocked_wads: Vec<String>,
         string_override_locales: Vec<String>,
@@ -118,6 +139,7 @@ impl OverlayState {
         Self {
             version: CURRENT_VERSION,
             enabled_mods,
+            mod_fingerprints,
             game_fingerprint,
             blocked_wads,
             string_override_locales,
@@ -165,8 +187,9 @@ impl OverlayState {
     /// Check if this state is an exact match for the current configuration.
     ///
     /// Returns `true` if:
-    /// - Version matches the current version (4)
+    /// - Version matches the current version (5)
     /// - Enabled mods list matches exactly (same IDs, same order)
+    /// - Per-mod content fingerprints match exactly
     /// - Game fingerprint matches
     /// - Blocked WADs list matches
     /// - String-override target locales match
@@ -177,18 +200,24 @@ impl OverlayState {
     /// # Arguments
     ///
     /// * `enabled_mod_ids` - Current list of enabled mod IDs
+    /// * `mod_fingerprints` - Current per-mod content fingerprints, or `None`
+    ///   when any enabled mod's provider could not compute one. `None` never
+    ///   matches — without a complete fingerprint set there is no way to prove
+    ///   the mod content is unchanged, so the skip must not be taken.
     /// * `game_fingerprint` - Current game fingerprint
     /// * `blocked_wads` - Current sorted list of blocked WAD filenames
     /// * `string_override_locales` - Current sorted list of string-override target locales
     pub fn matches(
         &self,
         enabled_mod_ids: &[String],
+        mod_fingerprints: Option<&BTreeMap<String, u64>>,
         game_fingerprint: u64,
         blocked_wads: &[String],
         string_override_locales: &[String],
     ) -> bool {
         self.version == CURRENT_VERSION
             && self.enabled_mods == enabled_mod_ids
+            && mod_fingerprints.is_some_and(|fps| &self.mod_fingerprints == fps)
             && self.game_fingerprint == game_fingerprint
             && self.blocked_wads == blocked_wads
             && self.string_override_locales == string_override_locales
@@ -227,6 +256,10 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    fn fps(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
     #[test]
     fn test_default_state() {
         let state = OverlayState::default();
@@ -239,8 +272,10 @@ mod tests {
     #[test]
     fn test_new_state() {
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
+        let fingerprints = fps(&[("mod1", 0xA1), ("mod2", 0xB2)]);
         let state = OverlayState::new(
             mods.clone(),
+            fingerprints.clone(),
             0x123456,
             Vec::new(),
             Vec::new(),
@@ -249,6 +284,7 @@ mod tests {
 
         assert_eq!(state.version, CURRENT_VERSION);
         assert_eq!(state.enabled_mods, mods);
+        assert_eq!(state.mod_fingerprints, fingerprints);
         assert_eq!(state.game_fingerprint, 0x123456);
         assert!(state.blocked_wads.is_empty());
         assert!(state.wad_fingerprints.is_empty());
@@ -265,6 +301,7 @@ mod tests {
 
         let state = OverlayState::new(
             vec!["mod1".to_string()],
+            BTreeMap::new(),
             0x123,
             Vec::new(),
             Vec::new(),
@@ -285,21 +322,24 @@ mod tests {
     #[test]
     fn test_matches_identical() {
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
+        let fingerprints = fps(&[("mod1", 0xA1), ("mod2", 0xB2)]);
         let state = OverlayState::new(
             mods.clone(),
+            fingerprints.clone(),
             0x123456,
             Vec::new(),
             Vec::new(),
             BTreeMap::new(),
         );
 
-        assert!(state.matches(&mods, 0x123456, &[], &[]));
+        assert!(state.matches(&mods, Some(&fingerprints), 0x123456, &[], &[]));
     }
 
     #[test]
     fn test_matches_different_mods() {
         let state = OverlayState::new(
             vec!["mod1".to_string()],
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             Vec::new(),
@@ -307,13 +347,14 @@ mod tests {
         );
         let other_mods = vec!["mod2".to_string()];
 
-        assert!(!state.matches(&other_mods, 0x123456, &[], &[]));
+        assert!(!state.matches(&other_mods, Some(&BTreeMap::new()), 0x123456, &[], &[]));
     }
 
     #[test]
     fn test_matches_different_order() {
         let state = OverlayState::new(
             vec!["mod1".to_string(), "mod2".to_string()],
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             Vec::new(),
@@ -321,7 +362,7 @@ mod tests {
         );
         let other_mods = vec!["mod2".to_string(), "mod1".to_string()];
 
-        assert!(!state.matches(&other_mods, 0x123456, &[], &[]));
+        assert!(!state.matches(&other_mods, Some(&BTreeMap::new()), 0x123456, &[], &[]));
     }
 
     #[test]
@@ -329,31 +370,87 @@ mod tests {
         let mods = vec!["mod1".to_string()];
         let state = OverlayState::new(
             mods.clone(),
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             Vec::new(),
             BTreeMap::new(),
         );
 
-        assert!(!state.matches(&mods, 0x789ABC, &[], &[]));
+        assert!(!state.matches(&mods, Some(&BTreeMap::new()), 0x789ABC, &[], &[]));
     }
 
     #[test]
     fn test_matches_different_blocked_wads() {
         let mods = vec!["mod1".to_string()];
         let blocked = vec!["map22.wad.client".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, blocked, Vec::new(), BTreeMap::new());
+        let state = OverlayState::new(
+            mods.clone(),
+            BTreeMap::new(),
+            0x123456,
+            blocked,
+            Vec::new(),
+            BTreeMap::new(),
+        );
 
         // Different blocked_wads should not match
-        assert!(!state.matches(&mods, 0x123456, &[], &[]));
+        assert!(!state.matches(&mods, Some(&BTreeMap::new()), 0x123456, &[], &[]));
         // Same blocked_wads should match
-        assert!(state.matches(&mods, 0x123456, &["map22.wad.client".to_string()], &[]));
+        assert!(state.matches(
+            &mods,
+            Some(&BTreeMap::new()),
+            0x123456,
+            &["map22.wad.client".to_string()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn test_matches_mod_fingerprints() {
+        let mods = vec!["workshop:proj".to_string()];
+        let fingerprints = fps(&[("workshop:proj", 0xAAAA)]);
+        let state = OverlayState::new(
+            mods.clone(),
+            fingerprints.clone(),
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+
+        assert!(state.matches(&mods, Some(&fingerprints), 0x123456, &[], &[]));
+
+        // Same mod ID with changed content must invalidate the exact-match skip.
+        let changed = fps(&[("workshop:proj", 0xBBBB)]);
+        assert!(!state.matches(&mods, Some(&changed), 0x123456, &[], &[]));
+
+        // Unknown current fingerprints can never prove content is unchanged.
+        assert!(!state.matches(&mods, None, 0x123456, &[], &[]));
+    }
+
+    #[test]
+    fn test_matches_incomplete_stored_fingerprints() {
+        // State built when a provider couldn't fingerprint: the mod is absent
+        // from the stored map, so even a complete current set must not match.
+        let mods = vec!["mod1".to_string()];
+        let state = OverlayState::new(
+            mods.clone(),
+            BTreeMap::new(),
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+
+        let current = fps(&[("mod1", 0xAAAA)]);
+        assert!(!state.matches(&mods, Some(&current), 0x123456, &[], &[]));
     }
 
     #[test]
     fn test_supports_incremental() {
         let state = OverlayState::new(
             vec!["mod1".to_string()],
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             Vec::new(),
@@ -377,7 +474,13 @@ mod tests {
         assert!(state.blocked_wads.is_empty());
         assert!(state.wad_fingerprints.is_empty());
         assert!(!state.supports_incremental(1234));
-        assert!(!state.matches(&[String::from("mod1")], 1234, &[], &[]));
+        assert!(!state.matches(
+            &[String::from("mod1")],
+            Some(&BTreeMap::new()),
+            1234,
+            &[],
+            &[]
+        ));
     }
 
     #[test]
@@ -389,7 +492,15 @@ mod tests {
         wad_fps.insert("DATA/FINAL/test.wad.client".to_string(), 0xABC);
 
         let mods = vec!["mod1".to_string(), "mod2".to_string()];
-        let state = OverlayState::new(mods.clone(), 0x123456, Vec::new(), Vec::new(), wad_fps);
+        let fingerprints = fps(&[("mod1", 0xA1), ("mod2", 0xB2)]);
+        let state = OverlayState::new(
+            mods.clone(),
+            fingerprints,
+            0x123456,
+            Vec::new(),
+            Vec::new(),
+            wad_fps,
+        );
 
         // Save
         state.save(path).unwrap();
@@ -398,6 +509,7 @@ mod tests {
         let loaded = OverlayState::load(path).unwrap().unwrap();
         assert_eq!(loaded.version, state.version);
         assert_eq!(loaded.enabled_mods, state.enabled_mods);
+        assert_eq!(loaded.mod_fingerprints, state.mod_fingerprints);
         assert_eq!(loaded.game_fingerprint, state.game_fingerprint);
         assert_eq!(loaded.wad_fingerprints, state.wad_fingerprints);
     }
@@ -427,6 +539,7 @@ mod tests {
     fn test_serialization_format() {
         let state = OverlayState::new(
             vec!["mod1".to_string()],
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             Vec::new(),
@@ -434,8 +547,9 @@ mod tests {
         );
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("\"version\":4"));
+        assert!(json.contains("\"version\":5"));
         assert!(json.contains("\"enabledMods\""));
+        assert!(json.contains("\"modFingerprints\""));
         assert!(json.contains("\"gameFingerprint\""));
         assert!(json.contains("\"blockedWads\""));
         assert!(json.contains("\"stringOverrideLocales\""));
@@ -448,21 +562,31 @@ mod tests {
         let locales = vec!["en_us".to_string()];
         let state = OverlayState::new(
             mods.clone(),
+            BTreeMap::new(),
             0x123456,
             Vec::new(),
             locales.clone(),
             BTreeMap::new(),
         );
 
-        assert!(state.matches(&mods, 0x123456, &[], &locales));
+        let no_fps = BTreeMap::new();
+        assert!(state.matches(&mods, Some(&no_fps), 0x123456, &[], &locales));
         // Toggling the target locales must invalidate the exact-match skip.
-        assert!(!state.matches(&mods, 0x123456, &[], &[]));
-        assert!(!state.matches(&mods, 0x123456, &[], &["ko_kr".to_string()]));
+        assert!(!state.matches(&mods, Some(&no_fps), 0x123456, &[], &[]));
+        assert!(!state.matches(&mods, Some(&no_fps), 0x123456, &[], &["ko_kr".to_string()]));
+    }
 
-        // A pre-feature state file (no stringOverrideLocales) defaults to empty,
-        // so existing users without string overrides keep their skip path.
+    #[test]
+    fn test_v4_state_triggers_full_rebuild() {
+        // A v4 state file (no modFingerprints) deserializes with an empty map,
+        // and the version bump makes both the exact-match skip and the
+        // incremental path reject it — one clean rebuild on upgrade.
+        let mods = vec!["mod1".to_string()];
         let v4_json = r#"{"version":4,"enabledMods":["mod1"],"gameFingerprint":1234}"#;
         let old: OverlayState = serde_json::from_str(v4_json).unwrap();
-        assert!(old.matches(&mods, 1234, &[], &[]));
+
+        assert!(old.mod_fingerprints.is_empty());
+        assert!(!old.matches(&mods, Some(&BTreeMap::new()), 1234, &[], &[]));
+        assert!(!old.supports_incremental(1234));
     }
 }

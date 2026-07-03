@@ -97,16 +97,15 @@ impl OverlayBuilder {
             let wad_path = Utf8PathBuf::from(wad_path_str);
             let overlay_wad = self.overlay_root.join(&wad_path);
 
-            if can_incremental {
-                if let Some(ref state) = prev_state {
-                    if let Some(old_fp) = state.wad_fingerprint(wad_path_str) {
-                        if old_fp == new_fp && overlay_wad.as_std_path().exists() {
-                            tracing::debug!("Reusing WAD: {}", wad_path);
-                            wads_to_reuse.push(wad_path);
-                            continue;
-                        }
-                    }
-                }
+            if can_incremental
+                && let Some(state) = prev_state
+                && let Some(old_fp) = state.wad_fingerprint(wad_path_str)
+                && old_fp == new_fp
+                && overlay_wad.as_std_path().exists()
+            {
+                tracing::debug!("Reusing WAD: {}", wad_path);
+                wads_to_reuse.push(wad_path);
+                continue;
             }
 
             tracing::debug!("Need to rebuild WAD: {}", wad_path);

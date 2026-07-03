@@ -18,8 +18,8 @@
 //! - **Everything else**: compressed with Zstd at level 3.
 
 use crate::error::{Error, Result};
-use byteorder::{WriteBytesExt, LE};
-use camino::Utf8Path;
+use byteorder::{LE, WriteBytesExt};
+use camino::{Utf8Path, Utf8PathBuf};
 use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
 use std::collections::HashSet;
@@ -58,6 +58,9 @@ pub struct PatchedWadStats {
 ///
 /// Parent directories for `dst_wad_path` are created automatically.
 ///
+/// The WAD is written to a sibling `.tmp` file and renamed into place atomically once
+/// complete.
+///
 /// # Arguments
 ///
 /// * `src_wad_path` — Absolute path to the original game WAD file.
@@ -75,6 +78,38 @@ pub struct PatchedWadStats {
 /// [`PatchedWadStats`] with build metrics (chunk counts, timing).
 pub fn build_patched_wad<B: AsRef<[u8]>>(
     src_wad_path: &Utf8Path,
+    dst_wad_path: &Utf8Path,
+    override_hashes: &HashSet<u64>,
+    resolve_override: impl FnMut(u64) -> Result<B>,
+) -> Result<PatchedWadStats> {
+    if let Some(parent) = dst_wad_path.parent() {
+        std::fs::create_dir_all(parent.as_std_path())?;
+    }
+
+    let tmp_path = Utf8PathBuf::from(format!("{dst_wad_path}.tmp"));
+    match write_patched_wad(
+        src_wad_path,
+        &tmp_path,
+        dst_wad_path,
+        override_hashes,
+        resolve_override,
+    ) {
+        Ok(stats) => {
+            std::fs::rename(tmp_path.as_std_path(), dst_wad_path.as_std_path())?;
+            Ok(stats)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(tmp_path.as_std_path());
+            Err(e)
+        }
+    }
+}
+
+/// Write the patched WAD to `out_path` (the temp file). `dst_wad_path` is only
+/// used for logging so messages show the real destination.
+fn write_patched_wad<B: AsRef<[u8]>>(
+    src_wad_path: &Utf8Path,
+    out_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
     override_hashes: &HashSet<u64>,
     mut resolve_override: impl FnMut(u64) -> Result<B>,
@@ -114,13 +149,9 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 
     let mut overrides_applied = 0usize;
 
-    if let Some(parent) = dst_wad_path.parent() {
-        std::fs::create_dir_all(parent.as_std_path())?;
-    }
-
     let mut writer = BufWriter::with_capacity(
         WRITE_BUFFER_SIZE,
-        std::fs::File::create(dst_wad_path.as_std_path())?,
+        std::fs::File::create(out_path.as_std_path())?,
     );
 
     // Write header

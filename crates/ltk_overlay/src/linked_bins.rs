@@ -116,7 +116,7 @@ pub(crate) fn collect_linked_bin_offenders(
 /// Returns `Some(links)` for a well-formed bin (empty when it declares none) and
 /// `None` when the bytes are not a property-bin or are truncated.
 pub(crate) fn parse_linked_bins(bytes: &[u8]) -> Option<Vec<String>> {
-    use byteorder::{ReadBytesExt, LE};
+    use byteorder::{LE, ReadBytesExt};
     use std::io::Read;
 
     let mut cursor = std::io::Cursor::new(bytes);
@@ -158,7 +158,7 @@ pub(crate) fn parse_linked_bins(bytes: &[u8]) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use crate::builder::OverrideSource;
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
     use std::io::Write;
 
     /// Build a minimal PROP bin body with the given version and linked paths.

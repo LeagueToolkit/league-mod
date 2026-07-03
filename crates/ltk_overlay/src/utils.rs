@@ -72,10 +72,11 @@ pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
     let file_stem = Utf8Path::new(file_name).file_stem().unwrap_or("");
 
     // If this is a hex-hash filename (as emitted by HexPathResolver), use it directly
-    if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
-        if let Ok(v) = u64::from_str_radix(file_stem, 16) {
-            return Ok(v);
-        }
+    if file_stem.len() == 16
+        && file_stem.chars().all(|c| c.is_ascii_hexdigit())
+        && let Ok(v) = u64::from_str_radix(file_stem, 16)
+    {
+        return Ok(v);
     }
 
     // Otherwise, compute from normalized path

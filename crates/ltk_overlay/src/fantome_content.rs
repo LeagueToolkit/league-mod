@@ -8,15 +8,15 @@
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
 
-use crate::content::{archive_fingerprint, ModContentProvider};
+use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{default_layers, ModProject, ModProjectAuthor, ModProjectLayer};
+use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, default_layers};
 use ltk_wad::Wad;
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
-use zip::read::ZipFile;
 use zip::ZipArchive;
+use zip::read::ZipFile;
 
 /// Read a ZIP entry's uncompressed bytes, bypassing the zip crate's CRC32 check.
 ///
@@ -88,29 +88,30 @@ impl FantomeIndex {
                     // Packed WAD file directly under WAD/.
                     let key = relative.to_ascii_lowercase();
                     packed_wad_paths.insert(key, name);
-                } else if let Some(wad_name) = relative.split('/').next() {
-                    if is_wad_file_name(wad_name) {
-                        let rel = relative
-                            .strip_prefix(wad_name)
-                            .and_then(|s| s.strip_prefix('/'))
-                            .unwrap_or("");
-                        if !rel.is_empty() {
-                            // Own the key/rel so `name` is free to move below.
-                            let key = wad_name.to_ascii_lowercase();
-                            let rel = rel.to_string();
-                            wad_dir_entries.entry(key).or_default().push((name, rel));
-                        }
+                } else if let Some(wad_name) = relative.split('/').next()
+                    && is_wad_file_name(wad_name)
+                {
+                    let rel = relative
+                        .strip_prefix(wad_name)
+                        .and_then(|s| s.strip_prefix('/'))
+                        .unwrap_or("");
+                    if !rel.is_empty() {
+                        // Own the key/rel so `name` is free to move below.
+                        let key = wad_name.to_ascii_lowercase();
+                        let rel = rel.to_string();
+                        wad_dir_entries.entry(key).or_default().push((name, rel));
                     }
                 }
                 continue;
             }
 
             // RAW/ entries (prefix matched case-insensitively)
-            if let Some(relative) = strip_prefix_ci(&name, "RAW/") {
-                if !relative.is_empty() && !is_dir {
-                    let relative = relative.to_string();
-                    raw_entries.push((name, relative));
-                }
+            if let Some(relative) = strip_prefix_ci(&name, "RAW/")
+                && !relative.is_empty()
+                && !is_dir
+            {
+                let relative = relative.to_string();
+                raw_entries.push((name, relative));
             }
         }
 
@@ -360,16 +361,17 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 .file_stem()
                 .unwrap_or("");
 
-            if file_stem.len() == 16 && file_stem.chars().all(|c| c.is_ascii_hexdigit()) {
-                if let Ok(target_hash) = u64::from_str_radix(file_stem, 16) {
-                    let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
-                        Error::Other(format!(
-                            "WAD chunk {:016x} not found in packed WAD",
-                            target_hash
-                        ))
-                    })?;
-                    return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
-                }
+            if file_stem.len() == 16
+                && file_stem.chars().all(|c| c.is_ascii_hexdigit())
+                && let Ok(target_hash) = u64::from_str_radix(file_stem, 16)
+            {
+                let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
+                    Error::Other(format!(
+                        "WAD chunk {:016x} not found in packed WAD",
+                        target_hash
+                    ))
+                })?;
+                return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
             }
         }
 
