@@ -42,14 +42,19 @@
 //! # Incremental Rebuild
 //!
 //! After a successful build, an `overlay.json` state file is persisted (in the
-//! *state directory*) containing the list of enabled mod IDs, a game directory
-//! fingerprint, and per-WAD override fingerprints. On the next build:
+//! *state directory*) containing the list of enabled mod IDs, per-mod content
+//! fingerprints, a game directory fingerprint, and per-WAD override
+//! fingerprints. On the next build:
 //!
-//! - **Exact match**: mod list, game fingerprint, and all per-WAD fingerprints match,
-//!   and every overlay WAD exists on disk — the build is skipped entirely.
-//! - **Incremental**: game fingerprint matches but the mod list changed. Per-WAD
-//!   override fingerprints are compared and only WADs whose inputs changed are
-//!   re-patched. Stale WADs (no longer needed) are removed.
+//! - **Exact match**: mod list, per-mod content fingerprints, and game
+//!   fingerprint match, and every overlay WAD exists on disk — the build is
+//!   skipped entirely. Content fingerprints participate so that mutable
+//!   sources (e.g. a workshop project directory edited between test runs)
+//!   invalidate the skip even though their mod ID is unchanged.
+//! - **Incremental**: game fingerprint matches but the mod list or some mod's
+//!   content changed. Per-WAD override fingerprints are compared and only WADs
+//!   whose inputs changed are re-patched. Stale WADs (no longer needed) are
+//!   removed.
 //! - **Full rebuild**: game fingerprint or state version changed — all overlay WADs
 //!   are wiped and rebuilt from scratch.
 //!
@@ -99,13 +104,10 @@ pub mod strings;
 pub mod utils;
 pub mod wad_builder;
 
-#[cfg(test)]
-mod strings_integration_tests;
-
 // Re-export main public API.
 pub use builder::{
-    AffectedWad, EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder, OverlayProgress,
-    OverlayStage, BASE_LAYER_NAME,
+    AffectedWad, BASE_LAYER_NAME, EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder,
+    OverlayProgress, OverlayStage,
 };
 pub use content::{FsModContent, ModContentProvider};
 pub use error::{Error, Result};

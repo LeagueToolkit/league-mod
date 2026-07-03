@@ -4,7 +4,7 @@
 //! access to layer structure, WAD targets, and override file data without
 //! extracting to disk.
 
-use crate::content::{archive_fingerprint, ModContentProvider};
+use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
@@ -95,10 +95,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
                 .modpkg
                 .chunks_for_wad_layer(wad_idx as u32, layer_index)
                 .is_empty()
+                && let Some(name) = self.modpkg.wad_name_for_index(wad_idx as u32)
             {
-                if let Some(name) = self.modpkg.wad_name_for_index(wad_idx as u32) {
-                    wad_names.push(name.to_string());
-                }
+                wad_names.push(name.to_string());
             }
         }
 

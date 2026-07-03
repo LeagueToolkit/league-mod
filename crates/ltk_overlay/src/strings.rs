@@ -699,9 +699,11 @@ mod tests {
             subchunktoc_blocked: HashSet::new(),
         };
 
-        assert!(StringOverrideMode::Disabled
-            .resolve_locales(&game_index)
-            .is_empty());
+        assert!(
+            StringOverrideMode::Disabled
+                .resolve_locales(&game_index)
+                .is_empty()
+        );
         assert_eq!(
             StringOverrideMode::Locales(vec!["en_US".to_string(), "en_us".to_string()])
                 .resolve_locales(&game_index),

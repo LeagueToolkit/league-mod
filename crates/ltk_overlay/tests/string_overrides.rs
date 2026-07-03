@@ -1,16 +1,24 @@
 //! End-to-end tests for string override application through the full
 //! `OverlayBuilder::build` pipeline, against a synthetic game directory.
 
-use crate::content::FsModContent;
-use crate::fantome_content::FantomeContent;
-use crate::strings::{stringtable_chunk_hash, StringOverrideMode};
-use crate::{EnabledMod, OverlayBuilder, OverlayStage};
+use ltk_overlay::{
+    EnabledMod, FantomeContent, FsModContent, OverlayBuilder, OverlayStage, StringOverrideMode,
+};
+
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::sync::{Arc, Mutex};
+
+/// Mirror of the crate-private `strings::stringtable_chunk_hash` — the WAD
+/// chunk path hash of `data/menu/{locale}/lol.stringtable`.
+fn stringtable_chunk_hash(locale: &str) -> u64 {
+    ltk_modpkg::utils::hash_chunk_name(&ltk_modpkg::utils::normalize_chunk_path(&format!(
+        "data/menu/{locale}/lol.stringtable"
+    )))
+}
 
 fn make_stringtable(entries: &[(&str, &str)]) -> Vec<u8> {
     let mut table = ltk_rst::Stringtable::new();
@@ -181,14 +189,18 @@ fn fs_mod_overrides_patch_game_stringtable() {
 
     let result = builder.build().unwrap();
     assert_eq!(result.wads_built.len(), 1);
-    assert!(result.wads_built[0]
-        .as_str()
-        .ends_with("Global.en_US.wad.client"));
-    assert!(stages
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|s| s == &format!("{:?}", OverlayStage::ApplyingStringOverrides)));
+    assert!(
+        result.wads_built[0]
+            .as_str()
+            .ends_with("Global.en_US.wad.client")
+    );
+    assert!(
+        stages
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s == &format!("{:?}", OverlayStage::ApplyingStringOverrides))
+    );
 
     let table = read_overlay_table(&env.overlay_root, "en_US");
     assert_eq!(table.get_key("game_client_quit"), Some("Bye"));
@@ -204,9 +216,11 @@ fn fs_mod_overrides_patch_game_stringtable() {
     builder = builder.with_string_overrides(StringOverrideMode::Disabled);
     let disabled = builder.build().unwrap();
     assert!(disabled.wads_built.is_empty());
-    assert!(!overlay_stringtable_path(&env.overlay_root, "en_US")
-        .as_std_path()
-        .exists());
+    assert!(
+        !overlay_stringtable_path(&env.overlay_root, "en_US")
+            .as_std_path()
+            .exists()
+    );
 }
 
 #[test]
@@ -338,9 +352,11 @@ fn mod_shipped_stringtable_is_rejected_even_with_string_patching_disabled() {
         result.wads_built.is_empty(),
         "a rejected stringtable chunk must not produce an overlay WAD"
     );
-    assert!(!overlay_stringtable_path(&env.overlay_root, "en_US")
-        .as_std_path()
-        .exists());
+    assert!(
+        !overlay_stringtable_path(&env.overlay_root, "en_US")
+            .as_std_path()
+            .exists()
+    );
 }
 
 #[test]
