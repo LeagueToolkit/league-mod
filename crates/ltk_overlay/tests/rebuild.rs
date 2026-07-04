@@ -229,3 +229,50 @@ fn failed_wad_build_leaves_no_partial_file() {
         .unwrap_or_default();
     assert!(leftovers.is_empty(), "unexpected leftovers: {leftovers:?}");
 }
+
+/// The patched WAD must carry the source WAD's header signature and checksum
+/// verbatim — Riot's RSA signature over the original TOC is the provenance
+/// record that ltk_sig's merged-WAD verification recovers from overlay files.
+#[test]
+fn patched_wad_preserves_original_signature_and_checksum() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+    let signature = [0xA5u8; 256];
+    let checksum = 0xDEAD_BEEF_CAFE_F00D_u64;
+
+    // A "signed" game WAD with one chunk.
+    let mut cursor = Cursor::new(Vec::new());
+    WadBuilder::default()
+        .with_prebuilt_signature(&signature)
+        .with_prebuilt_checksum(checksum)
+        .with_chunk(
+            WadChunkBuilder::default()
+                .with_path(CHUNK_PATH)
+                .with_force_compression(WadChunkCompression::None),
+        )
+        .build_to_writer(&mut cursor, |_hash, writer| {
+            writer.write_all(b"GAME_ORIGINAL")?;
+            Ok(())
+        })
+        .unwrap();
+    let src = root.join(GAME_WAD);
+    fs::write(src.as_std_path(), cursor.into_inner()).unwrap();
+
+    // Replace the existing chunk and insert a brand-new entry, covering both
+    // TOC-mutating paths.
+    let override_hash = resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap();
+    let new_hash = resolve_chunk_hash(Utf8Path::new("assets/new/entry.bin"), b"").unwrap();
+    let dst = root.join("out").join(GAME_WAD);
+    build_patched_wad(
+        &src,
+        &dst,
+        &HashSet::from([override_hash, new_hash]),
+        |_hash| -> Result<Vec<u8>> { Ok(b"MODDED".to_vec()) },
+    )
+    .unwrap();
+
+    let patched = Wad::mount(fs::File::open(dst.as_std_path()).unwrap()).unwrap();
+    assert_eq!(patched.signature(), &signature);
+    assert_eq!(patched.checksum(), checksum);
+}

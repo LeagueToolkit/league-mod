@@ -4,6 +4,13 @@
 //! and a set of override chunks, and produces a new WAD file containing all original
 //! chunks plus the overrides.
 //!
+//! # Signature Preservation
+//!
+//! The output header carries the original WAD's signature and checksum **verbatim**.
+//! Riot's RSA signature covers the original TOC, so it does not validate the patched
+//! TOC — it is preserved as provenance: verifiers (e.g. `ltk_sig`'s `WadMod` records)
+//! use it to prove which Riot-signed WAD the overlay was derived from.
+//!
 //! # Compression Strategy
 //!
 //! **Non-overridden chunks** are passed through as raw compressed bytes from the
@@ -55,6 +62,9 @@ pub struct PatchedWadStats {
 /// else is passed through as raw bytes from the original. Override hashes that don't
 /// exist in the source WAD are treated as **new entries** and inserted at the correct
 /// sorted position in the TOC.
+///
+/// The original WAD's header signature and checksum are copied through verbatim
+/// (see the [module docs](self) on signature preservation).
 ///
 /// Parent directories for `dst_wad_path` are created automatically.
 ///
@@ -159,9 +169,12 @@ fn write_patched_wad<B: AsRef<[u8]>>(
     writer.write_u8(3)?; // major version
     writer.write_u8(4)?; // minor version
 
-    // Write dummy ECDSA signature (256 bytes) + checksum (8 bytes)
-    writer.write_all(&[0u8; 256])?;
-    writer.write_u64::<LE>(0)?;
+    // Carry the source WAD's signature (256 bytes) + checksum (8 bytes) through
+    // verbatim. The signature covers the *original* TOC, not the patched one —
+    // preserving it lets verifiers (ltk_sig's WadMod records) recover the
+    // Riot-signed original TOC provenance from the overlay file.
+    writer.write_all(wad.signature())?;
+    writer.write_u64::<LE>(wad.checksum())?;
 
     // Write chunk count
     writer.write_u32::<LE>(ordered.len() as u32)?;
