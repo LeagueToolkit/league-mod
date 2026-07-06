@@ -9,6 +9,70 @@ use crate::wad_builder::build_patched_wad;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// Uncompressed override bytes shared across every WAD they are routed to; the
+/// WAD writer compresses them, so all copies of a shared chunk end up with the
+/// same compressed bytes and checksum.
+pub(crate) type ResolvedChunk = SharedBytes;
+
+struct ChunkSources<'a> {
+    /// Overrides read from mod content providers, grouped by mod id. Their bytes
+    /// are compressed by the writer.
+    by_mod: HashMap<&'a str, Vec<u64>>,
+
+    /// Synthetic stringtable patches, rebuilt from the game chunk + merged plan.
+    string_patches: Vec<u64>,
+}
+
+impl<'a> ChunkSources<'a> {
+    fn classify(needed_hashes: &HashSet<u64>, all_meta: &'a HashMap<u64, OverrideMeta>) -> Self {
+        let mut sources = ChunkSources {
+            by_mod: HashMap::new(),
+            string_patches: Vec::new(),
+        };
+
+        for &path_hash in needed_hashes {
+            let Some(meta) = all_meta.get(&path_hash) else {
+                continue;
+            };
+
+            match &meta.source {
+                OverrideSource::LayerWad { mod_id, .. } | OverrideSource::Raw { mod_id, .. } => {
+                    sources
+                        .by_mod
+                        .entry(mod_id.as_str())
+                        .or_default()
+                        .push(path_hash);
+                }
+                OverrideSource::StringPatch { .. } => sources.string_patches.push(path_hash),
+            }
+        }
+        sources
+    }
+}
+
+/// Spread the flat `resolved` map into the per-WAD maps the patch step consumes:
+/// each WAD gets a clone of the resolved chunk for every hash routed to it.
+fn distribute_resolved_to_wads(
+    wads_to_build: &[Utf8PathBuf],
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
+    resolved: &HashMap<u64, ResolvedChunk>,
+) -> BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>> {
+    let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>> = BTreeMap::new();
+    for wad_path in wads_to_build {
+        let Some(hashes) = wad_hash_sets.get(wad_path) else {
+            continue;
+        };
+        let mut per_wad: HashMap<u64, ResolvedChunk> = HashMap::with_capacity(hashes.len());
+        for &hash in hashes {
+            if let Some(chunk) = resolved.get(&hash) {
+                per_wad.insert(hash, chunk.clone());
+            }
+        }
+        wad_overrides.insert(wad_path.clone(), per_wad);
+    }
+    wad_overrides
+}
+
 impl OverlayBuilder {
     /// Distribute override path hashes to all affected WADs (lightweight).
     ///
@@ -128,26 +192,26 @@ impl OverlayBuilder {
         (wads_to_build, wads_to_reuse, new_wad_fingerprints)
     }
 
-    /// Re-read override bytes for WADs that need rebuilding (pass 2).
+    /// Resolve the bytes each rebuilding WAD needs (pass 2).
     ///
-    /// Groups needed overrides by source mod, reads each file once via the
-    /// targeted `read_wad_override_file` / `read_raw_override_file` methods,
-    /// wraps bytes in `Arc` for cross-WAD sharing, and distributes to per-WAD maps.
+    /// Every needed chunk is resolved once, from exactly one of two sources
+    /// (see [`ChunkSources`]), into a [`ResolvedChunk`], then the flat result is
+    /// spread across the per-WAD maps the patch step consumes:
     ///
-    /// [`OverrideSource::StringPatch`] entries have no provider to re-read from;
-    /// their bytes are generated here from the matching plan in `string_plans`
-    /// (the game's own stringtable chunk + key-level overrides). A failure to
-    /// read or patch a stringtable is logged and skipped — the locale's WAD is
-    /// still written, just without the string patch — instead of failing the
-    /// whole build.
+    /// - **Mod overrides** — read from each mod's content provider.
+    /// - **String patches** — the game's stringtable rebuilt with merged overrides.
+    ///
+    /// All bytes are uncompressed; the writer compresses them. A chunk routed to
+    /// several WADs shares one buffer, so each WAD compresses the same input and
+    /// every copy carries the same compressed checksum.
     pub(crate) fn resolve_overrides_for_wads(
         &mut self,
         wads_to_build: &[Utf8PathBuf],
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
         all_meta: &HashMap<u64, OverrideMeta>,
         string_plans: &HashMap<u64, StringPatchPlan>,
-    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>>> {
-        // Collect all unique path_hashes needed across WADs to build
+    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>>> {
+        // Every unique path hash needed across the WADs being rebuilt.
         let needed_hashes: HashSet<u64> = wads_to_build
             .iter()
             .filter_map(|wad_path| wad_hash_sets.get(wad_path))
@@ -158,24 +222,27 @@ impl OverlayBuilder {
             return Ok(BTreeMap::new());
         }
 
-        // Group needed hashes by source mod ID; string patches resolve separately.
-        let mut by_mod: HashMap<&str, Vec<u64>> = HashMap::new();
-        let mut string_patch_hashes: Vec<u64> = Vec::new();
-        for &path_hash in &needed_hashes {
-            if let Some(meta) = all_meta.get(&path_hash) {
-                let mod_id = match &meta.source {
-                    OverrideSource::LayerWad { mod_id, .. } => mod_id.as_str(),
-                    OverrideSource::Raw { mod_id, .. } => mod_id.as_str(),
-                    OverrideSource::StringPatch { .. } => {
-                        string_patch_hashes.push(path_hash);
-                        continue;
-                    }
-                };
-                by_mod.entry(mod_id).or_default().push(path_hash);
-            }
-        }
+        let sources = ChunkSources::classify(&needed_hashes, all_meta);
 
-        // Build mod ID -> index lookup for provider access
+        let mut resolved: HashMap<u64, ResolvedChunk> = HashMap::with_capacity(needed_hashes.len());
+        self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut resolved)?;
+        self.resolve_string_patches(&sources.string_patches, string_plans, &mut resolved)?;
+
+        Ok(distribute_resolved_to_wads(
+            wads_to_build,
+            wad_hash_sets,
+            &resolved,
+        ))
+    }
+
+    /// Resolve overrides read from mod content providers into uncompressed bytes,
+    /// reading each file once and cloning the bytes for every WAD that needs it.
+    fn resolve_provider_overrides(
+        &mut self,
+        by_mod: &HashMap<&str, Vec<u64>>,
+        all_meta: &HashMap<u64, OverrideMeta>,
+        resolved: &mut HashMap<u64, ResolvedChunk>,
+    ) -> Result<()> {
         let mod_id_to_index: HashMap<String, usize> = self
             .enabled_mods
             .iter()
@@ -183,10 +250,7 @@ impl OverlayBuilder {
             .map(|(i, m)| (m.id.clone(), i))
             .collect();
 
-        // Read bytes from each mod via targeted read methods
-        let mut resolved: HashMap<u64, SharedBytes> = HashMap::with_capacity(needed_hashes.len());
-
-        for (mod_id, hashes) in &by_mod {
+        for (mod_id, hashes) in by_mod {
             let Some(&idx) = mod_id_to_index.get(*mod_id) else {
                 return Err(Error::Other(format!(
                     "Override source references unknown mod '{}'",
@@ -196,8 +260,7 @@ impl OverlayBuilder {
             let provider = &mut self.enabled_mods[idx].content;
 
             for &path_hash in hashes {
-                let meta = &all_meta[&path_hash];
-                let bytes = match &meta.source {
+                let bytes = match &all_meta[&path_hash].source {
                     OverrideSource::LayerWad {
                         layer,
                         wad_name,
@@ -208,14 +271,29 @@ impl OverlayBuilder {
                         provider.read_raw_override_file(rel_path)?
                     }
                     OverrideSource::StringPatch { .. } => {
-                        unreachable!("StringPatch sources are filtered out of the by-mod grouping")
+                        unreachable!("StringPatch sources are not grouped by mod")
                     }
                 };
                 resolved.insert(path_hash, Arc::from(bytes));
             }
         }
 
-        for path_hash in string_patch_hashes {
+        Ok(())
+    }
+
+    /// Resolve synthetic stringtable patches into uncompressed bytes: the game's
+    /// own stringtable chunk rebuilt with the locale's merged key overrides.
+    ///
+    /// A read/patch failure is logged and that locale left unpatched — the WAD is
+    /// still written, just without the string patch — instead of failing the build.
+    /// A missing plan is an internal invariant violation and is a hard error.
+    fn resolve_string_patches(
+        &self,
+        string_patch_hashes: &[u64],
+        string_plans: &HashMap<u64, StringPatchPlan>,
+        resolved: &mut HashMap<u64, ResolvedChunk>,
+    ) -> Result<()> {
+        for &path_hash in string_patch_hashes {
             let plan = string_plans.get(&path_hash).ok_or_else(|| {
                 Error::Other(format!(
                     "Missing string patch plan for chunk {:016x}",
@@ -238,21 +316,7 @@ impl OverlayBuilder {
             }
         }
 
-        // Distribute resolved bytes to per-WAD maps
-        let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>> = BTreeMap::new();
-        for wad_path in wads_to_build {
-            if let Some(hashes) = wad_hash_sets.get(wad_path) {
-                let mut per_wad: HashMap<u64, SharedBytes> = HashMap::with_capacity(hashes.len());
-                for &hash in hashes {
-                    if let Some(bytes) = resolved.get(&hash) {
-                        per_wad.insert(hash, Arc::clone(bytes));
-                    }
-                }
-                wad_overrides.insert(wad_path.clone(), per_wad);
-            }
-        }
-
-        Ok(wad_overrides)
+        Ok(())
     }
 
     /// Patch WADs in parallel, emitting progress after each one completes.
@@ -262,7 +326,7 @@ impl OverlayBuilder {
     pub(crate) fn patch_wads_parallel(
         &self,
         wads_to_build: Vec<Utf8PathBuf>,
-        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, SharedBytes>>,
+        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>>,
     ) -> Result<Vec<Utf8PathBuf>> {
         let total_wads = wads_to_build.len() as u32;
         let completed = AtomicU32::new(0);
@@ -285,7 +349,7 @@ impl OverlayBuilder {
         });
 
         // Extract per-WAD overrides so each parallel task owns its data.
-        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, SharedBytes>)> = wads_to_build
+        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, ResolvedChunk>)> = wads_to_build
             .into_iter()
             .map(|path| {
                 let overrides = wad_overrides.remove(&path).unwrap_or_default();

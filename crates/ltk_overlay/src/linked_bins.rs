@@ -2,9 +2,8 @@
 //!
 //! League property-bins (`PROP`/`PTCH`) declare a list of *linked* bin paths they
 //! depend on. At load time the game resolves each linked path against the WAD it is
-//! mounted from; a missing dependency yields `STATUS_NOT_FOUND` (`c0000225`). The
-//! cslol patcher used to treat this as fatal but now only logs it and keeps patching,
-//! so a broken mod can silently destabilize the game.
+//! mounted from; a missing dependency yields `STATUS_NOT_FOUND` (`c0000225`), so a
+//! broken mod can silently destabilize the game.
 //!
 //! We replicate the check against the overlay we are about to write: a linked bin is
 //! considered missing when its chunk-path hash is absent from the overlay WAD that
@@ -261,7 +260,6 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/test.bin"),
             },
             fallback_wad: None,
-            fallback_only: false,
             linked_bins: linked.iter().map(|s| s.to_string()).collect(),
         }
     }

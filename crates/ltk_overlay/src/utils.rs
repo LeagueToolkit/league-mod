@@ -252,7 +252,6 @@ mod tests {
                         rel_path: Utf8PathBuf::from("dummy"),
                     },
                     fallback_wad: None,
-                    fallback_only: false,
                     linked_bins: Vec::new(),
                 },
             );
