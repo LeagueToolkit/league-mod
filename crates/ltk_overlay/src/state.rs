@@ -19,20 +19,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Current schema version. Bump this when the state format changes
-/// incompatibly — any state file with a different version triggers a full
-/// rebuild.
-const CURRENT_VERSION: u32 = 5;
+/// incompatibly, or when build semantics change such that WADs on disk may no
+/// longer match what a fresh build would produce — any state file with a
+/// different version triggers a full rebuild.
+const CURRENT_VERSION: u32 = 6;
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
 ///
 /// Used to determine whether the existing overlay can be reused, incrementally
 /// updated, or needs a full rebuild.
 ///
-/// # JSON format (v5)
+/// # JSON format (v6)
 ///
 /// ```json
 /// {
-///   "version": 5,
+///   "version": 6,
 ///   "enabledMods": ["mod-a", "mod-b"],
 ///   "modFingerprints": {
 ///     "mod-a": 1122334455,
@@ -48,7 +49,7 @@ const CURRENT_VERSION: u32 = 5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
-    /// Schema version (current: `5`). Used for forward compatibility — if a
+    /// Schema version (current: `6`). Used for forward compatibility — if a
     /// future version changes the format, old overlays won't match.
     pub version: u32,
 
@@ -187,7 +188,7 @@ impl OverlayState {
     /// Check if this state is an exact match for the current configuration.
     ///
     /// Returns `true` if:
-    /// - Version matches the current version (5)
+    /// - Version matches the current version (6)
     /// - Enabled mods list matches exactly (same IDs, same order)
     /// - Per-mod content fingerprints match exactly
     /// - Game fingerprint matches
@@ -547,7 +548,7 @@ mod tests {
         );
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("\"version\":5"));
+        assert!(json.contains("\"version\":6"));
         assert!(json.contains("\"enabledMods\""));
         assert!(json.contains("\"modFingerprints\""));
         assert!(json.contains("\"gameFingerprint\""));

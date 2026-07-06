@@ -19,7 +19,7 @@ impl OverlayBuilder {
         all_meta: &HashMap<u64, OverrideMeta>,
         game_index: &GameIndex,
     ) -> BTreeMap<Utf8PathBuf, HashSet<u64>> {
-        let mut wad_hash_sets: BTreeMap<Utf8PathBuf, HashSet<u64>> = BTreeMap::new();
+        let mut wad_hash_sets: BTreeMap<&Utf8Path, HashSet<u64>> = BTreeMap::new();
         let mut new_entry_count = 0usize;
         let mut dropped_count = 0usize;
 
@@ -27,13 +27,13 @@ impl OverlayBuilder {
             if let Some(wad_paths) = game_index.find_wads_with_hash(path_hash) {
                 for wad_path in wad_paths {
                     wad_hash_sets
-                        .entry(wad_path.clone())
+                        .entry(wad_path.as_path())
                         .or_default()
                         .insert(path_hash);
                 }
             } else if let Some(fallback) = &meta.fallback_wad {
                 wad_hash_sets
-                    .entry(fallback.clone())
+                    .entry(fallback.as_path())
                     .or_default()
                     .insert(path_hash);
                 new_entry_count += 1;
@@ -68,6 +68,9 @@ impl OverlayBuilder {
         );
 
         wad_hash_sets
+            .into_iter()
+            .map(|(path, hashes)| (path.to_path_buf(), hashes))
+            .collect()
     }
 
     /// Compute per-WAD fingerprints from metadata and partition into rebuild vs reuse.

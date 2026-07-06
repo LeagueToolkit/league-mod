@@ -12,7 +12,11 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// Current cache format version. Bump when the serialized format changes.
-const CACHE_VERSION: u32 = 3;
+///
+/// v4: cached metadata is now post-filter (SubChunkTOC / stringtable / lazy
+/// overrides already stripped); v3 caches hold unfiltered entries and must be
+/// discarded.
+const CACHE_VERSION: u32 = 4;
 
 /// Serializable cache entry for a single override.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -43,7 +47,10 @@ pub struct CachedOverride {
 pub struct CachedModMeta {
     /// Fingerprint that was current when this cache entry was written.
     pub content_fingerprint: u64,
-    /// All overrides from this mod.
+    /// All overrides from this mod, post-filter (SubChunkTOC / stringtable /
+    /// lazy overrides already stripped). Both filter inputs are covered by the
+    /// cache keys: mod content by `content_fingerprint`, game content by the
+    /// cache-wide game fingerprint.
     pub overrides: Vec<CachedOverride>,
 }
 
