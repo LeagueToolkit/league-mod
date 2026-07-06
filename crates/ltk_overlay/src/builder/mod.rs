@@ -291,6 +291,12 @@ pub struct AffectedWad {
 /// potential WAD footprint regardless of which other mods are enabled
 /// alongside it.
 ///
+/// Overrides that can never reach the overlay — SubChunkTOC entries,
+/// mod-shipped stringtable chunks, and lazy overrides byte-identical to the
+/// game originals — are excluded before the report is computed, so the
+/// reported footprint matches the WADs an overlay build of this mod alone
+/// would actually write.
+///
 /// Reports are produced in two ways:
 ///
 /// 1. As a side effect of [`OverlayBuilder::build`], which captures one report
@@ -336,14 +342,14 @@ impl ModWadReport {
         content_fingerprint: Option<u64>,
         game_index: &GameIndex,
     ) -> Self {
-        let mut counts: BTreeMap<Utf8PathBuf, u32> = BTreeMap::new();
+        let mut counts: BTreeMap<&Utf8Path, u32> = BTreeMap::new();
         for (path_hash, meta) in mod_meta {
             if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
                 for wp in wad_paths {
-                    *counts.entry(wp.clone()).or_insert(0) += 1;
+                    *counts.entry(wp.as_path()).or_insert(0) += 1;
                 }
             } else if let Some(fallback) = &meta.fallback_wad {
-                *counts.entry(fallback.clone()).or_insert(0) += 1;
+                *counts.entry(fallback.as_path()).or_insert(0) += 1;
             }
         }
 
@@ -352,7 +358,7 @@ impl ModWadReport {
             affected_wads: counts
                 .into_iter()
                 .map(|(path, override_count)| AffectedWad {
-                    path: path.into_string().into_boxed_str(),
+                    path: path.as_str().into(),
                     override_count,
                 })
                 .collect(),
