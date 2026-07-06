@@ -13,9 +13,9 @@ use std::collections::HashMap;
 
 /// Current cache format version. Bump when the serialized format changes.
 ///
-/// v5: adds `fallback_only` and keeps byte-identical cross-WAD imports; v4
-/// caches were filtered under the old lazy rule that dropped those imports
-/// entirely, so they must be discarded.
+/// v5: keeps byte-identical cross-WAD imports; v4 caches were filtered under
+/// the old lazy rule that dropped those imports entirely, so they must be
+/// discarded.
 ///
 /// v4: cached metadata is now post-filter (SubChunkTOC / stringtable / lazy
 /// overrides already stripped); v3 caches hold unfiltered entries and must be
@@ -47,11 +47,6 @@ pub struct CachedOverride {
     /// otherwise. Cached so unchanged mods need no re-parse for the linked-bin check.
     #[serde(default)]
     pub linked_bins: Vec<String>,
-
-    /// Route exclusively to `target_wad`, skipping hash-based routing (a
-    /// byte-identical cross-WAD import). See [`OverrideMeta::fallback_only`].
-    #[serde(default)]
-    pub fallback_only: bool,
 }
 
 /// Cached metadata for a single mod.
@@ -100,7 +95,6 @@ impl CachedModMeta {
                     source,
                     fallback_wad: entry.target_wad.as_ref().map(Utf8PathBuf::from),
                     linked_bins: entry.linked_bins.clone(),
-                    fallback_only: entry.fallback_only,
                 },
             );
         }
@@ -146,7 +140,6 @@ impl CachedModMeta {
                     source_wad_name,
                     source_rel_path,
                     linked_bins: meta.linked_bins.clone(),
-                    fallback_only: meta.fallback_only,
                 }
             })
             .collect();
@@ -286,7 +279,6 @@ mod tests {
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
                     linked_bins: Vec::new(),
-                    fallback_only: false,
                 }],
             },
         );

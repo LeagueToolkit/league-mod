@@ -96,6 +96,16 @@ fn read_chunk(wad_path: &Utf8Path, chunk_path: &str) -> Option<Vec<u8>> {
     Some(wad.load_chunk_decompressed(&chunk).unwrap().to_vec())
 }
 
+/// The stored `(compression_type, compressed checksum)` for a chunk — the pair
+/// League compares across WADs when validating a shared chunk.
+fn chunk_identity(wad_path: &Utf8Path, chunk_path: &str) -> Option<(WadChunkCompression, u64)> {
+    let file = fs::File::open(wad_path.as_std_path()).unwrap();
+    let wad = Wad::mount(file).unwrap();
+    let hash = resolve_chunk_hash(Utf8Path::new(chunk_path), b"").unwrap();
+    let chunk = wad.chunks().get(hash)?;
+    Some((chunk.compression_type, chunk.checksum))
+}
+
 fn build_overlay(root: &Utf8Path, mod_dir: &Utf8PathBuf) -> Utf8PathBuf {
     let game_dir = root.join("Game");
     let profile_dir = root.join("profile");
@@ -112,10 +122,11 @@ fn build_overlay(root: &Utf8Path, mod_dir: &Utf8PathBuf) -> Utf8PathBuf {
 }
 
 /// A byte-identical copy of another WAD's chunk shipped under the mod's own
-/// WAD directory must be added to that WAD as a new entry — and the WAD that
-/// already holds the original must be left alone.
+/// WAD directory must be added to the declared WAD as a new entry AND written
+/// into every game WAD that holds the chunk, so every copy shares one
+/// compressed checksum.
 #[test]
-fn identical_cross_wad_chunk_is_added_to_declared_wad() {
+fn identical_cross_wad_chunk_is_fanned_out_to_all_holders() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
     let game_dir = root.join("Game");
@@ -127,6 +138,7 @@ fn identical_cross_wad_chunk_is_added_to_declared_wad() {
 
     let champions = overlay_root.join("DATA").join("FINAL").join("Champions");
     let overlay_aatrox = champions.join(AATROX_WAD);
+    let overlay_ahri = champions.join(AHRI_WAD);
     assert_eq!(
         read_chunk(&overlay_aatrox, AATROX_CHUNK).as_deref(),
         Some(b"AATROX_MODDED".as_slice())
@@ -136,9 +148,23 @@ fn identical_cross_wad_chunk_is_added_to_declared_wad() {
         Some(AHRI_ORIGINAL),
         "the imported original chunk must be present in the mod's target WAD"
     );
-    assert!(
-        !champions.join(AHRI_WAD).as_std_path().exists(),
-        "an identical import must not rewrite the WAD that already holds the original"
+    assert_eq!(
+        read_chunk(&overlay_ahri, AHRI_CHUNK).as_deref(),
+        Some(AHRI_ORIGINAL),
+        "the WAD holding the original must be rebuilt with the same copy"
+    );
+
+    // The crux of the crash fix: every overlay copy of the shared chunk must
+    // carry the SAME compression type and compressed checksum. League validates
+    // a shared chunk by its compressed checksum, so divergent copies across
+    // loaded WADs would be rejected and crash the client.
+    let imported =
+        chunk_identity(&overlay_aatrox, AHRI_CHUNK).expect("overlay Aatrox.wad has the import");
+    let fanned_out =
+        chunk_identity(&overlay_ahri, AHRI_CHUNK).expect("overlay Ahri.wad has the chunk");
+    assert_eq!(
+        imported, fanned_out,
+        "all overlay copies of a shared chunk must have identical compression + checksum"
     );
 }
 
@@ -164,5 +190,10 @@ fn modified_cross_wad_chunk_lands_in_both_wads() {
     assert_eq!(
         read_chunk(&champions.join(AHRI_WAD), AHRI_CHUNK).as_deref(),
         Some(b"AHRI_MODDED".as_slice())
+    );
+    assert_eq!(
+        chunk_identity(&champions.join(AATROX_WAD), AHRI_CHUNK),
+        chunk_identity(&champions.join(AHRI_WAD), AHRI_CHUNK),
+        "both overlay copies must share one compression + compressed checksum"
     );
 }

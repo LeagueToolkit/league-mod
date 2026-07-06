@@ -69,7 +69,6 @@ fn build_override_meta(source: OverrideSource, bytes: &[u8]) -> Result<(u64, Ove
             uncompressed_size: bytes.len(),
             source,
             fallback_wad: None,
-            fallback_only: false,
             linked_bins: crate::linked_bins::parse_linked_bins(bytes).unwrap_or_default(),
         },
     ))
@@ -179,9 +178,8 @@ fn collect_wad_dir_metadata(
 ///
 /// A WAD name known to the game maps directly to its game-relative path. An
 /// unknown name (e.g. "Spirit-Blossom-Rift.wad.client") is matched by chunk-hash
-/// overlap against the game WADs (same approach as cslol-manager's
-/// find_by_overlap). With no overlap either, returns `None` and the overrides
-/// are routed by hash matching only.
+/// overlap against the game WADs. With no overlap either, returns `None` and
+/// the overrides are routed by hash matching only.
 fn resolve_fallback_wad(
     mod_id: &str,
     wad_name: &str,
@@ -316,8 +314,8 @@ fn route_unroutable_to_dominant_wad(
 /// 3. Lazy overrides — mod files identical to game originals, detected by
 ///    comparing pre-computed content hashes against game originals. Identical
 ///    files that are cross-WAD imports (shipped under a WAD directory whose
-///    game WAD lacks the chunk) survive this pass, marked
-///    [`fallback_only`](OverrideMeta::fallback_only).
+///    game WAD lacks the chunk) survive this pass and route like any other
+///    override: to the declared WAD and every game WAD holding the chunk.
 ///
 /// Runs per-mod at the end of [`collect_single_mod_metadata`], before caching
 /// and before [`super::ModWadReport`]s are computed, so reports, cache, and
@@ -364,13 +362,10 @@ pub(crate) fn filter_override_metadata(
     // Filter out lazy overrides — mod files identical to game originals.
     // Use pre-computed content_hash from metadata instead of re-reading bytes.
     //
-    // Exception: a byte-identical file the mod explicitly ships under a WAD
-    // directory whose game WAD does NOT contain the chunk is a cross-WAD
-    // import — the mod bundles an original asset from another WAD so it is
-    // loadable from its own target WAD (which may be the only one mounted
-    // in-game). Those are kept and marked `fallback_only` so routing adds them
-    // to the declared WAD without pointlessly rewriting the WADs that already
-    // hold the original.
+    // Exception: a byte-identical file shipped under a WAD directory whose game
+    // WAD does NOT contain the chunk is a cross-WAD import (the mod bundles an
+    // asset from another WAD so it is loadable from its own target WAD). Those
+    // are kept and routed like modified overrides.
     let override_hashes: HashSet<u64> = all_meta.keys().copied().collect();
     let content_hashes = game_index.compute_content_hashes_batch(game_dir, &override_hashes);
 
@@ -391,7 +386,6 @@ pub(crate) fn filter_override_metadata(
                 meta.fallback_wad.as_deref().unwrap_or(Utf8Path::new("?")),
             );
 
-            meta.fallback_only = true;
             import_count += 1;
 
             return true;
@@ -409,7 +403,8 @@ pub(crate) fn filter_override_metadata(
     }
     if import_count > 0 {
         tracing::info!(
-            "Kept {} byte-identical override(s) as cross-WAD imports into their declared WADs",
+            "Kept {} byte-identical cross-WAD import(s), fanned out to their declared \
+             and source WADs",
             import_count
         );
     }
@@ -890,7 +885,6 @@ mod tests {
             },
             fallback_wad: None,
             linked_bins: Vec::new(),
-            fallback_only: false,
         };
 
         let stringtable_hash = crate::strings::stringtable_chunk_hash("en_us");
@@ -1058,12 +1052,12 @@ mod tests {
         let import = meta.get(&import_hash).expect(
             "byte-identical override under another WAD dir is a cross-WAD import and must be kept",
         );
-        assert!(import.fallback_only);
         assert_eq!(import.fallback_wad.as_deref(), Some(aatrox_rel.as_path()));
         assert_eq!(
             import.route_targets(import_hash, &game_index),
-            vec![aatrox_rel.as_path()],
-            "an identical import must route only to the declared WAD"
+            vec![ahri_rel.as_path(), aatrox_rel.as_path()],
+            "an identical import must fan out to the declared WAD and every WAD \
+             holding the chunk, so all copies share one compressed checksum"
         );
     }
 
@@ -1081,7 +1075,6 @@ mod tests {
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
                     linked_bins: vec!["data/characters/test/test.bin".to_string()],
-                    fallback_only: false,
                 },
                 CachedOverride {
                     path_hash: 0xABCD,
@@ -1092,7 +1085,6 @@ mod tests {
                     source_wad_name: None,
                     source_rel_path: "assets/raw/file.bin".to_string(),
                     linked_bins: Vec::new(),
-                    fallback_only: true,
                 },
             ],
         };
@@ -1111,7 +1103,5 @@ mod tests {
             vec!["data/characters/test/test.bin".to_string()]
         );
         assert!(meta[&0xABCD].linked_bins.is_empty());
-        assert!(!meta[&0x1234].fallback_only);
-        assert!(meta[&0xABCD].fallback_only);
     }
 }

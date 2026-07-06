@@ -106,12 +106,6 @@ pub struct OverrideMeta {
     /// property-bin (`PROP`/`PTCH`); empty otherwise. Parsed once in pass 1 and
     /// cached so the linked-bin pre-flight needs no re-decompression.
     pub(crate) linked_bins: Vec<String>,
-    /// Route this override exclusively to [`fallback_wad`](Self::fallback_wad),
-    /// skipping hash-based routing. Set during filtering for cross-WAD imports
-    /// whose bytes are identical to the game original: rewriting the WADs that
-    /// already contain the chunk would be a no-op, but the chunk must still be
-    /// added to the mod's declared target WAD (which doesn't contain it).
-    pub(crate) fallback_only: bool,
 }
 
 impl OverrideMeta {
@@ -141,8 +135,8 @@ impl OverrideMeta {
 
     /// The game-relative WAD paths this override routes to.
     ///
-    /// - Hash-matched WADs (every game WAD containing `path_hash`), unless the
-    ///   override is [`fallback_only`](Self::fallback_only).
+    /// - Every game WAD containing `path_hash` — a shared chunk is fanned out
+    ///   to all of its holders so every loaded copy stays checksum-consistent.
     /// - Additionally `fallback_wad` when no WAD hash-matched, or when the
     ///   override is a [cross-WAD import](Self::is_cross_wad_import) whose
     ///   declared WAD is missing from the matches.
@@ -160,10 +154,7 @@ impl OverrideMeta {
             .find_wads_with_hash(path_hash)
             .unwrap_or_default();
 
-        let mut targets: Vec<&Utf8Path> = Vec::new();
-        if !self.fallback_only {
-            targets.extend(matched.iter().map(Utf8PathBuf::as_path));
-        }
+        let mut targets: Vec<&Utf8Path> = matched.iter().map(Utf8PathBuf::as_path).collect();
 
         if let Some(fallback) = self.fallback_wad.as_deref()
             && (targets.is_empty() || self.is_cross_wad_import(path_hash, game_index))
@@ -360,10 +351,9 @@ pub struct AffectedWad {
 ///
 /// Overrides that can never reach the overlay — SubChunkTOC entries,
 /// mod-shipped stringtable chunks, and lazy overrides byte-identical to the
-/// game originals (unless they are cross-WAD imports into a declared WAD
-/// that lacks the chunk) — are excluded before the report is computed, so
-/// the reported footprint matches the WADs an overlay build of this mod
-/// alone would actually write.
+/// game originals whose declared WAD already holds the chunk — are excluded
+/// before the report is computed, so the reported footprint matches the WADs
+/// an overlay build of this mod alone would actually write.
 ///
 /// Reports are produced in two ways:
 ///
@@ -1129,7 +1119,6 @@ mod tests {
             },
             fallback_wad: None,
             linked_bins: Vec::new(),
-            fallback_only: false,
         };
         assert_eq!(meta.content_hash, 0x1234);
         assert_eq!(meta.uncompressed_size, 100);
@@ -1147,7 +1136,6 @@ mod tests {
             },
             fallback_wad: None,
             linked_bins: Vec::new(),
-            fallback_only: false,
         }
     }
 
@@ -1218,21 +1206,15 @@ mod tests {
         hash_index.insert(0xA881_u64, vec![ahri.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
-        // Modified copy of an Ahri chunk shipped under the Aatrox WAD dir:
-        // route to Ahri (hash match) AND import into Aatrox (declared WAD).
+        // A copy of an Ahri chunk shipped under the Aatrox WAD dir (cross-WAD
+        // import, identical or modified alike): route to Ahri (hash match) AND
+        // import into Aatrox (declared WAD). Both WADs receive the same bytes
+        // so their compressed checksums stay consistent in-game.
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(aatrox.clone());
         assert_eq!(
             meta.route_targets(0xA881, &game_index),
             vec![ahri.as_path(), aatrox.as_path()]
-        );
-
-        // Byte-identical copy (fallback_only set by the lazy filter): only the
-        // declared WAD is touched — rewriting Ahri would be a no-op.
-        meta.fallback_only = true;
-        assert_eq!(
-            meta.route_targets(0xA881, &game_index),
-            vec![aatrox.as_path()]
         );
 
         // Declared WAD already among the hash matches: no extra target.
@@ -1263,7 +1245,6 @@ mod tests {
             },
             fallback_wad: Some(aatrox.clone()),
             linked_bins: Vec::new(),
-            fallback_only: false,
         };
         assert_eq!(
             meta.route_targets(0xA881, &game_index),
