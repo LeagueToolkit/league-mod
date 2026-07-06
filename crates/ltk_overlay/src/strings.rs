@@ -203,6 +203,7 @@ impl StringPatchPlan {
                 chunk_path: Utf8PathBuf::from(stringtable_chunk_path(&self.locale)),
             },
             fallback_wad: Some(self.wad_rel_path.clone()),
+            fallback_only: false,
             linked_bins: Vec::new(),
         }
     }

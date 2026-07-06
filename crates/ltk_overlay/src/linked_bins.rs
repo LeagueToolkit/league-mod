@@ -261,6 +261,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/test.bin"),
             },
             fallback_wad: None,
+            fallback_only: false,
             linked_bins: linked.iter().map(|s| s.to_string()).collect(),
         }
     }

@@ -106,6 +106,73 @@ pub struct OverrideMeta {
     /// property-bin (`PROP`/`PTCH`); empty otherwise. Parsed once in pass 1 and
     /// cached so the linked-bin pre-flight needs no re-decompression.
     pub(crate) linked_bins: Vec<String>,
+    /// Route this override exclusively to [`fallback_wad`](Self::fallback_wad),
+    /// skipping hash-based routing. Set during filtering for cross-WAD imports
+    /// whose bytes are identical to the game original: rewriting the WADs that
+    /// already contain the chunk would be a no-op, but the chunk must still be
+    /// added to the mod's declared target WAD (which doesn't contain it).
+    pub(crate) fallback_only: bool,
+}
+
+impl OverrideMeta {
+    /// Whether this override is a cross-WAD import: a file the mod explicitly
+    /// ships under a WAD directory whose resolved game WAD does not already
+    /// contain the chunk. Mods do this to make an asset from another WAD (which
+    /// may not be mounted in-game) loadable from their own target WAD, so the
+    /// chunk must be *added* to `fallback_wad` rather than only routed to the
+    /// WADs that already hold it.
+    ///
+    /// Only [`OverrideSource::LayerWad`] entries qualify — a WAD directory is an
+    /// explicit placement, while RAW overrides carry no target of their own
+    /// (their `fallback_wad` is a routing heuristic, not a declaration).
+    pub(crate) fn is_cross_wad_import(&self, path_hash: u64, game_index: &GameIndex) -> bool {
+        if !matches!(self.source, OverrideSource::LayerWad { .. }) {
+            return false;
+        }
+        let Some(fallback) = self.fallback_wad.as_deref() else {
+            return false;
+        };
+        game_index
+            .find_wads_with_hash(path_hash)
+            .unwrap_or_default()
+            .iter()
+            .all(|wad| wad != fallback)
+    }
+
+    /// The game-relative WAD paths this override routes to.
+    ///
+    /// - Hash-matched WADs (every game WAD containing `path_hash`), unless the
+    ///   override is [`fallback_only`](Self::fallback_only).
+    /// - Additionally `fallback_wad` when no WAD hash-matched, or when the
+    ///   override is a [cross-WAD import](Self::is_cross_wad_import) whose
+    ///   declared WAD is missing from the matches.
+    ///
+    /// An empty result means the override cannot be routed anywhere and is
+    /// dropped. This is the single source of truth shared by
+    /// [`OverlayBuilder::distribute_override_hashes`] and
+    /// [`ModWadReport::from_meta`] so build routing and mod reports agree.
+    pub(crate) fn route_targets<'a>(
+        &'a self,
+        path_hash: u64,
+        game_index: &'a GameIndex,
+    ) -> Vec<&'a Utf8Path> {
+        let matched = game_index
+            .find_wads_with_hash(path_hash)
+            .unwrap_or_default();
+
+        let mut targets: Vec<&Utf8Path> = Vec::new();
+        if !self.fallback_only {
+            targets.extend(matched.iter().map(Utf8PathBuf::as_path));
+        }
+
+        if let Some(fallback) = self.fallback_wad.as_deref()
+            && (targets.is_empty() || self.is_cross_wad_import(path_hash, game_index))
+        {
+            targets.push(fallback);
+        }
+
+        targets
+    }
 }
 
 /// A mod to be included in the overlay build.
@@ -293,9 +360,10 @@ pub struct AffectedWad {
 ///
 /// Overrides that can never reach the overlay — SubChunkTOC entries,
 /// mod-shipped stringtable chunks, and lazy overrides byte-identical to the
-/// game originals — are excluded before the report is computed, so the
-/// reported footprint matches the WADs an overlay build of this mod alone
-/// would actually write.
+/// game originals (unless they are cross-WAD imports into a declared WAD
+/// that lacks the chunk) — are excluded before the report is computed, so
+/// the reported footprint matches the WADs an overlay build of this mod
+/// alone would actually write.
 ///
 /// Reports are produced in two ways:
 ///
@@ -331,11 +399,10 @@ impl ModWadReport {
 
     /// Build a report from one mod's collected override metadata.
     ///
-    /// For each override hash, the matching set of game WADs is looked up via
-    /// [`GameIndex::find_wads_with_hash`]. Hashes that don't appear in any
-    /// game WAD fall back to the per-override `fallback_wad` recorded during
-    /// metadata collection (i.e. the WAD the mod's directory structure
-    /// pointed at). A hash present in several WADs counts toward each.
+    /// Each override contributes to every WAD returned by
+    /// [`OverrideMeta::route_targets`] — the same routing the build itself
+    /// uses: hash-matched game WADs, plus the mod's declared WAD for new
+    /// entries and cross-WAD imports.
     pub(crate) fn from_meta(
         mod_id: String,
         mod_meta: &HashMap<u64, OverrideMeta>,
@@ -344,12 +411,8 @@ impl ModWadReport {
     ) -> Self {
         let mut counts: BTreeMap<&Utf8Path, u32> = BTreeMap::new();
         for (path_hash, meta) in mod_meta {
-            if let Some(wad_paths) = game_index.find_wads_with_hash(*path_hash) {
-                for wp in wad_paths {
-                    *counts.entry(wp.as_path()).or_insert(0) += 1;
-                }
-            } else if let Some(fallback) = &meta.fallback_wad {
-                *counts.entry(fallback.as_path()).or_insert(0) += 1;
+            for wad_path in meta.route_targets(*path_hash, game_index) {
+                *counts.entry(wad_path).or_insert(0) += 1;
             }
         }
 
@@ -1066,6 +1129,7 @@ mod tests {
             },
             fallback_wad: None,
             linked_bins: Vec::new(),
+            fallback_only: false,
         };
         assert_eq!(meta.content_hash, 0x1234);
         assert_eq!(meta.uncompressed_size, 100);
@@ -1083,6 +1147,7 @@ mod tests {
             },
             fallback_wad: None,
             linked_bins: Vec::new(),
+            fallback_only: false,
         }
     }
 
@@ -1143,6 +1208,102 @@ mod tests {
         // override_count is distinct overrides, not the per-WAD sum (which is 4).
         assert_eq!(report.override_count, 2);
         assert_eq!(report.game_index_fingerprint, 7);
+    }
+
+    #[test]
+    fn route_targets_adds_declared_wad_for_cross_wad_import() {
+        let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
+        let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
+        let mut hash_index = HashMap::new();
+        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        // Modified copy of an Ahri chunk shipped under the Aatrox WAD dir:
+        // route to Ahri (hash match) AND import into Aatrox (declared WAD).
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(aatrox.clone());
+        assert_eq!(
+            meta.route_targets(0xA881, &game_index),
+            vec![ahri.as_path(), aatrox.as_path()]
+        );
+
+        // Byte-identical copy (fallback_only set by the lazy filter): only the
+        // declared WAD is touched — rewriting Ahri would be a no-op.
+        meta.fallback_only = true;
+        assert_eq!(
+            meta.route_targets(0xA881, &game_index),
+            vec![aatrox.as_path()]
+        );
+
+        // Declared WAD already among the hash matches: no extra target.
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(ahri.clone());
+        assert_eq!(
+            meta.route_targets(0xA881, &game_index),
+            vec![ahri.as_path()]
+        );
+    }
+
+    #[test]
+    fn route_targets_ignores_heuristic_fallback_for_raw_sources() {
+        let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
+        let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
+        let mut hash_index = HashMap::new();
+        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
+        // declared placement — hash matches must not be widened by it.
+        let meta = OverrideMeta {
+            content_hash: 1,
+            uncompressed_size: 1,
+            source: OverrideSource::Raw {
+                mod_id: "m".to_string(),
+                rel_path: Utf8PathBuf::from("assets/x.bin"),
+            },
+            fallback_wad: Some(aatrox.clone()),
+            linked_bins: Vec::new(),
+            fallback_only: false,
+        };
+        assert_eq!(
+            meta.route_targets(0xA881, &game_index),
+            vec![ahri.as_path()]
+        );
+        // ...but it still routes brand-new hashes.
+        assert_eq!(
+            meta.route_targets(0xF00D, &game_index),
+            vec![aatrox.as_path()]
+        );
+    }
+
+    #[test]
+    fn from_meta_counts_cross_wad_import_in_declared_wad() {
+        let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
+        let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
+        let mut hash_index = HashMap::new();
+        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(aatrox.clone());
+        let mut mod_meta = HashMap::new();
+        mod_meta.insert(0xA881, meta);
+
+        let report = ModWadReport::from_meta("import".to_string(), &mod_meta, None, &game_index);
+        assert_eq!(
+            report.affected_wads,
+            vec![
+                AffectedWad {
+                    path: aatrox.as_str().into(),
+                    override_count: 1,
+                },
+                AffectedWad {
+                    path: ahri.as_str().into(),
+                    override_count: 1,
+                },
+            ],
+            "a cross-WAD import must show up in the mod's declared WAD too"
+        );
     }
 
     #[test]

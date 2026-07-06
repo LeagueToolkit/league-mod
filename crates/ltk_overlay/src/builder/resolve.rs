@@ -13,7 +13,10 @@ impl OverlayBuilder {
     /// Distribute override path hashes to all affected WADs (lightweight).
     ///
     /// Returns a map of `relative_wad_path -> set of path_hashes`. No byte data
-    /// is involved — only hash routing via the game index.
+    /// is involved — only routing via [`OverrideMeta::route_targets`]: every
+    /// game WAD that contains the hash, plus the mod's declared WAD for new
+    /// entries and cross-WAD imports (chunks the mod ships under a WAD that
+    /// doesn't already contain them).
     pub(crate) fn distribute_override_hashes(
         &self,
         all_meta: &HashMap<u64, OverrideMeta>,
@@ -21,23 +24,12 @@ impl OverlayBuilder {
     ) -> BTreeMap<Utf8PathBuf, HashSet<u64>> {
         let mut wad_hash_sets: BTreeMap<&Utf8Path, HashSet<u64>> = BTreeMap::new();
         let mut new_entry_count = 0usize;
+        let mut cross_import_count = 0usize;
         let mut dropped_count = 0usize;
 
         for (&path_hash, meta) in all_meta {
-            if let Some(wad_paths) = game_index.find_wads_with_hash(path_hash) {
-                for wad_path in wad_paths {
-                    wad_hash_sets
-                        .entry(wad_path.as_path())
-                        .or_default()
-                        .insert(path_hash);
-                }
-            } else if let Some(fallback) = &meta.fallback_wad {
-                wad_hash_sets
-                    .entry(fallback.as_path())
-                    .or_default()
-                    .insert(path_hash);
-                new_entry_count += 1;
-            } else {
+            let targets = meta.route_targets(path_hash, game_index);
+            if targets.is_empty() {
                 dropped_count += 1;
                 tracing::debug!(
                     "Override {:016x} from mod '{}' ('{}') matches no game WAD and has no \
@@ -46,6 +38,17 @@ impl OverlayBuilder {
                     meta.source.mod_id(),
                     meta.source.rel_path(),
                 );
+                continue;
+            }
+
+            if game_index.find_wads_with_hash(path_hash).is_none() {
+                new_entry_count += 1;
+            } else if meta.is_cross_wad_import(path_hash, game_index) {
+                cross_import_count += 1;
+            }
+
+            for wad_path in targets {
+                wad_hash_sets.entry(wad_path).or_default().insert(path_hash);
             }
         }
 
@@ -53,6 +56,13 @@ impl OverlayBuilder {
             tracing::info!(
                 "Routed {} new entries (not in any game WAD) via mod directory structure",
                 new_entry_count
+            );
+        }
+        if cross_import_count > 0 {
+            tracing::info!(
+                "Routed {} cross-WAD import(s) into their mods' declared WADs \
+                 (chunk originates from a different game WAD)",
+                cross_import_count
             );
         }
         if dropped_count > 0 {

@@ -13,10 +13,14 @@ use std::collections::HashMap;
 
 /// Current cache format version. Bump when the serialized format changes.
 ///
+/// v5: adds `fallback_only` and keeps byte-identical cross-WAD imports; v4
+/// caches were filtered under the old lazy rule that dropped those imports
+/// entirely, so they must be discarded.
+///
 /// v4: cached metadata is now post-filter (SubChunkTOC / stringtable / lazy
 /// overrides already stripped); v3 caches hold unfiltered entries and must be
 /// discarded.
-const CACHE_VERSION: u32 = 4;
+const CACHE_VERSION: u32 = 5;
 
 /// Serializable cache entry for a single override.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -27,19 +31,27 @@ pub struct CachedOverride {
     pub content_hash: u64,
     /// Size of the uncompressed override bytes.
     pub uncompressed_size: usize,
+
     /// Relative WAD path this override targets (if known from directory structure).
     /// `None` for raw overrides that are routed by hash matching only.
     pub target_wad: Option<String>,
+
     /// Source layer name. `None` for raw overrides.
     pub source_layer: Option<String>,
     /// Source WAD directory name. `None` for raw overrides.
     pub source_wad_name: Option<String>,
     /// Relative file path within the WAD dir or raw content dir.
     pub source_rel_path: String,
+
     /// Linked-file dependency paths if this override is a property-bin; empty
     /// otherwise. Cached so unchanged mods need no re-parse for the linked-bin check.
     #[serde(default)]
     pub linked_bins: Vec<String>,
+
+    /// Route exclusively to `target_wad`, skipping hash-based routing (a
+    /// byte-identical cross-WAD import). See [`OverrideMeta::fallback_only`].
+    #[serde(default)]
+    pub fallback_only: bool,
 }
 
 /// Cached metadata for a single mod.
@@ -47,6 +59,7 @@ pub struct CachedOverride {
 pub struct CachedModMeta {
     /// Fingerprint that was current when this cache entry was written.
     pub content_fingerprint: u64,
+
     /// All overrides from this mod, post-filter (SubChunkTOC / stringtable /
     /// lazy overrides already stripped). Both filter inputs are covered by the
     /// cache keys: mod content by `content_fingerprint`, game content by the
@@ -87,6 +100,7 @@ impl CachedModMeta {
                     source,
                     fallback_wad: entry.target_wad.as_ref().map(Utf8PathBuf::from),
                     linked_bins: entry.linked_bins.clone(),
+                    fallback_only: entry.fallback_only,
                 },
             );
         }
@@ -132,6 +146,7 @@ impl CachedModMeta {
                     source_wad_name,
                     source_rel_path,
                     linked_bins: meta.linked_bins.clone(),
+                    fallback_only: meta.fallback_only,
                 }
             })
             .collect();
@@ -271,6 +286,7 @@ mod tests {
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
                     linked_bins: Vec::new(),
+                    fallback_only: false,
                 }],
             },
         );
