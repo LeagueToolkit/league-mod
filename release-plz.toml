@@ -27,6 +27,11 @@ name = "ltk_mod_project"
 publish = true
 changelog_update = true
 
+[[package]]
+name = "ltk_sig"
+publish = true
+changelog_update = true
+
 [changelog]
 header = """
 # Changelog
