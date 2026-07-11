@@ -44,6 +44,7 @@ This is a Cargo workspace with the following crates:
 - **`ltk_mod_core`** - Shared utilities (League path detection, cross-platform utilities)
 - **`ltk_fantome`** - Fantome archive format support (`.fantome` files)
 - **`ltk_overlay`** - Overlay building engine (WAD patching, game file indexing)
+- **`ltk_sig`** - Mod signing/verification (COSE/CWT tokens, platform-attested trust; base-skin overlay verifier behind the `base-skin` feature)
 
 ## Critical Development Patterns
 

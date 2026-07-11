@@ -303,8 +303,7 @@ fn ensure_chunk_fits(
 /// An uncompressed override: identify the file type, apply the ideal compression,
 /// and checksum our *own* compressed output.
 fn prepare_uncompressed(path_hash: u64, data: &[u8]) -> Result<PreparedChunk<'static>> {
-    let compression = LeagueFileKind::identify_from_bytes(data).ideal_compression();
-    let compressed = compress_by_type(data, compression)?;
+    let (compression, compressed) = prepare_override_chunk(data)?;
     ensure_chunk_fits(path_hash, compressed.len(), data.len(), "Override")?;
     let checksum = xxh3_64(&compressed);
     Ok(PreparedChunk {
@@ -335,6 +334,20 @@ fn prepare_passthrough<'a>(orig: &WadChunk, mmap: &'a [u8]) -> Result<PreparedCh
         start_frame: orig.start_frame,
         checksum: orig.checksum,
     })
+}
+
+/// Prepare an override chunk's stored form exactly as [`build_patched_wad`]
+/// writes it: identify the file type, pick its ideal compression (audio stays
+/// uncompressed, everything else is Zstd level 3), and compress.
+///
+/// This is the single source of truth for how override data appears inside a
+/// patched WAD. Statement extraction (`ltk_sig`) must use it so recorded
+/// compressed checksums and digests match the merged WAD byte-for-byte.
+pub fn prepare_override_chunk(data: &[u8]) -> Result<(WadChunkCompression, Vec<u8>)> {
+    let kind = LeagueFileKind::identify_from_bytes(data);
+    let compression = kind.ideal_compression();
+    let compressed = compress_by_type(data, compression)?;
+    Ok((compression, compressed))
 }
 
 /// Compress data using the specified compression type.
