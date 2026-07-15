@@ -4,7 +4,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use ltk_modpkg::Modpkg;
 use ltk_overlay::skin_integrity::check_single_mod;
-use ltk_overlay::{EnabledMod, FantomeContent, FsModContent, ModContentProvider, ModpkgContent};
+use ltk_overlay::{
+    EnabledMod, FantomeContent, FsModContent, ModContentProvider, ModpkgContent, SkinPolicy,
+};
 use miette::{miette, IntoDiagnostic};
 
 use crate::println_pad;
@@ -13,6 +15,9 @@ use crate::utils::config;
 pub struct SanitizeModArgs {
     pub file_path: String,
     pub game_dir: Option<String>,
+    /// Judge under [`SkinPolicy::strict`]: every missing reference is a
+    /// violation, including dangling texture refs the default tolerates.
+    pub strict: bool,
 }
 
 /// Verify a mod's base-skin integrity against the game files, straight from
@@ -47,7 +52,12 @@ pub fn sanitize_mod(args: SanitizeModArgs) -> miette::Result<()> {
             .unwrap_or_else(|_| Utf8PathBuf::from("league-mod-game-index.bin"))
     });
 
-    let offenders = check_single_mod(&game_dir, &index_cache, &mut enabled_mod)
+    let policy = if args.strict {
+        SkinPolicy::strict()
+    } else {
+        SkinPolicy::default()
+    };
+    let offenders = check_single_mod(&game_dir, &index_cache, &mut enabled_mod, policy)
         .map_err(|err| miette!("{err}"))?;
 
     if offenders.is_empty() {

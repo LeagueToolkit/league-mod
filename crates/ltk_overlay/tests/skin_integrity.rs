@@ -28,15 +28,14 @@ fn h(name: &str) -> BinHash {
     BinHash::hash_str(name)
 }
 
-/// A skin0 bin whose entry references the given texture path (skeleton and
-/// simple-skin always point at the stock assets). `scale` varies the bytes so
-/// a "modded" bin differs from the original.
-fn skin0_bin(texture: &str, scale: f32) -> Vec<u8> {
+/// A skin0 bin whose entry references the given slot paths. `scale` varies
+/// the bytes so a "modded" bin differs from the original.
+fn skin0_bin_refs(skeleton: &str, simple_skin: &str, texture: &str, scale: f32) -> Vec<u8> {
     let mesh = values::Embedded(values::Struct {
         class_hash: h("SkinMeshDataProperties"),
         properties: IndexMap::from([
-            (h("Skeleton"), values::String::from(SKL).into()),
-            (h("SimpleSkin"), values::String::from(SKN).into()),
+            (h("Skeleton"), values::String::from(skeleton).into()),
+            (h("SimpleSkin"), values::String::from(simple_skin).into()),
             (h("Texture"), values::String::from(texture).into()),
             (h("SkinScale"), values::F32::new(scale).into()),
         ]),
@@ -53,6 +52,11 @@ fn skin0_bin(texture: &str, scale: f32) -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
     bin.to_writer(&mut cursor).unwrap();
     cursor.into_inner()
+}
+
+/// [`skin0_bin_refs`] with stock skeleton/simple-skin references.
+fn skin0_bin(texture: &str, scale: f32) -> Vec<u8> {
+    skin0_bin_refs(SKL, SKN, texture, scale)
 }
 
 fn write_game_wad(game_dir: &Utf8Path, wad_name: &str, chunks: &[(&str, Vec<u8>)]) {
@@ -204,20 +208,20 @@ fn mod_without_skin0_override_is_not_flagged() {
     assert_eq!(build_and_take_offenders(&root, &mod_dir), vec![]);
 }
 
-/// A skin0 referencing a texture that exists nowhere — an outdated or broken
-/// mod — is flagged with a "missing everywhere" violation, and the offender
-/// survives an exact-match skip via the persisted overlay state.
+/// A skin0 referencing a skeleton that exists nowhere — an outdated or
+/// broken mod — is flagged with a "missing everywhere" violation, and the
+/// offender survives an exact-match skip via the persisted overlay state.
 #[test]
 fn dangling_reference_is_flagged_and_persisted() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
     write_game(&root.join("Game"));
 
-    let stale = "assets/characters/testchamp/skins/base/removed_in_patch.tex";
+    let stale = "assets/characters/testchamp/skins/base/removed_in_patch.skl";
     let mod_dir = write_mod_dir(
         &root,
         "broken-mod",
-        &[(CHAMP_WAD, SKIN0_BIN, skin0_bin(stale, 2.0))],
+        &[(CHAMP_WAD, SKIN0_BIN, skin0_bin_refs(stale, SKN, TEX, 2.0))],
     );
 
     let offenders = build_and_take_offenders(&root, &mod_dir);
@@ -237,6 +241,24 @@ fn dangling_reference_is_flagged_and_persisted() {
     assert_eq!(build_and_take_offenders(&root, &mod_dir), offenders);
 }
 
+/// A dangling *texture* reference is a known authoring idiom, tolerated by
+/// the default [`ltk_overlay::SkinPolicy`] — reported nowhere as an offender.
+#[test]
+fn dangling_texture_is_tolerated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+    write_game(&root.join("Game"));
+
+    let stale = "assets/characters/testchamp/skins/base/suppressed.tex";
+    let mod_dir = write_mod_dir(
+        &root,
+        "texture-trick-mod",
+        &[(CHAMP_WAD, SKIN0_BIN, skin0_bin(stale, 2.0))],
+    );
+
+    assert_eq!(build_and_take_offenders(&root, &mod_dir), vec![]);
+}
+
 /// A skin0 referencing a custom asset the mod shipped into a *different* WAD
 /// is flagged as misplaced, naming the WAD that has it.
 #[test]
@@ -245,15 +267,15 @@ fn misplaced_reference_is_flagged_with_the_wrong_wad() {
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
     write_game(&root.join("Game"));
 
-    let custom = "assets/characters/testchamp/skins/base/custom.tex";
+    let custom = "assets/characters/testchamp/skins/base/custom.skl";
     let mod_dir = write_mod_dir(
         &root,
         "misplaced-mod",
         &[
-            (CHAMP_WAD, SKIN0_BIN, skin0_bin(custom, 2.0)),
+            (CHAMP_WAD, SKIN0_BIN, skin0_bin_refs(custom, SKN, TEX, 2.0)),
             // New chunk shipped under the wrong WAD directory: it routes to
             // Ahri.wad.client, not the champion WAD referencing it.
-            (OTHER_WAD, custom, b"custom-texture".to_vec()),
+            (OTHER_WAD, custom, b"custom-skeleton".to_vec()),
         ],
     );
 

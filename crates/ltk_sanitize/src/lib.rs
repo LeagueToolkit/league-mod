@@ -34,7 +34,7 @@ pub mod source;
 
 pub use check::{
     BaselineAnomaly, RefMissingKind, RefReport, RefStatus, SkinCheckOutcome, SkinIntegrity,
-    check_base_skin,
+    SkinPolicy, check_base_skin,
 };
 pub use resolve::{
     CorruptBin, MAX_LINKED_BINS, ResolveError, ResolveOutcome, ResolvedBinObject,

@@ -66,6 +66,63 @@ pub struct RefReport {
     pub status: RefStatus,
 }
 
+impl RefReport {
+    /// Whether this reference counts as a violation under `policy`. A
+    /// tolerated reference keeps its [`RefStatus::Missing`] status in the
+    /// report — only the verdict changes.
+    pub fn violates(&self, policy: SkinPolicy) -> bool {
+        matches!(self.status, RefStatus::Missing(_))
+            && !(policy.allow_dangling_texture && self.slot == MeshSlot::Texture)
+    }
+}
+
+/// Verdict policy for judging a [`SkinIntegrity`] report.
+///
+/// Classification is always the full truth; the policy only decides which
+/// facts count as violations. **Every consumer of the check — mod manager,
+/// CLI, and the in-game verifier once it bootstraps from this crate — must
+/// use the same policy**, or ahead-of-time predictions diverge from in-game
+/// enforcement.
+///
+/// The policy is deliberately defined on the per-WAD view (does the
+/// reference resolve *in this WAD*), because that is all the in-game
+/// verifier can ever see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkinPolicy {
+    /// Tolerate a **set** texture slot whose reference does not resolve in
+    /// this WAD. This is a known authoring idiom (a dangling path
+    /// suppresses the vanilla base texture) and is safe to wave through: a
+    /// dangling reference admits no attacker-controlled bytes — there is no
+    /// chunk to load, scan, or swap — so the closed-world anti-evasion
+    /// property is unaffected.
+    ///
+    /// Never extended to skeleton/simple-skin (dangling ones are malformed
+    /// skins), and never applied to the original-WAD baseline. A tolerated
+    /// missing texture also never counts as a *stock* slot for any
+    /// "unchanged slot vouches" rule — it is modified-but-tolerated.
+    pub allow_dangling_texture: bool,
+}
+
+impl Default for SkinPolicy {
+    /// The blessed shared default: dangling texture references tolerated.
+    fn default() -> Self {
+        Self {
+            allow_dangling_texture: true,
+        }
+    }
+}
+
+impl SkinPolicy {
+    /// Fail-closed judgment: every missing reference is a violation
+    /// regardless of slot. For audits and for matching the legacy in-game
+    /// behavior.
+    pub fn strict() -> Self {
+        Self {
+            allow_dangling_texture: false,
+        }
+    }
+}
+
 /// Correctness report for one champion WAD's base skin. Empty
 /// [`violations`](Self::violations) means the mod is fine.
 #[derive(Debug, Clone, PartialEq)]
@@ -89,20 +146,17 @@ pub struct SkinIntegrity {
 
 impl SkinIntegrity {
     /// Whether anything about this base skin violates the closed-world
-    /// assertion (and would fail in-game verification).
-    pub fn is_broken(&self) -> bool {
+    /// assertion under `policy` (and would fail in-game verification).
+    pub fn is_broken(&self, policy: SkinPolicy) -> bool {
         self.resolve_error.is_some()
             || !self.missing_required.is_empty()
             || !self.corrupt.is_empty()
-            || self
-                .refs
-                .iter()
-                .any(|r| matches!(r.status, RefStatus::Missing(_)))
+            || self.refs.iter().any(|r| r.violates(policy))
     }
 
-    /// Human-readable violation lines, suitable for logs and user-facing
-    /// diagnostics. Empty when the mod is fine.
-    pub fn violations(&self) -> Vec<String> {
+    /// Human-readable violation lines under `policy`, suitable for logs and
+    /// user-facing diagnostics. Empty when the mod is fine.
+    pub fn violations(&self, policy: SkinPolicy) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(err) = &self.resolve_error {
             out.push(format!("base-skin entry could not be resolved: {err}"));
@@ -117,6 +171,9 @@ impl SkinIntegrity {
             ));
         }
         for r in &self.refs {
+            if !r.violates(policy) {
+                continue;
+            }
             match &r.status {
                 RefStatus::Unmodified | RefStatus::Modified => {}
                 RefStatus::Missing(RefMissingKind::Everywhere) => out.push(format!(
@@ -202,6 +259,7 @@ pub fn check_base_skin(
     merged: &mut dyn ChunkSource,
     champion: &str,
     world: Option<&dyn Fn(u64) -> Vec<String>>,
+    policy: SkinPolicy,
 ) -> SkinCheckOutcome {
     let root_bin_path = skin0_bin_path(champion);
     let root_hash = *WadHash::hash_str(&root_bin_path);
@@ -233,15 +291,18 @@ pub fn check_base_skin(
     let resolved = match outcome.entry {
         Ok(resolved) => resolved,
         Err(err) => {
-            return report(SkinIntegrity {
-                champion: champion.to_owned(),
-                bin_path: root_bin_path.clone(),
-                bin_name_hash: root_hash,
-                resolve_error: Some(err),
-                missing_required: Vec::new(),
-                refs: Vec::new(),
-                corrupt: outcome.corrupt,
-            });
+            return report(
+                SkinIntegrity {
+                    champion: champion.to_owned(),
+                    bin_path: root_bin_path.clone(),
+                    bin_name_hash: root_hash,
+                    resolve_error: Some(err),
+                    missing_required: Vec::new(),
+                    refs: Vec::new(),
+                    corrupt: outcome.corrupt,
+                },
+                policy,
+            );
         }
     };
 
@@ -274,15 +335,18 @@ pub fn check_base_skin(
         });
     }
 
-    report(SkinIntegrity {
-        champion: champion.to_owned(),
-        bin_path: resolved.bin_path,
-        bin_name_hash: resolved.bin_name_hash,
-        resolve_error: None,
-        missing_required: mesh_refs.missing_required_slots(),
-        refs,
-        corrupt: outcome.corrupt,
-    })
+    report(
+        SkinIntegrity {
+            champion: champion.to_owned(),
+            bin_path: resolved.bin_path,
+            bin_name_hash: resolved.bin_name_hash,
+            resolve_error: None,
+            missing_required: mesh_refs.missing_required_slots(),
+            refs,
+            corrupt: outcome.corrupt,
+        },
+        policy,
+    )
 }
 
 /// Resolve and extract the original WAD's base skin, mapping every failure
@@ -319,8 +383,8 @@ fn anomaly(baseline: BaselineAnomaly) -> SkinCheckOutcome {
     SkinCheckOutcome::BaselineAnomaly(baseline)
 }
 
-fn report(integrity: SkinIntegrity) -> SkinCheckOutcome {
-    for line in integrity.violations() {
+fn report(integrity: SkinIntegrity, policy: SkinPolicy) -> SkinCheckOutcome {
+    for line in integrity.violations(policy) {
         tracing::warn!("Base-skin violation for {}: {line}", integrity.champion);
     }
     SkinCheckOutcome::Report(integrity)
@@ -442,6 +506,7 @@ mod tests {
         original_contents: &BTreeMap<u64, Vec<u8>>,
         merged_contents: &BTreeMap<u64, Vec<u8>>,
         world: Option<&dyn Fn(u64) -> Vec<String>>,
+        policy: SkinPolicy,
     ) -> SkinCheckOutcome {
         let mut original = build_wad(original_contents);
         let mut merged = build_wad(merged_contents);
@@ -450,6 +515,7 @@ mod tests {
             &mut WadChunkSource(&mut merged),
             CHAMP,
             world,
+            policy,
         )
     }
 
@@ -468,7 +534,7 @@ mod tests {
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
         assert_eq!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::SkippedUnmodified
         );
     }
@@ -483,11 +549,16 @@ mod tests {
         );
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken());
-        assert!(report.violations().is_empty());
+        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(report.violations(SkinPolicy::default()).is_empty());
         assert_eq!(report.bin_path, ROOT);
         let statuses: Vec<_> = report
             .refs
@@ -505,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn dangling_reference_is_missing_everywhere() {
+    fn dangling_texture_is_a_violation_under_strict_policy() {
         // The mod's skin bin references a texture path that exists nowhere —
         // a broken/outdated mod (e.g. the asset was removed from the game).
         let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
@@ -516,15 +587,69 @@ mod tests {
             skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
+        let SkinCheckOutcome::Report(report) =
+            check(&original, &merged, Some(&empty_world), SkinPolicy::strict())
+        else {
             panic!("expected a report");
         };
-        assert!(report.is_broken());
+        assert!(report.is_broken(SkinPolicy::strict()));
         assert_eq!(
             report.refs[2].status,
             RefStatus::Missing(RefMissingKind::Everywhere)
         );
-        assert_eq!(report.violations().len(), 1);
+        assert_eq!(report.violations(SkinPolicy::strict()).len(), 1);
+    }
+
+    #[test]
+    fn dangling_texture_is_tolerated_by_default_policy() {
+        // Same setup under the blessed default: a dangling texture is a
+        // known authoring idiom — still reported as Missing, but not a
+        // violation.
+        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
+        );
+
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(report.violations(SkinPolicy::default()).is_empty());
+        // The fact is still on record — only the verdict changed.
+        assert_eq!(
+            report.refs[2].status,
+            RefStatus::Missing(RefMissingKind::Everywhere)
+        );
+    }
+
+    #[test]
+    fn dangling_skeleton_is_never_tolerated() {
+        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.skl";
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(stale), Some(SKN), Some(TEX), 2.0),
+        );
+
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        assert!(report.is_broken(SkinPolicy::default()));
+        assert_eq!(report.violations(SkinPolicy::default()).len(), 1);
     }
 
     #[test]
@@ -544,17 +669,22 @@ mod tests {
                 Vec::new()
             }
         };
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&world)) else {
+        let SkinCheckOutcome::Report(report) =
+            check(&original, &merged, Some(&world), SkinPolicy::strict())
+        else {
             panic!("expected a report");
         };
-        assert!(report.is_broken());
+        assert!(report.is_broken(SkinPolicy::strict()));
         assert_eq!(
             report.refs[2].status,
             RefStatus::Missing(RefMissingKind::Misplaced {
                 found_in: vec!["Testchamp.en_US.wad.client".to_string()]
             })
         );
-        assert!(report.violations()[0].contains("wrong WAD"));
+        assert!(report.violations(SkinPolicy::strict())[0].contains("wrong WAD"));
+        // The policy is per-WAD (the in-game view cannot tell Misplaced from
+        // Everywhere), so the default tolerates a misplaced texture too.
+        assert!(!report.is_broken(SkinPolicy::default()));
     }
 
     #[test]
@@ -567,7 +697,9 @@ mod tests {
             skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, NO_WORLD) else {
+        let SkinCheckOutcome::Report(report) =
+            check(&original, &merged, NO_WORLD, SkinPolicy::default())
+        else {
             panic!("expected a report");
         };
         assert_eq!(
@@ -582,10 +714,15 @@ mod tests {
         let mut merged = original.clone();
         merged.insert(chunk_hash(ROOT), skin_bin(None, Some(SKN), Some(TEX), 2.0));
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken());
+        assert!(report.is_broken(SkinPolicy::default()));
         assert_eq!(report.missing_required, vec![MeshSlot::Skeleton]);
     }
 
@@ -595,10 +732,15 @@ mod tests {
         let mut merged = original.clone();
         merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken());
+        assert!(report.is_broken(SkinPolicy::default()));
         assert!(matches!(
             report.resolve_error,
             Some(ResolveError::EntryNotFound { .. })
@@ -622,10 +764,15 @@ mod tests {
         );
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken());
+        assert!(!report.is_broken(SkinPolicy::default()));
         assert_eq!(report.bin_path, CONCAT);
     }
 
@@ -638,7 +785,7 @@ mod tests {
         let merged = original_contents();
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRootMissing { .. })
         ));
     }
@@ -650,7 +797,7 @@ mod tests {
         merged.remove(&chunk_hash(ROOT));
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::MergedRootMissing { .. })
         ));
     }
@@ -662,7 +809,7 @@ mod tests {
         let merged = original_contents();
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalCorruptBin(_))
         ));
     }
@@ -680,7 +827,7 @@ mod tests {
         );
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalMissingRequiredSlot(
                 MeshSlot::Skeleton
             ))
@@ -699,7 +846,7 @@ mod tests {
         merged.insert(chunk_hash(SKL), b"modded-skeleton".to_vec());
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD),
+            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRefUnresolved {
                 slot: MeshSlot::Skeleton,
                 ..

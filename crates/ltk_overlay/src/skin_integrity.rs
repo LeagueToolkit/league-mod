@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 
 use camino::{Utf8Path, Utf8PathBuf};
+pub use ltk_sanitize::SkinPolicy;
 use ltk_sanitize::{
     ChunkSource, SkinCheckOutcome, VirtualMerge, WadChunkSource, champion_from_wad_path,
     check_base_skin, skin0_bin_name_hash,
@@ -58,6 +59,9 @@ pub(crate) fn collect_skin_integrity_offenders(
     wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
     game_index: &GameIndex,
 ) -> Vec<SkinIntegrityOffender> {
+    // Builds always judge under the blessed shared default so the offender
+    // list predicts exactly what the in-game verifier will do.
+    let policy = SkinPolicy::default();
     let mut offenders = Vec::new();
 
     for (wad_path, override_hashes) in wad_hash_sets {
@@ -114,6 +118,7 @@ pub(crate) fn collect_skin_integrity_offenders(
             &mut WadChunkSource(&mut merged),
             &champion,
             Some(&world),
+            policy,
         ) {
             SkinCheckOutcome::SkippedUnmodified => {}
             SkinCheckOutcome::BaselineAnomaly(anomaly) => {
@@ -122,7 +127,7 @@ pub(crate) fn collect_skin_integrity_offenders(
                 tracing::error!("base-skin baseline anomaly in '{wad_path}': {anomaly}");
             }
             SkinCheckOutcome::Report(report) => {
-                if report.is_broken() {
+                if report.is_broken(policy) {
                     offenders.push(SkinIntegrityOffender {
                         mod_id: mod_id.to_string(),
                         wad: wad_path
@@ -130,7 +135,7 @@ pub(crate) fn collect_skin_integrity_offenders(
                             .unwrap_or(wad_path.as_str())
                             .to_string(),
                         champion,
-                        violations: report.violations(),
+                        violations: report.violations(policy),
                     });
                 }
             }
@@ -164,6 +169,7 @@ pub fn check_single_mod(
     game_dir: &Utf8Path,
     index_cache_path: &Utf8Path,
     enabled_mod: &mut EnabledMod,
+    policy: SkinPolicy,
 ) -> crate::error::Result<Vec<SkinIntegrityOffender>> {
     let game_index = GameIndex::load_or_build(game_dir, index_cache_path)?;
     let mod_meta = metadata::collect_single_mod_metadata(enabled_mod, &game_index, game_dir)?;
@@ -235,13 +241,14 @@ pub fn check_single_mod(
             &mut merged,
             &champion,
             Some(&world),
+            policy,
         ) {
             SkinCheckOutcome::SkippedUnmodified => {}
             SkinCheckOutcome::BaselineAnomaly(anomaly) => {
                 tracing::error!("base-skin baseline anomaly in '{wad_path}': {anomaly}");
             }
             SkinCheckOutcome::Report(report) => {
-                if report.is_broken() {
+                if report.is_broken(policy) {
                     offenders.push(SkinIntegrityOffender {
                         mod_id: mod_id.clone(),
                         wad: wad_path
@@ -249,7 +256,7 @@ pub fn check_single_mod(
                             .unwrap_or(wad_path.as_str())
                             .to_string(),
                         champion,
-                        violations: report.violations(),
+                        violations: report.violations(policy),
                     });
                 }
             }
