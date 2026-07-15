@@ -713,6 +713,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
+name = "enum_dispatch"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa18ce2bc66555b3218614519ac839ddb759a7d6720732f979ef8d13be147ecd"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1380,6 +1392,7 @@ dependencies = [
  "ltk_mod_core",
  "ltk_mod_project",
  "ltk_modpkg",
+ "ltk_overlay",
  "miette",
  "regex",
  "reqwest",
@@ -1390,6 +1403,7 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "toml",
+ "tracing-subscriber",
  "zip",
 ]
 
@@ -1525,6 +1539,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ltk_hash"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
+dependencies = [
+ "byteorder",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "ltk_io_ext"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,6 +1569,26 @@ dependencies = [
  "byteorder",
  "glam",
  "ltk_primitives 0.3.5",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ltk_meta"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b46b10820509cda6ec4cb8799e39f26997e0c6acc52baf66351e6604b637e298"
+dependencies = [
+ "byteorder",
+ "enum_dispatch",
+ "glam",
+ "indexmap",
+ "log",
+ "ltk_hash",
+ "ltk_io_ext 0.4.4",
+ "ltk_primitives 0.3.5",
+ "miette",
+ "num_enum",
+ "paste",
  "thiserror 1.0.69",
 ]
 
@@ -1605,9 +1649,11 @@ dependencies = [
  "indexmap",
  "ltk_fantome",
  "ltk_file",
+ "ltk_meta",
  "ltk_mod_project",
  "ltk_modpkg",
  "ltk_rst",
+ "ltk_sanitize",
  "ltk_wad",
  "memmap2",
  "rayon",
@@ -1657,6 +1703,18 @@ dependencies = [
  "num_enum",
  "thiserror 1.0.69",
  "xxhash-rust",
+]
+
+[[package]]
+name = "ltk_sanitize"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "ltk_hash",
+ "ltk_meta",
+ "ltk_wad",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

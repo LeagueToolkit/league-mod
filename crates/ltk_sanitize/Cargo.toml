@@ -1,0 +1,22 @@
+[package]
+name = "ltk_sanitize"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Mod correctness verification for League of Legends overlays (base-skin reference integrity)"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
+
+[dependencies]
+ltk_wad = { workspace = true }
+ltk_meta = "0.6.1"
+ltk_hash = "0.4.0"
+thiserror = "2.0"
+tracing = "0.1"
+
+[dev-dependencies]
+indexmap = { workspace = true }

@@ -2,8 +2,9 @@ use clap::builder::{styling::AnsiColor, Styles};
 use clap::ColorChoice;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use commands::{
-    extract_mod_package, info_mod_package, init_mod_project, pack_mod_project,
+    extract_mod_package, info_mod_package, init_mod_project, pack_mod_project, sanitize_mod,
     ExtractModPackageArgs, InfoModPackageArgs, InitModProjectArgs, PackFormat, PackModProjectArgs,
+    SanitizeModArgs,
 };
 use miette::Result;
 
@@ -65,6 +66,16 @@ pub enum Commands {
         /// The directory to extract the mod package to (defaults to file name without extension)
         #[arg(short, long)]
         output_dir: Option<String>,
+    },
+    /// Verify a mod's base-skin integrity against the game files, straight
+    /// from the archive (nothing is installed or extracted)
+    Sanitize {
+        /// Path to a .fantome / .modpkg file or a mod project directory
+        file_path: String,
+
+        /// Game directory (or install root); defaults to the configured League path
+        #[arg(long)]
+        game_dir: Option<String>,
     },
     /// Manage application configuration
     Config {
@@ -141,6 +152,13 @@ fn main() -> Result<()> {
         } => extract_mod_package(ExtractModPackageArgs {
             file_path,
             output_dir,
+        }),
+        Commands::Sanitize {
+            file_path,
+            game_dir,
+        } => sanitize_mod(SanitizeModArgs {
+            file_path,
+            game_dir,
         }),
         Commands::Config { action } => match action {
             ConfigAction::Show => config_cmd::show_config(),
