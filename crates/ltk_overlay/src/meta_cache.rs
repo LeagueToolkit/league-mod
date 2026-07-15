@@ -11,7 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-/// Current cache format version. Bump when the serialized format changes.
+/// Current cache format version. Bump when the serialized format changes, or
+/// when cached values are derived differently (the cache persists derived
+/// routing data, not just file facts).
+///
+/// v6: non-audio overrides declared under a localized champion WAD now fall
+/// back to the champion's real WAD; v5 caches persist the pre-delocalization
+/// `fallback_wad` targets and must be discarded.
 ///
 /// v5: keeps byte-identical cross-WAD imports; v4 caches were filtered under
 /// the old lazy rule that dropped those imports entirely, so they must be
@@ -20,7 +26,7 @@ use std::collections::HashMap;
 /// v4: cached metadata is now post-filter (SubChunkTOC / stringtable / lazy
 /// overrides already stripped); v3 caches hold unfiltered entries and must be
 /// discarded.
-const CACHE_VERSION: u32 = 5;
+const CACHE_VERSION: u32 = 6;
 
 /// Serializable cache entry for a single override.
 #[derive(Serialize, Deserialize, Clone, Debug)]

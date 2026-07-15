@@ -6,6 +6,7 @@
 use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
+use ltk_file::LeagueFileKind;
 use rayon::prelude::*;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -136,7 +137,7 @@ fn collect_wad_dir_metadata(
 
     // Capture only the id: the provider box inside `EnabledMod` isn't `Sync`.
     let mod_id = &enabled_mod.id;
-    let entries: Vec<(u64, OverrideMeta)> = override_files
+    let entries: Vec<(u64, OverrideMeta, bool)> = override_files
         .into_par_iter()
         .map(|(rel_path, bytes)| {
             let source = OverrideSource::LayerWad {
@@ -145,11 +146,12 @@ fn collect_wad_dir_metadata(
                 wad_name: wad_name.to_string(),
                 rel_path,
             };
-            build_override_meta(source, &bytes)
+            let audio = is_audio_chunk(&bytes);
+            build_override_meta(source, &bytes).map(|(path_hash, meta)| (path_hash, meta, audio))
         })
         .collect::<Result<_>>()?;
 
-    let path_hashes: Vec<u64> = entries.iter().map(|(path_hash, _)| *path_hash).collect();
+    let path_hashes: Vec<u64> = entries.iter().map(|(path_hash, _, _)| *path_hash).collect();
     let fallback_wad = resolve_fallback_wad(
         &enabled_mod.id,
         wad_name,
@@ -158,9 +160,36 @@ fn collect_wad_dir_metadata(
         game_dir,
     )?;
 
-    for (path_hash, mut meta) in entries {
-        meta.fallback_wad = fallback_wad.clone();
+    // A localized champion WAD (`X.<locale>.wad.client`) only ever holds
+    // locale-tagged VO audio, yet mods routinely pack their whole content
+    // into one. Re-home every non-audio override's fallback to the
+    // champion's real WAD, so new chunks land where the game (and the
+    // in-game verifier) resolve them; audio keeps the declared target,
+    // since genuine localized content is exactly VO.
+    let delocalized_wad = fallback_wad
+        .as_deref()
+        .and_then(|declared| delocalized_champion_wad(declared, game_index, game_dir));
+
+    let mut rehomed = 0usize;
+    for (path_hash, mut meta, audio) in entries {
+        meta.fallback_wad = match &delocalized_wad {
+            Some(target) if !audio => {
+                rehomed += 1;
+                Some(target.clone())
+            }
+            _ => fallback_wad.clone(),
+        };
         mod_meta.insert(path_hash, meta);
+    }
+    if rehomed > 0 {
+        tracing::info!(
+            "Mod='{}' WAD='{}': {} non-audio override(s) target '{}' instead of the \
+             localized WAD (localized WADs only hold locale VO)",
+            enabled_mod.id,
+            wad_name,
+            rehomed,
+            delocalized_wad.as_deref().unwrap_or(Utf8Path::new("?")),
+        );
     }
 
     tracing::info!(
@@ -228,6 +257,56 @@ fn resolve_fallback_wad(
         },
         Err(other) => Err(other),
     }
+}
+
+/// The game-relative path of the non-localized sibling (`X.wad.client`) for
+/// a localized champion WAD (`X.<locale>.wad.client`), when the sibling
+/// exists in the game. `None` for anything else — non-champion WADs
+/// (`Localized/Global.<locale>` string tables stay untouched), non-localized
+/// names, or a sibling the game does not have.
+fn delocalized_champion_wad(
+    declared: &Utf8Path,
+    game_index: &GameIndex,
+    game_dir: &Utf8Path,
+) -> Option<Utf8PathBuf> {
+    if !declared
+        .parent()?
+        .file_name()?
+        .eq_ignore_ascii_case("champions")
+    {
+        return None;
+    }
+    let sibling = delocalized_wad_name(declared.file_name()?)?;
+    let original = game_index.find_wad(&sibling).ok()?;
+    original
+        .strip_prefix(game_dir)
+        .ok()
+        .map(Utf8Path::to_path_buf)
+}
+
+/// `X.<locale>.wad.client` → `X.wad.client`; `None` when the name carries no
+/// `xx_YY` locale segment.
+fn delocalized_wad_name(file_name: &str) -> Option<String> {
+    let lower = file_name.to_ascii_lowercase();
+    let stem = &file_name[..lower.strip_suffix(".wad.client")?.len()];
+    let (champion, locale) = stem.rsplit_once('.')?;
+    let is_locale = locale.len() == 5
+        && locale.as_bytes()[2] == b'_'
+        && locale
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| i == 2 || b.is_ascii_alphabetic());
+    (is_locale && !champion.is_empty()).then(|| format!("{champion}.wad.client"))
+}
+
+/// Whether override bytes are a Wwise audio container (bank/package) — the
+/// only content class that legitimately lives in a localized WAD. Same
+/// detection the WAD writer uses for compression decisions.
+fn is_audio_chunk(bytes: &[u8]) -> bool {
+    matches!(
+        LeagueFileKind::identify_from_bytes(bytes),
+        LeagueFileKind::WwiseBank | LeagueFileKind::WwisePackage
+    )
 }
 
 /// Collect RAW overrides into `mod_meta` — files identified by game asset path
@@ -1103,5 +1182,28 @@ mod tests {
             vec!["data/characters/test/test.bin".to_string()]
         );
         assert!(meta[&0xABCD].linked_bins.is_empty());
+    }
+
+    #[test]
+    fn delocalized_wad_name_parses_locale_segments() {
+        assert_eq!(
+            delocalized_wad_name("Aatrox.en_US.wad.client").as_deref(),
+            Some("Aatrox.wad.client")
+        );
+        assert_eq!(
+            delocalized_wad_name("Yone.zh_CN.wad.client").as_deref(),
+            Some("Yone.wad.client")
+        );
+        // No locale segment.
+        assert_eq!(delocalized_wad_name("Aatrox.wad.client"), None);
+        // Underscore in the champion name, not a locale (Ruby event WADs).
+        assert_eq!(delocalized_wad_name("Ruby_Amumu.wad.client"), None);
+        // Not a locale-shaped middle segment.
+        assert_eq!(delocalized_wad_name("Spirit.Blossom.wad.client"), None);
+        assert_eq!(delocalized_wad_name("Aatrox.en-US.wad.client"), None);
+        assert_eq!(delocalized_wad_name("Aatrox.1n_US.wad.client"), None);
+        // Nothing before the locale.
+        assert_eq!(delocalized_wad_name(".en_US.wad.client"), None);
+        assert_eq!(delocalized_wad_name("bare-name"), None);
     }
 }
