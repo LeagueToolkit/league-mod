@@ -1715,6 +1715,7 @@ dependencies = [
  "ltk_wad",
  "thiserror 2.0.18",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

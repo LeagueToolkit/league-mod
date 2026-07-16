@@ -28,20 +28,24 @@ pub const MAX_LINKED_BINS: usize = 64;
 /// Distinct outcomes so callers can report precisely: a missing root bin is
 /// "nothing to verify here" (non-champion WAD), while a champion WAD whose
 /// skin entry cannot be found is itself diagnostic-worthy.
+///
+/// Entry/class hashes are plain `u32` fnv1a values, never `ltk_hash` types:
+/// this error travels inside reports (and consumers' own error enums), which
+/// must not couple consumers to this crate's `ltk_hash` version.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     #[error("bin '{bin_path}' is not in the WAD")]
     RootBinMissing { bin_path: String },
 
     #[error("entry {entry:08x} not found in '{root}' or its linked bins")]
-    EntryNotFound { root: String, entry: BinHash },
+    EntryNotFound { root: String, entry: u32 },
 
     #[error("entry {entry:08x} in '{bin_path}' has class {class:08x}, expected {expected:08x}")]
     WrongClass {
         bin_path: String,
-        entry: BinHash,
-        class: BinHash,
-        expected: BinHash,
+        entry: u32,
+        class: u32,
+        expected: u32,
     },
 
     #[error("gave up resolving entry from '{root}': more than {limit} linked bins")]
@@ -161,9 +165,9 @@ pub fn resolve_bin_entry_with(
                 return ResolveOutcome {
                     entry: Err(ResolveError::WrongClass {
                         bin_path,
-                        entry: entry_hash,
-                        class: object.class_hash,
-                        expected,
+                        entry: *entry_hash,
+                        class: *object.class_hash,
+                        expected: *expected,
                     }),
                     corrupt,
                 };
@@ -184,7 +188,7 @@ pub fn resolve_bin_entry_with(
     ResolveOutcome {
         entry: Err(ResolveError::EntryNotFound {
             root: root_bin_path.to_owned(),
-            entry: entry_hash,
+            entry: *entry_hash,
         }),
         corrupt,
     }
@@ -364,8 +368,8 @@ mod tests {
         assert!(matches!(
             outcome.entry,
             Err(ResolveError::WrongClass { class, expected, .. })
-                if class == h("ResourceResolver")
-                    && expected == h("SkinCharacterDataProperties")
+                if class == *h("ResourceResolver")
+                    && expected == *h("SkinCharacterDataProperties")
         ));
     }
 }

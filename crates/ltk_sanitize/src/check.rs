@@ -18,6 +18,7 @@
 
 use ltk_hash::{BinHash, Hash as _, WadHash};
 use thiserror::Error;
+use xxhash_rust::xxh3::xxh3_64;
 
 use crate::resolve::{CorruptBin, ResolveError, resolve_bin_entry_with};
 use crate::skin::{
@@ -39,6 +40,32 @@ pub enum RefMissingKind {
     /// The chunk exists, but in other WADs — the mod shipped it to the
     /// wrong WAD (commonly a localized WAD instead of the champion WAD).
     Misplaced { found_in: Vec<String> },
+    /// In the TOC, but its bytes could not be read (load/decompression
+    /// failure) — present in name only, so the closed world is violated
+    /// just the same. Never tolerated (see
+    /// [`SkinPolicy::allow_dangling_texture`]): unlike a dangling
+    /// reference, a stored chunk exists and admits attacker-controlled
+    /// bytes.
+    Unreadable { reason: String },
+}
+
+/// Both fingerprints of one merged chunk, as attested against
+/// known-fingerprint sets: the TOC checksum and the xxh3 of the
+/// decompressed bytes (stable across re-compression).
+///
+/// They only travel as a pair: the TOC checksum is *declared* by the
+/// (untrusted) merged WAD, not recomputed from the stored bytes, so a
+/// chunk whose bytes cannot even be read must never become attestable
+/// via its declared checksum alone — such a chunk classifies as
+/// [`RefMissingKind::Unreadable`] instead of carrying half a
+/// fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkChecksums {
+    /// TOC checksum as declared by the merged WAD (xxh3 of the stored
+    /// chunk bytes, see [`ChunkSource::checksum`]).
+    pub checksum: u64,
+    /// xxh3 of the decompressed chunk bytes.
+    pub decompressed_checksum: u64,
 }
 
 /// How a referenced asset relates to the merged and original WADs.
@@ -47,11 +74,21 @@ pub enum RefStatus {
     /// Same TOC checksum as the original chunk.
     Unmodified,
     /// Present with different content (or a chunk the original lacks).
-    /// Not a correctness violation. Note this is checksum-based: an asset
-    /// byte-identical to the original but compressed differently also
-    /// reads as modified.
-    Modified,
-    /// Not present in the merged WAD — a closed-world violation.
+    /// Not a correctness violation. Carries the merged chunk's
+    /// fingerprints so consumers that attest modified assets (e.g.
+    /// against a known-fingerprint set) never re-fetch it. Note that
+    /// *classification* is TOC-checksum-based: an asset byte-identical
+    /// to the original but compressed differently also reads as
+    /// modified (its decompressed checksum then equals the original's).
+    Modified {
+        /// The merged chunk's fingerprints. Always real: a chunk whose
+        /// bytes cannot be read classifies as
+        /// [`RefMissingKind::Unreadable`], never as modified.
+        checksums: ChunkChecksums,
+    },
+    /// Not usable from the merged WAD — absent, or present but
+    /// unreadable ([`RefMissingKind::Unreadable`]). A closed-world
+    /// violation.
     Missing(RefMissingKind),
 }
 
@@ -71,8 +108,16 @@ impl RefReport {
     /// tolerated reference keeps its [`RefStatus::Missing`] status in the
     /// report — only the verdict changes.
     pub fn violates(&self, policy: SkinPolicy) -> bool {
-        matches!(self.status, RefStatus::Missing(_))
-            && !(policy.allow_dangling_texture && self.slot == MeshSlot::Texture)
+        match &self.status {
+            // Present in name only: a stored chunk exists, so the
+            // dangling-texture tolerance's rationale (no bytes admitted)
+            // never applies.
+            RefStatus::Missing(RefMissingKind::Unreadable { .. }) => true,
+            RefStatus::Missing(_) => {
+                !(policy.allow_dangling_texture && self.slot == MeshSlot::Texture)
+            }
+            RefStatus::Unmodified | RefStatus::Modified { .. } => false,
+        }
     }
 }
 
@@ -94,7 +139,17 @@ pub struct SkinPolicy {
     /// suppresses the vanilla base texture) and is safe to wave through: a
     /// dangling reference admits no attacker-controlled bytes — there is no
     /// chunk to load, scan, or swap — so the closed-world anti-evasion
-    /// property is unaffected.
+    /// property is unaffected. For the same reason the tolerance never
+    /// covers a reference that is present but unreadable
+    /// ([`RefMissingKind::Unreadable`]) — there a stored chunk does exist.
+    ///
+    /// The sibling idiom — *removing* the texture property from the skin
+    /// entry — needs no policy at all: texture is not a required slot
+    /// (see [`MeshSlot::is_required`]), so an unset texture is clean even
+    /// under [`SkinPolicy::strict`]. It is equally safe (no bytes
+    /// admitted), and it never vouches as a stock slot either — an unset
+    /// slot produces no [`RefReport`] to read [`RefStatus::Unmodified`]
+    /// from.
     ///
     /// Never extended to skeleton/simple-skin (dangling ones are malformed
     /// skins), and never applied to the original-WAD baseline. A tolerated
@@ -175,7 +230,7 @@ impl SkinIntegrity {
                 continue;
             }
             match &r.status {
-                RefStatus::Unmodified | RefStatus::Modified => {}
+                RefStatus::Unmodified | RefStatus::Modified { .. } => {}
                 RefStatus::Missing(RefMissingKind::Everywhere) => out.push(format!(
                     "{} '{}' is missing from this WAD and everywhere else in the game \
                      and overlay — the mod is likely broken or outdated (the asset may \
@@ -191,6 +246,10 @@ impl SkinIntegrity {
                 RefStatus::Missing(RefMissingKind::Unknown) => {
                     out.push(format!("{} '{}' is missing from this WAD", r.slot, r.path))
                 }
+                RefStatus::Missing(RefMissingKind::Unreadable { reason }) => out.push(format!(
+                    "{} '{}' is in the WAD but cannot be read: {reason}",
+                    r.slot, r.path
+                )),
             }
         }
         out
@@ -230,6 +289,12 @@ pub enum SkinCheckOutcome {
     /// in-game verifier: an unmodified root bin means an unmodified base
     /// skin; a mod would have to modify only a *linked* bin to sidestep
     /// it, which in practice does not happen for skin swaps.)
+    ///
+    /// Note the referenced mesh chunks are not inspected either: a mod
+    /// can replace the chunk *contents* at the stock mesh paths while
+    /// keeping `skin0.bin` byte-identical. Harmless for the correctness
+    /// lane (nothing can be missing), but a consumer that gates further
+    /// scanning on this outcome inherits that blind spot.
     SkippedUnmodified,
     /// The base skin was checked; see [`SkinIntegrity::is_broken`].
     Report(SkinIntegrity),
@@ -314,7 +379,15 @@ pub fn check_base_skin(
             Some(checksum) if original.checksum(name_hash) == Some(checksum) => {
                 RefStatus::Unmodified
             }
-            Some(_) => RefStatus::Modified,
+            Some(checksum) => match merged.load(name_hash) {
+                Ok(data) => RefStatus::Modified {
+                    checksums: ChunkChecksums {
+                        checksum,
+                        decompressed_checksum: xxh3_64(&data),
+                    },
+                },
+                Err(reason) => RefStatus::Missing(RefMissingKind::Unreadable { reason }),
+            },
             None => RefStatus::Missing(match world {
                 None => RefMissingKind::Unknown,
                 Some(lookup) => {
@@ -549,6 +622,14 @@ mod tests {
         );
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
+        // The Modified status must carry both fingerprints of the merged
+        // chunk: the TOC checksum exactly as a ChunkSource over the merged
+        // WAD reports it, and the xxh3 of the decompressed bytes.
+        let mut merged_wad = build_wad(&merged);
+        let tex_checksum = WadChunkSource(&mut merged_wad)
+            .checksum(chunk_hash(TEX))
+            .expect("merged texture chunk");
+
         let SkinCheckOutcome::Report(report) = check(
             &original,
             &merged,
@@ -570,9 +651,100 @@ mod tests {
             vec![
                 (MeshSlot::Skeleton, RefStatus::Unmodified),
                 (MeshSlot::SimpleSkin, RefStatus::Unmodified),
-                (MeshSlot::Texture, RefStatus::Modified),
+                (
+                    MeshSlot::Texture,
+                    RefStatus::Modified {
+                        checksums: ChunkChecksums {
+                            checksum: tex_checksum,
+                            decompressed_checksum: xxh3_64(b"MODDED-texture"),
+                        }
+                    }
+                ),
             ]
         );
+    }
+
+    /// Delegates to a WAD but refuses to load one chunk, simulating a
+    /// chunk that is present in the TOC but unreadable.
+    struct BrokenChunk<S> {
+        inner: S,
+        broken: u64,
+    }
+
+    impl<S: ChunkSource> ChunkSource for BrokenChunk<S> {
+        fn checksum(&mut self, name_hash: u64) -> Option<u64> {
+            self.inner.checksum(name_hash)
+        }
+        fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {
+            if name_hash == self.broken {
+                return Err("simulated unreadable chunk".to_string());
+            }
+            self.inner.load(name_hash)
+        }
+    }
+
+    #[test]
+    fn unreadable_chunk_is_missing_and_never_tolerated() {
+        // The TOC checksum is declared by the untrusted WAD; a chunk whose
+        // bytes cannot be read is present in name only, so it classifies
+        // as Missing(Unreadable) — a violation even for a texture slot
+        // under the default policy, because unlike a dangling reference a
+        // stored chunk exists.
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+        );
+        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+
+        let mut original_wad = build_wad(&original);
+        let mut merged_wad = build_wad(&merged);
+        let mut merged_source = BrokenChunk {
+            inner: WadChunkSource(&mut merged_wad),
+            broken: chunk_hash(TEX),
+        };
+
+        let SkinCheckOutcome::Report(report) = check_base_skin(
+            &mut WadChunkSource(&mut original_wad),
+            &mut merged_source,
+            CHAMP,
+            NO_WORLD,
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        assert!(report.is_broken(SkinPolicy::default()));
+        assert!(matches!(
+            &report.refs[2].status,
+            RefStatus::Missing(RefMissingKind::Unreadable { .. })
+        ));
+        let violations = report.violations(SkinPolicy::default());
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("cannot be read"));
+    }
+
+    #[test]
+    fn removed_texture_property_is_clean_even_under_strict() {
+        // The sibling idiom to a dangling texture reference: the mod
+        // *unsets* the texture property entirely. Texture is not a
+        // required slot, so this is clean under both policies — and it
+        // leaves no texture ref on record at all, so it can never vouch
+        // as a stock slot either.
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(chunk_hash(ROOT), skin_bin(Some(SKL), Some(SKN), None, 2.0));
+
+        let SkinCheckOutcome::Report(report) =
+            check(&original, &merged, Some(&empty_world), SkinPolicy::strict())
+        else {
+            panic!("expected a report");
+        };
+        assert!(!report.is_broken(SkinPolicy::strict()));
+        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(report.missing_required.is_empty());
+        let slots: Vec<_> = report.refs.iter().map(|r| r.slot).collect();
+        assert_eq!(slots, vec![MeshSlot::Skeleton, MeshSlot::SimpleSkin]);
     }
 
     #[test]

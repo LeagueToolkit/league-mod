@@ -41,8 +41,9 @@ impl fmt::Display for MeshSlot {
 /// entry (its `SkinMeshProperties` embed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinMeshRefs {
-    /// Path hash of the entry (e.g. `Characters/Nautilus/Skins/Skin0`).
-    pub entry_hash: BinHash,
+    /// fnv1a path hash of the entry (e.g. `Characters/Nautilus/Skins/Skin0`),
+    /// as a plain `u32` — report structs never expose `ltk_hash` types.
+    pub entry_hash: u32,
     /// `SkinMeshProperties.Skeleton` (`.skl`).
     pub skeleton: Option<String>,
     /// `SkinMeshProperties.SimpleSkin` (`.skn`).
@@ -83,7 +84,7 @@ pub fn skin_mesh_refs(object: &BinObject) -> SkinMeshRefs {
     let mesh_prop = BinHash::hash_str("SkinMeshProperties");
 
     let mut refs = SkinMeshRefs {
-        entry_hash: object.path_hash,
+        entry_hash: *object.path_hash,
         skeleton: None,
         simple_skin: None,
         texture: None,
@@ -197,7 +198,7 @@ mod tests {
             .get_object(h("Characters/Testchamp/Skins/Skin0"))
             .unwrap();
         let refs = skin_mesh_refs(object);
-        assert_eq!(refs.entry_hash, h("Characters/Testchamp/Skins/Skin0"));
+        assert_eq!(refs.entry_hash, *h("Characters/Testchamp/Skins/Skin0"));
         assert_eq!(refs.skeleton.as_deref(), Some(SKL));
         assert_eq!(refs.simple_skin.as_deref(), Some(SKN));
         assert_eq!(refs.texture.as_deref(), Some(TEX));

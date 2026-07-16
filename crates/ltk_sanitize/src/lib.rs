@@ -26,6 +26,13 @@
 //!   WAD violates the assumptions — which is never the mod's fault and must
 //!   be reported separately (corrupt install, or a game patch broke an
 //!   assumption this crate bakes in).
+//!
+//! Report types expose hashes as plain integers — `u64` xxh64 chunk hashes,
+//! `u32` fnv1a bin-entry hashes — never as [`ltk_hash`] wrapper types, so a
+//! consumer pinned to a different `ltk_hash` version never hits a type
+//! clash consuming them. The re-exported [`BinHash`]/[`WadHash`] are for
+//! constructing *inputs* to the resolve/skin helpers; treat this crate's
+//! re-export as the source of truth there.
 
 pub mod check;
 pub mod resolve;
@@ -33,8 +40,8 @@ pub mod skin;
 pub mod source;
 
 pub use check::{
-    BaselineAnomaly, RefMissingKind, RefReport, RefStatus, SkinCheckOutcome, SkinIntegrity,
-    SkinPolicy, check_base_skin,
+    BaselineAnomaly, ChunkChecksums, RefMissingKind, RefReport, RefStatus, SkinCheckOutcome,
+    SkinIntegrity, SkinPolicy, check_base_skin,
 };
 pub use resolve::{
     CorruptBin, MAX_LINKED_BINS, ResolveError, ResolveOutcome, ResolvedBinObject,
