@@ -53,6 +53,16 @@ pub struct SkinMeshRefs {
 }
 
 impl SkinMeshRefs {
+    /// The referenced path for one slot, `None` when the entry does not set
+    /// it.
+    pub fn slot_path(&self, slot: MeshSlot) -> Option<&str> {
+        match slot {
+            MeshSlot::Skeleton => self.skeleton.as_deref(),
+            MeshSlot::SimpleSkin => self.simple_skin.as_deref(),
+            MeshSlot::Texture => self.texture.as_deref(),
+        }
+    }
+
     /// The set slots and their referenced paths, in a fixed order.
     pub fn slots(&self) -> impl Iterator<Item = (MeshSlot, &str)> {
         [
