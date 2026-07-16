@@ -18,6 +18,7 @@ ltk_file = "0.2.8"
 ltk_mod_project = { version = "0.5.0", path = "../ltk_mod_project" }
 ltk_modpkg = { version = "0.6.0", path = "../ltk_modpkg" }
 ltk_fantome = { version = "0.6.1", path = "../ltk_fantome" }
+ltk_sanitize = { version = "0.1.0", path = "../ltk_sanitize" }
 indexmap = { workspace = true }
 ltk_rst = "0.2.0"
 
@@ -52,5 +53,6 @@ memmap2 = "0.9"
 rayon = "1.10"
 
 [dev-dependencies]
+ltk_meta = "0.6.1"
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
