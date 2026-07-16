@@ -270,9 +270,11 @@ pub fn check_single_mod(
 /// its content provider and cached per `(layer, WAD)` directory.
 ///
 /// `checksum` reports the override's *content hash* (xxh3 of the uncompressed
-/// bytes) as a pseudo-checksum: it only ever gets compared against original
-/// TOC checksums, so overridden chunks read as modified — which is all the
-/// correctness lane needs (its violations come from *missing* chunks).
+/// bytes) as a pseudo-checksum: it never equals an original TOC checksum, so
+/// overridden chunks always take the base-skin check's content-comparison
+/// path, where `load` hands back the exact bytes that comparison
+/// fingerprints — byte-identical overrides read as unmodified, everything
+/// else as modified, and violations only ever come from *missing* chunks.
 struct ModChunkSource<'a> {
     provider: &'a mut dyn ModContentProvider,
     meta: &'a HashMap<u64, OverrideMeta>,

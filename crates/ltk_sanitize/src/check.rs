@@ -71,15 +71,19 @@ pub struct ChunkChecksums {
 /// How a referenced asset relates to the merged and original WADs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefStatus {
-    /// Same TOC checksum as the original chunk.
+    /// Same *content* as the original chunk at this path: equal TOC
+    /// checksums, or equal decompressed bytes when a repack merely
+    /// re-encoded an untouched asset (zstd is not canonical, so TOC
+    /// equality alone is too strict a test).
     Unmodified,
     /// Present with different content (or a chunk the original lacks).
     /// Not a correctness violation. Carries the merged chunk's
     /// fingerprints so consumers that attest modified assets (e.g.
-    /// against a known-fingerprint set) never re-fetch it. Note that
-    /// *classification* is TOC-checksum-based: an asset byte-identical
-    /// to the original but compressed differently also reads as
-    /// modified (its decompressed checksum then equals the original's).
+    /// against a known-fingerprint set) never re-fetch it. A mere
+    /// re-compression of untouched bytes does not land here — content
+    /// comparison classifies it [`RefStatus::Unmodified`] — so modified
+    /// means the decompressed bytes really differ, or the original side
+    /// could not prove them equal (chunk absent there, or unreadable).
     Modified {
         /// The merged chunk's fingerprints. Always real: a chunk whose
         /// bytes cannot be read classifies as
@@ -380,12 +384,20 @@ pub fn check_base_skin(
                 RefStatus::Unmodified
             }
             Some(checksum) => match merged.load(name_hash) {
-                Ok(data) => RefStatus::Modified {
-                    checksums: ChunkChecksums {
+                Ok(data) => {
+                    let checksums = ChunkChecksums {
                         checksum,
                         decompressed_checksum: xxh3_64(&data),
-                    },
-                },
+                    };
+                    // zstd is not canonical: a repack can re-encode an
+                    // untouched asset into a different TOC checksum, so a
+                    // TOC mismatch is settled by the decompressed bytes.
+                    if original_content_matches(original, name_hash, &checksums) {
+                        RefStatus::Unmodified
+                    } else {
+                        RefStatus::Modified { checksums }
+                    }
+                }
                 Err(reason) => RefStatus::Missing(RefMissingKind::Unreadable { reason }),
             },
             None => RefStatus::Missing(match world {
@@ -420,6 +432,34 @@ pub fn check_base_skin(
         },
         policy,
     )
+}
+
+/// Whether the original WAD's chunk at `name_hash` decompresses to the same
+/// content the merged chunk was fingerprinted with — the tie-breaker for a
+/// TOC-checksum mismatch, since a repack can re-encode identical bytes into
+/// a different TOC checksum. An original that lacks the chunk, or whose
+/// chunk cannot be read, does not match: the merged side then classifies as
+/// [`RefStatus::Modified`] (an unreadable *original* is never the mod's
+/// problem to report, so it maps to no error and no
+/// [`RefMissingKind::Unreadable`], which describes the merged side).
+fn original_content_matches(
+    original: &mut dyn ChunkSource,
+    name_hash: u64,
+    merged: &ChunkChecksums,
+) -> bool {
+    if !original.contains(name_hash) {
+        return false;
+    }
+    match original.load(name_hash) {
+        Ok(data) => xxh3_64(&data) == merged.decompressed_checksum,
+        Err(reason) => {
+            tracing::debug!(
+                "original chunk {name_hash:016x} is unreadable ({reason}); \
+                 classifying the merged chunk as modified"
+            );
+            false
+        }
+    }
 }
 
 /// Resolve and extract the original WAD's base skin, mapping every failure
@@ -722,6 +762,105 @@ mod tests {
         let violations = report.violations(SkinPolicy::default());
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("cannot be read"));
+    }
+
+    /// Delegates to a WAD but reports a perturbed TOC checksum for one
+    /// chunk while `load` still returns the same bytes — the shape a
+    /// repack produces for an untouched asset (zstd is not canonical).
+    struct RecompressedChunk<S> {
+        inner: S,
+        repacked: u64,
+    }
+
+    impl<S: ChunkSource> ChunkSource for RecompressedChunk<S> {
+        fn checksum(&mut self, name_hash: u64) -> Option<u64> {
+            let checksum = self.inner.checksum(name_hash)?;
+            Some(checksum ^ u64::from(name_hash == self.repacked))
+        }
+        fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {
+            self.inner.load(name_hash)
+        }
+    }
+
+    #[test]
+    fn recompressed_untouched_asset_reads_unmodified() {
+        // The mod repacked the WAD: skin0.bin is genuinely modified, but
+        // the texture chunk carries the original bytes under a different
+        // TOC checksum. Content comparison must classify it Unmodified.
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+        );
+
+        let mut original_wad = build_wad(&original);
+        let mut merged_wad = build_wad(&merged);
+        let mut merged_source = RecompressedChunk {
+            inner: WadChunkSource(&mut merged_wad),
+            repacked: chunk_hash(TEX),
+        };
+
+        let SkinCheckOutcome::Report(report) = check_base_skin(
+            &mut WadChunkSource(&mut original_wad),
+            &mut merged_source,
+            CHAMP,
+            NO_WORLD,
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        assert!(!report.is_broken(SkinPolicy::default()));
+        let statuses: Vec<_> = report
+            .refs
+            .iter()
+            .map(|r| (r.slot, r.status.clone()))
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                (MeshSlot::Skeleton, RefStatus::Unmodified),
+                (MeshSlot::SimpleSkin, RefStatus::Unmodified),
+                (MeshSlot::Texture, RefStatus::Unmodified),
+            ]
+        );
+    }
+
+    #[test]
+    fn unreadable_original_side_still_classifies_modified() {
+        // When the ORIGINAL chunk cannot be read, content equality cannot
+        // be proven — the merged chunk stays Modified with its
+        // fingerprints intact. Never an error, never Missing(Unreadable):
+        // that kind describes the merged side.
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+        );
+        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+
+        let mut original_wad = build_wad(&original);
+        let mut merged_wad = build_wad(&merged);
+        let mut original_source = BrokenChunk {
+            inner: WadChunkSource(&mut original_wad),
+            broken: chunk_hash(TEX),
+        };
+
+        let SkinCheckOutcome::Report(report) = check_base_skin(
+            &mut original_source,
+            &mut WadChunkSource(&mut merged_wad),
+            CHAMP,
+            NO_WORLD,
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(matches!(
+            &report.refs[2].status,
+            RefStatus::Modified { checksums } if checksums.decompressed_checksum == xxh3_64(b"MODDED-texture")
+        ));
     }
 
     #[test]

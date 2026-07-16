@@ -56,9 +56,10 @@ impl<TSource: Read + Seek> ChunkSource for WadChunkSource<'_, TSource> {
 /// (or extracting) anything.
 ///
 /// Note that `checksum` returns the *overlay's* checksum for overridden
-/// chunks; a chunk whose bytes equal the original but was compressed
-/// differently therefore reads as modified. The correctness checks only
-/// derive violations from *missing* chunks, so this is benign there.
+/// chunks, so a chunk whose bytes equal the original but was compressed
+/// differently reads as a TOC mismatch here. The base-skin check settles
+/// that case by comparing decompressed content — and its violations only
+/// ever come from *missing* chunks anyway.
 pub struct VirtualMerge<'a> {
     pub overlay: &'a mut dyn ChunkSource,
     pub base: &'a mut dyn ChunkSource,
