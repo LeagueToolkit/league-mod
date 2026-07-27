@@ -72,7 +72,7 @@ impl ProjectPacker {
     /// Looks for `mod.config.json` or `mod.config.toml` in `project_root`,
     /// validates the project, and scans all layer directories for content.
     pub fn new(project_root: Utf8PathBuf) -> Result<Self, PackError> {
-        let mod_project = ModProject::load(project_root.as_std_path())?;
+        let mod_project = ModProject::load(&project_root)?;
 
         Self::with_mod_project(mod_project, project_root)
     }

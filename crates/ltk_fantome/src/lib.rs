@@ -1,22 +1,21 @@
-use eyre::Result;
+use camino::Utf8Path;
 use image::ImageFormat;
 use indexmap::IndexMap;
 use ltk_mod_project::{
     ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, canonical_license_file_name,
-    find_license_file_std,
+    find_license_file,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{File, read_dir};
+use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
 pub mod error;
 mod extractor;
 mod hashtable;
 
-pub use error::FantomeExtractError;
+pub use error::{FantomeExtractError, FantomePackError, WadHashtableError};
 pub use extractor::{FantomeExtractResult, FantomeExtractor};
 pub use hashtable::{WadHashtable, format_chunk_path_hash};
 
@@ -145,21 +144,21 @@ pub fn get_unsupported_layers(mod_project: &ModProject) -> Vec<&ModProjectLayer>
     mod_project
         .layers
         .iter()
-        .filter(|layer| layer.name != "base")
+        .filter(|layer| !layer.is_base())
         .collect()
 }
 
 /// Check if the mod project has layers that won't be included in Fantome format.
 pub fn has_unsupported_layers(mod_project: &ModProject) -> bool {
-    mod_project.layers.iter().any(|layer| layer.name != "base")
+    mod_project.layers.iter().any(|layer| !layer.is_base())
 }
 
 /// Pack a mod project into a Fantome .zip format
 pub fn pack_to_fantome<W: Write + std::io::Seek>(
     writer: W,
     mod_project: &ModProject,
-    project_root: &Path,
-) -> Result<()> {
+    project_root: &Utf8Path,
+) -> Result<(), FantomePackError> {
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -177,32 +176,26 @@ pub fn pack_to_fantome<W: Write + std::io::Seek>(
 
 fn pack_base_layer<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    project_root: &Path,
+    project_root: &Utf8Path,
     options: &SimpleFileOptions,
-) -> Result<()> {
+) -> Result<(), FantomePackError> {
     let base_layer_path = project_root.join("content").join("base");
 
     if !base_layer_path.exists() {
-        return Err(eyre::eyre!(
-            "Base layer directory does not exist: {}",
-            base_layer_path.display()
-        ));
+        return Err(FantomePackError::MissingBaseLayer(base_layer_path));
     }
 
-    // Iterate through all .wad.client directories in the base layer
-    for entry in read_dir(&base_layer_path)? {
-        let entry = entry?;
-        let path = entry.path();
+    let entries = base_layer_path
+        .read_dir_utf8()
+        .map_err(|source| FantomePackError::read(&base_layer_path, source))?;
 
-        if path.is_dir()
-            && path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with(".wad.client")
-        {
-            let wad_name = path.file_name().unwrap().to_string_lossy();
-            pack_wad_directory(zip, &path, &format!("WAD/{}", wad_name), options)?;
+    // Iterate through all .wad.client directories in the base layer
+    for entry in entries {
+        let entry = entry.map_err(|source| FantomePackError::read(&base_layer_path, source))?;
+
+        if entry.path().is_dir() && entry.file_name().ends_with(".wad.client") {
+            let zip_prefix = format!("WAD/{}", entry.file_name());
+            pack_wad_directory(zip, entry.path(), &zip_prefix, options)?;
         }
     }
 
@@ -211,37 +204,61 @@ fn pack_base_layer<W: Write + std::io::Seek>(
 
 fn pack_wad_directory<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    wad_dir: &Path,
+    wad_dir: &Utf8Path,
     zip_prefix: &str,
     options: &SimpleFileOptions,
-) -> Result<()> {
+) -> Result<(), FantomePackError> {
     for entry in walkdir::WalkDir::new(wad_dir).into_iter() {
-        let entry = entry.map_err(|e| eyre::eyre!("Failed to walk directory: {}", e))?;
-        let path = entry.path();
+        let entry = entry.map_err(|source| {
+            FantomePackError::read(
+                wad_dir,
+                source.into_io_error().unwrap_or_else(walk_io_error),
+            )
+        })?;
 
-        if path.is_file() {
-            let relative_path = path.strip_prefix(wad_dir)?;
-            let zip_path = format!(
-                "{}/{}",
-                zip_prefix,
-                relative_path.to_string_lossy().replace('\\', "/")
-            );
+        let path = Utf8Path::from_path(entry.path()).ok_or_else(|| {
+            FantomePackError::NonUtf8Path(entry.path().to_string_lossy().into_owned())
+        })?;
 
-            zip.start_file(zip_path, *options)?;
-            let mut file = File::open(path)?;
-            std::io::copy(&mut file, zip)?;
+        if !path.is_file() {
+            continue;
         }
+
+        // WalkDir yields only paths beneath its root, so the prefix is always
+        // present.
+        let relative_path = path
+            .strip_prefix(wad_dir)
+            .expect("WalkDir yields paths under its root");
+
+        let zip_path = format!(
+            "{}/{}",
+            zip_prefix,
+            relative_path.as_str().replace('\\', "/")
+        );
+
+        zip.start_file(zip_path, *options)?;
+        let mut file = File::open(path).map_err(|source| FantomePackError::read(path, source))?;
+        std::io::copy(&mut file, zip).map_err(|source| FantomePackError::read(path, source))?;
     }
 
     Ok(())
 }
 
+/// A walk failure that carried no IO error of its own, which happens only for a
+/// symlink loop.
+fn walk_io_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "directory loop while scanning",
+    )
+}
+
 fn pack_metadata<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
     mod_project: &ModProject,
-    project_root: &Path,
+    project_root: &Utf8Path,
     options: &SimpleFileOptions,
-) -> Result<()> {
+) -> Result<(), FantomePackError> {
     // Build layers map with string overrides
     let layers = build_fantome_layers(mod_project);
 
@@ -265,24 +282,21 @@ fn pack_metadata<W: Write + std::io::Seek>(
     let readme_path = project_root.join("README.md");
     if readme_path.exists() {
         zip.start_file("META/README.md", *options)?;
-        let mut readme_file = File::open(readme_path)?;
-        std::io::copy(&mut readme_file, zip)?;
+        copy_file_into(zip, &readme_path)?;
     }
 
     // Add the license text, if the project ships one. The entry keeps the
     // canonical spelling of the source file's name (`license.txt` becomes
     // `META/LICENSE.txt`), which is what the extractor writes back out, so
     // pack → extract → pack does not rename the file underneath the author.
-    if let Some(license_path) = find_license_file_std(project_root) {
+    if let Some(license_path) = find_license_file(project_root) {
         let entry_name = license_path
             .file_name()
-            .and_then(|name| name.to_str())
             .and_then(canonical_license_file_name)
             .unwrap_or("LICENSE");
 
         zip.start_file(format!("META/{entry_name}"), *options)?;
-        let mut license_file = File::open(&license_path)?;
-        std::io::copy(&mut license_file, zip)?;
+        copy_file_into(zip, &license_path)?;
     }
 
     // Add image.png if thumbnail exists
@@ -296,15 +310,30 @@ fn pack_metadata<W: Write + std::io::Seek>(
     Ok(())
 }
 
+/// Copy a project file into the entry the archive is currently writing.
+fn copy_file_into<W: Write>(zip: &mut W, path: &Utf8Path) -> Result<(), FantomePackError> {
+    let mut file = File::open(path).map_err(|source| FantomePackError::read(path, source))?;
+
+    std::io::copy(&mut file, zip).map_err(|source| FantomePackError::read(path, source))?;
+
+    Ok(())
+}
+
 fn pack_image<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
-    image_path: &Path,
+    image_path: &Utf8Path,
     options: &SimpleFileOptions,
-) -> Result<()> {
-    let img = image::open(image_path)?;
+) -> Result<(), FantomePackError> {
+    let thumbnail_error = |source: image::ImageError| FantomePackError::Thumbnail {
+        path: image_path.to_owned(),
+        source: Box::new(source),
+    };
+
+    let img = image::open(image_path).map_err(thumbnail_error)?;
 
     let mut png_buffer = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png_buffer), ImageFormat::Png)?;
+    img.write_to(&mut std::io::Cursor::new(&mut png_buffer), ImageFormat::Png)
+        .map_err(thumbnail_error)?;
 
     zip.start_file("META/image.png", *options)?;
     zip.write_all(&png_buffer)?;
@@ -350,7 +379,14 @@ fn format_authors(authors: &[ModProjectAuthor]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use camino::Utf8PathBuf;
     use std::io::Cursor;
+    use tempfile::TempDir;
+
+    /// The temp directory's path, which packing takes as UTF-8.
+    fn utf8_dir(dir: &TempDir) -> Utf8PathBuf {
+        Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap()
+    }
 
     fn test_project(license: Option<ModProjectLicense>) -> ModProject {
         ModProject {
@@ -370,7 +406,7 @@ mod tests {
     }
 
     /// Write a minimal project tree with one base-layer WAD file.
-    fn write_project_tree(root: &Path) {
+    fn write_project_tree(root: &Utf8Path) {
         let wad_dir = root.join("content").join("base").join("Test.wad.client");
         std::fs::create_dir_all(&wad_dir).unwrap();
         std::fs::write(wad_dir.join("data.bin"), b"content").unwrap();
@@ -443,14 +479,14 @@ mod tests {
     #[test]
     fn pack_writes_license_file_and_field() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        write_project_tree(root);
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
         std::fs::write(root.join("LICENSE.md"), "The terms.").unwrap();
 
         let project = test_project(Some(ModProjectLicense::Spdx("MIT".to_string())));
 
         let mut buffer = Cursor::new(Vec::new());
-        pack_to_fantome(&mut buffer, &project, root).unwrap();
+        pack_to_fantome(&mut buffer, &project, &root).unwrap();
 
         buffer.set_position(0);
         let mut archive = zip::ZipArchive::new(buffer).unwrap();
@@ -477,13 +513,13 @@ mod tests {
     #[test]
     fn pack_omits_license_entry_when_project_has_none() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        write_project_tree(root);
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
 
         let project = test_project(None);
 
         let mut buffer = Cursor::new(Vec::new());
-        pack_to_fantome(&mut buffer, &project, root).unwrap();
+        pack_to_fantome(&mut buffer, &project, &root).unwrap();
 
         buffer.set_position(0);
         let mut archive = zip::ZipArchive::new(buffer).unwrap();
@@ -493,7 +529,7 @@ mod tests {
     #[test]
     fn license_survives_project_fantome_project_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("project");
+        let root = utf8_dir(&tmp).join("project");
         write_project_tree(&root);
         std::fs::write(root.join("LICENSE.txt"), "Round trip terms.").unwrap();
 
@@ -506,7 +542,7 @@ mod tests {
         pack_to_fantome(&mut buffer, &project, &root).unwrap();
 
         buffer.set_position(0);
-        let extracted = tmp.path().join("extracted");
+        let extracted = utf8_dir(&tmp).join("extracted");
         let result = FantomeExtractor::new(buffer)
             .unwrap()
             .extract_to(&extracted)
@@ -530,12 +566,12 @@ mod tests {
     #[test]
     fn pack_canonicalizes_license_entry_name() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        write_project_tree(root);
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
         std::fs::write(root.join("license.txt"), "The terms.").unwrap();
 
         let mut buffer = Cursor::new(Vec::new());
-        pack_to_fantome(&mut buffer, &test_project(None), root).unwrap();
+        pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap();
 
         buffer.set_position(0);
         let mut archive = zip::ZipArchive::new(buffer).unwrap();
@@ -558,6 +594,73 @@ mod tests {
         assert!(
             serde_json::from_str::<FantomeInfo>(typoed).is_err(),
             "a misspelled license key must not parse as a URL-less license"
+        );
+    }
+
+    /// A project with nothing to pack is a distinct, matchable failure rather
+    /// than a string a caller can only print.
+    #[test]
+    fn pack_without_a_base_layer_names_the_missing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+
+        let mut buffer = Cursor::new(Vec::new());
+        let error = pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap_err();
+
+        match error {
+            FantomePackError::MissingBaseLayer(path) => {
+                assert_eq!(path, root.join("content").join("base"));
+            }
+            other => panic!("expected MissingBaseLayer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pack_reports_an_unreadable_thumbnail_with_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        // Present, so packing reaches it, but not an image.
+        std::fs::write(root.join("thumbnail.webp"), b"not an image").unwrap();
+
+        let project = ModProject {
+            thumbnail: Some("thumbnail.webp".to_string()),
+            ..test_project(None)
+        };
+
+        let mut buffer = Cursor::new(Vec::new());
+        let error = pack_to_fantome(&mut buffer, &project, &root).unwrap_err();
+
+        match error {
+            FantomePackError::Thumbnail { path, .. } => {
+                assert_eq!(path, root.join("thumbnail.webp"));
+            }
+            other => panic!("expected Thumbnail, got {other:?}"),
+        }
+    }
+
+    /// An error's own message must not repeat what its source says, or an error
+    /// chain prints the same sentence twice.
+    #[test]
+    fn pack_error_display_does_not_embed_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+        std::fs::write(root.join("thumbnail.webp"), b"not an image").unwrap();
+
+        let project = ModProject {
+            thumbnail: Some("thumbnail.webp".to_string()),
+            ..test_project(None)
+        };
+
+        let mut buffer = Cursor::new(Vec::new());
+        let error = pack_to_fantome(&mut buffer, &project, &root).unwrap_err();
+
+        let source = std::error::Error::source(&error).unwrap().to_string();
+        assert!(
+            !error.to_string().contains(&source),
+            "`{error}` already contains its source `{source}`"
         );
     }
 }

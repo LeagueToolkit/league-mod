@@ -5,7 +5,6 @@
 //! present.
 
 use camino::{Utf8Path, Utf8PathBuf};
-use std::path::{Path, PathBuf};
 
 /// License file names recognized at a project root, in precedence order.
 pub const LICENSE_FILE_NAMES: [&str; 3] = ["LICENSE", "LICENSE.md", "LICENSE.txt"];
@@ -21,21 +20,11 @@ pub const LICENSE_FILE_NAMES: [&str; 3] = ["LICENSE", "LICENSE.md", "LICENSE.txt
 /// `LICENSE` next to `license`) are broken lexicographically on the on-disk
 /// name so the pick is deterministic.
 ///
+/// A file whose own name is not valid UTF-8 is skipped, which costs nothing:
+/// every recognized name is ASCII.
+///
 /// Returns `None` if the directory cannot be read or holds no license file.
 pub fn find_license_file(project_root: &Utf8Path) -> Option<Utf8PathBuf> {
-    let path = find_license_file_std(project_root.as_std_path())?;
-
-    Utf8PathBuf::from_path_buf(path).ok()
-}
-
-/// [`find_license_file`] for a caller holding an OS path it cannot assume is
-/// UTF-8.
-///
-/// Prefer [`find_license_file`]; this exists so that a project root which does
-/// not round-trip through UTF-8 still gets its license packaged instead of
-/// silently skipped. The license file's own name is still matched as UTF-8,
-/// which costs nothing, since every recognized name is ASCII.
-pub fn find_license_file_std(project_root: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(project_root).ok()?;
 
     // Best on-disk name per recognized name, indexed into LICENSE_FILE_NAMES.

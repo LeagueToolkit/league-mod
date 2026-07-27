@@ -118,29 +118,24 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
 
     let mut extractor = FantomeExtractor::new(file)
         .map_err(map_fantome_error)?
-        .with_hashtable_opt(hashtable);
+        .with_hashtable(hashtable);
     extractor
-        .extract_to(output_dir.as_std_path())
+        .extract_to(&output_dir)
         .map_err(map_fantome_error)?;
     println_pad!("{}", "✅ Extraction complete!".bright_green().bold());
     Ok(())
 }
 
 /// Map FantomeExtractError to CliError for user-friendly error messages.
+///
+/// Only the WAD case is pulled out, for its help text. Everything else is
+/// carried as a source so miette prints the whole chain, which is where the
+/// path that failed now lives.
 fn map_fantome_error(err: FantomeExtractError) -> CliError {
     match err {
-        FantomeExtractError::Wad(e) => CliError::WadExtractionFailed {
-            message: e.to_string(),
+        FantomeExtractError::Wad(source) => CliError::WadExtractionFailed {
+            message: source.to_string(),
         },
-        FantomeExtractError::Io(e) => CliError::IoError { source: e },
-        FantomeExtractError::Zip(e) => CliError::IoError {
-            source: std::io::Error::other(e),
-        },
-        FantomeExtractError::Json(e) => CliError::IoError {
-            source: std::io::Error::other(e),
-        },
-        FantomeExtractError::MissingMetadata => CliError::IoError {
-            source: std::io::Error::other("Missing info.json metadata file"),
-        },
+        source => CliError::FantomeExtractionFailed { source },
     }
 }
