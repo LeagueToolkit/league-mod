@@ -111,8 +111,11 @@ fn new_returns_error_for_missing_config() {
 
     let err = ProjectPacker::new(root).unwrap_err();
     assert!(
-        matches!(err, PackError::ConfigError(_)),
-        "Expected ConfigError, got: {err}"
+        matches!(
+            err,
+            PackError::Config(ltk_mod_project::ModProjectError::ConfigNotFound(_))
+        ),
+        "Expected a missing config file, got: {err}"
     );
 }
 

@@ -72,8 +72,7 @@ impl ProjectPacker {
     /// Looks for `mod.config.json` or `mod.config.toml` in `project_root`,
     /// validates the project, and scans all layer directories for content.
     pub fn new(project_root: Utf8PathBuf) -> Result<Self, PackError> {
-        let mod_project = ModProject::load(project_root.as_std_path())
-            .map_err(|e| PackError::ConfigError(e.to_string()))?;
+        let mod_project = ModProject::load(project_root.as_std_path())?;
 
         Self::with_mod_project(mod_project, project_root)
     }
@@ -338,8 +337,7 @@ impl ProjectPacker {
     }
 
     fn build_metadata(&self) -> Result<ModpkgMetadata, PackError> {
-        let version = semver::Version::parse(&self.mod_project.version)
-            .map_err(|e| PackError::InvalidVersion(e.to_string()))?;
+        let version = semver::Version::parse(&self.mod_project.version)?;
 
         Ok(ModpkgMetadata {
             schema_version: CURRENT_SCHEMA_VERSION,

@@ -27,7 +27,7 @@ use crate::builder::ModpkgBuilderError;
 use crate::error::{EncodingError, InvalidSlugError, ReadTextError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
-use ltk_mod_project::ModProject;
+use ltk_mod_project::{ModProject, ModProjectError};
 use std::io;
 
 // ---------------------------------------------------------------------------
@@ -50,8 +50,8 @@ pub enum PackError {
     #[error("Config file not found in project directory: {0}")]
     ConfigNotFound(Utf8PathBuf),
 
-    #[error("Failed to load project config: {0}")]
-    ConfigError(String),
+    #[error("Failed to load project config")]
+    Config(#[from] ModProjectError),
 
     #[error("Layer directory missing: {layer} at {path}")]
     LayerDirMissing { layer: String, path: Utf8PathBuf },
@@ -65,8 +65,8 @@ pub enum PackError {
     #[error("Failed to process thumbnail")]
     Thumbnail(#[from] ThumbnailError),
 
-    #[error("Invalid version format: {0}")]
-    InvalidVersion(String),
+    #[error("Invalid mod version")]
+    InvalidVersion(#[from] semver::Error),
 
     /// A content directory could not be turned into a valid glob pattern.
     ///
