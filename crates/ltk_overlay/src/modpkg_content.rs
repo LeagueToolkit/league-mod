@@ -35,10 +35,7 @@ impl<R: Read + Seek> ModpkgContent<R> {
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
-        let metadata = self
-            .modpkg
-            .load_metadata()
-            .map_err(|e| Error::Other(format!("Failed to load modpkg metadata: {}", e)))?;
+        let metadata = self.modpkg.load_metadata()?;
 
         let mut layers: Vec<ModProjectLayer> = self
             .modpkg
@@ -148,9 +145,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         }
 
         // Batch load all chunks in offset-sorted order for sequential I/O
-        let batch = self.modpkg.load_chunks_batch(&chunk_keys).map_err(|e| {
-            Error::Other(format!("Failed to batch decompress modpkg chunks: {}", e))
-        })?;
+        let batch = self.modpkg.load_chunks_batch(&chunk_keys)?;
 
         let mut results = Vec::with_capacity(batch.len());
         for (path_hash, _layer_hash, data) in batch {
@@ -171,15 +166,10 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
         let path_hash = ltk_modpkg::ChunkPath::new(rel_path.as_str()).hash();
 
+        // `ModpkgError` already names the chunk it failed on.
         let bytes = self
             .modpkg
-            .load_chunk_decompressed_by_hash(path_hash, layer_hash)
-            .map_err(|e| {
-                Error::Other(format!(
-                    "Failed to decompress modpkg chunk {:016x}: {}",
-                    path_hash, e
-                ))
-            })?;
+            .load_chunk_decompressed_by_hash(path_hash, layer_hash)?;
 
         Ok(bytes.into_vec())
     }

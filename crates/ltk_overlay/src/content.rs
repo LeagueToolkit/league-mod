@@ -11,7 +11,7 @@
 //! Archive-backed implementations (`.modpkg`, `.fantome`) live in the `ltk-manager`
 //! crate where the archive format dependencies are available.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::ModProject;
 use xxhash_rust::xxh3::xxh3_64;
@@ -183,7 +183,8 @@ impl FsModContent {
 impl ModContentProvider for FsModContent {
     fn mod_project(&mut self) -> Result<ModProject> {
         let config_path = self.mod_dir.join("mod.config.json");
-        let contents = std::fs::read_to_string(config_path.as_std_path())?;
+        let contents = std::fs::read_to_string(config_path.as_std_path())
+            .map_err(|source| Error::read(&config_path, source))?;
         Ok(serde_json::from_str(&contents)?)
     }
 
@@ -194,8 +195,10 @@ impl ModContentProvider for FsModContent {
         }
 
         let mut wads = Vec::new();
-        for entry in std::fs::read_dir(layer_dir.as_std_path())? {
-            let entry = entry?;
+        let entries = std::fs::read_dir(layer_dir.as_std_path())
+            .map_err(|source| Error::read(&layer_dir, source))?;
+        for entry in entries {
+            let entry = entry.map_err(|source| Error::read(&layer_dir, source))?;
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -221,8 +224,10 @@ impl ModContentProvider for FsModContent {
         let mut stack = vec![wad_dir.clone()];
 
         while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(dir.as_std_path())? {
-                let entry = entry?;
+            let entries =
+                std::fs::read_dir(dir.as_std_path()).map_err(|source| Error::read(&dir, source))?;
+            for entry in entries {
+                let entry = entry.map_err(|source| Error::read(&dir, source))?;
                 let path = entry.path();
 
                 let utf8_path = match Utf8PathBuf::from_path_buf(path) {
@@ -243,7 +248,8 @@ impl ModContentProvider for FsModContent {
                     .unwrap_or(&utf8_path)
                     .as_str()
                     .replace('\\', "/");
-                let bytes = std::fs::read(utf8_path.as_std_path())?;
+                let bytes = std::fs::read(utf8_path.as_std_path())
+                    .map_err(|source| Error::read(&utf8_path, source))?;
                 results.push((Utf8PathBuf::from(rel), bytes));
             }
         }
@@ -297,7 +303,8 @@ impl ModContentProvider for FsModContent {
                     continue;
                 }
 
-                let meta = std::fs::metadata(utf8_path.as_std_path())?;
+                let meta = std::fs::metadata(utf8_path.as_std_path())
+                    .map_err(|source| Error::read(&utf8_path, source))?;
                 let size = meta.len();
                 let mtime = meta
                     .modified()
@@ -339,12 +346,12 @@ impl ModContentProvider for FsModContent {
             .join(layer)
             .join(wad_name)
             .join(rel_path);
-        Ok(std::fs::read(file_path.as_std_path())?)
+        std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
     }
 
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
         let file_path = self.mod_dir.join("content").join(rel_path);
-        Ok(std::fs::read(file_path.as_std_path())?)
+        std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
     }
 }
 

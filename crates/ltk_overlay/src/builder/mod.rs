@@ -534,7 +534,8 @@ impl OverlayBuilder {
             )));
         }
 
-        std::fs::create_dir_all(state_dir.as_std_path())?;
+        std::fs::create_dir_all(state_dir.as_std_path())
+            .map_err(|source| Error::write(state_dir, source))?;
         let cache_path = state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(game_dir, &cache_path)?;
 
@@ -618,8 +619,10 @@ impl OverlayBuilder {
             )));
         }
 
-        std::fs::create_dir_all(self.overlay_root.as_std_path())?;
-        std::fs::create_dir_all(self.state_dir.as_std_path())?;
+        std::fs::create_dir_all(self.overlay_root.as_std_path())
+            .map_err(|source| Error::write(&self.overlay_root, source))?;
+        std::fs::create_dir_all(self.state_dir.as_std_path())
+            .map_err(|source| Error::write(&self.state_dir, source))?;
 
         let cache_path = self.state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
@@ -779,7 +782,8 @@ impl OverlayBuilder {
         // Remove previous state so build() sees no match
         let state_path = self.state_dir.join("overlay.json");
         if state_path.as_std_path().exists() {
-            std::fs::remove_file(state_path.as_std_path())?;
+            std::fs::remove_file(state_path.as_std_path())
+                .map_err(|source| Error::write(&state_path, source))?;
         }
         self.clean_overlay_wads()?;
         self.build()
@@ -1018,7 +1022,8 @@ impl OverlayBuilder {
     fn clean_overlay_wads(&self) -> Result<()> {
         let data_dir = self.overlay_root.join("DATA");
         if data_dir.as_std_path().exists() {
-            std::fs::remove_dir_all(data_dir.as_std_path())?;
+            std::fs::remove_dir_all(data_dir.as_std_path())
+                .map_err(|source| Error::write(&data_dir, source))?;
         }
         Ok(())
     }

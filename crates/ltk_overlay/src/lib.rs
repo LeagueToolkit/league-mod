@@ -110,7 +110,7 @@ pub use builder::{
     OverlayProgress, OverlayStage,
 };
 pub use content::{FsModContent, ModContentProvider};
-pub use error::{Error, Result};
+pub use error::{CacheError, Error, Result};
 pub use fantome_content::FantomeContent;
 pub use game_index::GameIndex;
 pub use linked_bins::LinkedBinOffender;

@@ -1,6 +1,5 @@
 use binrw::binrw;
 use chunk::{ModpkgChunk, NO_LAYER_HASH};
-use error::ModpkgError;
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -27,6 +26,7 @@ pub mod project;
 
 pub use chunk_path::ChunkPath;
 pub use decoder::ModpkgDecoder;
+pub use error::{EncodingError, InvalidSlugError, ModpkgError, ReadFileError, StripPrefixError};
 pub use extractor::ModpkgExtractor;
 pub use license::*;
 pub use metadata::*;

@@ -197,13 +197,15 @@ impl GameIndex {
     /// * `cache_path` - Path where the index should be saved
     pub fn save(&self, cache_path: &Utf8Path) -> Result<()> {
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent.as_std_path())?;
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| Error::cache_write(cache_path, source))?;
         }
 
         let cache = self.to_cache();
         let bytes = rmp_serde::to_vec_named(&cache)
-            .map_err(|e| Error::Other(format!("Failed to serialize game index cache: {}", e)))?;
-        std::fs::write(cache_path.as_std_path(), bytes)?;
+            .map_err(|source| Error::cache_write(cache_path, source))?;
+        std::fs::write(cache_path.as_std_path(), bytes)
+            .map_err(|source| Error::cache_write(cache_path, source))?;
 
         tracing::debug!("Game index cache saved to {}", cache_path);
         Ok(())
@@ -367,7 +369,8 @@ impl GameIndex {
             return Ok(None);
         }
 
-        let bytes = std::fs::read(cache_path.as_std_path())?;
+        let bytes = std::fs::read(cache_path.as_std_path())
+            .map_err(|source| Error::read(cache_path, source))?;
         let cache: GameIndexCache = match rmp_serde::from_slice(&bytes) {
             Ok(c) => c,
             Err(e) => {

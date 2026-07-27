@@ -215,12 +215,14 @@ impl OverrideMetaCache {
     /// Save cache to disk.
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent.as_std_path())?;
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| Error::cache_write(path, source))?;
         }
 
-        let bytes = rmp_serde::to_vec_named(self)
-            .map_err(|e| Error::Other(format!("Failed to serialize override meta cache: {}", e)))?;
-        std::fs::write(path.as_std_path(), bytes)?;
+        let bytes =
+            rmp_serde::to_vec_named(self).map_err(|source| Error::cache_write(path, source))?;
+        std::fs::write(path.as_std_path(), bytes)
+            .map_err(|source| Error::cache_write(path, source))?;
 
         tracing::debug!("Override meta cache saved to {}", path);
         Ok(())
