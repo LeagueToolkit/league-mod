@@ -1,7 +1,7 @@
 use crate::error::{EncodingError, ReadTextError, StripPrefixError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::path::PathBuf;
-use xxhash_rust::{xxh3, xxh64};
+use xxhash_rust::xxh3;
 
 pub fn is_hex_chunk_name(chunk_name: &str) -> bool {
     // Reject 0x prefix
@@ -22,7 +22,10 @@ pub fn is_hex_chunk_name(chunk_name: &str) -> bool {
 ///
 /// Lowercases the path and converts backslashes to forward slashes so that
 /// the same logical path is represented identically on all platforms.
-/// Call this once before storing or hashing a chunk path.
+///
+/// Prefer [`ChunkPath`](crate::ChunkPath), which applies this in its
+/// constructor and so cannot be hashed before it is normalized. This is
+/// exposed for display normalization, where no hash is involved.
 pub fn normalize_chunk_path(path: &str) -> String {
     path.to_lowercase().replace('\\', "/")
 }
@@ -30,15 +33,6 @@ pub fn normalize_chunk_path(path: &str) -> String {
 /// Hash a layer name using xxhash3.
 pub fn hash_layer_name(name: &str) -> u64 {
     xxh3::xxh3_64(name.to_lowercase().as_bytes())
-}
-
-/// Hash a chunk name using xxhash64.
-///
-/// Expects a pre-normalized path (lowercase, forward slashes).
-/// Use [`normalize_chunk_path`] before calling this if the input may
-/// contain uppercase characters or backslashes.
-pub fn hash_chunk_name(name: &str) -> u64 {
-    xxh64::xxh64(name.as_bytes(), 0)
 }
 
 /// Hash a wad name using xxhash3.
@@ -108,44 +102,33 @@ impl PathBufExt for PathBuf {
 mod tests {
     use super::*;
 
+    const IN_WAD: &str = "ASSETS/Characters/Aatrox/Skins/Base/Aatrox.dds";
+    const CANONICAL: &str = "assets/characters/aatrox/skins/base/aatrox.dds";
+
     #[test]
     fn normalize_chunk_path_lowercases() {
-        assert_eq!(
-            normalize_chunk_path("Graves.wad.client/Data/File.bin"),
-            "graves.wad.client/data/file.bin"
-        );
+        assert_eq!(normalize_chunk_path(IN_WAD), CANONICAL);
     }
 
     #[test]
     fn normalize_chunk_path_converts_backslashes() {
         assert_eq!(
-            normalize_chunk_path("graves.wad.client\\data\\characters\\graves"),
-            "graves.wad.client/data/characters/graves"
+            normalize_chunk_path("assets\\characters\\aatrox\\skins\\base\\aatrox.dds"),
+            CANONICAL
         );
     }
 
     #[test]
     fn normalize_chunk_path_handles_mixed_separators() {
         assert_eq!(
-            normalize_chunk_path("Graves.wad.client\\Data/Characters\\Graves"),
-            "graves.wad.client/data/characters/graves"
+            normalize_chunk_path("ASSETS\\Characters/Aatrox\\Skins/Base/Aatrox.dds"),
+            CANONICAL
         );
     }
 
     #[test]
     fn normalize_chunk_path_noop_on_normalized() {
-        let path = "graves.wad.client/data/file.bin";
-        assert_eq!(normalize_chunk_path(path), path);
-    }
-
-    #[test]
-    fn hash_chunk_name_consistent_after_normalization() {
-        let forward = normalize_chunk_path("graves.wad.client/data/file.bin");
-        let back = normalize_chunk_path("graves.wad.client\\data\\file.bin");
-        let mixed = normalize_chunk_path("Graves.wad.client\\Data/File.bin");
-
-        assert_eq!(hash_chunk_name(&forward), hash_chunk_name(&back));
-        assert_eq!(hash_chunk_name(&forward), hash_chunk_name(&mixed));
+        assert_eq!(normalize_chunk_path(CANONICAL), CANONICAL);
     }
 
     #[test]

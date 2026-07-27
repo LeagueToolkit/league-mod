@@ -79,7 +79,7 @@ mod tests {
         let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
 
         // Get the test.bin chunk (not the metadata chunk)
-        let test_path_hash = crate::hash_chunk_name("test.bin");
+        let test_path_hash = crate::ChunkPath::new("test.bin").hash();
         let base_layer_hash = crate::hash_layer_name("base");
         let chunk = modpkg
             .chunks

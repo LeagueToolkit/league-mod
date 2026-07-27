@@ -13,7 +13,7 @@ use crate::{
     ModpkgCompression,
 };
 use crate::{
-    hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
+    hash_layer_name, hash_wad_name, utils, ChunkPath, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
     README_CHUNK_PATH,
 };
 
@@ -66,7 +66,7 @@ struct MetaChunk<'builder> {
 
 impl MetaChunk<'_> {
     fn path_hash(&self) -> u64 {
-        hash_chunk_name(self.path)
+        ChunkPath::new(self.path).hash()
     }
 }
 
@@ -615,11 +615,11 @@ impl ModpkgChunkBuilder {
 
     /// Set the path of the chunk (input path is case insensitive).
     ///
-    /// This will always hash the provided path string using `hash_chunk_name`.
+    /// The path is normalized into a [`ChunkPath`] and hashed from that form.
     pub fn with_path(mut self, path: &str) -> Result<Self, ModpkgBuilderError> {
-        let path = crate::utils::normalize_chunk_path(path);
-        self.path_hash = hash_chunk_name(&path);
-        self.path = path;
+        let path = ChunkPath::new(path);
+        self.path_hash = path.hash();
+        self.path = path.into_string();
         Ok(self)
     }
 
@@ -796,11 +796,11 @@ mod tests {
 
         let chunk = modpkg
             .chunks
-            .get(&(hash_chunk_name("test.png"), hash_layer_name("base")))
+            .get(&(ChunkPath::new("test.png").hash(), hash_layer_name("base")))
             .unwrap();
 
         assert_eq!(
-            modpkg.chunk_paths.get(&hash_chunk_name("test.png")),
+            modpkg.chunk_paths.get(&ChunkPath::new("test.png").hash()),
             Some(&"test.png".to_string())
         );
 
@@ -909,7 +909,7 @@ mod tests {
 
         let chunk = *modpkg
             .chunks
-            .get(&(hash_chunk_name("noise.bin"), hash_layer_name("base")))
+            .get(&(ChunkPath::new("noise.bin").hash(), hash_layer_name("base")))
             .unwrap();
         assert_eq!(chunk.compression, ModpkgCompression::None);
         assert_eq!(chunk.compressed_size, chunk.uncompressed_size);
@@ -970,15 +970,15 @@ mod tests {
         let base = hash_layer_name("base");
         let a = *modpkg
             .chunks
-            .get(&(hash_chunk_name("a.bin"), base))
+            .get(&(ChunkPath::new("a.bin").hash(), base))
             .unwrap();
         let b = *modpkg
             .chunks
-            .get(&(hash_chunk_name("b.bin"), base))
+            .get(&(ChunkPath::new("b.bin").hash(), base))
             .unwrap();
         let c = *modpkg
             .chunks
-            .get(&(hash_chunk_name("c.bin"), base))
+            .get(&(ChunkPath::new("c.bin").hash(), base))
             .unwrap();
 
         // a and b share content: written once, both TOC entries point at it
@@ -1008,17 +1008,14 @@ mod tests {
     #[test]
     fn with_path_normalizes_backslashes() {
         let chunk = ModpkgChunkBuilder::new()
-            .with_path("Graves.wad.client\\data\\characters\\graves\\skin0.bin")
+            .with_path("ASSETS\\Characters\\Aatrox\\Skins\\Base\\Aatrox.dds")
             .unwrap();
 
-        assert_eq!(
-            chunk.path,
-            "graves.wad.client/data/characters/graves/skin0.bin"
-        );
+        assert_eq!(chunk.path, "assets/characters/aatrox/skins/base/aatrox.dds");
 
         // Hash should match the normalized forward-slash version
         let forward = ModpkgChunkBuilder::new()
-            .with_path("graves.wad.client/data/characters/graves/skin0.bin")
+            .with_path("assets/characters/aatrox/skins/base/aatrox.dds")
             .unwrap();
 
         assert_eq!(chunk.path_hash(), forward.path_hash());
@@ -1034,7 +1031,7 @@ mod tests {
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\Data\\skin0.bin")
+                    .with_path("ASSETS\\Characters\\Aatrox\\Aatrox.dds")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base"),
@@ -1051,8 +1048,8 @@ mod tests {
         let modpkg = Modpkg::mount_from_reader(&mut cursor).unwrap();
 
         // Stored path must be normalized
-        let normalized = "graves.wad.client/data/skin0.bin";
-        let path_hash = hash_chunk_name(normalized);
+        let normalized = "assets/characters/aatrox/aatrox.dds";
+        let path_hash = ChunkPath::new(normalized).hash();
 
         assert_eq!(
             modpkg.chunk_paths.get(&path_hash),

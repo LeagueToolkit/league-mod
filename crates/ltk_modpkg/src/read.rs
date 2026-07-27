@@ -10,7 +10,7 @@ use ltk_io_ext::ReaderExt;
 use crate::{
     chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},
     error::ModpkgError,
-    hash_chunk_name, hash_layer_name, hash_wad_name, Modpkg, ModpkgLayer,
+    hash_layer_name, hash_wad_name, ChunkPath, Modpkg, ModpkgLayer,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -100,10 +100,10 @@ fn read_chunk_paths<R: Read + Seek>(
     let mut chunk_path_indices = Vec::with_capacity(chunk_paths_count as usize);
     let mut chunk_paths = HashMap::with_capacity(chunk_paths_count as usize);
     for _ in 0..chunk_paths_count {
-        let chunk_path = crate::utils::normalize_chunk_path(&reader.read_str_until_nul()?);
-        let chunk_path_hash = hash_chunk_name(&chunk_path);
+        let chunk_path = ChunkPath::new(reader.read_str_until_nul()?);
+        let chunk_path_hash = chunk_path.hash();
         chunk_path_indices.push(chunk_path_hash);
-        chunk_paths.insert(chunk_path_hash, chunk_path);
+        chunk_paths.insert(chunk_path_hash, chunk_path.into_string());
     }
     Ok((chunk_path_indices, chunk_paths))
 }

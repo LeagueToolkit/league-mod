@@ -15,9 +15,7 @@ use std::sync::{Arc, Mutex};
 /// Mirror of the crate-private `strings::stringtable_chunk_hash` — the WAD
 /// chunk path hash of `data/menu/{locale}/lol.stringtable`.
 fn stringtable_chunk_hash(locale: &str) -> u64 {
-    ltk_modpkg::utils::hash_chunk_name(&ltk_modpkg::utils::normalize_chunk_path(&format!(
-        "data/menu/{locale}/lol.stringtable"
-    )))
+    ltk_modpkg::ChunkPath::new(format!("data/menu/{locale}/lol.stringtable")).hash()
 }
 
 fn make_stringtable(entries: &[(&str, &str)]) -> Vec<u8> {

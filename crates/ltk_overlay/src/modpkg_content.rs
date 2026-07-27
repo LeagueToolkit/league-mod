@@ -169,8 +169,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let normalized = ltk_modpkg::utils::normalize_chunk_path(rel_path.as_str());
-        let path_hash = ltk_modpkg::utils::hash_chunk_name(&normalized);
+        let path_hash = ltk_modpkg::ChunkPath::new(rel_path.as_str()).hash();
 
         let bytes = self
             .modpkg
