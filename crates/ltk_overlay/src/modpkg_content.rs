@@ -230,7 +230,6 @@ mod tests {
         ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_metadata(metadata)
-            .unwrap()
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\skin0.bin")

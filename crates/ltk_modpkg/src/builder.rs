@@ -62,10 +62,15 @@ impl From<binrw::Error> for ModpkgBuilderError {
 /// Meta chunks (metadata, readme, license text, thumbnail) are not held as
 /// chunk builders: they are derived from the content fields by
 /// [`meta_chunks`](Self::meta_chunks) at build time.
+///
+/// The readme and license text are bytes, not `String`. They are copied
+/// byte-for-byte from the project and never inspected, so decoding them would
+/// only create the chance to mangle a file whose exact contents matter. Callers
+/// that display one decode it at that point.
 #[derive(Debug, Clone, Default)]
 pub struct ModpkgBuilder {
-    pub readme: Option<String>,
-    pub license_text: Option<String>,
+    pub readme: Option<Vec<u8>>,
+    pub license_text: Option<Vec<u8>>,
     pub thumbnail: Option<Vec<u8>>,
     pub metadata: ModpkgMetadata,
     pub chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
@@ -337,7 +342,7 @@ impl ModpkgBuilder {
         if let Some(readme) = self.readme.as_deref() {
             meta_chunks.push(MetaChunk {
                 path: README_CHUNK_PATH,
-                data: Cow::Borrowed(readme.as_bytes()),
+                data: Cow::Borrowed(readme),
                 compression: ModpkgCompression::None,
             });
         }
@@ -348,7 +353,7 @@ impl ModpkgBuilder {
         if let Some(license_text) = self.license_text.as_deref() {
             meta_chunks.push(MetaChunk {
                 path: LICENSE_CHUNK_PATH,
-                data: Cow::Borrowed(license_text.as_bytes()),
+                data: Cow::Borrowed(license_text),
                 compression: ModpkgCompression::Zstd,
             });
         }
@@ -724,29 +729,36 @@ impl ModpkgChunkBuilder {
 // is derived at build time by [`ModpkgBuilder::meta_chunks`].
 impl ModpkgBuilder {
     /// Set the metadata for the builder.
-    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Result<Self, ModpkgBuilderError> {
+    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Self {
         self.metadata = metadata;
-        Ok(self)
+        self
     }
 
     /// Set the readme for the builder.
-    pub fn with_readme(mut self, readme: &str) -> Result<Self, ModpkgBuilderError> {
-        self.readme = Some(readme.to_string());
-        Ok(self)
+    ///
+    /// The bytes are not decoded, so a readme that is not valid UTF-8 survives
+    /// the round trip unchanged.
+    pub fn with_readme(mut self, readme: impl Into<Vec<u8>>) -> Self {
+        self.readme = Some(readme.into());
+        self
     }
 
     /// Set the license text for the builder.
     ///
+    /// The bytes are not decoded: a license is a legal document, and a
+    /// `LICENSE` saved in Latin-1 must not come back out with its copyright
+    /// symbol replaced.
+    ///
     /// The chunk is stored compressed; see [`meta_chunks`](Self::meta_chunks).
-    pub fn with_license_text(mut self, license_text: &str) -> Result<Self, ModpkgBuilderError> {
-        self.license_text = Some(license_text.to_string());
-        Ok(self)
+    pub fn with_license_text(mut self, license_text: impl Into<Vec<u8>>) -> Self {
+        self.license_text = Some(license_text.into());
+        self
     }
 
     /// Set the thumbnail for the builder.
-    pub fn with_thumbnail(mut self, thumbnail: Vec<u8>) -> Result<Self, ModpkgBuilderError> {
-        self.thumbnail = Some(thumbnail);
-        Ok(self)
+    pub fn with_thumbnail(mut self, thumbnail: impl Into<Vec<u8>>) -> Self {
+        self.thumbnail = Some(thumbnail.into());
+        self
     }
 }
 
@@ -798,7 +810,6 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_metadata(ModpkgMetadata::default())
-            .unwrap()
             .with_layer(ModpkgLayerBuilder::new("base").unwrap().with_priority(0))
             .with_chunk(
                 ModpkgChunkBuilder::new()

@@ -48,8 +48,8 @@ pub struct ProjectPacker {
     mod_project: ModProject,
     project_root: Utf8PathBuf,
     chunks: Vec<ChunkEntry>,
-    readme: Option<String>,
-    license_text: Option<String>,
+    readme: Option<Vec<u8>>,
+    license_text: Option<Vec<u8>>,
     thumbnail: Option<Vec<u8>>,
 }
 
@@ -251,11 +251,11 @@ impl ProjectPacker {
     fn scan_meta_files(&mut self) -> Result<(), PackError> {
         let readme_path = self.project_root.join("README.md");
         if readme_path.exists() {
-            self.readme = Some(readme_path.read_text_lossy()?);
+            self.readme = Some(readme_path.read_bytes()?);
         }
 
         if let Some(license_path) = find_license_file(&self.project_root) {
-            self.license_text = Some(license_path.read_text_lossy()?);
+            self.license_text = Some(license_path.read_bytes()?);
         }
 
         let thumbnail_path = self
@@ -292,9 +292,7 @@ impl ProjectPacker {
         }
 
         // Metadata
-        builder = builder
-            .with_metadata(self.build_metadata()?)
-            .map_err(PackError::Builder)?;
+        builder = builder.with_metadata(self.build_metadata()?);
 
         // Content chunks
         let mut file_map = ChunkFileMap::new();
@@ -319,18 +317,14 @@ impl ProjectPacker {
         }
 
         // Meta chunks
-        if let Some(readme) = &self.readme {
-            builder = builder.with_readme(readme).map_err(PackError::Builder)?;
+        if let Some(readme) = self.readme {
+            builder = builder.with_readme(readme);
         }
-        if let Some(license_text) = &self.license_text {
-            builder = builder
-                .with_license_text(license_text)
-                .map_err(PackError::Builder)?;
+        if let Some(license_text) = self.license_text {
+            builder = builder.with_license_text(license_text);
         }
         if let Some(thumbnail) = self.thumbnail {
-            builder = builder
-                .with_thumbnail(thumbnail)
-                .map_err(PackError::Builder)?;
+            builder = builder.with_thumbnail(thumbnail);
         }
 
         Ok((builder, file_map))

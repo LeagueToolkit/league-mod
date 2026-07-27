@@ -38,15 +38,15 @@ impl InvalidSlugError {
     }
 }
 
-/// Failure to read a file as text, carrying the path it failed on.
+/// Failure to read a file, carrying the path it failed on.
 #[derive(Debug, Error)]
 #[error("Failed to read {path}")]
-pub struct ReadTextError {
+pub struct ReadFileError {
     path: Utf8PathBuf,
     source: std::io::Error,
 }
 
-impl ReadTextError {
+impl ReadFileError {
     pub(crate) fn new(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
         Self {
             path: path.into(),

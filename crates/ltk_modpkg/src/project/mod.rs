@@ -24,7 +24,7 @@ pub use packer::ProjectPacker;
 pub use thumbnail::{load_thumbnail, ThumbnailError, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
-use crate::error::{EncodingError, InvalidSlugError, ReadTextError, StripPrefixError};
+use crate::error::{EncodingError, InvalidSlugError, ReadFileError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use ltk_mod_project::{ModProject, ModProjectError};
@@ -42,7 +42,7 @@ pub enum PackError {
     Io(#[from] io::Error),
 
     #[error(transparent)]
-    ReadFile(#[from] ReadTextError),
+    ReadFile(#[from] ReadFileError),
 
     #[error("Builder error")]
     Builder(#[from] ModpkgBuilderError),

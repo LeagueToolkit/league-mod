@@ -1,4 +1,4 @@
-use crate::error::{EncodingError, ReadTextError, StripPrefixError};
+use crate::error::{EncodingError, ReadFileError, StripPrefixError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::path::PathBuf;
 use xxhash_rust::xxh3;
@@ -42,14 +42,14 @@ pub fn hash_wad_name(name: &str) -> u64 {
 
 /// Path operations that `ltk_modpkg` needs but `camino` does not provide.
 pub trait Utf8PathExt {
-    /// Read the file as text, replacing invalid UTF-8 instead of failing.
+    /// Read the whole file, attaching the path to any IO failure.
     ///
-    /// Files picked up by convention rather than by explicit request
-    /// (`README.md`, `LICENSE`) are frequently authored in Latin-1, and a `©`
-    /// in a copy of a GPL or Creative Commons text must not be able to fail an
-    /// otherwise valid operation. Genuine IO failures still surface, with the
-    /// path attached.
-    fn read_text_lossy(&self) -> Result<String, ReadTextError>;
+    /// Returns bytes rather than a `String` on purpose. Files picked up by
+    /// convention rather than by explicit request (`README.md`, `LICENSE`) are
+    /// frequently authored in Latin-1, and a `©` in a copy of a GPL or Creative
+    /// Commons text must neither fail the pack nor come out the other side as a
+    /// replacement character. Decode at the point of display, if at all.
+    fn read_bytes(&self) -> Result<Vec<u8>, ReadFileError>;
 
     /// Strip `base` from the path and return the remainder as a normalized
     /// string (forward slashes, for cross-platform consistency).
@@ -57,10 +57,8 @@ pub trait Utf8PathExt {
 }
 
 impl Utf8PathExt for Utf8Path {
-    fn read_text_lossy(&self) -> Result<String, ReadTextError> {
-        let bytes = std::fs::read(self).map_err(|source| ReadTextError::new(self, source))?;
-
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    fn read_bytes(&self) -> Result<Vec<u8>, ReadFileError> {
+        std::fs::read(self).map_err(|source| ReadFileError::new(self, source))
     }
 
     fn strip_prefix_normalized(&self, base: &Utf8Path) -> Result<String, StripPrefixError> {
@@ -119,22 +117,22 @@ mod tests {
     }
 
     #[test]
-    fn read_text_lossy_replaces_invalid_utf8() {
+    fn read_bytes_preserves_invalid_utf8() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("LICENSE").into_utf8().unwrap();
 
         // Latin-1 "Copyright © 2026".
         std::fs::write(&path, b"Copyright \xA9 2026").unwrap();
 
-        assert_eq!(path.read_text_lossy().unwrap(), "Copyright \u{FFFD} 2026");
+        assert_eq!(path.read_bytes().unwrap(), b"Copyright \xA9 2026");
     }
 
     #[test]
-    fn read_text_lossy_names_the_file_it_failed_on() {
+    fn read_bytes_names_the_file_it_failed_on() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("missing").into_utf8().unwrap();
 
-        let err = path.read_text_lossy().unwrap_err();
+        let err = path.read_bytes().unwrap_err();
 
         assert_eq!(err.path(), path);
         assert!(err.to_string().contains("missing"));

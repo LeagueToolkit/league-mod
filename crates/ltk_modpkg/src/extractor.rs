@@ -227,11 +227,8 @@ mod tests {
         ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_readme(readme)
-            .unwrap()
             .with_license_text(license_text)
-            .unwrap()
             .with_thumbnail(thumbnail.clone())
-            .unwrap()
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.bin")
