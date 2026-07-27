@@ -10,9 +10,7 @@ mod license_file;
 
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
-pub use license_file::{
-    canonical_license_file_name, find_license_file, find_license_file_std, LICENSE_FILE_NAMES,
-};
+pub use license_file::{canonical_license_file_name, find_license_file, LICENSE_FILE_NAMES};
 
 /// Well-known mod tags for common mod categories.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
