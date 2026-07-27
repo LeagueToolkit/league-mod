@@ -1,4 +1,3 @@
-use crate::ModpkgCompression;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::io;
 use std::path::{PathBuf, StripPrefixError};
@@ -54,20 +53,6 @@ pub fn is_valid_slug(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !s.starts_with('-')
         && !s.ends_with('-')
-}
-
-/// Compression to request for a content file, chosen from its extension.
-///
-/// Wwise audio containers (`.bnk`/`.wpk`) are always stored uncompressed,
-/// mirroring how the overlay builder treats them in game WADs. Everything
-/// else requests Zstd; the builder stores a chunk raw when compression
-/// doesn't meaningfully reduce its size, so already-compressed formats
-/// need no special-casing here.
-pub fn requested_compression(ext: Option<&str>) -> ModpkgCompression {
-    match ext.map(|e| e.to_ascii_lowercase()).as_deref() {
-        Some("bnk" | "wpk") => ModpkgCompression::None,
-        _ => ModpkgCompression::Zstd,
-    }
 }
 
 /// Read a text file, replacing invalid UTF-8 instead of failing.
@@ -152,19 +137,6 @@ mod tests {
         assert!(!is_valid_slug("invalid-"));
         assert!(!is_valid_slug("UPPERCASE"));
         assert!(!is_valid_slug("has spaces"));
-    }
-
-    #[test]
-    fn test_requested_compression() {
-        // Wwise audio containers are never compressed
-        assert_eq!(requested_compression(Some("bnk")), ModpkgCompression::None);
-        assert_eq!(requested_compression(Some("WPK")), ModpkgCompression::None);
-
-        // Everything else requests Zstd (the builder falls back to raw storage
-        // per chunk when compression doesn't pay)
-        assert_eq!(requested_compression(Some("dds")), ModpkgCompression::Zstd);
-        assert_eq!(requested_compression(Some("bin")), ModpkgCompression::Zstd);
-        assert_eq!(requested_compression(None), ModpkgCompression::Zstd);
     }
 
     #[test]

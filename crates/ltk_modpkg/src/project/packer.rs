@@ -6,10 +6,9 @@ use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     metadata::CURRENT_SCHEMA_VERSION,
     utils::{
-        hash_layer_name, is_valid_slug, read_text_file_lossy, requested_compression,
-        strip_path_prefix, utf8_path_from,
+        hash_layer_name, is_valid_slug, read_text_file_lossy, strip_path_prefix, utf8_path_from,
     },
-    ModpkgLayerMetadata, ModpkgMetadata,
+    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{
@@ -302,7 +301,9 @@ impl ProjectPacker {
             let mut cb = ModpkgChunkBuilder::new()
                 .with_path(&entry.rel_path)
                 .map_err(PackError::Builder)?
-                .with_compression(requested_compression(entry.file_path.extension()))
+                .with_compression(ModpkgCompression::for_extension(
+                    entry.file_path.extension(),
+                ))
                 .with_layer(&entry.layer_name);
 
             if let Some(wad) = &entry.wad_name {
