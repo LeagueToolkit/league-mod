@@ -93,6 +93,22 @@ pub enum ModpkgCompression {
     Zstd = 1,
 }
 
+impl ModpkgCompression {
+    /// The compression to request for a content file, chosen from its extension.
+    ///
+    /// Wwise audio containers (`.bnk`/`.wpk`) are always stored uncompressed,
+    /// mirroring how the overlay builder treats them in game WADs. Everything
+    /// else requests Zstd; the builder stores a chunk raw when compression
+    /// doesn't meaningfully reduce its size, so already-compressed formats
+    /// need no special-casing here.
+    pub fn for_extension(ext: Option<&str>) -> Self {
+        match ext.map(|e| e.to_ascii_lowercase()).as_deref() {
+            Some("bnk" | "wpk") => Self::None,
+            _ => Self::Zstd,
+        }
+    }
+}
+
 impl<TSource: Read + Seek> Modpkg<TSource> {
     /// Create a decoder for this modpkg
     pub fn decoder(&'_ mut self) -> ModpkgDecoder<'_, TSource> {
@@ -296,6 +312,34 @@ mod tests {
     use super::*;
     use crate::builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder};
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn test_compression_for_extension() {
+        // Wwise audio containers are never compressed
+        assert_eq!(
+            ModpkgCompression::for_extension(Some("bnk")),
+            ModpkgCompression::None
+        );
+        assert_eq!(
+            ModpkgCompression::for_extension(Some("WPK")),
+            ModpkgCompression::None
+        );
+
+        // Everything else requests Zstd (the builder falls back to raw storage
+        // per chunk when compression doesn't pay)
+        assert_eq!(
+            ModpkgCompression::for_extension(Some("dds")),
+            ModpkgCompression::Zstd
+        );
+        assert_eq!(
+            ModpkgCompression::for_extension(Some("bin")),
+            ModpkgCompression::Zstd
+        );
+        assert_eq!(
+            ModpkgCompression::for_extension(None),
+            ModpkgCompression::Zstd
+        );
+    }
 
     #[test]
     fn test_load_chunk() {
