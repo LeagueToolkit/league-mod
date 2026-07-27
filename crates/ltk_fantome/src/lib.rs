@@ -2,8 +2,8 @@ use camino::Utf8Path;
 use image::ImageFormat;
 use indexmap::IndexMap;
 use ltk_mod_project::{
-    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, canonical_license_file_name,
-    find_license_file,
+    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, PackageFormat,
+    canonical_license_file_name, find_license_file,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -122,18 +122,7 @@ pub struct FantomeLayerInfo {
 /// If `custom_name` is provided, it will be used (with `.fantome` extension added if missing).
 /// Otherwise, generates `{name}_{version}.fantome`.
 pub fn create_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
-    match custom_name {
-        Some(name) => {
-            if name.ends_with(".fantome") {
-                name
-            } else {
-                format!("{}.fantome", name)
-            }
-        }
-        None => {
-            format!("{}_{}.fantome", mod_project.name, mod_project.version)
-        }
-    }
+    mod_project.package_file_name(custom_name, PackageFormat::Fantome)
 }
 
 /// Get layers that are not supported by the Fantome format.
@@ -146,11 +135,6 @@ pub fn get_unsupported_layers(mod_project: &ModProject) -> Vec<&ModProjectLayer>
         .iter()
         .filter(|layer| !layer.is_base())
         .collect()
-}
-
-/// Check if the mod project has layers that won't be included in Fantome format.
-pub fn has_unsupported_layers(mod_project: &ModProject) -> bool {
-    mod_project.layers.iter().any(|layer| !layer.is_base())
 }
 
 /// Pack a mod project into a Fantome .zip format
@@ -202,55 +186,39 @@ fn pack_base_layer<W: Write + std::io::Seek>(
     Ok(())
 }
 
+/// Write every file under `wad_dir` into the archive beneath `zip_prefix`.
+///
+/// Descends rather than walking flat, so each entry name is built from the one
+/// above it. There is no relative path to recover, and so no prefix that could
+/// fail to strip.
 fn pack_wad_directory<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
     wad_dir: &Utf8Path,
     zip_prefix: &str,
     options: &SimpleFileOptions,
 ) -> Result<(), FantomePackError> {
-    for entry in walkdir::WalkDir::new(wad_dir).into_iter() {
-        let entry = entry.map_err(|source| {
-            FantomePackError::read(
-                wad_dir,
-                source.into_io_error().unwrap_or_else(walk_io_error),
-            )
-        })?;
+    let entries = wad_dir
+        .read_dir_utf8()
+        .map_err(|source| FantomePackError::read(wad_dir, source))?;
 
-        let path = Utf8Path::from_path(entry.path()).ok_or_else(|| {
-            FantomePackError::NonUtf8Path(entry.path().to_string_lossy().into_owned())
-        })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| FantomePackError::read(wad_dir, source))?;
+        let entry_type = entry
+            .file_type()
+            .map_err(|source| FantomePackError::read(entry.path(), source))?;
 
-        if !path.is_file() {
-            continue;
+        // Archive separators are always `/`, whatever the host uses.
+        let entry_zip_path = format!("{}/{}", zip_prefix, entry.file_name());
+
+        if entry_type.is_dir() {
+            pack_wad_directory(zip, entry.path(), &entry_zip_path, options)?;
+        } else {
+            zip.start_file(entry_zip_path, *options)?;
+            copy_file_into(zip, entry.path())?;
         }
-
-        // WalkDir yields only paths beneath its root, so the prefix is always
-        // present.
-        let relative_path = path
-            .strip_prefix(wad_dir)
-            .expect("WalkDir yields paths under its root");
-
-        let zip_path = format!(
-            "{}/{}",
-            zip_prefix,
-            relative_path.as_str().replace('\\', "/")
-        );
-
-        zip.start_file(zip_path, *options)?;
-        let mut file = File::open(path).map_err(|source| FantomePackError::read(path, source))?;
-        std::io::copy(&mut file, zip).map_err(|source| FantomePackError::read(path, source))?;
     }
 
     Ok(())
-}
-
-/// A walk failure that carried no IO error of its own, which happens only for a
-/// symlink loop.
-fn walk_io_error() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "directory loop while scanning",
-    )
 }
 
 fn pack_metadata<W: Write + std::io::Seek>(

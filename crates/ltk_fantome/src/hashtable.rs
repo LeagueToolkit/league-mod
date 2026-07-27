@@ -115,9 +115,9 @@ impl WadHashtable {
         Ok(())
     }
 
-    /// Returns a reference to the internal hashmap.
-    pub fn items(&self) -> &HashMap<u64, String> {
-        &self.items
+    /// Every hash and the path it resolves to, in arbitrary order.
+    pub fn entries(&self) -> impl Iterator<Item = (u64, &str)> {
+        self.items.iter().map(|(hash, path)| (*hash, path.as_str()))
     }
 
     /// Returns the number of entries in the hashtable.

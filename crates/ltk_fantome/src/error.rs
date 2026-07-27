@@ -41,11 +41,6 @@ pub enum FantomePackError {
         #[source]
         source: Box<image::ImageError>,
     },
-
-    /// A path inside the project is not valid UTF-8, so it cannot be named as
-    /// an archive entry. Carries the path rendered lossily.
-    #[error("Invalid UTF-8 path: {0}")]
-    NonUtf8Path(String),
 }
 
 impl FantomePackError {

@@ -6,6 +6,7 @@ use crate::utils::config::load_config;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use ltk_fantome::{FantomeExtractError, FantomeExtractor, WadHashtable};
+use ltk_mod_project::PackageFormat;
 use ltk_modpkg::{Modpkg, ModpkgExtractor};
 use miette::{IntoDiagnostic, Result};
 
@@ -34,11 +35,8 @@ pub fn extract_mod_package(args: ExtractModPackageArgs) -> Result<()> {
         ));
     }
 
-    // Check if it is a fantome file (ends with .fantome)
-    if let Some(extension) = file_path.extension() {
-        if extension == "fantome" {
-            return extract_fantome_package(args);
-        }
+    if PackageFormat::from_path(file_path) == Some(PackageFormat::Fantome) {
+        return extract_fantome_package(args);
     }
 
     let file = File::open(file_path)

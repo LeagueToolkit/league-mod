@@ -27,7 +27,7 @@ use crate::builder::ModpkgBuilderError;
 use crate::error::{EncodingError, InvalidSlugError, ReadFileError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
-use ltk_mod_project::{ModProject, ModProjectError};
+use ltk_mod_project::{ModProject, ModProjectError, PackageFormat};
 use std::io;
 
 // ---------------------------------------------------------------------------
@@ -122,18 +122,7 @@ impl PackResult {
 /// If `custom_name` is provided, it will be used (with `.modpkg` extension added if missing).
 /// Otherwise, generates `{name}_{version}.modpkg`.
 pub fn create_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
-    match custom_name {
-        Some(name) => {
-            if name.ends_with(".modpkg") {
-                name
-            } else {
-                format!("{}.modpkg", name)
-            }
-        }
-        None => {
-            format!("{}_{}.modpkg", mod_project.name, mod_project.version)
-        }
-    }
+    mod_project.package_file_name(custom_name, PackageFormat::Modpkg)
 }
 
 /// Pack a mod project directory to a `.modpkg` file.
