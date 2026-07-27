@@ -18,6 +18,7 @@ use crate::{
 };
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ModpkgBuilderError {
     #[error("io error")]
     IoError(#[from] io::Error),

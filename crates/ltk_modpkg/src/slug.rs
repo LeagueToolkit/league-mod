@@ -33,7 +33,7 @@ impl Slug {
 
         match valid {
             true => Ok(Self(value.to_string())),
-            false => Err(InvalidSlugError(value.to_string())),
+            false => Err(InvalidSlugError::new(value)),
         }
     }
 

@@ -58,19 +58,15 @@ pub trait Utf8PathExt {
 
 impl Utf8PathExt for Utf8Path {
     fn read_text_lossy(&self) -> Result<String, ReadTextError> {
-        let bytes = std::fs::read(self).map_err(|source| ReadTextError {
-            path: self.to_owned(),
-            source,
-        })?;
+        let bytes = std::fs::read(self).map_err(|source| ReadTextError::new(self, source))?;
 
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn strip_prefix_normalized(&self, base: &Utf8Path) -> Result<String, StripPrefixError> {
-        let rel = self.strip_prefix(base).map_err(|_| StripPrefixError {
-            path: self.to_owned(),
-            base: base.to_owned(),
-        })?;
+        let rel = self
+            .strip_prefix(base)
+            .map_err(|_| StripPrefixError::new(self, base))?;
 
         Ok(rel.as_str().replace('\\', "/"))
     }
@@ -140,8 +136,9 @@ mod tests {
 
         let err = path.read_text_lossy().unwrap_err();
 
-        assert_eq!(err.path, path);
+        assert_eq!(err.path(), path);
         assert!(err.to_string().contains("missing"));
+        assert_eq!(err.io_error().kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

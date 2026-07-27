@@ -117,9 +117,7 @@ impl ProjectPacker {
         let mut writer = BufWriter::new(File::create(output_path)?);
         self.pack_to_writer(&mut writer)?;
 
-        Ok(PackResult {
-            output_path: output_path.to_owned(),
-        })
+        Ok(PackResult::new(output_path))
     }
 
     /// Pack to an arbitrary writer.

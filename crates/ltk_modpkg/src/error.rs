@@ -1,4 +1,4 @@
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 use crate::ModpkgCompression;
@@ -8,6 +8,7 @@ use crate::ModpkgCompression;
 /// Paths are the common case: the OS hands back arbitrary bytes, while
 /// `.modpkg` stores every path as UTF-8.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EncodingError {
     /// A path from an OS API that is not valid UTF-8.
     ///
@@ -19,26 +20,80 @@ pub enum EncodingError {
 
 /// A value that is not a valid [`Slug`](crate::Slug).
 #[derive(Debug, Error)]
-#[error("Invalid slug: {0}")]
-pub struct InvalidSlugError(pub String);
+#[error("Invalid slug: {value}")]
+pub struct InvalidSlugError {
+    value: String,
+}
+
+impl InvalidSlugError {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+
+    /// The value that was rejected.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
 
 /// Failure to read a file as text, carrying the path it failed on.
 #[derive(Debug, Error)]
-#[error("Failed to read {path}: {source}")]
+#[error("Failed to read {path}")]
 pub struct ReadTextError {
-    pub path: Utf8PathBuf,
-    pub source: std::io::Error,
+    path: Utf8PathBuf,
+    source: std::io::Error,
+}
+
+impl ReadTextError {
+    pub(crate) fn new(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
+        Self {
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// The file that could not be read.
+    pub fn path(&self) -> &Utf8Path {
+        &self.path
+    }
+
+    /// The underlying IO failure.
+    pub fn io_error(&self) -> &std::io::Error {
+        &self.source
+    }
 }
 
 /// A path that does not start with the base it was stripped against.
 #[derive(Debug, Error)]
 #[error("{path} is not inside {base}")]
 pub struct StripPrefixError {
-    pub path: Utf8PathBuf,
-    pub base: Utf8PathBuf,
+    path: Utf8PathBuf,
+    base: Utf8PathBuf,
+}
+
+impl StripPrefixError {
+    pub(crate) fn new(path: impl Into<Utf8PathBuf>, base: impl Into<Utf8PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            base: base.into(),
+        }
+    }
+
+    /// The path that was stripped.
+    pub fn path(&self) -> &Utf8Path {
+        &self.path
+    }
+
+    /// The base it was stripped against.
+    pub fn base(&self) -> &Utf8Path {
+        &self.base
+    }
 }
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ModpkgError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

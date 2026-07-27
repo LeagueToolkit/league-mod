@@ -36,6 +36,7 @@ use std::io;
 
 /// Error type for project packing operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PackError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -83,8 +84,25 @@ pub enum PackError {
 /// Result of a successful pack operation.
 #[derive(Debug)]
 pub struct PackResult {
+    output_path: Utf8PathBuf,
+}
+
+impl PackResult {
+    pub(crate) fn new(output_path: impl Into<Utf8PathBuf>) -> Self {
+        Self {
+            output_path: output_path.into(),
+        }
+    }
+
     /// The path to the created `.modpkg` file.
-    pub output_path: Utf8PathBuf,
+    pub fn output_path(&self) -> &Utf8Path {
+        &self.output_path
+    }
+
+    /// Consume the result, yielding the output path.
+    pub fn into_output_path(self) -> Utf8PathBuf {
+        self.output_path
+    }
 }
 
 // ---------------------------------------------------------------------------
