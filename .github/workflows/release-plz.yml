@@ -62,11 +62,11 @@ jobs:
     needs: release-plz-release
     if: needs.release-plz-release.outputs.releases_created == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -97,7 +97,7 @@ jobs:
 
       - name: Build release binary
         if: steps.release_info.outputs.should_build == 'true'
-        run: cargo build --release --bin league-mod
+        run: cargo build --locked --release --bin league-mod
 
       - name: Create release directory
         if: steps.release_info.outputs.should_build == 'true'
