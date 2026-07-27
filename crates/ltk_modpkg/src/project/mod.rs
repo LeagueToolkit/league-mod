@@ -38,19 +38,19 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PackError {
-    #[error("IO error")]
+    #[error(transparent)]
     Io(#[from] io::Error),
 
     #[error(transparent)]
     ReadFile(#[from] ReadFileError),
 
-    #[error("Builder error")]
+    #[error(transparent)]
     Builder(#[from] ModpkgBuilderError),
 
     #[error("Config file not found in project directory: {0}")]
     ConfigNotFound(Utf8PathBuf),
 
-    #[error("Failed to load project config")]
+    #[error(transparent)]
     Config(#[from] ModProjectError),
 
     #[error("Layer directory missing: {layer} at {path}")]
@@ -62,7 +62,7 @@ pub enum PackError {
     #[error("Base layer must have priority 0, got: {0}")]
     InvalidBaseLayerPriority(i32),
 
-    #[error("Failed to process thumbnail")]
+    #[error(transparent)]
     Thumbnail(#[from] ThumbnailError),
 
     #[error("Invalid mod version")]

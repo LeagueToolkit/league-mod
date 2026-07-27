@@ -19,19 +19,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 pub enum Error {
     /// Filesystem I/O failed (reading WADs, writing overlay, etc.).
-    #[error("IO error: {0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     /// Failed to parse or serialize JSON (overlay state, mod config).
-    #[error("JSON error: {0}")]
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
 
     /// Error from the `ltk_wad` crate when mounting or reading a WAD file.
-    #[error("WAD error: {0}")]
+    #[error(transparent)]
     WadError(#[from] ltk_wad::WadError),
 
     /// Error from the `ltk_wad` WAD builder when writing a patched WAD.
-    #[error("WAD builder error: {0}")]
+    #[error(transparent)]
     WadBuilderError(#[from] ltk_wad::WadBuilderError),
 
     /// The game directory does not contain the expected `DATA/FINAL` structure.
@@ -53,4 +53,21 @@ pub enum Error {
     /// Catch-all for errors from content providers and other sources.
     #[error("{0}")]
     Other(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Consumers log these with `{e}` alone rather than walking the chain, so a
+    /// pass-through variant must display its cause rather than a category name.
+    #[test]
+    fn pass_through_display_carries_the_cause() {
+        let error = Error::from(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "overlay is locked",
+        ));
+
+        assert!(error.to_string().contains("overlay is locked"), "{error}");
+    }
 }

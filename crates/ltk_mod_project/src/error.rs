@@ -68,9 +68,9 @@ impl ModProjectError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SerializeError {
-    #[error("JSON serialization failed")]
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
 
-    #[error("TOML serialization failed")]
+    #[error(transparent)]
     Toml(#[from] toml::ser::Error),
 }

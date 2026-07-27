@@ -27,7 +27,7 @@ pub enum FantomePackError {
     Zip(#[from] zip::result::ZipError),
 
     /// An IO failure with no single project file to blame.
-    #[error("IO error")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     /// `META/info.json` could not be produced from the project.
@@ -65,7 +65,7 @@ pub enum FantomeExtractError {
     },
 
     /// Reading from the archive failed.
-    #[error("IO error")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     /// The archive could not be read.
@@ -77,7 +77,7 @@ pub enum FantomeExtractError {
     Json(#[from] serde_json::Error),
 
     /// The extracted project's `mod.config.json` could not be written.
-    #[error("Failed to write the project config")]
+    #[error(transparent)]
     Config(#[from] ltk_mod_project::ModProjectError),
 
     /// A packed WAD inside the archive could not be extracted.
