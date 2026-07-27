@@ -219,7 +219,9 @@ fn failed_wad_build_leaves_no_partial_file() {
         HashSet::from([resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap()]);
 
     let result = build_patched_wad(&src, &dst, &override_hashes, |_hash| -> Result<Vec<u8>> {
-        Err("override source vanished mid-build".to_string().into())
+        Err(ltk_overlay::Error::Other(
+            "override source vanished mid-build".to_string(),
+        ))
     });
 
     assert!(result.is_err());

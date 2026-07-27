@@ -7,10 +7,12 @@ use std::fmt;
 mod config_format;
 pub mod error;
 mod license_file;
+mod package_format;
 
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
 pub use license_file::{canonical_license_file_name, find_license_file, LICENSE_FILE_NAMES};
+pub use package_format::PackageFormat;
 
 /// Well-known mod tags for common mod categories.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -345,6 +347,20 @@ impl ModProject {
         let content = self.to_config_string(format)?;
 
         std::fs::write(path, content).map_err(|source| ModProjectError::io(path, source))
+    }
+
+    /// The file name a packed mod gets in `format`.
+    ///
+    /// `custom_name` is used as given, gaining the extension if it lacks it.
+    /// Without one the name is `{name}_{version}.{extension}`.
+    pub fn package_file_name(&self, custom_name: Option<String>, format: PackageFormat) -> String {
+        let suffix = format!(".{}", format.extension());
+
+        match custom_name {
+            Some(name) if name.ends_with(&suffix) => name,
+            Some(name) => name + &suffix,
+            None => format!("{}_{}{}", self.name, self.version, suffix),
+        }
     }
 
     /// Render the project as the text of a config file.

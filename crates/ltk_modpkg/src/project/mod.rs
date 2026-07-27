@@ -27,7 +27,7 @@ use crate::builder::ModpkgBuilderError;
 use crate::error::{EncodingError, InvalidSlugError, ReadFileError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
-use ltk_mod_project::{ModProject, ModProjectError};
+use ltk_mod_project::{ModProject, ModProjectError, PackageFormat};
 use std::io;
 
 // ---------------------------------------------------------------------------
@@ -38,19 +38,19 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PackError {
-    #[error("IO error")]
+    #[error(transparent)]
     Io(#[from] io::Error),
 
     #[error(transparent)]
     ReadFile(#[from] ReadFileError),
 
-    #[error("Builder error")]
+    #[error(transparent)]
     Builder(#[from] ModpkgBuilderError),
 
     #[error("Config file not found in project directory: {0}")]
     ConfigNotFound(Utf8PathBuf),
 
-    #[error("Failed to load project config")]
+    #[error(transparent)]
     Config(#[from] ModProjectError),
 
     #[error("Layer directory missing: {layer} at {path}")]
@@ -62,7 +62,7 @@ pub enum PackError {
     #[error("Base layer must have priority 0, got: {0}")]
     InvalidBaseLayerPriority(i32),
 
-    #[error("Failed to process thumbnail")]
+    #[error(transparent)]
     Thumbnail(#[from] ThumbnailError),
 
     #[error("Invalid mod version")]
@@ -122,18 +122,7 @@ impl PackResult {
 /// If `custom_name` is provided, it will be used (with `.modpkg` extension added if missing).
 /// Otherwise, generates `{name}_{version}.modpkg`.
 pub fn create_file_name(mod_project: &ModProject, custom_name: Option<String>) -> String {
-    match custom_name {
-        Some(name) => {
-            if name.ends_with(".modpkg") {
-                name
-            } else {
-                format!("{}.modpkg", name)
-            }
-        }
-        None => {
-            format!("{}_{}.modpkg", mod_project.name, mod_project.version)
-        }
-    }
+    mod_project.package_file_name(custom_name, PackageFormat::Modpkg)
 }
 
 /// Pack a mod project directory to a `.modpkg` file.

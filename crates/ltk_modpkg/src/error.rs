@@ -95,9 +95,9 @@ impl StripPrefixError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ModpkgError {
-    #[error("IO error")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("Failed to read from the source")]
+    #[error(transparent)]
     Reader(#[from] ltk_io_ext::ReaderError),
 
     /// The archive's binary layout could not be parsed.
@@ -139,9 +139,9 @@ pub enum ModpkgError {
     #[error("Invalid meta chunk: must not belong to any layer or wad")]
     InvalidMetaChunk,
 
-    #[error("Msgpack decode error")]
+    #[error(transparent)]
     MsgpackDecode(#[from] rmp_serde::decode::Error),
-    #[error("Msgpack encode error")]
+    #[error(transparent)]
     MsgpackEncode(#[from] rmp_serde::encode::Error),
 }
 
@@ -151,5 +151,33 @@ pub enum ModpkgError {
 impl From<binrw::Error> for ModpkgError {
     fn from(error: binrw::Error) -> Self {
         Self::Malformed(Box::new(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pass-through variants are `#[error(transparent)]` so that a caller which
+    /// prints only the top-level error still sees the cause. Wrapping them in a
+    /// message like "IO error" hides it from anyone not walking the chain.
+    #[test]
+    fn pass_through_display_carries_the_cause() {
+        let error = ModpkgError::from(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the file is gone",
+        ));
+
+        assert!(error.to_string().contains("the file is gone"), "{error}");
+    }
+
+    /// A variant that adds context keeps its own message, and must not also
+    /// inline the source, or a chain walker prints it twice.
+    #[test]
+    fn contextual_display_does_not_embed_its_source() {
+        let error = ModpkgError::Malformed(Box::new(std::io::Error::other("inner detail")));
+        let source = std::error::Error::source(&error).unwrap().to_string();
+
+        assert!(!error.to_string().contains(&source), "{error}");
     }
 }
