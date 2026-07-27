@@ -191,7 +191,9 @@ fn resolve_fallback_wad(
         Ok(original_wad_path) => {
             let relative_game_path = original_wad_path
                 .strip_prefix(game_dir)
-                .map_err(|_| format!("WAD path is not under Game/: {}", original_wad_path))?
+                .map_err(|_| {
+                    Error::Other(format!("WAD path is not under Game/: {original_wad_path}"))
+                })?
                 .to_path_buf();
 
             tracing::info!(

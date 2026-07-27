@@ -10,8 +10,13 @@ use thiserror::Error;
 /// Convenience alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
+// TODO: `Other(String)` is this crate's de facto error type, with 39 call
+// sites, and nothing can be matched on it. It needs replacing with real
+// variants. The enum is `#[non_exhaustive]` so that can land without another
+// breaking release.
 /// Errors that can occur during overlay building.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Filesystem I/O failed (reading WADs, writing overlay, etc.).
     #[error("IO error: {0}")]
@@ -45,25 +50,7 @@ pub enum Error {
     #[error("Invalid mod directory: {0}")]
     InvalidModDir(Utf8PathBuf),
 
-    /// A mod's `mod.config.json` is missing or malformed.
-    #[error("Invalid mod config: {0}")]
-    InvalidModConfig(String),
-
-    /// The overlay directory exists but its WAD files are corrupted.
-    #[error("Overlay validation failed: {0}")]
-    ValidationFailed(String),
-
-    /// Zstd compression or decompression failed.
-    #[error("Compression error: {0}")]
-    Compression(String),
-
     /// Catch-all for errors from content providers and other sources.
     #[error("{0}")]
     Other(String),
-}
-
-impl From<String> for Error {
-    fn from(s: String) -> Self {
-        Error::Other(s)
-    }
 }

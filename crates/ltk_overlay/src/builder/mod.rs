@@ -529,11 +529,9 @@ impl OverlayBuilder {
     ) -> Result<ModWadReport> {
         let data_final_dir = game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(format!(
-                "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
-                game_dir
-            )
-            .into());
+            return Err(Error::Other(format!(
+                "League path does not contain Game/DATA/FINAL. Game dir: '{game_dir}'"
+            )));
         }
 
         std::fs::create_dir_all(state_dir.as_std_path())?;
@@ -614,11 +612,10 @@ impl OverlayBuilder {
 
         let data_final_dir = self.game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(format!(
+            return Err(Error::Other(format!(
                 "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
                 self.game_dir
-            )
-            .into());
+            )));
         }
 
         std::fs::create_dir_all(self.overlay_root.as_std_path())?;
@@ -908,7 +905,7 @@ impl OverlayBuilder {
             };
             let wad_rel_path = wad_abs_path
                 .strip_prefix(&self.game_dir)
-                .map_err(|_| format!("WAD path is not under Game/: {}", wad_abs_path))?
+                .map_err(|_| Error::Other(format!("WAD path is not under Game/: {wad_abs_path}")))?
                 .to_path_buf();
 
             let chunk_hash = strings::stringtable_chunk_hash(&locale);
