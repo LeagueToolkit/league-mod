@@ -5,8 +5,8 @@ use super::PackError;
 use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     metadata::CURRENT_SCHEMA_VERSION,
-    utils::{hash_layer_name, is_valid_slug, PathBufExt, Utf8PathExt},
-    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
+    utils::{hash_layer_name, PathBufExt, Utf8PathExt},
+    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata, Slug,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{
@@ -284,8 +284,11 @@ impl ProjectPacker {
             if layer.name == "base" {
                 continue;
             }
-            builder = builder
-                .with_layer(ModpkgLayerBuilder::new(&layer.name).with_priority(layer.priority));
+            builder = builder.with_layer(
+                ModpkgLayerBuilder::new(&layer.name)
+                    .map_err(PackError::Builder)?
+                    .with_priority(layer.priority),
+            );
         }
 
         // Metadata
@@ -375,9 +378,7 @@ impl ProjectPacker {
 
 fn validate_project(mod_project: &ModProject, project_root: &Utf8Path) -> Result<(), PackError> {
     for layer in &mod_project.layers {
-        if !is_valid_slug(&layer.name) {
-            return Err(PackError::InvalidLayerName(layer.name.clone()));
-        }
+        Slug::new(&layer.name).map_err(|_| PackError::InvalidLayerName(layer.name.clone()))?;
         if layer.name == "base" && layer.priority != 0 {
             return Err(PackError::InvalidBaseLayerPriority(layer.priority));
         }

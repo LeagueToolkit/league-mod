@@ -13,7 +13,7 @@ use crate::{
     ModpkgCompression,
 };
 use crate::{
-    hash_layer_name, hash_wad_name, utils, ChunkPath, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
+    hash_layer_name, hash_wad_name, utils, ChunkPath, Slug, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
     README_CHUNK_PATH,
 };
 
@@ -39,6 +39,9 @@ pub enum ModpkgBuilderError {
 
     #[error("invalid chunk name: {0}")]
     InvalidChunkName(String),
+
+    #[error("invalid layer name: {0}")]
+    InvalidLayerName(#[from] crate::error::InvalidSlugError),
 }
 
 /// Provides an interface to build a Modpkg file.
@@ -79,10 +82,16 @@ pub struct ModpkgChunkBuilder {
     pub wad: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ModpkgLayerBuilder {
-    pub name: String,
+    pub name: Slug,
     pub priority: i32,
+}
+
+impl Default for ModpkgLayerBuilder {
+    fn default() -> Self {
+        Self::base()
+    }
 }
 
 impl ModpkgBuilder {
@@ -186,8 +195,8 @@ impl ModpkgBuilder {
     ) -> Result<(), ModpkgBuilderError> {
         writer.write_u32::<LE>(layers.len() as u32)?;
         for layer in layers {
-            writer.write_u32::<LE>(layer.name.len() as u32)?;
-            writer.write_all(layer.name.as_bytes())?;
+            writer.write_u32::<LE>(layer.name.as_str().len() as u32)?;
+            writer.write_all(layer.name.as_str().as_bytes())?;
             writer.write_i32::<LE>(layer.priority)?;
         }
         Ok(())
@@ -230,7 +239,7 @@ impl ModpkgBuilder {
     fn build_layer_index_map(layers: &[ModpkgLayerBuilder]) -> HashMap<u64, u32> {
         let mut layer_index_map = HashMap::new();
         for (idx, layer) in layers.iter().enumerate() {
-            layer_index_map.insert(hash_layer_name(&layer.name), idx as u32);
+            layer_index_map.insert(hash_layer_name(layer.name.as_str()), idx as u32);
         }
         layer_index_map
     }
@@ -729,16 +738,22 @@ impl ModpkgBuilder {
 }
 
 impl ModpkgLayerBuilder {
-    pub fn new(name: impl AsRef<str>) -> Self {
-        Self {
-            name: name.as_ref().to_string(),
+    /// Create a layer builder, validating `name` as a [`Slug`].
+    pub fn new(name: impl AsRef<str>) -> Result<Self, ModpkgBuilderError> {
+        Ok(Self {
+            name: Slug::new(name)?,
             priority: 0,
-        }
+        })
     }
 
-    pub fn with_name(mut self, name: impl AsRef<str>) -> Self {
-        self.name = name.as_ref().to_string();
-        self
+    /// Create a layer builder from an already-validated name.
+    pub fn from_slug(name: Slug) -> Self {
+        Self { name, priority: 0 }
+    }
+
+    pub fn with_name(mut self, name: impl AsRef<str>) -> Result<Self, ModpkgBuilderError> {
+        self.name = Slug::new(name)?;
+        Ok(self)
     }
 
     pub fn with_priority(mut self, priority: i32) -> Self {
@@ -746,9 +761,10 @@ impl ModpkgLayerBuilder {
         self
     }
 
+    /// The base layer, whose name is always valid.
     pub fn base() -> Self {
         Self {
-            name: BASE_LAYER_NAME.to_string(),
+            name: Slug::base(),
             priority: 0,
         }
     }
@@ -770,7 +786,7 @@ mod tests {
         let builder = ModpkgBuilder::default()
             .with_metadata(ModpkgMetadata::default())
             .unwrap()
-            .with_layer(ModpkgLayerBuilder::new("base").with_priority(0))
+            .with_layer(ModpkgLayerBuilder::new("base").unwrap().with_priority(0))
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.png")
@@ -1003,6 +1019,20 @@ mod tests {
         assert_eq!(&loaded_a[..], &shared_data[..]);
         assert_eq!(&loaded_b[..], &shared_data[..]);
         assert_eq!(&loaded_c[..], &unique_data[..]);
+    }
+
+    /// The builder used to accept any string, so a caller bypassing the packer
+    /// could produce a package with a layer name the packer would reject.
+    #[test]
+    fn layer_builder_rejects_names_the_packer_would_reject() {
+        for name in ["", "High Res", "-leading", "trailing-"] {
+            assert!(
+                ModpkgLayerBuilder::new(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+
+        assert!(ModpkgLayerBuilder::new("high-res").is_ok());
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod license;
 mod metadata;
 mod read;
 mod readme;
+mod slug;
 mod thumbnail;
 pub mod utils;
 
@@ -30,6 +31,7 @@ pub use extractor::ModpkgExtractor;
 pub use license::*;
 pub use metadata::*;
 pub use readme::*;
+pub use slug::Slug;
 pub use thumbnail::*;
 pub use utils::*;
 

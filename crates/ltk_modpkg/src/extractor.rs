@@ -287,7 +287,11 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
-            .with_layer(ModpkgLayerBuilder::new(custom_layer).with_priority(1))
+            .with_layer(
+                ModpkgLayerBuilder::new(custom_layer)
+                    .unwrap()
+                    .with_priority(1),
+            )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path(path)

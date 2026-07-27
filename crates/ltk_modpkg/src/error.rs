@@ -17,6 +17,11 @@ pub enum EncodingError {
     NonUtf8Path(String),
 }
 
+/// A value that is not a valid [`Slug`](crate::Slug).
+#[derive(Debug, Error)]
+#[error("Invalid slug: {0}")]
+pub struct InvalidSlugError(pub String);
+
 /// Failure to read a file as text, carrying the path it failed on.
 #[derive(Debug, Error)]
 #[error("Failed to read {path}: {source}")]

@@ -40,15 +40,6 @@ pub fn hash_wad_name(name: &str) -> u64 {
     xxh3::xxh3_64(name.to_lowercase().as_bytes())
 }
 
-/// Check if a string is a valid slug (lowercase alphanumeric with hyphens).
-pub fn is_valid_slug(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !s.starts_with('-')
-        && !s.ends_with('-')
-}
-
 /// Path operations that `ltk_modpkg` needs but `camino` does not provide.
 pub trait Utf8PathExt {
     /// Read the file as text, replacing invalid UTF-8 instead of failing.
@@ -129,18 +120,6 @@ mod tests {
     #[test]
     fn normalize_chunk_path_noop_on_normalized() {
         assert_eq!(normalize_chunk_path(CANONICAL), CANONICAL);
-    }
-
-    #[test]
-    fn test_is_valid_slug() {
-        assert!(is_valid_slug("base"));
-        assert!(is_valid_slug("my-layer"));
-        assert!(is_valid_slug("layer123"));
-        assert!(!is_valid_slug(""));
-        assert!(!is_valid_slug("-invalid"));
-        assert!(!is_valid_slug("invalid-"));
-        assert!(!is_valid_slug("UPPERCASE"));
-        assert!(!is_valid_slug("has spaces"));
     }
 
     #[test]

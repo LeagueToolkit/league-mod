@@ -341,7 +341,11 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
-            .with_layer(ModpkgLayerBuilder::new("loading-screen").with_priority(1))
+            .with_layer(
+                ModpkgLayerBuilder::new("loading-screen")
+                    .unwrap()
+                    .with_priority(1),
+            )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\base_file.bin")
