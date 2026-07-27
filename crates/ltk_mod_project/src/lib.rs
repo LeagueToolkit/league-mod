@@ -1,23 +1,21 @@
+use camino::Utf8Path;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
 
+mod config_format;
+pub mod error;
 mod license_file;
 
+pub use config_format::ConfigFormat;
+pub use error::{ModProjectError, SerializeError};
 pub use license_file::{
     canonical_license_file_name, find_license_file, find_license_file_std, LICENSE_FILE_NAMES,
 };
 
-fn serde_fmt<T: Serialize>(value: &T, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let json = serde_json::to_string(value).map_err(|_| fmt::Error)?;
-    let s: String = serde_json::from_str(&json).map_err(|_| fmt::Error)?;
-    f.write_str(&s)
-}
-
 /// Well-known mod tags for common mod categories.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum WellKnownModTag {
     LeagueOfLegends,
@@ -36,8 +34,66 @@ pub enum WellKnownModTag {
     Misc,
 }
 
+impl WellKnownModTag {
+    /// Every well-known tag, so a caller can list or validate against them.
+    pub const ALL: [WellKnownModTag; 14] = [
+        WellKnownModTag::LeagueOfLegends,
+        WellKnownModTag::Tft,
+        WellKnownModTag::ChampionSkin,
+        WellKnownModTag::MapSkin,
+        WellKnownModTag::WardSkin,
+        WellKnownModTag::Ui,
+        WellKnownModTag::Hud,
+        WellKnownModTag::Font,
+        WellKnownModTag::Sfx,
+        WellKnownModTag::Announcer,
+        WellKnownModTag::Structure,
+        WellKnownModTag::Minion,
+        WellKnownModTag::JungleMonster,
+        WellKnownModTag::Misc,
+    ];
+
+    /// The tag's spelling in a config file.
+    ///
+    /// Must stay in step with the `rename_all` attribute above;
+    /// `as_str_matches_serde` holds it there.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WellKnownModTag::LeagueOfLegends => "league-of-legends",
+            WellKnownModTag::Tft => "tft",
+            WellKnownModTag::ChampionSkin => "champion-skin",
+            WellKnownModTag::MapSkin => "map-skin",
+            WellKnownModTag::WardSkin => "ward-skin",
+            WellKnownModTag::Ui => "ui",
+            WellKnownModTag::Hud => "hud",
+            WellKnownModTag::Font => "font",
+            WellKnownModTag::Sfx => "sfx",
+            WellKnownModTag::Announcer => "announcer",
+            WellKnownModTag::Structure => "structure",
+            WellKnownModTag::Minion => "minion",
+            WellKnownModTag::JungleMonster => "jungle-monster",
+            WellKnownModTag::Misc => "misc",
+        }
+    }
+
+    /// The tag a config file spelling names, if it names one.
+    ///
+    /// Not `FromStr`: an unrecognized spelling is not an error here, it is a
+    /// [`ModTag::Custom`], so the caller wants an `Option` rather than a
+    /// `Result` it has to discard.
+    pub fn from_name(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tag| tag.as_str() == value)
+    }
+}
+
+impl fmt::Display for WellKnownModTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A mod tag, either a well-known category or a custom string.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Hash)]
 #[serde(untagged)]
 pub enum ModTag {
     Known(WellKnownModTag),
@@ -47,20 +103,34 @@ pub enum ModTag {
 impl fmt::Display for ModTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModTag::Known(tag) => serde_fmt(tag, f),
+            ModTag::Known(tag) => f.write_str(tag.as_str()),
             ModTag::Custom(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<&str> for ModTag {
+    fn from(s: &str) -> Self {
+        match WellKnownModTag::from_name(s) {
+            Some(tag) => ModTag::Known(tag),
+            None => ModTag::Custom(s.to_owned()),
         }
     }
 }
 
 impl From<String> for ModTag {
     fn from(s: String) -> Self {
-        serde_json::from_value(serde_json::Value::String(s.clone())).unwrap_or(ModTag::Custom(s))
+        // Matches on the borrowed form so a well-known tag does not keep the
+        // allocation the caller handed over.
+        match WellKnownModTag::from_name(&s) {
+            Some(tag) => ModTag::Known(tag),
+            None => ModTag::Custom(s),
+        }
     }
 }
 
 /// Well-known game maps.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum WellKnownMap {
     SummonersRift,
@@ -70,8 +140,47 @@ pub enum WellKnownMap {
     Swarm,
 }
 
+impl WellKnownMap {
+    /// Every well-known map, so a caller can list or validate against them.
+    pub const ALL: [WellKnownMap; 5] = [
+        WellKnownMap::SummonersRift,
+        WellKnownMap::Aram,
+        WellKnownMap::TeamfightTactics,
+        WellKnownMap::Arena,
+        WellKnownMap::Swarm,
+    ];
+
+    /// The map's spelling in a config file.
+    ///
+    /// Must stay in step with the `rename_all` attribute above;
+    /// `as_str_matches_serde` holds it there.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WellKnownMap::SummonersRift => "summoners-rift",
+            WellKnownMap::Aram => "aram",
+            WellKnownMap::TeamfightTactics => "teamfight-tactics",
+            WellKnownMap::Arena => "arena",
+            WellKnownMap::Swarm => "swarm",
+        }
+    }
+
+    /// The map a config file spelling names, if it names one.
+    ///
+    /// Not `FromStr`, for the same reason as
+    /// [`WellKnownModTag::from_name`].
+    pub fn from_name(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|map| map.as_str() == value)
+    }
+}
+
+impl fmt::Display for WellKnownMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A map identifier, either a well-known map or a custom string.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Hash)]
 #[serde(untagged)]
 pub enum ModMap {
     Known(WellKnownMap),
@@ -81,42 +190,37 @@ pub enum ModMap {
 impl fmt::Display for ModMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModMap::Known(map) => serde_fmt(map, f),
+            ModMap::Known(map) => f.write_str(map.as_str()),
             ModMap::Custom(s) => f.write_str(s),
+        }
+    }
+}
+
+impl From<&str> for ModMap {
+    fn from(s: &str) -> Self {
+        match WellKnownMap::from_name(s) {
+            Some(map) => ModMap::Known(map),
+            None => ModMap::Custom(s.to_owned()),
         }
     }
 }
 
 impl From<String> for ModMap {
     fn from(s: String) -> Self {
-        serde_json::from_value(serde_json::Value::String(s.clone())).unwrap_or(ModMap::Custom(s))
+        match WellKnownMap::from_name(&s) {
+            Some(map) => ModMap::Known(map),
+            None => ModMap::Custom(s),
+        }
     }
 }
 
-/// Config file names to search for, in priority order.
-const CONFIG_FILE_NAMES: [&str; 2] = ["mod.config.json", "mod.config.toml"];
-
-/// Error returned when loading a mod project configuration.
-#[derive(Debug, thiserror::Error)]
-pub enum ModProjectError {
-    #[error("Config file not found in {0} (expected mod.config.json or mod.config.toml)")]
-    ConfigNotFound(std::path::PathBuf),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Failed to parse JSON config: {0}")]
-    Json(#[from] serde_json::Error),
-
-    #[error("Failed to parse TOML config: {0}")]
-    Toml(#[from] toml::de::Error),
-
-    #[error("Unsupported config file extension: {0}")]
-    UnsupportedExtension(String),
-}
-
 /// Describes a mod project configuration file
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+///
+/// The `Default` impl exists for struct update syntax
+/// (`ModProject { name, ..Default::default() }`), so that a field added here
+/// does not break every caller that builds one. A default-constructed project
+/// is empty rather than valid, and is not meant to be written out as-is.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProject {
     /// The name of the mod
     /// Must not contain spaces or special characters except for underscores and hyphens
@@ -180,43 +284,93 @@ pub struct ModProject {
 impl ModProject {
     /// Load a mod project from a project directory.
     ///
-    /// Searches for `mod.config.json` (preferred) or `mod.config.toml` in the
-    /// given directory and parses the first one found.
-    pub fn load(project_dir: &Path) -> Result<Self, ModProjectError> {
-        for name in CONFIG_FILE_NAMES {
-            let path = project_dir.join(name);
+    /// Searches for `mod.config.json` (preferred) then `mod.config.toml`, and
+    /// parses the first one found.
+    pub fn load(project_dir: &Utf8Path) -> Result<Self, ModProjectError> {
+        for format in ConfigFormat::ALL {
+            let path = project_dir.join(format.file_name());
             if path.exists() {
-                return Self::load_from_file(&path);
+                return Self::load_from_file_as(&path, format);
             }
         }
+
         Err(ModProjectError::ConfigNotFound(project_dir.to_owned()))
     }
 
-    /// Load a mod project from a specific config file path.
-    ///
-    /// The format is determined by the file extension (`.json` or `.toml`).
-    pub fn load_from_file(path: &Path) -> Result<Self, ModProjectError> {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default();
+    /// Load a mod project from a config file, taking the format from its
+    /// extension.
+    pub fn load_from_file(path: &Utf8Path) -> Result<Self, ModProjectError> {
+        let format = ConfigFormat::from_path(path).ok_or_else(|| {
+            ModProjectError::UnsupportedExtension(path.extension().unwrap_or_default().to_owned())
+        })?;
 
-        match ext {
-            "json" => {
-                let file = std::fs::File::open(path)?;
-                Ok(serde_json::from_reader(file)?)
+        Self::load_from_file_as(path, format)
+    }
+
+    /// Load a mod project from a config file parsed as `format`, whatever the
+    /// file is named.
+    ///
+    /// Use this for a config whose name does not carry a usable extension.
+    pub fn load_from_file_as(
+        path: &Utf8Path,
+        format: ConfigFormat,
+    ) -> Result<Self, ModProjectError> {
+        let content =
+            std::fs::read_to_string(path).map_err(|source| ModProjectError::io(path, source))?;
+
+        match format {
+            ConfigFormat::Json => {
+                serde_json::from_str(&content).map_err(|source| ModProjectError::Json {
+                    path: path.to_owned(),
+                    source,
+                })
             }
-            "toml" => {
-                let content = std::fs::read_to_string(path)?;
-                Ok(toml::from_str(&content)?)
+            ConfigFormat::Toml => {
+                toml::from_str(&content).map_err(|source| ModProjectError::Toml {
+                    path: path.to_owned(),
+                    source: Box::new(source),
+                })
             }
-            other => Err(ModProjectError::UnsupportedExtension(other.to_string())),
         }
+    }
+
+    /// Write the project to a config file, taking the format from its
+    /// extension.
+    pub fn save(&self, path: &Utf8Path) -> Result<(), ModProjectError> {
+        let format = ConfigFormat::from_path(path).ok_or_else(|| {
+            ModProjectError::UnsupportedExtension(path.extension().unwrap_or_default().to_owned())
+        })?;
+
+        self.save_as(path, format)
+    }
+
+    /// Write the project to `path` in `format`, whatever the file is named.
+    pub fn save_as(&self, path: &Utf8Path, format: ConfigFormat) -> Result<(), ModProjectError> {
+        let content = self.to_config_string(format)?;
+
+        std::fs::write(path, content).map_err(|source| ModProjectError::io(path, source))
+    }
+
+    /// Render the project as the text of a config file.
+    ///
+    /// JSON is pretty-printed, since the result is a file a mod author edits by
+    /// hand rather than something only a machine reads.
+    pub fn to_config_string(&self, format: ConfigFormat) -> Result<String, ModProjectError> {
+        let result = match format {
+            ConfigFormat::Json => serde_json::to_string_pretty(self).map_err(SerializeError::Json),
+            ConfigFormat::Toml => toml::to_string_pretty(self).map_err(SerializeError::Toml),
+        };
+
+        result.map_err(|source| ModProjectError::Serialize { format, source })
     }
 }
 
 /// Represents a layer in a mod project
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+///
+/// As with [`ModProject`], `Default` is here for struct update syntax rather
+/// than to describe a usable layer: it has no name. Use
+/// [`base`](ModProjectLayer::base) for the layer every project starts with.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProjectLayer {
     /// The name of the layer
     /// Must not contain spaces or special characters except for underscores and hyphens
@@ -298,27 +452,28 @@ pub struct FileTransformer {
 pub type FileTransformerOptions = HashMap<String, serde_json::Value>;
 
 impl ModProjectLayer {
+    /// The name every project's lowest-priority layer carries.
+    pub const BASE_NAME: &'static str = "base";
+
     /// Returns the default base layer
     pub fn base() -> Self {
         Self {
-            name: "base".to_string(),
-            display_name: None,
-            priority: 0,
+            name: Self::BASE_NAME.to_string(),
             description: Some("Base layer of the mod".to_string()),
-            string_overrides: IndexMap::new(),
+            ..Default::default()
         }
+    }
+
+    /// Whether this is the base layer, which every project has and which the
+    /// Fantome format is limited to.
+    pub fn is_base(&self) -> bool {
+        self.name == Self::BASE_NAME
     }
 }
 
 /// Returns the default layers for a mod project
 pub fn default_layers() -> Vec<ModProjectLayer> {
-    vec![ModProjectLayer {
-        name: "base".to_string(),
-        display_name: None,
-        priority: 0,
-        description: Some("Base layer of the mod".to_string()),
-        string_overrides: IndexMap::new(),
-    }]
+    vec![ModProjectLayer::base()]
 }
 
 #[cfg(test)]
@@ -629,5 +784,207 @@ url = "https://example.com/terms"
             ModMap::from("custom-map".to_string()),
             ModMap::Custom("custom-map".to_string())
         );
+    }
+
+    /// `as_str` hand-writes what `rename_all = "kebab-case"` derives. The two
+    /// can drift apart silently, so pin them together: a tag whose `as_str`
+    /// disagrees with its serialized form would round-trip through a config
+    /// file as a `Custom` tag with the same text.
+    #[test]
+    fn as_str_matches_serde() {
+        for tag in WellKnownModTag::ALL {
+            assert_eq!(
+                serde_json::to_value(tag).unwrap(),
+                serde_json::Value::String(tag.as_str().to_string()),
+                "{tag:?}"
+            );
+            assert_eq!(WellKnownModTag::from_name(tag.as_str()), Some(tag));
+        }
+
+        for map in WellKnownMap::ALL {
+            assert_eq!(
+                serde_json::to_value(map).unwrap(),
+                serde_json::Value::String(map.as_str().to_string()),
+                "{map:?}"
+            );
+            assert_eq!(WellKnownMap::from_name(map.as_str()), Some(map));
+        }
+    }
+
+    /// `ALL` is hand-maintained, so an added variant that is left out of it
+    /// would be missed by `as_str_matches_serde` above.
+    #[test]
+    fn all_covers_every_variant() {
+        // Exhaustive matches: adding a variant fails to compile until it is
+        // listed here, at which point the length assertions catch `ALL`.
+        fn tag_is_listed(tag: WellKnownModTag) -> bool {
+            match tag {
+                WellKnownModTag::LeagueOfLegends
+                | WellKnownModTag::Tft
+                | WellKnownModTag::ChampionSkin
+                | WellKnownModTag::MapSkin
+                | WellKnownModTag::WardSkin
+                | WellKnownModTag::Ui
+                | WellKnownModTag::Hud
+                | WellKnownModTag::Font
+                | WellKnownModTag::Sfx
+                | WellKnownModTag::Announcer
+                | WellKnownModTag::Structure
+                | WellKnownModTag::Minion
+                | WellKnownModTag::JungleMonster
+                | WellKnownModTag::Misc => true,
+            }
+        }
+        fn map_is_listed(map: WellKnownMap) -> bool {
+            match map {
+                WellKnownMap::SummonersRift
+                | WellKnownMap::Aram
+                | WellKnownMap::TeamfightTactics
+                | WellKnownMap::Arena
+                | WellKnownMap::Swarm => true,
+            }
+        }
+
+        assert!(WellKnownModTag::ALL.into_iter().all(tag_is_listed));
+        assert!(WellKnownMap::ALL.into_iter().all(map_is_listed));
+
+        // Distinct spellings, so no variant is listed twice in place of another.
+        let tags: std::collections::HashSet<_> =
+            WellKnownModTag::ALL.iter().map(|t| t.as_str()).collect();
+        assert_eq!(tags.len(), WellKnownModTag::ALL.len());
+
+        let maps: std::collections::HashSet<_> =
+            WellKnownMap::ALL.iter().map(|m| m.as_str()).collect();
+        assert_eq!(maps.len(), WellKnownMap::ALL.len());
+    }
+
+    fn temp_root(tmp: &tempfile::TempDir) -> camino::Utf8PathBuf {
+        camino::Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap()
+    }
+
+    #[test]
+    fn save_load_round_trips_in_both_formats() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = temp_root(&tmp);
+        let project = create_example_project();
+
+        for format in ConfigFormat::ALL {
+            let path = root.join(format.file_name());
+            project.save(&path).unwrap();
+
+            assert_eq!(
+                ModProject::load_from_file(&path).unwrap(),
+                project,
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_prefers_json_over_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = temp_root(&tmp);
+
+        let mut json_project = create_example_project();
+        json_project.name = "from-json".to_string();
+        json_project.save(&root.join("mod.config.json")).unwrap();
+
+        let mut toml_project = create_example_project();
+        toml_project.name = "from-toml".to_string();
+        toml_project.save(&root.join("mod.config.toml")).unwrap();
+
+        assert_eq!(ModProject::load(&root).unwrap().name, "from-json");
+    }
+
+    #[test]
+    fn load_reports_the_directory_it_searched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = temp_root(&tmp);
+
+        match ModProject::load(&root) {
+            Err(ModProjectError::ConfigNotFound(dir)) => assert_eq!(dir, root),
+            other => panic!("expected ConfigNotFound, got {other:?}"),
+        }
+    }
+
+    /// A parse failure has to name the file. A project can hold both a JSON and
+    /// a TOML config, and "expected `,` at line 4" alone does not say which one
+    /// to open.
+    #[test]
+    fn parse_failure_names_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = temp_root(&tmp);
+        let path = root.join("mod.config.json");
+        std::fs::write(&path, "{ not json").unwrap();
+
+        match ModProject::load_from_file(&path) {
+            Err(ModProjectError::Json { path: failed, .. }) => assert_eq!(failed, path),
+            other => panic!("expected Json, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_file_reports_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = temp_root(&tmp).join("mod.config.json");
+
+        match ModProject::load_from_file(&path) {
+            Err(ModProjectError::Io {
+                path: failed,
+                source,
+            }) => {
+                assert_eq!(failed, path);
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected Io, got {other:?}"),
+        }
+    }
+
+    /// The error's own message must not repeat what its source says, or an
+    /// error chain prints the same sentence twice.
+    #[test]
+    fn error_display_does_not_embed_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = temp_root(&tmp).join("mod.config.json");
+        let err = ModProject::load_from_file(&path).unwrap_err();
+
+        let source = std::error::Error::source(&err).unwrap().to_string();
+        assert!(
+            !err.to_string().contains(&source),
+            "`{err}` already contains its source `{source}`"
+        );
+    }
+
+    #[test]
+    fn unsupported_extension_names_it() {
+        let path = camino::Utf8PathBuf::from("mod.config.yaml");
+
+        match ModProject::load_from_file(&path) {
+            Err(ModProjectError::UnsupportedExtension(ext)) => assert_eq!(ext, "yaml"),
+            other => panic!("expected UnsupportedExtension, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn default_supports_struct_update() {
+        let project = ModProject {
+            name: "only-field-i-care-about".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(project.name, "only-field-i-care-about");
+        assert!(project.layers.is_empty());
+    }
+
+    #[test]
+    fn base_layer_is_recognized() {
+        assert!(ModProjectLayer::base().is_base());
+        assert_eq!(default_layers(), vec![ModProjectLayer::base()]);
+
+        let other = ModProjectLayer {
+            name: "high_res".to_string(),
+            ..Default::default()
+        };
+        assert!(!other.is_base());
     }
 }
