@@ -152,22 +152,17 @@ pub struct FantomeContent<R: Read + Seek> {
 
 impl<R: Read + Seek> FantomeContent<R> {
     pub fn new(reader: R) -> Result<Self> {
-        let mut archive = ZipArchive::new(reader)
-            .map_err(|e| Error::Other(format!("Failed to open fantome archive: {}", e)))?;
+        let mut archive = ZipArchive::new(reader)?;
         let index = FantomeIndex::build(&mut archive);
 
         // Mount all packed WADs upfront, reading via the stored entry path.
         let mut packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>> = HashMap::new();
         for (wad_key, zip_path) in &index.packed_wad_paths {
-            let mut entry = archive.by_name(zip_path).map_err(|e| {
-                Error::Other(format!("Failed to read packed WAD '{}': {}", zip_path, e))
-            })?;
-            let wad_data = read_zip_entry_bytes(&mut entry).map_err(|e| {
-                Error::Other(format!(
-                    "Failed to read packed WAD data '{}': {}",
-                    zip_path, e
-                ))
-            })?;
+            let mut entry = archive
+                .by_name(zip_path)
+                .map_err(|source| Error::archive_entry(zip_path, source))?;
+            let wad_data = read_zip_entry_bytes(&mut entry)
+                .map_err(|source| Error::archive_entry(zip_path, source))?;
 
             let wad = Wad::mount(Cursor::new(wad_data))?;
             packed_wads.insert(wad_key.clone(), wad);
@@ -198,15 +193,16 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         let mut info_file = self
             .archive
             .by_name(info_name)
-            .map_err(|e| Error::Other(format!("Failed to read info.json: {}", e)))?;
+            .map_err(|source| Error::archive_entry(info_name.as_str(), source))?;
         let info_bytes = read_zip_entry_bytes(&mut info_file)
-            .map_err(|e| Error::Other(format!("Failed to read info.json content: {}", e)))?;
-        let info_content = String::from_utf8(info_bytes)
-            .map_err(|e| Error::Other(format!("info.json is not valid UTF-8: {}", e)))?;
+            .map_err(|source| Error::archive_entry(info_name.as_str(), source))?;
 
-        let info_content = info_content.trim_start_matches('\u{feff}').trim();
-        let info: ltk_fantome::FantomeInfo = serde_json::from_str(info_content)
-            .map_err(|e| Error::Other(format!("Failed to parse fantome info.json: {}", e)))?;
+        // Some Fantome tools write a UTF-8 BOM, which serde_json rejects.
+        // Invalid UTF-8 past that point surfaces as a parse error.
+        let info_json = info_bytes
+            .strip_prefix(b"\xEF\xBB\xBF")
+            .unwrap_or(&info_bytes);
+        let info: ltk_fantome::FantomeInfo = serde_json::from_slice(info_json)?;
 
         // Map declared layers so per-layer string overrides survive; fantome WAD
         // content itself is still base-layer only.
@@ -273,9 +269,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 let mut entry = self
                     .archive
                     .by_name(zip_path)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
                 let bytes = read_zip_entry_bytes(&mut entry)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
                 results.push((Utf8PathBuf::from(rel_path), bytes));
             }
 
@@ -310,9 +306,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             let mut entry = self
                 .archive
                 .by_name(zip_path)
-                .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             let bytes = read_zip_entry_bytes(&mut entry)
-                .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             results.push((Utf8PathBuf::from(rel_path), bytes));
         }
 
@@ -351,9 +347,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             let mut entry = self
                 .archive
                 .by_name(&zip_path)
-                .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             let bytes = read_zip_entry_bytes(&mut entry)
-                .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             return Ok(bytes);
         }
 
@@ -400,14 +396,12 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             ))
         })?;
 
-        let mut entry = self.archive.by_name(&zip_path).map_err(|e| {
-            Error::Other(format!(
-                "Failed to read RAW ZIP entry '{}': {}",
-                zip_path, e
-            ))
-        })?;
+        let mut entry = self
+            .archive
+            .by_name(&zip_path)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
         read_zip_entry_bytes(&mut entry)
-            .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
