@@ -24,6 +24,7 @@ pub use packer::ProjectPacker;
 pub use thumbnail::{load_thumbnail, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
+use crate::error::{EncodingError, ReadTextError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use ltk_mod_project::ModProject;
@@ -39,11 +40,8 @@ pub enum PackError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("Failed to read {path}: {source}")]
-    ReadFile {
-        path: Utf8PathBuf,
-        source: io::Error,
-    },
+    #[error(transparent)]
+    ReadFile(#[from] ReadTextError),
 
     #[error("Builder error: {0}")]
     Builder(#[from] ModpkgBuilderError),
@@ -72,8 +70,14 @@ pub enum PackError {
     #[error("Glob pattern error: {0}")]
     GlobError(#[from] glob::PatternError),
 
-    #[error("Invalid UTF-8 path: {0}")]
-    InvalidUtf8Path(String),
+    #[error(transparent)]
+    Encoding(#[from] EncodingError),
+
+    #[error("Path has no file name: {0}")]
+    MissingFileName(Utf8PathBuf),
+
+    #[error(transparent)]
+    StripPrefix(#[from] StripPrefixError),
 }
 
 /// Result of a successful pack operation.

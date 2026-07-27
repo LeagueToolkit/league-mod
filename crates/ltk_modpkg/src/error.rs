@@ -1,6 +1,37 @@
+use camino::Utf8PathBuf;
 use thiserror::Error;
 
 use crate::ModpkgCompression;
+
+/// A value that could not be represented in the encoding this crate requires.
+///
+/// Paths are the common case: the OS hands back arbitrary bytes, while
+/// `.modpkg` stores every path as UTF-8.
+#[derive(Debug, Error)]
+pub enum EncodingError {
+    /// A path from an OS API that is not valid UTF-8.
+    ///
+    /// Carries the path rendered lossily, which is the only form left that can
+    /// go in a message.
+    #[error("Invalid UTF-8 path: {0}")]
+    NonUtf8Path(String),
+}
+
+/// Failure to read a file as text, carrying the path it failed on.
+#[derive(Debug, Error)]
+#[error("Failed to read {path}: {source}")]
+pub struct ReadTextError {
+    pub path: Utf8PathBuf,
+    pub source: std::io::Error,
+}
+
+/// A path that does not start with the base it was stripped against.
+#[derive(Debug, Error)]
+#[error("{path} is not inside {base}")]
+pub struct StripPrefixError {
+    pub path: Utf8PathBuf,
+    pub base: Utf8PathBuf,
+}
 
 #[derive(Error, Debug)]
 pub enum ModpkgError {

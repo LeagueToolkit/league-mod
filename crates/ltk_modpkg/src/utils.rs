@@ -1,6 +1,6 @@
+use crate::error::{EncodingError, ReadTextError, StripPrefixError};
 use camino::{Utf8Path, Utf8PathBuf};
-use std::io;
-use std::path::{PathBuf, StripPrefixError};
+use std::path::PathBuf;
 use xxhash_rust::{xxh3, xxh64};
 
 pub fn is_hex_chunk_name(chunk_name: &str) -> bool {
@@ -55,32 +55,53 @@ pub fn is_valid_slug(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
-/// Read a text file, replacing invalid UTF-8 instead of failing.
-///
-/// Files picked up by convention rather than by explicit request (`README.md`,
-/// `LICENSE`) are frequently authored in Latin-1, and a `©` in a copy of a GPL
-/// or Creative Commons text must not be able to fail an otherwise valid
-/// operation. Genuine IO failures still surface.
-pub fn read_text_file_lossy(path: &Utf8Path) -> io::Result<String> {
-    let bytes = std::fs::read(path)?;
+/// Path operations that `ltk_modpkg` needs but `camino` does not provide.
+pub trait Utf8PathExt {
+    /// Read the file as text, replacing invalid UTF-8 instead of failing.
+    ///
+    /// Files picked up by convention rather than by explicit request
+    /// (`README.md`, `LICENSE`) are frequently authored in Latin-1, and a `©`
+    /// in a copy of a GPL or Creative Commons text must not be able to fail an
+    /// otherwise valid operation. Genuine IO failures still surface, with the
+    /// path attached.
+    fn read_text_lossy(&self) -> Result<String, ReadTextError>;
 
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    /// Strip `base` from the path and return the remainder as a normalized
+    /// string (forward slashes, for cross-platform consistency).
+    fn strip_prefix_normalized(&self, base: &Utf8Path) -> Result<String, StripPrefixError>;
 }
 
-/// Convert a `std::path::PathBuf` to a `Utf8PathBuf`.
-///
-/// On failure the error carries the offending path rendered lossily, which is
-/// the only form left that can go in a message.
-pub fn utf8_path_from(path: PathBuf) -> Result<Utf8PathBuf, String> {
-    Utf8PathBuf::from_path_buf(path).map_err(|path| path.display().to_string())
+impl Utf8PathExt for Utf8Path {
+    fn read_text_lossy(&self) -> Result<String, ReadTextError> {
+        let bytes = std::fs::read(self).map_err(|source| ReadTextError {
+            path: self.to_owned(),
+            source,
+        })?;
+
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn strip_prefix_normalized(&self, base: &Utf8Path) -> Result<String, StripPrefixError> {
+        let rel = self.strip_prefix(base).map_err(|_| StripPrefixError {
+            path: self.to_owned(),
+            base: base.to_owned(),
+        })?;
+
+        Ok(rel.as_str().replace('\\', "/"))
+    }
 }
 
-/// Strip a prefix from a path and return the remainder as a normalized string
-/// (forward slashes, for cross-platform consistency).
-pub fn strip_path_prefix(path: &Utf8Path, base: &Utf8Path) -> Result<String, StripPrefixError> {
-    let rel = path.strip_prefix(base)?;
+/// Conversion from the `std` path types that OS APIs hand back.
+pub trait PathBufExt {
+    /// Convert into a [`Utf8PathBuf`], or fail with the lossy rendering.
+    fn into_utf8(self) -> Result<Utf8PathBuf, EncodingError>;
+}
 
-    Ok(rel.as_str().replace('\\', "/"))
+impl PathBufExt for PathBuf {
+    fn into_utf8(self) -> Result<Utf8PathBuf, EncodingError> {
+        Utf8PathBuf::from_path_buf(self)
+            .map_err(|path| EncodingError::NonUtf8Path(path.display().to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -140,39 +161,56 @@ mod tests {
     }
 
     #[test]
-    fn read_text_file_lossy_replaces_invalid_utf8() {
+    fn read_text_lossy_replaces_invalid_utf8() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(tmp.path().join("LICENSE")).unwrap();
+        let path = tmp.path().join("LICENSE").into_utf8().unwrap();
 
         // Latin-1 "Copyright © 2026".
         std::fs::write(&path, b"Copyright \xA9 2026").unwrap();
 
-        assert_eq!(
-            read_text_file_lossy(&path).unwrap(),
-            "Copyright \u{FFFD} 2026"
-        );
+        assert_eq!(path.read_text_lossy().unwrap(), "Copyright \u{FFFD} 2026");
     }
 
     #[test]
-    fn read_text_file_lossy_surfaces_io_errors() {
+    fn read_text_lossy_names_the_file_it_failed_on() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(tmp.path().join("missing")).unwrap();
+        let path = tmp.path().join("missing").into_utf8().unwrap();
 
-        assert!(read_text_file_lossy(&path).is_err());
+        let err = path.read_text_lossy().unwrap_err();
+
+        assert_eq!(err.path, path);
+        assert!(err.to_string().contains("missing"));
     }
 
     #[test]
-    fn strip_path_prefix_normalizes_separators() {
+    fn strip_prefix_normalized_normalizes_separators() {
         let base = Utf8Path::new("root/content/base");
 
         assert_eq!(
-            strip_path_prefix(&base.join("Graves.wad.client").join("f.bin"), base).unwrap(),
+            base.join("Graves.wad.client")
+                .join("f.bin")
+                .strip_prefix_normalized(base)
+                .unwrap(),
             "Graves.wad.client/f.bin"
         );
     }
 
     #[test]
-    fn strip_path_prefix_rejects_unrelated_base() {
-        assert!(strip_path_prefix(Utf8Path::new("a/b"), Utf8Path::new("c")).is_err());
+    fn strip_prefix_normalized_rejects_unrelated_base() {
+        let err = Utf8Path::new("a/b")
+            .strip_prefix_normalized(Utf8Path::new("c"))
+            .unwrap_err();
+
+        // Both sides make it into the message; the std error says only
+        // "prefix not found", which is useless without them.
+        assert_eq!(err.to_string(), "a/b is not inside c");
+    }
+
+    #[test]
+    fn into_utf8_accepts_a_utf8_path() {
+        assert_eq!(
+            PathBuf::from("root/content/base").into_utf8().unwrap(),
+            Utf8Path::new("root/content/base")
+        );
     }
 }
