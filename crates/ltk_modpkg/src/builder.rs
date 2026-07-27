@@ -21,7 +21,7 @@ use crate::{
 #[non_exhaustive]
 pub enum ModpkgBuilderError {
     #[error("io error")]
-    IoError(#[from] io::Error),
+    Io(#[from] io::Error),
 
     /// A chunk's binary layout could not be written.
     ///
@@ -31,7 +31,7 @@ pub enum ModpkgBuilderError {
     BinWrite(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("modpkg error")]
-    ModpkgError(#[from] crate::error::ModpkgError),
+    Modpkg(#[from] crate::error::ModpkgError),
 
     #[error("unsupported compression type: {0:?}")]
     UnsupportedCompressionType(ModpkgCompression),

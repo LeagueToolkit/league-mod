@@ -26,7 +26,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
 
         let version = reader.read_u32::<LE>()?;
         if version != 1 {
-            return Err(ModpkgError::InvalidVersion(version));
+            return Err(ModpkgError::UnsupportedFormatVersion(version));
         }
 
         let signature_size = reader.read_u32::<LE>()?;

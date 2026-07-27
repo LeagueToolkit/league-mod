@@ -38,13 +38,13 @@ use std::io;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PackError {
-    #[error("IO error: {0}")]
+    #[error("IO error")]
     Io(#[from] io::Error),
 
     #[error(transparent)]
     ReadFile(#[from] ReadTextError),
 
-    #[error("Builder error: {0}")]
+    #[error("Builder error")]
     Builder(#[from] ModpkgBuilderError),
 
     #[error("Config file not found in project directory: {0}")]

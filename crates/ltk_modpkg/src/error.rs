@@ -129,8 +129,9 @@ pub enum ModpkgError {
     InvalidLicenseType(u8),
     #[error("Invalid modpkg magic: {0}")]
     InvalidMagic(u64),
-    #[error("Invalid modpkg version: {0}")]
-    InvalidVersion(u32),
+    /// The container format version, not the mod's own version.
+    #[error("Unsupported modpkg format version: {0}")]
+    UnsupportedFormatVersion(u32),
     #[error("Duplicate chunk: {0}")]
     DuplicateChunk(u64),
     #[error("Chunk not found: {0:x}")]
