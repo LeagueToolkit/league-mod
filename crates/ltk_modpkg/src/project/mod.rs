@@ -39,6 +39,12 @@ pub enum PackError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
+    #[error("Failed to read {path}: {source}")]
+    ReadFile {
+        path: Utf8PathBuf,
+        source: io::Error,
+    },
+
     #[error("Builder error: {0}")]
     Builder(#[from] ModpkgBuilderError),
 

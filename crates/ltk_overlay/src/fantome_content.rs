@@ -11,7 +11,9 @@
 use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, default_layers};
+use ltk_mod_project::{
+    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, default_layers,
+};
 use ltk_wad::Wad;
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
@@ -234,7 +236,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             version: info.version,
             description: info.description,
             authors: vec![ModProjectAuthor::Name(info.author)],
-            license: None,
+            license: info.license.map(ModProjectLicense::from),
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -522,11 +524,19 @@ mod tests {
     }
 
     fn make_info_json(name: &str) -> Vec<u8> {
+        make_info_json_with_license(name, None)
+    }
+
+    fn make_info_json_with_license(
+        name: &str,
+        license: Option<ltk_fantome::FantomeLicense>,
+    ) -> Vec<u8> {
         serde_json::to_vec(&ltk_fantome::FantomeInfo {
             name: name.to_string(),
             author: "Author".to_string(),
             version: "1.0.0".to_string(),
             description: "Desc".to_string(),
+            license,
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -557,6 +567,23 @@ mod tests {
     }
 
     #[test]
+    fn mod_project_surfaces_license() {
+        let cursor = make_fantome_zip(&[(
+            "META/info.json",
+            &make_info_json_with_license(
+                "Licensed Mod",
+                Some(ltk_fantome::FantomeLicense::Spdx("MIT".to_string())),
+            ),
+        )]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        assert_eq!(
+            content.mod_project().unwrap().license,
+            Some(ModProjectLicense::Spdx("MIT".to_string()))
+        );
+    }
+
+    #[test]
     fn mod_project_missing_info_json() {
         let cursor = make_fantome_zip(&[("WAD/test.wad.client/file", b"data")]);
         let mut content = FantomeContent::new(cursor).unwrap();
@@ -572,6 +599,7 @@ mod tests {
                 author: "Author".to_string(),
                 version: "1.0.0".to_string(),
                 description: "Desc".to_string(),
+                license: None,
                 tags: Vec::new(),
                 champions: Vec::new(),
                 maps: Vec::new(),

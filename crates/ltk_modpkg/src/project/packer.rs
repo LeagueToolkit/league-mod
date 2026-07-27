@@ -1,15 +1,20 @@
-//! [`ProjectPacker`] — scans a mod project directory and builds a `.modpkg` archive.
+//! [`ProjectPacker`]: scans a mod project directory and builds a `.modpkg` archive.
 
 use super::thumbnail::load_thumbnail;
 use super::PackError;
 use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     metadata::CURRENT_SCHEMA_VERSION,
-    utils::hash_layer_name,
-    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
+    utils::{
+        hash_layer_name, is_valid_slug, read_text_file_lossy, requested_compression,
+        strip_path_prefix, utf8_path_from,
+    },
+    ModpkgLayerMetadata, ModpkgMetadata,
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
+use ltk_mod_project::{
+    find_license_file, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense,
+};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Read, Seek, Write};
@@ -47,6 +52,7 @@ pub struct ProjectPacker {
     project_root: Utf8PathBuf,
     chunks: Vec<ChunkEntry>,
     readme: Option<String>,
+    license_text: Option<String>,
     thumbnail: Option<Vec<u8>>,
 }
 
@@ -91,6 +97,7 @@ impl ProjectPacker {
             project_root,
             chunks: Vec::new(),
             readme: None,
+            license_text: None,
             thumbnail: None,
         };
 
@@ -185,7 +192,7 @@ impl ProjectPacker {
 
         for entry in fs::read_dir(layer_dir.as_std_path())? {
             let entry = entry?;
-            let entry_path = utf8_path_from(entry.path())?;
+            let entry_path = to_utf8_path(entry.path())?;
 
             if entry_path.is_dir() {
                 self.scan_directory(&layer_dir, &entry_path, layer)?;
@@ -221,7 +228,7 @@ impl ProjectPacker {
             .filter_map(Result::ok)
             .filter(|e| e.is_file())
         {
-            let file_path = utf8_path_from(file)?;
+            let file_path = to_utf8_path(file)?;
             let rel_path = strip_prefix(&file_path, strip_base)?;
             self.push_chunk(rel_path, layer, wad_name.clone(), file_path);
         }
@@ -247,7 +254,11 @@ impl ProjectPacker {
     fn scan_meta_files(&mut self) -> Result<(), PackError> {
         let readme_path = self.project_root.join("README.md");
         if readme_path.exists() {
-            self.readme = Some(fs::read_to_string(&readme_path)?);
+            self.readme = Some(read_text_file(&readme_path)?);
+        }
+
+        if let Some(license_path) = find_license_file(&self.project_root) {
+            self.license_text = Some(read_text_file(&license_path)?);
         }
 
         let thumbnail_path = self
@@ -308,6 +319,11 @@ impl ProjectPacker {
         // Meta chunks
         if let Some(readme) = &self.readme {
             builder = builder.with_readme(readme).map_err(PackError::Builder)?;
+        }
+        if let Some(license_text) = &self.license_text {
+            builder = builder
+                .with_license_text(license_text)
+                .map_err(PackError::Builder)?;
         }
         if let Some(thumbnail) = self.thumbnail {
             builder = builder
@@ -377,15 +393,6 @@ fn validate_project(mod_project: &ModProject, project_root: &Utf8Path) -> Result
     Ok(())
 }
 
-/// Check if a string is a valid slug (lowercase alphanumeric with hyphens).
-pub(super) fn is_valid_slug(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !s.starts_with('-')
-        && !s.ends_with('-')
-}
-
 // ---------------------------------------------------------------------------
 // Metadata conversion
 // ---------------------------------------------------------------------------
@@ -446,34 +453,23 @@ fn build_layer_metadata(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
 }
 
 // ---------------------------------------------------------------------------
-// Path utilities
+// Error mapping for the shared utilities in [`crate::utils`]
 // ---------------------------------------------------------------------------
 
-/// Convert a `std::path::PathBuf` to a `Utf8PathBuf`, returning a `PackError` on failure.
-fn utf8_path_from(path: std::path::PathBuf) -> Result<Utf8PathBuf, PackError> {
-    Utf8PathBuf::from_path_buf(path)
-        .map_err(|p| PackError::InvalidUtf8Path(p.display().to_string()))
+/// [`read_text_file_lossy`] with the path attached to any IO failure.
+fn read_text_file(path: &Utf8Path) -> Result<String, PackError> {
+    read_text_file_lossy(path).map_err(|source| PackError::ReadFile {
+        path: path.to_owned(),
+        source,
+    })
 }
 
-/// Strip a prefix from a path and return the remainder as a normalized string
-/// (forward slashes, for cross-platform consistency).
+/// [`crate::utils::utf8_path_from`], as a [`PackError`].
+fn to_utf8_path(path: std::path::PathBuf) -> Result<Utf8PathBuf, PackError> {
+    utf8_path_from(path).map_err(PackError::InvalidUtf8Path)
+}
+
+/// [`strip_path_prefix`], as a [`PackError`].
 fn strip_prefix(path: &Utf8Path, base: &Utf8Path) -> Result<String, PackError> {
-    let rel = path
-        .strip_prefix(base)
-        .map_err(|e| PackError::Io(io::Error::other(e.to_string())))?;
-    Ok(rel.as_str().replace('\\', "/"))
-}
-
-/// Compression to request for a content file.
-///
-/// Wwise audio containers (`.bnk`/`.wpk`) are always stored uncompressed,
-/// mirroring how the overlay builder treats them in game WADs. Everything
-/// else requests Zstd; the builder stores a chunk raw when compression
-/// doesn't meaningfully reduce its size, so already-compressed formats
-/// need no special-casing here.
-pub(super) fn requested_compression(ext: Option<&str>) -> ModpkgCompression {
-    match ext.map(|e| e.to_ascii_lowercase()).as_deref() {
-        Some("bnk" | "wpk") => ModpkgCompression::None,
-        _ => ModpkgCompression::Zstd,
-    }
+    strip_path_prefix(path, base).map_err(|e| PackError::Io(io::Error::other(e.to_string())))
 }

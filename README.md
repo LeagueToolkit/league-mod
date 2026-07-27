@@ -153,8 +153,27 @@ my-mod/
 │   ├── high_res/             # High resolution layer
 │   └── gameplay/             # Gameplay modifications layer
 ├── build/                    # Output directory for .modpkg files
+├── LICENSE                   # License text (optional, also LICENSE.md/.txt)
 └── README.md                 # Project documentation/description
 ```
+
+### Licensing
+
+A project declares its license in two independent places:
+
+- The **`license` field** in `mod.config.json` names the terms — either an SPDX
+  identifier (`"license": "MIT"`) or a custom object
+  (`"license": { "name": "My License", "url": "https://example.com/terms" }`,
+  where `url` is optional).
+- A **`LICENSE` file** at the project root carries the text. `LICENSE`,
+  `LICENSE.md`, and `LICENSE.txt` are recognized, matched case-insensitively
+  and in that precedence order.
+
+Either, both, or neither may be present; nothing hard-fails on a mismatch. Both
+formats carry the license through: `.modpkg` stores the text in a compressed
+`_meta_/license` chunk, `.fantome` in a `META/LICENSE` entry (keeping the source
+file's extension, e.g. `META/LICENSE.md`). Extracting either format writes the
+license back to the project root under the name it was packed with.
 
 ## 📖 Quick Start
 
@@ -181,6 +200,7 @@ Edit `mod.config.json` to add metadata, authors, and configure layers:
   "version": "1.0.0",
   "description": "A complete visual overhaul for Aatrox",
   "authors": ["Your Name"],
+  "license": "MIT",
   "layers": [
     {
       "name": "base",

@@ -7,8 +7,8 @@
 use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
-use ltk_modpkg::Modpkg;
+use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
+use ltk_modpkg::{Modpkg, ModpkgLicense};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
@@ -73,7 +73,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
                 .into_iter()
                 .map(|a| ModProjectAuthor::Name(a.name))
                 .collect(),
-            license: None,
+            license: convert_license(metadata.license),
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -199,6 +199,15 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     }
 }
 
+/// Map a package's license declaration back to its mod project form.
+fn convert_license(license: ModpkgLicense) -> Option<ModProjectLicense> {
+    match license {
+        ModpkgLicense::None => None,
+        ModpkgLicense::Spdx { spdx_id } => Some(ModProjectLicense::Spdx(spdx_id)),
+        ModpkgLicense::Custom { name, url } => Some(ModProjectLicense::Custom { name, url }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +215,49 @@ mod tests {
     use ltk_modpkg::builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder};
     use ltk_modpkg::{Modpkg, ModpkgCompression};
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn mod_project_surfaces_license() {
+        let mut cursor = Cursor::new(Vec::new());
+
+        let metadata = ltk_modpkg::ModpkgMetadata {
+            license: ModpkgLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            },
+            ..Default::default()
+        };
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_metadata(metadata)
+            .unwrap()
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("data\\skin0.bin")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
+            )
+            .build_to_writer(&mut cursor, |_chunk, cursor| {
+                cursor.write_all(&[0xAA; 10])?;
+                Ok(())
+            })
+            .unwrap();
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+        let mut content = ModpkgContent::new(modpkg);
+
+        assert_eq!(
+            content.mod_project().unwrap().license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            })
+        );
+    }
 
     #[test]
     fn list_layer_wads_with_wad_index() {

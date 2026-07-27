@@ -1,5 +1,6 @@
 use binrw::BinWrite;
 use byteorder::{WriteBytesExt, LE};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -12,7 +13,8 @@ use crate::{
     ModpkgCompression,
 };
 use crate::{
-    hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME, README_CHUNK_PATH,
+    hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
+    README_CHUNK_PATH,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -40,29 +42,31 @@ pub enum ModpkgBuilderError {
 }
 
 /// Provides an interface to build a Modpkg file.
-#[derive(Debug, Clone)]
+///
+/// Meta chunks (metadata, readme, license text, thumbnail) are not held as
+/// chunk builders: they are derived from the content fields by
+/// [`meta_chunks`](Self::meta_chunks) at build time.
+#[derive(Debug, Clone, Default)]
 pub struct ModpkgBuilder {
     pub readme: Option<String>,
+    pub license_text: Option<String>,
     pub thumbnail: Option<Vec<u8>>,
     pub metadata: ModpkgMetadata,
     pub chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
-    pub meta_chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
     pub layers: Vec<ModpkgLayerBuilder>,
 }
 
-impl Default for ModpkgBuilder {
-    fn default() -> Self {
-        let mut builder = Self {
-            readme: None,
-            thumbnail: None,
-            metadata: ModpkgMetadata::default(),
-            chunks: HashMap::new(),
-            meta_chunks: HashMap::new(),
-            layers: Vec::new(),
-        };
+/// A meta chunk to be written, resolved from the builder's content fields.
+#[derive(Debug)]
+struct MetaChunk<'builder> {
+    path: &'static str,
+    data: Cow<'builder, [u8]>,
+    compression: ModpkgCompression,
+}
 
-        builder = builder.with_metadata(ModpkgMetadata::default()).unwrap();
-        builder
+impl MetaChunk<'_> {
+    fn path_hash(&self) -> u64 {
+        hash_chunk_name(self.path)
     }
 }
 
@@ -110,14 +114,22 @@ impl ModpkgBuilder {
     ) -> Result<(), ModpkgBuilderError> {
         let mut writer = BufWriter::new(writer);
 
+        // Resolve exactly what will be written before writing anything: the
+        // header's chunk count and the reserved TOC are both derived from these
+        // two lists, so they cannot disagree with the entries written later.
+        let meta_chunks = self.meta_chunks()?;
+        let meta_path_hashes: HashSet<u64> = meta_chunks.iter().map(MetaChunk::path_hash).collect();
+        let regular_chunks = self.collect_regular_chunks(&meta_path_hashes);
+
         // Collect all unique paths, layers, and wads
-        let (chunk_paths, chunk_path_indices) = self.collect_unique_paths();
-        let (layers, _) = self.collect_unique_layers();
-        let (wads, wad_indices) = self.collect_unique_wads();
+        let (chunk_paths, chunk_path_indices) =
+            Self::collect_unique_paths(&meta_chunks, &regular_chunks);
+        let (layers, _) = Self::collect_unique_layers(&regular_chunks);
+        let (wads, wad_indices) = Self::collect_unique_wads(&regular_chunks);
 
         Self::validate_layers(&self.layers, &layers)?;
 
-        let total_chunks = self.chunks.len() + self.meta_chunks.len();
+        let total_chunks = meta_chunks.len() + regular_chunks.len();
 
         Self::write_header(&mut writer, total_chunks)?;
         Self::write_layers(&mut writer, &self.layers)?;
@@ -131,9 +143,11 @@ impl ModpkgBuilder {
 
         let layer_index_map = Self::build_layer_index_map(&self.layers);
 
-        let all_chunks = self.process_all_chunks(
+        let all_chunks = Self::process_all_chunks(
             &mut writer,
             provide_chunk_data,
+            &meta_chunks,
+            &regular_chunks,
             &chunk_path_indices,
             &layer_index_map,
             &wad_indices,
@@ -225,17 +239,17 @@ impl ModpkgBuilder {
         TWriter: io::Write + io::Seek,
         TChunkDataProvider: Fn(&ModpkgChunkBuilder, &mut Cursor<Vec<u8>>) -> Result<(), ModpkgBuilderError>,
     >(
-        &self,
         writer: &mut BufWriter<TWriter>,
         provide_chunk_data: TChunkDataProvider,
+        meta_chunks: &[MetaChunk<'_>],
+        regular_chunks: &[&ModpkgChunkBuilder],
         chunk_path_indices: &HashMap<u64, u32>,
         layer_index_map: &HashMap<u64, u32>,
         wad_indices: &HashMap<u64, u32>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
-        let mut meta_chunks = self.process_meta_chunks(writer, chunk_path_indices)?;
-        let regular_chunks = self.collect_regular_chunks(&meta_chunks);
+        let mut all_chunks = Self::process_meta_chunks(writer, meta_chunks, chunk_path_indices)?;
         let mut processed_regular_chunks = Self::process_chunks(
-            &regular_chunks,
+            regular_chunks,
             writer,
             provide_chunk_data,
             chunk_path_indices,
@@ -243,25 +257,19 @@ impl ModpkgBuilder {
             wad_indices,
         )?;
 
-        meta_chunks.append(&mut processed_regular_chunks);
+        all_chunks.append(&mut processed_regular_chunks);
 
-        Ok(meta_chunks)
+        Ok(all_chunks)
     }
 
     /// Collect all non-meta chunks, sorted by WAD name then layer.
     ///
     /// This groups related chunks physically in the file,
     /// enabling more sequential I/O when reading all overrides for a WAD.
-    fn collect_regular_chunks(&self, meta_chunks: &[ModpkgChunk]) -> Vec<&ModpkgChunkBuilder> {
-        let meta_path_hashes = meta_chunks
-            .iter()
-            .map(|c| c.path_hash)
-            .collect::<HashSet<_>>();
-
+    fn collect_regular_chunks(&self, meta_path_hashes: &HashSet<u64>) -> Vec<&ModpkgChunkBuilder> {
         let mut regular_chunks: Vec<_> = self
             .chunks
             .values()
-            .chain(self.meta_chunks.values())
             .filter(|chunk| !meta_path_hashes.contains(&chunk.path_hash))
             .collect();
         regular_chunks.sort_by(|a, b| a.wad.cmp(&b.wad).then(a.layer.cmp(&b.layer)));
@@ -281,79 +289,101 @@ impl ModpkgBuilder {
         Ok(())
     }
 
-    fn process_meta_chunks<TWriter: io::Write + io::Seek>(
-        &self,
-        writer: &mut BufWriter<TWriter>,
-        chunk_path_indices: &HashMap<u64, u32>,
-    ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
-        let mut meta_chunks = Vec::new();
+    /// The meta chunks this builder will write, in write order.
+    ///
+    /// This is the only place that decides which meta chunks exist and how each
+    /// is stored; the metadata chunk is always present, the rest follow their
+    /// content field.
+    fn meta_chunks(&self) -> Result<Vec<MetaChunk<'_>>, ModpkgBuilderError> {
+        let mut metadata_bytes = Vec::new();
+        self.metadata.write(&mut metadata_bytes)?;
 
-        // Metadata
-        let metadata_chunk =
-            Self::process_metadata_chunk(&self.metadata, writer, chunk_path_indices)?;
-        meta_chunks.push(metadata_chunk);
+        let mut meta_chunks = vec![MetaChunk {
+            path: METADATA_CHUNK_PATH,
+            data: Cow::Owned(metadata_bytes),
+            compression: ModpkgCompression::None,
+        }];
 
-        // Thumbnail
-        if let Some(thumbnail_data) = self.thumbnail.as_ref() {
-            let thumbnail_chunk = Self::write_meta_chunk(
-                hash_chunk_name(THUMBNAIL_CHUNK_PATH),
-                thumbnail_data,
-                writer,
-                chunk_path_indices,
-            )?;
-            meta_chunks.push(thumbnail_chunk);
+        if let Some(thumbnail) = self.thumbnail.as_deref() {
+            meta_chunks.push(MetaChunk {
+                path: THUMBNAIL_CHUNK_PATH,
+                data: Cow::Borrowed(thumbnail),
+                compression: ModpkgCompression::None,
+            });
         }
 
-        // README
-        if let Some(readme_content) = self.readme.as_ref() {
-            let readme_chunk = Self::write_meta_chunk(
-                hash_chunk_name(README_CHUNK_PATH),
-                readme_content.as_bytes(),
-                writer,
-                chunk_path_indices,
-            )?;
-            meta_chunks.push(readme_chunk);
+        if let Some(readme) = self.readme.as_deref() {
+            meta_chunks.push(MetaChunk {
+                path: README_CHUNK_PATH,
+                data: Cow::Borrowed(readme.as_bytes()),
+                compression: ModpkgCompression::None,
+            });
+        }
+
+        // License texts are boilerplate-heavy and compress well (a CC license
+        // runs to tens of kilobytes), so the chunk requests Zstd. Short texts
+        // that don't pay for it fall back to raw storage in `write_meta_chunk`.
+        if let Some(license_text) = self.license_text.as_deref() {
+            meta_chunks.push(MetaChunk {
+                path: LICENSE_CHUNK_PATH,
+                data: Cow::Borrowed(license_text.as_bytes()),
+                compression: ModpkgCompression::Zstd,
+            });
         }
 
         Ok(meta_chunks)
     }
 
-    fn process_metadata_chunk<TWriter: io::Write + io::Seek>(
-        metadata: &ModpkgMetadata,
+    fn process_meta_chunks<TWriter: io::Write + io::Seek>(
         writer: &mut BufWriter<TWriter>,
+        meta_chunks: &[MetaChunk<'_>],
         chunk_path_indices: &HashMap<u64, u32>,
-    ) -> Result<ModpkgChunk, ModpkgBuilderError> {
-        let mut metadata_bytes = Vec::new();
-        metadata.write(&mut metadata_bytes)?;
+    ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
+        let mut processed = Vec::with_capacity(meta_chunks.len());
 
-        Self::write_meta_chunk(
-            hash_chunk_name(METADATA_CHUNK_PATH),
-            &metadata_bytes,
-            writer,
-            chunk_path_indices,
-        )
+        for meta_chunk in meta_chunks {
+            processed.push(Self::write_meta_chunk(
+                meta_chunk.path_hash(),
+                &meta_chunk.data,
+                meta_chunk.compression,
+                writer,
+                chunk_path_indices,
+            )?);
+        }
+
+        Ok(processed)
     }
 
+    /// Write a meta chunk's data and return its TOC entry.
+    ///
+    /// `compression` is a request, not a guarantee: as with regular chunks, the
+    /// data is stored raw when compressing it doesn't meaningfully pay, and the
+    /// returned entry records the form actually stored.
     fn write_meta_chunk<TWriter: io::Write + io::Seek>(
         path_hash: u64,
         data: &[u8],
+        compression: ModpkgCompression,
         writer: &mut BufWriter<TWriter>,
         chunk_path_indices: &HashMap<u64, u32>,
     ) -> Result<ModpkgChunk, ModpkgBuilderError> {
-        let size = data.len();
-        let checksum = xxh3_64(data);
+        let uncompressed_size = data.len();
+        let uncompressed_checksum = xxh3_64(data);
+
+        let (stored_data, compression) = Self::compress_chunk_data(data, compression)?;
+        let compressed_size = stored_data.len();
+        let compressed_checksum = xxh3_64(&stored_data);
 
         let data_offset = writer.stream_position()?;
-        writer.write_all(data)?;
+        writer.write_all(&stored_data)?;
 
         Ok(ModpkgChunk {
             path_hash,
             data_offset,
-            compression: ModpkgCompression::None,
-            compressed_size: size as u64,
-            uncompressed_size: size as u64,
-            compressed_checksum: checksum,
-            uncompressed_checksum: checksum,
+            compression,
+            compressed_size: compressed_size as u64,
+            uncompressed_size: uncompressed_size as u64,
+            compressed_checksum,
+            uncompressed_checksum,
             path_index: *chunk_path_indices.get(&path_hash).unwrap_or(&0),
             layer_index: NO_LAYER_INDEX,
             wad_index: NO_WAD_INDEX,
@@ -386,10 +416,10 @@ impl ModpkgBuilder {
         }
     }
 
-    fn collect_unique_layers(&self) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_layers(chunks: &[&ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
         let mut layers = Vec::new();
         let mut layer_indices = HashMap::new();
-        for chunk in self.chunks.values().chain(self.meta_chunks.values()) {
+        for chunk in chunks {
             // Skip empty layer names (they represent chunks with no layer)
             if chunk.layer.is_empty() {
                 continue;
@@ -405,15 +435,25 @@ impl ModpkgBuilder {
         (layers, layer_indices)
     }
 
-    fn collect_unique_paths(&self) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_paths(
+        meta_chunks: &[MetaChunk<'_>],
+        regular_chunks: &[&ModpkgChunkBuilder],
+    ) -> (Vec<String>, HashMap<u64, u32>) {
         let mut paths = Vec::new();
         let mut path_indices = HashMap::new();
 
-        // Collect paths from both regular chunks and meta chunks
-        for chunk in self.chunks.values().chain(self.meta_chunks.values()) {
-            path_indices.entry(chunk.path_hash).or_insert_with(|| {
+        // Collect paths from both meta chunks and regular chunks
+        let meta_paths = meta_chunks
+            .iter()
+            .map(|meta| (meta.path_hash(), meta.path.to_string()));
+        let regular_paths = regular_chunks
+            .iter()
+            .map(|chunk| (chunk.path_hash, chunk.path.clone()));
+
+        for (path_hash, path) in meta_paths.chain(regular_paths) {
+            path_indices.entry(path_hash).or_insert_with(|| {
                 let index = paths.len();
-                paths.push(chunk.path.clone());
+                paths.push(path);
                 index as u32
             });
         }
@@ -421,10 +461,10 @@ impl ModpkgBuilder {
         (paths, path_indices)
     }
 
-    fn collect_unique_wads(&self) -> (Vec<String>, HashMap<u64, u32>) {
+    fn collect_unique_wads(chunks: &[&ModpkgChunkBuilder]) -> (Vec<String>, HashMap<u64, u32>) {
         let mut wads = Vec::new();
         let mut wad_indices = HashMap::new();
-        for chunk in self.chunks.values().chain(self.meta_chunks.values()) {
+        for chunk in chunks {
             // Skip empty wad names (they represent chunks with no wad)
             if chunk.wad.is_empty() {
                 continue;
@@ -658,47 +698,32 @@ impl ModpkgChunkBuilder {
     }
 }
 
+// The `with_*` meta setters below only assign a field. The corresponding chunk
+// is derived at build time by [`ModpkgBuilder::meta_chunks`].
 impl ModpkgBuilder {
     /// Set the metadata for the builder.
     pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Result<Self, ModpkgBuilderError> {
         self.metadata = metadata;
-
-        self.meta_chunks.insert(
-            (hash_chunk_name(METADATA_CHUNK_PATH), NO_LAYER_HASH),
-            ModpkgChunkBuilder::new()
-                .with_path(METADATA_CHUNK_PATH)?
-                .with_compression(ModpkgCompression::None)
-                .with_layer(""),
-        );
-
         Ok(self)
     }
 
     /// Set the readme for the builder.
     pub fn with_readme(mut self, readme: &str) -> Result<Self, ModpkgBuilderError> {
         self.readme = Some(readme.to_string());
-        let readme_chunk = ModpkgChunkBuilder::new()
-            .with_path(README_CHUNK_PATH)?
-            .with_compression(ModpkgCompression::None)
-            .with_layer("");
+        Ok(self)
+    }
 
-        let key = readme_chunk.key();
-        self.meta_chunks.insert(key, readme_chunk);
-
+    /// Set the license text for the builder.
+    ///
+    /// The chunk is stored compressed; see [`meta_chunks`](Self::meta_chunks).
+    pub fn with_license_text(mut self, license_text: &str) -> Result<Self, ModpkgBuilderError> {
+        self.license_text = Some(license_text.to_string());
         Ok(self)
     }
 
     /// Set the thumbnail for the builder.
     pub fn with_thumbnail(mut self, thumbnail: Vec<u8>) -> Result<Self, ModpkgBuilderError> {
         self.thumbnail = Some(thumbnail);
-        let thumbnail_chunk = ModpkgChunkBuilder::new()
-            .with_path(THUMBNAIL_CHUNK_PATH)?
-            .with_compression(ModpkgCompression::None)
-            .with_layer("");
-
-        let key = thumbnail_chunk.key();
-        self.meta_chunks.insert(key, thumbnail_chunk);
-
         Ok(self)
     }
 }
@@ -783,7 +808,9 @@ mod tests {
         assert_eq!(chunk.uncompressed_size, 100);
         assert_eq!(chunk.compressed_size, 17);
         assert_eq!(chunk.uncompressed_checksum, xxh3_64(&[0xAA; 100]));
-        assert_eq!(chunk.path_index, 0);
+        // Meta chunk paths are registered first, so the metadata chunk holds
+        // index 0 and content paths follow.
+        assert_eq!(chunk.path_index, 1);
 
         assert_eq!(modpkg.layers.len(), 1);
         assert_eq!(
