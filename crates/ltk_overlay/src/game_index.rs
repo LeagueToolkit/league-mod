@@ -369,7 +369,8 @@ impl GameIndex {
             return Ok(None);
         }
 
-        let bytes = std::fs::read(cache_path.as_std_path())?;
+        let bytes = std::fs::read(cache_path.as_std_path())
+            .map_err(|source| Error::read(cache_path, source))?;
         let cache: GameIndexCache = match rmp_serde::from_slice(&bytes) {
             Ok(c) => c,
             Err(e) => {

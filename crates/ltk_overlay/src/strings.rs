@@ -307,7 +307,8 @@ pub(crate) fn read_game_chunk(
     chunk_hash: u64,
 ) -> Result<Vec<u8>> {
     let abs_path = game_dir.join(wad_rel_path);
-    let file = std::fs::File::open(abs_path.as_std_path())?;
+    let file = std::fs::File::open(abs_path.as_std_path())
+        .map_err(|source| Error::read(&abs_path, source))?;
     let mut wad = ltk_wad::Wad::mount(file)?;
 
     let chunk = *wad.chunks().get(chunk_hash).ok_or_else(|| {

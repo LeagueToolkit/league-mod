@@ -12,7 +12,7 @@
 //! - **Full rebuild** (version or game fingerprint mismatch): the overlay is
 //!   wiped and rebuilt from scratch.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
@@ -163,7 +163,8 @@ impl OverlayState {
             return Ok(None);
         }
 
-        let contents = std::fs::read_to_string(path.as_std_path())?;
+        let contents = std::fs::read_to_string(path.as_std_path())
+            .map_err(|source| Error::read(path, source))?;
         let state: Self = serde_json::from_str(&contents)?;
         Ok(Some(state))
     }
@@ -177,11 +178,13 @@ impl OverlayState {
     /// * `path` - Path where the overlay.json state file should be written
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent.as_std_path())?;
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| Error::write(parent, source))?;
         }
 
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path.as_std_path(), contents)?;
+        std::fs::write(path.as_std_path(), contents)
+            .map_err(|source| Error::write(path, source))?;
         Ok(())
     }
 

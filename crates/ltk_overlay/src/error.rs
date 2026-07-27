@@ -4,7 +4,7 @@
 //! as the error type. External error types (`std::io::Error`, `serde_json::Error`,
 //! WAD errors) are automatically converted via `From` impls.
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 /// Convenience alias used throughout the crate.
@@ -19,7 +19,26 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// Filesystem I/O failed (reading WADs, writing overlay, etc.).
+    /// A file or directory could not be read.
+    #[error("Failed to read {path}")]
+    Read {
+        path: Utf8PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A file or directory could not be written.
+    #[error("Failed to write {path}")]
+    Write {
+        path: Utf8PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// An IO failure with no single path to blame.
+    ///
+    /// Prefer [`Read`](Self::Read) or [`Write`](Self::Write) wherever there is
+    /// a path: `io::Error` never carries one.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -84,6 +103,22 @@ pub enum Error {
 }
 
 impl Error {
+    /// A failure reading the file or directory at `path`.
+    pub(crate) fn read(path: impl AsRef<Utf8Path>, source: std::io::Error) -> Self {
+        Self::Read {
+            path: path.as_ref().to_path_buf(),
+            source,
+        }
+    }
+
+    /// A failure writing the file or directory at `path`.
+    pub(crate) fn write(path: impl AsRef<Utf8Path>, source: std::io::Error) -> Self {
+        Self::Write {
+            path: path.as_ref().to_path_buf(),
+            source,
+        }
+    }
+
     /// A failure reading `entry` from a ZIP archive.
     ///
     /// Takes `impl Into<ZipError>` so an `io::Error` from decompressing an
@@ -149,6 +184,33 @@ mod tests {
         ));
 
         assert!(error.to_string().contains("overlay is locked"), "{error}");
+    }
+
+    /// `io::Error` never carries a path, so "the system cannot find the file
+    /// specified" is unactionable on its own.
+    #[test]
+    fn file_errors_name_the_file() {
+        let read = Error::read(
+            "content/base/Aatrox.wad.client/skin0.bin",
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        let write = Error::write(
+            "overlay/DATA/FINAL",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+
+        assert!(read.to_string().contains("skin0.bin"), "{read}");
+        assert!(write.to_string().contains("overlay/DATA/FINAL"), "{write}");
+    }
+
+    /// The path goes in the message, so the source must not repeat it or a
+    /// chain walker prints the file twice.
+    #[test]
+    fn file_errors_do_not_embed_their_source() {
+        let error = Error::read("state/overlay.json", std::io::Error::other("inner detail"));
+        let source = std::error::Error::source(&error).unwrap().to_string();
+
+        assert!(!error.to_string().contains(&source), "{error}");
     }
 
     /// `ZipError::FileNotFound` renders without naming a file, so the variant
