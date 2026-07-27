@@ -21,7 +21,7 @@ pub mod thumbnail;
 mod tests;
 
 pub use packer::ProjectPacker;
-pub use thumbnail::{load_thumbnail, MAX_THUMBNAIL_SIZE};
+pub use thumbnail::{load_thumbnail, ThumbnailError, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
 use crate::error::{EncodingError, ReadTextError, StripPrefixError};
@@ -62,8 +62,8 @@ pub enum PackError {
     #[error("Base layer must have priority 0, got: {0}")]
     InvalidBaseLayerPriority(i32),
 
-    #[error("Failed to process thumbnail: {0}")]
-    ThumbnailError(String),
+    #[error("Failed to process thumbnail")]
+    Thumbnail(#[from] ThumbnailError),
 
     #[error("Invalid version format: {0}")]
     InvalidVersion(String),
