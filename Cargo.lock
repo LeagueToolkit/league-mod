@@ -1563,9 +1563,11 @@ dependencies = [
 name = "ltk_mod_project"
 version = "0.5.0"
 dependencies = [
+ "camino",
  "indexmap",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
 ]

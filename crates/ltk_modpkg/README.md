@@ -1,6 +1,6 @@
 # ltk_modpkg
 
-A Rust library for reading, writing, and packing `.modpkg` archives — the binary mod distribution format for League of Legends mods in the [League Mod Toolkit](https://github.com/LeagueToolkit/league-mod).
+A Rust library for reading, writing, and packing `.modpkg` archives, the binary mod distribution format for League of Legends mods in the [League Mod Toolkit](https://github.com/LeagueToolkit/league-mod).
 
 ## Overview
 
@@ -8,11 +8,11 @@ A `.modpkg` file is a binary container that stores mod content organized by laye
 
 This crate provides:
 
-- **Reading** — mount a modpkg from any `Read + Seek` source and access chunks by path hash
-- **Writing** — build a modpkg from scratch using `ModpkgBuilder`
-- **Project packing** — scan a mod project directory and produce a modpkg in one call (requires `project` feature)
-- **Extraction** — extract modpkg contents back to disk
-- **Metadata** — read/write msgpack-encoded mod metadata
+- **Reading**: mount a modpkg from any `Read + Seek` source and access chunks by path hash
+- **Writing**: build a modpkg from scratch using `ModpkgBuilder`
+- **Project packing**: scan a mod project directory and produce a modpkg in one call (requires `project` feature)
+- **Extraction**: extract modpkg contents back to disk
+- **Metadata**: read/write msgpack-encoded mod metadata
 
 ## Usage
 

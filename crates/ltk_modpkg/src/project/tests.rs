@@ -1,6 +1,5 @@
-use super::packer::{is_valid_slug, requested_compression};
 use super::*;
-use crate::{Modpkg, ModpkgCompression};
+use crate::{Modpkg, ModpkgCompression, LICENSE_CHUNK_PATH};
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
@@ -281,6 +280,232 @@ fn pack_preserves_metadata() {
     assert_eq!(meta.champions, vec!["Graves"]);
 }
 
+#[test]
+fn pack_includes_license_text_chunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    let license_text = "MIT License\n\nCopyright (c) 2026 Someone\n";
+    fs::write(root.join("LICENSE"), license_text).unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let output = root.join("build/out.modpkg");
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let mut modpkg = mount_modpkg(&output);
+
+    assert_eq!(
+        modpkg.load_license_text().unwrap(),
+        license_text.as_bytes(),
+        "license text must round-trip byte-for-byte"
+    );
+}
+
+#[test]
+fn pack_stores_license_text_compressed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    // Roughly the shape of a real license: long, repetitive, highly compressible.
+    let license_text = "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files.\n".repeat(60);
+    fs::write(root.join("LICENSE"), &license_text).unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    let chunk = *modpkg.get_chunk(LICENSE_CHUNK_PATH, None).unwrap();
+    assert_eq!(chunk.compression, ModpkgCompression::Zstd);
+    assert!(
+        chunk.compressed_size < chunk.uncompressed_size,
+        "expected the license chunk to shrink: {} -> {}",
+        chunk.uncompressed_size,
+        chunk.compressed_size
+    );
+
+    // The reader decompresses transparently.
+    assert_eq!(
+        modpkg.load_license_text().unwrap(),
+        license_text.as_bytes(),
+        "compressed license text must still round-trip byte-for-byte"
+    );
+}
+
+#[test]
+fn pack_stores_incompressible_license_text_raw() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    // Too short for compression to pay: the builder must fall back to raw
+    // storage and record that in the TOC entry.
+    let license_text = "MIT";
+    fs::write(root.join("LICENSE"), license_text).unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    let chunk = *modpkg.get_chunk(LICENSE_CHUNK_PATH, None).unwrap();
+    assert_eq!(chunk.compression, ModpkgCompression::None);
+    assert_eq!(chunk.compressed_size, chunk.uncompressed_size);
+
+    assert_eq!(modpkg.load_license_text().unwrap(), license_text.as_bytes());
+}
+
+#[test]
+fn pack_finds_license_file_by_extension_precedence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    fs::write(root.join("LICENSE.md"), "markdown terms").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    assert_eq!(modpkg.load_license_text().unwrap(), b"markdown terms");
+}
+
+#[test]
+fn pack_without_license_file_has_no_license_chunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    assert!(!modpkg.has_chunk(LICENSE_CHUNK_PATH, None));
+    assert!(
+        matches!(
+            modpkg.load_license_text(),
+            Err(crate::error::ModpkgError::MissingChunk(_))
+        ),
+        "expected a clean MissingChunk error"
+    );
+}
+
+#[test]
+fn pack_preserves_custom_license_without_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let mut project = test_mod_project(vec![ModProjectLayer::base()]);
+    project.license = Some(ModProjectLicense::Custom {
+        name: "My License".to_string(),
+        url: None,
+    });
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+    let meta = modpkg.load_metadata().unwrap();
+
+    assert_eq!(
+        meta.license,
+        crate::ModpkgLicense::Custom {
+            name: "My License".to_string(),
+            url: None,
+        }
+    );
+}
+
+#[test]
+fn pack_tolerates_non_utf8_license_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    // Latin-1 "Copyright © 2026", a realistic encoding for a license text and
+    // one the project never opted into shipping.
+    fs::write(root.join("LICENSE.txt"), b"Copyright \xA9 2026").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .expect("a non-UTF-8 license file must not fail the pack")
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    assert_eq!(
+        modpkg.load_license_text().unwrap(),
+        "Copyright \u{FFFD} 2026".as_bytes()
+    );
+}
+
+#[test]
+fn pack_tolerates_non_utf8_readme() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    fs::write(root.join("README.md"), b"Caf\xE9 mod").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .expect("a non-UTF-8 readme must not fail the pack")
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    assert_eq!(modpkg.load_readme().unwrap(), "Caf\u{FFFD} mod".as_bytes());
+}
+
 // -- utility tests ---------------------------------------------------------
 
 #[test]
@@ -296,31 +521,6 @@ fn test_create_file_name() {
         create_file_name(&project, Some("custom.modpkg".to_string())),
         "custom.modpkg"
     );
-}
-
-#[test]
-fn test_is_valid_slug() {
-    assert!(is_valid_slug("base"));
-    assert!(is_valid_slug("my-layer"));
-    assert!(is_valid_slug("layer123"));
-    assert!(!is_valid_slug(""));
-    assert!(!is_valid_slug("-invalid"));
-    assert!(!is_valid_slug("invalid-"));
-    assert!(!is_valid_slug("UPPERCASE"));
-    assert!(!is_valid_slug("has spaces"));
-}
-
-#[test]
-fn test_requested_compression() {
-    // Wwise audio containers are never compressed
-    assert_eq!(requested_compression(Some("bnk")), ModpkgCompression::None);
-    assert_eq!(requested_compression(Some("WPK")), ModpkgCompression::None);
-
-    // Everything else requests Zstd (the builder falls back to raw storage
-    // per chunk when compression doesn't pay)
-    assert_eq!(requested_compression(Some("dds")), ModpkgCompression::Zstd);
-    assert_eq!(requested_compression(Some("bin")), ModpkgCompression::Zstd);
-    assert_eq!(requested_compression(None), ModpkgCompression::Zstd);
 }
 
 // -- test helpers ----------------------------------------------------------

@@ -4,7 +4,9 @@ use std::path::Path;
 
 use camino::Utf8Path;
 use image::ImageFormat;
-use ltk_mod_project::{ModMap, ModProject, ModProjectAuthor, ModTag, default_layers};
+use ltk_mod_project::{
+    ModMap, ModProject, ModProjectAuthor, ModProjectLicense, ModTag, default_layers,
+};
 use ltk_wad::{HexPathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 
@@ -125,7 +127,7 @@ impl<R: Read + Seek> FantomeExtractor<R> {
             version: info.version,
             description: info.description,
             authors: vec![ModProjectAuthor::Name(info.author)],
-            license: None,
+            license: info.license.map(ModProjectLicense::from),
             tags: info.tags.into_iter().map(ModTag::from).collect(),
             champions: info.champions,
             maps: info.maps.into_iter().map(ModMap::from).collect(),
@@ -189,6 +191,11 @@ impl<R: Read + Seek> FantomeExtractor<R> {
                 let output_file_path = output_dir.join("README.md");
                 let mut outfile = File::create(&output_file_path)?;
                 std::io::copy(&mut file, &mut outfile)?;
+            } else if let Some(license_name) = license_entry_target(&file_name) {
+                // Extract the license text
+                let output_file_path = output_dir.join(license_name);
+                let mut outfile = File::create(&output_file_path)?;
+                std::io::copy(&mut file, &mut outfile)?;
             } else if file_name == "META/image.png" {
                 // Extract and convert thumbnail to WebP
                 let output_file_path = output_dir.join("thumbnail.webp");
@@ -203,6 +210,20 @@ impl<R: Read + Seek> FantomeExtractor<R> {
         config_file.write_all(config_content.as_bytes())?;
 
         Ok(FantomeExtractResult { mod_project })
+    }
+}
+
+/// Match a `META/LICENSE*` archive entry case-insensitively and return the file
+/// name it should be written to in the extracted project.
+///
+/// The canonical entry is extensionless `META/LICENSE`, but readers accept the
+/// `.md` and `.txt` variants and preserve their extension on the way out.
+fn license_entry_target(file_name: &str) -> Option<&'static str> {
+    match file_name.to_ascii_lowercase().as_str() {
+        "meta/license" => Some("LICENSE"),
+        "meta/license.md" => Some("LICENSE.md"),
+        "meta/license.txt" => Some("LICENSE.txt"),
+        _ => None,
     }
 }
 
@@ -313,6 +334,105 @@ mod tests {
                 .join("content/base/test.wad.client/assets/test.bin")
                 .exists()
         );
+    }
+
+    /// Build a fantome archive whose license entry is named `license_entry`.
+    fn create_fantome_with_license(license_entry: &str, info: &str) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("META/info.json", options).unwrap();
+        zip.write_all(info.as_bytes()).unwrap();
+
+        zip.start_file(license_entry, options).unwrap();
+        zip.write_all(b"The terms.").unwrap();
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn test_extract_license_entry_case_and_extension_variants() {
+        let info =
+            r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
+
+        for (entry, expected_file) in [
+            ("META/LICENSE", "LICENSE"),
+            ("META/license.md", "LICENSE.md"),
+            ("meta/LICENSE.TXT", "LICENSE.txt"),
+        ] {
+            let data = create_fantome_with_license(entry, info);
+            let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
+
+            let temp_dir = tempdir().unwrap();
+            extractor.extract_to(temp_dir.path()).unwrap();
+
+            let extracted = temp_dir.path().join(expected_file);
+            assert!(
+                extracted.exists(),
+                "expected {expected_file} for archive entry {entry}"
+            );
+            assert_eq!(std::fs::read_to_string(&extracted).unwrap(), "The terms.");
+        }
+    }
+
+    #[test]
+    fn test_extract_license_field() {
+        let info = r#"{
+            "Name": "Test",
+            "Author": "Test",
+            "Version": "1.0.0",
+            "Description": "Test",
+            "License": "Apache-2.0"
+        }"#;
+        let data = create_fantome_with_license("META/LICENSE", info);
+
+        let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let result = extractor.extract_to(temp_dir.path()).unwrap();
+
+        assert_eq!(
+            result.mod_project.license,
+            Some(ltk_mod_project::ModProjectLicense::Spdx(
+                "Apache-2.0".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_extract_custom_license_field_without_url() {
+        let info = r#"{
+            "Name": "Test",
+            "Author": "Test",
+            "Version": "1.0.0",
+            "Description": "Test",
+            "License": { "Name": "My License" }
+        }"#;
+        let data = create_fantome_with_license("META/LICENSE", info);
+
+        let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let result = extractor.extract_to(temp_dir.path()).unwrap();
+
+        assert_eq!(
+            result.mod_project.license,
+            Some(ltk_mod_project::ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_extract_legacy_fantome_has_no_license() {
+        let fantome_data = create_test_fantome();
+        let mut extractor = FantomeExtractor::new(Cursor::new(fantome_data)).unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let result = extractor.extract_to(temp_dir.path()).unwrap();
+
+        assert_eq!(result.mod_project.license, None);
+        assert!(!temp_dir.path().join("LICENSE").exists());
     }
 
     #[test]

@@ -117,7 +117,7 @@ pub struct ModpkgLayerMetadata {
     /// Outer key: locale (e.g., "en_us", "ko_kr", "zh_cn", or "default" for all locales)
     /// Inner map: field name (from `data/menu/{locale}/lol.stringtable`) -> replacement string
     ///
-    /// Only the overrides are stored — not the full stringtable — so the
+    /// Only the overrides are stored, not the full stringtable, so the
     /// mod stays compatible across game patches.
     /// Empty maps are omitted during serialization.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -423,7 +423,7 @@ mod tests {
         };
         let license_custom = ModpkgLicense::Custom {
             name: "MyLicense".to_string(),
-            url: "https://example.com".to_string(),
+            url: Some("https://example.com".to_string()),
         };
 
         println!(

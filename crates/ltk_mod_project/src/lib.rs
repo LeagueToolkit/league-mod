@@ -4,6 +4,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
+mod license_file;
+
+pub use license_file::{
+    canonical_license_file_name, find_license_file, find_license_file_std, LICENSE_FILE_NAMES,
+};
+
 fn serde_fmt<T: Serialize>(value: &T, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let json = serde_json::to_string(value).map_err(|_| fmt::Error)?;
     let s: String = serde_json::from_str(&json).map_err(|_| fmt::Error)?;
@@ -247,11 +253,24 @@ pub enum ModProjectAuthor {
     Role { name: String, role: String },
 }
 
+/// How a project declares its license terms.
+///
+/// `url` being optional leaves `name` as the only required field, so without
+/// `deny_unknown_fields` a misspelled key would make the object still match
+/// `Custom`: `{"name": "X", "ur1": "..."}` would silently parse as a license
+/// with no URL instead of failing. Rejecting unknown fields restores the
+/// structural check that the required `url` used to provide.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum ModProjectLicense {
     Spdx(String),
-    Custom { name: String, url: String },
+    Custom {
+        name: String,
+        /// Optional link to the full terms. A project may name a license and
+        /// ship its text in a `LICENSE` file without pointing anywhere.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
 }
 
 /// Represents a file transformer that can be applied to files during the build process
@@ -397,6 +416,118 @@ mod tests {
 
         let project: ModProject = serde_json::from_str(config_with_thumbnail).unwrap();
         assert_eq!(project.thumbnail, Some("custom/path.png".to_string()));
+    }
+
+    #[test]
+    fn test_custom_license_url_optional() {
+        let with_url = r#"
+        {
+            "name": "test-mod",
+            "display_name": "Test Mod",
+            "version": "1.0.0",
+            "description": "A test mod",
+            "authors": ["Test Author"],
+            "license": { "name": "My License", "url": "https://example.com/terms" }
+        }
+        "#;
+
+        let project: ModProject = serde_json::from_str(with_url).unwrap();
+        assert_eq!(
+            project.license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: Some("https://example.com/terms".to_string()),
+            })
+        );
+
+        let without_url = r#"
+        {
+            "name": "test-mod",
+            "display_name": "Test Mod",
+            "version": "1.0.0",
+            "description": "A test mod",
+            "authors": ["Test Author"],
+            "license": { "name": "My License" }
+        }
+        "#;
+
+        let project: ModProject = serde_json::from_str(without_url).unwrap();
+        assert_eq!(
+            project.license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            })
+        );
+
+        // A URL-less custom license must not emit a null `url` key.
+        let json = serde_json::to_value(project.license.as_ref().unwrap()).unwrap();
+        assert_eq!(json, serde_json::json!({ "name": "My License" }));
+    }
+
+    #[test]
+    fn test_custom_license_rejects_unknown_field() {
+        let typoed_url = r#"
+        {
+            "name": "test-mod",
+            "display_name": "Test Mod",
+            "version": "1.0.0",
+            "description": "A test mod",
+            "authors": ["Test Author"],
+            "license": { "name": "My License", "ur1": "https://example.com/terms" }
+        }
+        "#;
+
+        // Without deny_unknown_fields this parses as a URL-less custom license
+        // and the author's link is silently dropped.
+        assert!(
+            serde_json::from_str::<ModProject>(typoed_url).is_err(),
+            "a misspelled license key must not parse as a URL-less license"
+        );
+    }
+
+    #[test]
+    fn test_custom_license_url_optional_toml() {
+        let toml_config = r#"
+name = "test-mod"
+display_name = "Test Mod"
+version = "1.0.0"
+description = "A test mod"
+authors = ["Test Author"]
+
+[license]
+name = "My License"
+"#;
+
+        let project: ModProject = toml::from_str(toml_config).unwrap();
+        assert_eq!(
+            project.license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            })
+        );
+
+        let toml_config = r#"
+name = "test-mod"
+display_name = "Test Mod"
+version = "1.0.0"
+description = "A test mod"
+authors = ["Test Author"]
+
+[license]
+name = "My License"
+url = "https://example.com/terms"
+"#;
+
+        let project: ModProject = toml::from_str(toml_config).unwrap();
+        assert_eq!(
+            project.license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: Some("https://example.com/terms".to_string()),
+            })
+        );
     }
 
     #[test]
