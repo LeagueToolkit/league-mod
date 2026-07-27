@@ -68,8 +68,16 @@ pub enum PackError {
     #[error("Invalid version format: {0}")]
     InvalidVersion(String),
 
-    #[error("Glob pattern error: {0}")]
-    GlobError(#[from] glob::PatternError),
+    /// A content directory could not be turned into a valid glob pattern.
+    ///
+    /// Reachable from user input: a directory named `[base]` produces a
+    /// pattern the glob parser rejects.
+    #[error("Invalid glob pattern: {pattern}")]
+    InvalidGlobPattern {
+        pattern: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     #[error(transparent)]
     Encoding(#[from] EncodingError),

@@ -219,10 +219,13 @@ impl ProjectPacker {
         let strip_base = if is_wad { dir_path } else { layer_dir };
 
         let pattern = dir_path.join("**/*");
-        for file in glob::glob(pattern.as_str())?
-            .filter_map(Result::ok)
-            .filter(|e| e.is_file())
-        {
+        let matches =
+            glob::glob(pattern.as_str()).map_err(|source| PackError::InvalidGlobPattern {
+                pattern: pattern.to_string(),
+                source: Box::new(source),
+            })?;
+
+        for file in matches.filter_map(Result::ok).filter(|e| e.is_file()) {
             let file_path = file.into_utf8()?;
             let rel_path = file_path.strip_prefix_normalized(strip_base)?;
             self.push_chunk(rel_path, layer, wad_name.clone(), file_path);

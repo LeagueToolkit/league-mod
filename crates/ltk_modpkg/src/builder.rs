@@ -23,10 +23,14 @@ pub enum ModpkgBuilderError {
     #[error("io error")]
     IoError(#[from] io::Error),
 
-    #[error("binrw error")]
-    BinWriteError(#[from] binrw::Error),
+    /// A chunk's binary layout could not be written.
+    ///
+    /// The underlying writer error is boxed so the crate used to write it is
+    /// not part of this crate's public API.
+    #[error("Failed to write binary layout")]
+    BinWrite(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("modpkg error: {0}")]
+    #[error("modpkg error")]
     ModpkgError(#[from] crate::error::ModpkgError),
 
     #[error("unsupported compression type: {0:?}")]
@@ -41,8 +45,16 @@ pub enum ModpkgBuilderError {
     #[error("invalid chunk name: {0}")]
     InvalidChunkName(String),
 
-    #[error("invalid layer name: {0}")]
+    #[error("invalid layer name")]
     InvalidLayerName(#[from] crate::error::InvalidSlugError),
+}
+
+// See the matching impl on `ModpkgError`: the conversion names `binrw::Error`
+// so `?` keeps working, while the variant does not.
+impl From<binrw::Error> for ModpkgBuilderError {
+    fn from(error: binrw::Error) -> Self {
+        Self::BinWrite(Box::new(error))
+    }
 }
 
 /// Provides an interface to build a Modpkg file.
