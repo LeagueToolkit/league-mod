@@ -21,6 +21,9 @@ pub enum WellKnownModTag {
     ChampionSkin,
     MapSkin,
     WardSkin,
+    Emote,
+    SummonerIcon,
+    Companion,
     Ui,
     Hud,
     Font,
@@ -34,12 +37,15 @@ pub enum WellKnownModTag {
 
 impl WellKnownModTag {
     /// Every well-known tag, so a caller can list or validate against them.
-    pub const ALL: [WellKnownModTag; 14] = [
+    pub const ALL: [WellKnownModTag; 17] = [
         WellKnownModTag::LeagueOfLegends,
         WellKnownModTag::Tft,
         WellKnownModTag::ChampionSkin,
         WellKnownModTag::MapSkin,
         WellKnownModTag::WardSkin,
+        WellKnownModTag::Emote,
+        WellKnownModTag::SummonerIcon,
+        WellKnownModTag::Companion,
         WellKnownModTag::Ui,
         WellKnownModTag::Hud,
         WellKnownModTag::Font,
@@ -59,6 +65,9 @@ impl WellKnownModTag {
             WellKnownModTag::ChampionSkin => "champion-skin",
             WellKnownModTag::MapSkin => "map-skin",
             WellKnownModTag::WardSkin => "ward-skin",
+            WellKnownModTag::Emote => "emote",
+            WellKnownModTag::SummonerIcon => "summoner-icon",
+            WellKnownModTag::Companion => "companion",
             WellKnownModTag::Ui => "ui",
             WellKnownModTag::Hud => "hud",
             WellKnownModTag::Font => "font",
@@ -808,6 +817,9 @@ url = "https://example.com/terms"
                 | WellKnownModTag::ChampionSkin
                 | WellKnownModTag::MapSkin
                 | WellKnownModTag::WardSkin
+                | WellKnownModTag::Emote
+                | WellKnownModTag::SummonerIcon
+                | WellKnownModTag::Companion
                 | WellKnownModTag::Ui
                 | WellKnownModTag::Hud
                 | WellKnownModTag::Font
@@ -840,6 +852,19 @@ url = "https://example.com/terms"
         let maps: std::collections::HashSet<_> =
             WellKnownMap::ALL.iter().map(|m| m.as_str()).collect();
         assert_eq!(maps.len(), WellKnownMap::ALL.len());
+    }
+
+    /// Promoting a tag from `Custom` to `Known` must not change what lands on
+    /// disk, or existing config files and modpkgs would rewrite themselves.
+    #[test]
+    fn promoted_tags_keep_their_serialized_form() {
+        for name in ["emote", "summoner-icon", "companion"] {
+            let tag = ModTag::from(name);
+
+            assert!(matches!(tag, ModTag::Known(_)), "{name} should be known");
+            assert_eq!(serde_json::to_value(&tag).unwrap(), serde_json::json!(name));
+            assert_eq!(tag.to_string(), name);
+        }
     }
 
     fn temp_root(tmp: &tempfile::TempDir) -> camino::Utf8PathBuf {
