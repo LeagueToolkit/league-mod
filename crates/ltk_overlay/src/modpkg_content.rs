@@ -169,8 +169,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let normalized = ltk_modpkg::utils::normalize_chunk_path(rel_path.as_str());
-        let path_hash = ltk_modpkg::utils::hash_chunk_name(&normalized);
+        let path_hash = ltk_modpkg::ChunkPath::new(rel_path.as_str()).hash();
 
         let bytes = self
             .modpkg
@@ -231,7 +230,6 @@ mod tests {
         ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_metadata(metadata)
-            .unwrap()
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\skin0.bin")
@@ -342,7 +340,11 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
-            .with_layer(ModpkgLayerBuilder::new("loading-screen").with_priority(1))
+            .with_layer(
+                ModpkgLayerBuilder::new("loading-screen")
+                    .unwrap()
+                    .with_priority(1),
+            )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\base_file.bin")

@@ -66,8 +66,8 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 ///
 /// The returned `Vec<(PathBuf, Vec<u8>)>` from [`read_wad_overrides`](Self::read_wad_overrides)
 /// uses paths that are resolved to `u64` hashes by [`resolve_chunk_hash`](crate::utils::resolve_chunk_hash):
-/// - **Named paths** (e.g., `data/characters/aatrox/skin0.bin`) are hashed via
-///   [`ltk_modpkg::utils::hash_chunk_name`].
+/// - **Named paths** (e.g., `data/characters/aatrox/skin0.bin`) are hashed as a
+///   [`ltk_modpkg::ChunkPath`].
 /// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
 ///   `u64` values. This is used by packed WAD content where original paths are lost.
 pub trait ModContentProvider: Send + Sync {

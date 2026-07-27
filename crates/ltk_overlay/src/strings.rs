@@ -94,9 +94,7 @@ pub(crate) fn stringtable_chunk_path(locale: &str) -> String {
 
 /// The WAD chunk path hash of [`stringtable_chunk_path`] for `locale`.
 pub(crate) fn stringtable_chunk_hash(locale: &str) -> u64 {
-    ltk_modpkg::utils::hash_chunk_name(&ltk_modpkg::utils::normalize_chunk_path(
-        &stringtable_chunk_path(locale),
-    ))
+    ltk_modpkg::ChunkPath::new(stringtable_chunk_path(locale)).hash()
 }
 
 /// Path hashes of the `lol.stringtable` chunks for every locale installed in

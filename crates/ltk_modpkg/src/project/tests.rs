@@ -25,7 +25,7 @@ fn new_rejects_invalid_layer_slug() {
 
     let err = ProjectPacker::with_mod_project(project, root.clone()).unwrap_err();
     assert!(
-        matches!(err, PackError::InvalidLayerName(ref n) if n == "UPPERCASE"),
+        matches!(err, PackError::InvalidLayerName(ref e) if e.value() == "UPPERCASE"),
         "Expected InvalidLayerName, got: {err}"
     );
 }
@@ -111,8 +111,11 @@ fn new_returns_error_for_missing_config() {
 
     let err = ProjectPacker::new(root).unwrap_err();
     assert!(
-        matches!(err, PackError::ConfigError(_)),
-        "Expected ConfigError, got: {err}"
+        matches!(
+            err,
+            PackError::Config(ltk_mod_project::ModProjectError::ConfigNotFound(_))
+        ),
+        "Expected a missing config file, got: {err}"
     );
 }
 
@@ -458,7 +461,7 @@ fn pack_preserves_custom_license_without_url() {
 }
 
 #[test]
-fn pack_tolerates_non_utf8_license_text() {
+fn pack_preserves_non_utf8_license_text() {
     let tmp = tempfile::tempdir().unwrap();
     let root = utf8_tempdir(&tmp);
 
@@ -478,14 +481,14 @@ fn pack_tolerates_non_utf8_license_text() {
     buffer.set_position(0);
     let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
 
-    assert_eq!(
-        modpkg.load_license_text().unwrap(),
-        "Copyright \u{FFFD} 2026".as_bytes()
-    );
+    // The exact bytes, not a lossy decode. A license is a legal document, so
+    // silently rewriting the byte we could not decode is worse than either
+    // failing or storing what the author wrote.
+    assert_eq!(modpkg.load_license_text().unwrap(), b"Copyright \xA9 2026");
 }
 
 #[test]
-fn pack_tolerates_non_utf8_readme() {
+fn pack_preserves_non_utf8_readme() {
     let tmp = tempfile::tempdir().unwrap();
     let root = utf8_tempdir(&tmp);
 
@@ -503,7 +506,38 @@ fn pack_tolerates_non_utf8_readme() {
     buffer.set_position(0);
     let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
 
-    assert_eq!(modpkg.load_readme().unwrap(), "Caf\u{FFFD} mod".as_bytes());
+    assert_eq!(modpkg.load_readme().unwrap(), b"Caf\xE9 mod");
+}
+
+/// Pack -> extract must return the author's exact bytes. This is the property
+/// [`meta_chunk_target`](crate::extractor) exists for, and a lossy decode on
+/// the pack side would break it while every assertion above still passed.
+#[test]
+fn license_survives_a_pack_extract_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    let original: &[u8] = b"Copyright \xA9 2026 Someone";
+    fs::write(root.join("LICENSE"), original).unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack_to_writer(&mut buffer)
+        .unwrap();
+
+    buffer.set_position(0);
+    let mut modpkg = Modpkg::mount_from_reader(buffer).unwrap();
+
+    let out = tmp.path().join("extracted");
+    crate::ModpkgExtractor::new(&mut modpkg)
+        .extract_all(&out)
+        .unwrap();
+
+    assert_eq!(fs::read(out.join("LICENSE")).unwrap(), original);
 }
 
 // -- utility tests ---------------------------------------------------------

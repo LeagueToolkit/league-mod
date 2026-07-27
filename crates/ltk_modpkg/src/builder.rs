@@ -13,20 +13,25 @@ use crate::{
     ModpkgCompression,
 };
 use crate::{
-    hash_chunk_name, hash_layer_name, hash_wad_name, utils, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
+    hash_layer_name, hash_wad_name, utils, ChunkPath, Slug, BASE_LAYER_NAME, LICENSE_CHUNK_PATH,
     README_CHUNK_PATH,
 };
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ModpkgBuilderError {
     #[error("io error")]
-    IoError(#[from] io::Error),
+    Io(#[from] io::Error),
 
-    #[error("binrw error")]
-    BinWriteError(#[from] binrw::Error),
+    /// A chunk's binary layout could not be written.
+    ///
+    /// The underlying writer error is boxed so the crate used to write it is
+    /// not part of this crate's public API.
+    #[error("Failed to write binary layout")]
+    BinWrite(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("modpkg error: {0}")]
-    ModpkgError(#[from] crate::error::ModpkgError),
+    #[error("modpkg error")]
+    Modpkg(#[from] crate::error::ModpkgError),
 
     #[error("unsupported compression type: {0:?}")]
     UnsupportedCompressionType(ModpkgCompression),
@@ -39,6 +44,17 @@ pub enum ModpkgBuilderError {
 
     #[error("invalid chunk name: {0}")]
     InvalidChunkName(String),
+
+    #[error("invalid layer name")]
+    InvalidLayerName(#[from] crate::error::InvalidSlugError),
+}
+
+// See the matching impl on `ModpkgError`: the conversion names `binrw::Error`
+// so `?` keeps working, while the variant does not.
+impl From<binrw::Error> for ModpkgBuilderError {
+    fn from(error: binrw::Error) -> Self {
+        Self::BinWrite(Box::new(error))
+    }
 }
 
 /// Provides an interface to build a Modpkg file.
@@ -46,10 +62,15 @@ pub enum ModpkgBuilderError {
 /// Meta chunks (metadata, readme, license text, thumbnail) are not held as
 /// chunk builders: they are derived from the content fields by
 /// [`meta_chunks`](Self::meta_chunks) at build time.
+///
+/// The readme and license text are bytes, not `String`. They are copied
+/// byte-for-byte from the project and never inspected, so decoding them would
+/// only create the chance to mangle a file whose exact contents matter. Callers
+/// that display one decode it at that point.
 #[derive(Debug, Clone, Default)]
 pub struct ModpkgBuilder {
-    pub readme: Option<String>,
-    pub license_text: Option<String>,
+    pub readme: Option<Vec<u8>>,
+    pub license_text: Option<Vec<u8>>,
     pub thumbnail: Option<Vec<u8>>,
     pub metadata: ModpkgMetadata,
     pub chunks: HashMap<(u64, u64), ModpkgChunkBuilder>,
@@ -66,7 +87,7 @@ struct MetaChunk<'builder> {
 
 impl MetaChunk<'_> {
     fn path_hash(&self) -> u64 {
-        hash_chunk_name(self.path)
+        ChunkPath::new(self.path).hash()
     }
 }
 
@@ -79,10 +100,16 @@ pub struct ModpkgChunkBuilder {
     pub wad: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ModpkgLayerBuilder {
-    pub name: String,
+    pub name: Slug,
     pub priority: i32,
+}
+
+impl Default for ModpkgLayerBuilder {
+    fn default() -> Self {
+        Self::base()
+    }
 }
 
 impl ModpkgBuilder {
@@ -186,8 +213,8 @@ impl ModpkgBuilder {
     ) -> Result<(), ModpkgBuilderError> {
         writer.write_u32::<LE>(layers.len() as u32)?;
         for layer in layers {
-            writer.write_u32::<LE>(layer.name.len() as u32)?;
-            writer.write_all(layer.name.as_bytes())?;
+            writer.write_u32::<LE>(layer.name.as_str().len() as u32)?;
+            writer.write_all(layer.name.as_str().as_bytes())?;
             writer.write_i32::<LE>(layer.priority)?;
         }
         Ok(())
@@ -230,7 +257,7 @@ impl ModpkgBuilder {
     fn build_layer_index_map(layers: &[ModpkgLayerBuilder]) -> HashMap<u64, u32> {
         let mut layer_index_map = HashMap::new();
         for (idx, layer) in layers.iter().enumerate() {
-            layer_index_map.insert(hash_layer_name(&layer.name), idx as u32);
+            layer_index_map.insert(hash_layer_name(layer.name.as_str()), idx as u32);
         }
         layer_index_map
     }
@@ -315,7 +342,7 @@ impl ModpkgBuilder {
         if let Some(readme) = self.readme.as_deref() {
             meta_chunks.push(MetaChunk {
                 path: README_CHUNK_PATH,
-                data: Cow::Borrowed(readme.as_bytes()),
+                data: Cow::Borrowed(readme),
                 compression: ModpkgCompression::None,
             });
         }
@@ -326,7 +353,7 @@ impl ModpkgBuilder {
         if let Some(license_text) = self.license_text.as_deref() {
             meta_chunks.push(MetaChunk {
                 path: LICENSE_CHUNK_PATH,
-                data: Cow::Borrowed(license_text.as_bytes()),
+                data: Cow::Borrowed(license_text),
                 compression: ModpkgCompression::Zstd,
             });
         }
@@ -615,11 +642,11 @@ impl ModpkgChunkBuilder {
 
     /// Set the path of the chunk (input path is case insensitive).
     ///
-    /// This will always hash the provided path string using `hash_chunk_name`.
+    /// The path is normalized into a [`ChunkPath`] and hashed from that form.
     pub fn with_path(mut self, path: &str) -> Result<Self, ModpkgBuilderError> {
-        let path = crate::utils::normalize_chunk_path(path);
-        self.path_hash = hash_chunk_name(&path);
-        self.path = path;
+        let path = ChunkPath::new(path);
+        self.path_hash = path.hash();
+        self.path = path.into_string();
         Ok(self)
     }
 
@@ -702,43 +729,56 @@ impl ModpkgChunkBuilder {
 // is derived at build time by [`ModpkgBuilder::meta_chunks`].
 impl ModpkgBuilder {
     /// Set the metadata for the builder.
-    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Result<Self, ModpkgBuilderError> {
+    pub fn with_metadata(mut self, metadata: ModpkgMetadata) -> Self {
         self.metadata = metadata;
-        Ok(self)
+        self
     }
 
     /// Set the readme for the builder.
-    pub fn with_readme(mut self, readme: &str) -> Result<Self, ModpkgBuilderError> {
-        self.readme = Some(readme.to_string());
-        Ok(self)
+    ///
+    /// The bytes are not decoded, so a readme that is not valid UTF-8 survives
+    /// the round trip unchanged.
+    pub fn with_readme(mut self, readme: impl Into<Vec<u8>>) -> Self {
+        self.readme = Some(readme.into());
+        self
     }
 
     /// Set the license text for the builder.
     ///
+    /// The bytes are not decoded: a license is a legal document, and a
+    /// `LICENSE` saved in Latin-1 must not come back out with its copyright
+    /// symbol replaced.
+    ///
     /// The chunk is stored compressed; see [`meta_chunks`](Self::meta_chunks).
-    pub fn with_license_text(mut self, license_text: &str) -> Result<Self, ModpkgBuilderError> {
-        self.license_text = Some(license_text.to_string());
-        Ok(self)
+    pub fn with_license_text(mut self, license_text: impl Into<Vec<u8>>) -> Self {
+        self.license_text = Some(license_text.into());
+        self
     }
 
     /// Set the thumbnail for the builder.
-    pub fn with_thumbnail(mut self, thumbnail: Vec<u8>) -> Result<Self, ModpkgBuilderError> {
-        self.thumbnail = Some(thumbnail);
-        Ok(self)
+    pub fn with_thumbnail(mut self, thumbnail: impl Into<Vec<u8>>) -> Self {
+        self.thumbnail = Some(thumbnail.into());
+        self
     }
 }
 
 impl ModpkgLayerBuilder {
-    pub fn new(name: impl AsRef<str>) -> Self {
-        Self {
-            name: name.as_ref().to_string(),
+    /// Create a layer builder, validating `name` as a [`Slug`].
+    pub fn new(name: impl AsRef<str>) -> Result<Self, ModpkgBuilderError> {
+        Ok(Self {
+            name: Slug::new(name)?,
             priority: 0,
-        }
+        })
     }
 
-    pub fn with_name(mut self, name: impl AsRef<str>) -> Self {
-        self.name = name.as_ref().to_string();
-        self
+    /// Create a layer builder from an already-validated name.
+    pub fn from_slug(name: Slug) -> Self {
+        Self { name, priority: 0 }
+    }
+
+    pub fn with_name(mut self, name: impl AsRef<str>) -> Result<Self, ModpkgBuilderError> {
+        self.name = Slug::new(name)?;
+        Ok(self)
     }
 
     pub fn with_priority(mut self, priority: i32) -> Self {
@@ -746,9 +786,10 @@ impl ModpkgLayerBuilder {
         self
     }
 
+    /// The base layer, whose name is always valid.
     pub fn base() -> Self {
         Self {
-            name: BASE_LAYER_NAME.to_string(),
+            name: Slug::base(),
             priority: 0,
         }
     }
@@ -769,8 +810,7 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_metadata(ModpkgMetadata::default())
-            .unwrap()
-            .with_layer(ModpkgLayerBuilder::new("base").with_priority(0))
+            .with_layer(ModpkgLayerBuilder::new("base").unwrap().with_priority(0))
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.png")
@@ -796,11 +836,11 @@ mod tests {
 
         let chunk = modpkg
             .chunks
-            .get(&(hash_chunk_name("test.png"), hash_layer_name("base")))
+            .get(&(ChunkPath::new("test.png").hash(), hash_layer_name("base")))
             .unwrap();
 
         assert_eq!(
-            modpkg.chunk_paths.get(&hash_chunk_name("test.png")),
+            modpkg.chunk_paths.get(&ChunkPath::new("test.png").hash()),
             Some(&"test.png".to_string())
         );
 
@@ -909,7 +949,7 @@ mod tests {
 
         let chunk = *modpkg
             .chunks
-            .get(&(hash_chunk_name("noise.bin"), hash_layer_name("base")))
+            .get(&(ChunkPath::new("noise.bin").hash(), hash_layer_name("base")))
             .unwrap();
         assert_eq!(chunk.compression, ModpkgCompression::None);
         assert_eq!(chunk.compressed_size, chunk.uncompressed_size);
@@ -970,15 +1010,15 @@ mod tests {
         let base = hash_layer_name("base");
         let a = *modpkg
             .chunks
-            .get(&(hash_chunk_name("a.bin"), base))
+            .get(&(ChunkPath::new("a.bin").hash(), base))
             .unwrap();
         let b = *modpkg
             .chunks
-            .get(&(hash_chunk_name("b.bin"), base))
+            .get(&(ChunkPath::new("b.bin").hash(), base))
             .unwrap();
         let c = *modpkg
             .chunks
-            .get(&(hash_chunk_name("c.bin"), base))
+            .get(&(ChunkPath::new("c.bin").hash(), base))
             .unwrap();
 
         // a and b share content: written once, both TOC entries point at it
@@ -1005,20 +1045,31 @@ mod tests {
         assert_eq!(&loaded_c[..], &unique_data[..]);
     }
 
+    /// The builder used to accept any string, so a caller bypassing the packer
+    /// could produce a package with a layer name the packer would reject.
+    #[test]
+    fn layer_builder_rejects_names_the_packer_would_reject() {
+        for name in ["", "High Res", "-leading", "trailing-"] {
+            assert!(
+                ModpkgLayerBuilder::new(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+
+        assert!(ModpkgLayerBuilder::new("high-res").is_ok());
+    }
+
     #[test]
     fn with_path_normalizes_backslashes() {
         let chunk = ModpkgChunkBuilder::new()
-            .with_path("Graves.wad.client\\data\\characters\\graves\\skin0.bin")
+            .with_path("ASSETS\\Characters\\Aatrox\\Skins\\Base\\Aatrox.dds")
             .unwrap();
 
-        assert_eq!(
-            chunk.path,
-            "graves.wad.client/data/characters/graves/skin0.bin"
-        );
+        assert_eq!(chunk.path, "assets/characters/aatrox/skins/base/aatrox.dds");
 
         // Hash should match the normalized forward-slash version
         let forward = ModpkgChunkBuilder::new()
-            .with_path("graves.wad.client/data/characters/graves/skin0.bin")
+            .with_path("assets/characters/aatrox/skins/base/aatrox.dds")
             .unwrap();
 
         assert_eq!(chunk.path_hash(), forward.path_hash());
@@ -1034,7 +1085,7 @@ mod tests {
             .with_layer(ModpkgLayerBuilder::base())
             .with_chunk(
                 ModpkgChunkBuilder::new()
-                    .with_path("Graves.wad.client\\Data\\skin0.bin")
+                    .with_path("ASSETS\\Characters\\Aatrox\\Aatrox.dds")
                     .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base"),
@@ -1051,8 +1102,8 @@ mod tests {
         let modpkg = Modpkg::mount_from_reader(&mut cursor).unwrap();
 
         // Stored path must be normalized
-        let normalized = "graves.wad.client/data/skin0.bin";
-        let path_hash = hash_chunk_name(normalized);
+        let normalized = "assets/characters/aatrox/aatrox.dds";
+        let path_hash = ChunkPath::new(normalized).hash();
 
         assert_eq!(
             modpkg.chunk_paths.get(&path_hash),

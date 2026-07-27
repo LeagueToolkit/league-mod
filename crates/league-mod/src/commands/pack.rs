@@ -99,7 +99,9 @@ fn convert_pack_error(err: PackError, project_root: &Utf8Path) -> miette::Report
         PackError::LayerDirMissing { layer, path } => {
             CliError::layer_directory_missing(layer, path.into_std_path_buf()).into()
         }
-        PackError::InvalidLayerName(name) => CliError::invalid_layer_name(name, None).into(),
+        PackError::InvalidLayerName(e) => {
+            CliError::invalid_layer_name(e.value().to_string(), None).into()
+        }
         PackError::InvalidBaseLayerPriority(priority) => {
             CliError::invalid_base_layer_priority(priority).into()
         }

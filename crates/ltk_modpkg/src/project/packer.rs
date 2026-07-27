@@ -5,10 +5,8 @@ use super::PackError;
 use crate::{
     builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder},
     metadata::CURRENT_SCHEMA_VERSION,
-    utils::{
-        hash_layer_name, is_valid_slug, read_text_file_lossy, strip_path_prefix, utf8_path_from,
-    },
-    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
+    utils::{hash_layer_name, PathBufExt, Utf8PathExt},
+    ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata, Slug,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{
@@ -50,8 +48,8 @@ pub struct ProjectPacker {
     mod_project: ModProject,
     project_root: Utf8PathBuf,
     chunks: Vec<ChunkEntry>,
-    readme: Option<String>,
-    license_text: Option<String>,
+    readme: Option<Vec<u8>>,
+    license_text: Option<Vec<u8>>,
     thumbnail: Option<Vec<u8>>,
 }
 
@@ -74,8 +72,7 @@ impl ProjectPacker {
     /// Looks for `mod.config.json` or `mod.config.toml` in `project_root`,
     /// validates the project, and scans all layer directories for content.
     pub fn new(project_root: Utf8PathBuf) -> Result<Self, PackError> {
-        let mod_project = ModProject::load(project_root.as_std_path())
-            .map_err(|e| PackError::ConfigError(e.to_string()))?;
+        let mod_project = ModProject::load(project_root.as_std_path())?;
 
         Self::with_mod_project(mod_project, project_root)
     }
@@ -119,9 +116,7 @@ impl ProjectPacker {
         let mut writer = BufWriter::new(File::create(output_path)?);
         self.pack_to_writer(&mut writer)?;
 
-        Ok(PackResult {
-            output_path: output_path.to_owned(),
-        })
+        Ok(PackResult::new(output_path))
     }
 
     /// Pack to an arbitrary writer.
@@ -191,12 +186,12 @@ impl ProjectPacker {
 
         for entry in fs::read_dir(layer_dir.as_std_path())? {
             let entry = entry?;
-            let entry_path = to_utf8_path(entry.path())?;
+            let entry_path = entry.path().into_utf8()?;
 
             if entry_path.is_dir() {
                 self.scan_directory(&layer_dir, &entry_path, layer)?;
             } else if entry_path.is_file() {
-                let rel_path = strip_prefix(&entry_path, &layer_dir)?;
+                let rel_path = entry_path.strip_prefix_normalized(&layer_dir)?;
                 self.push_chunk(rel_path, layer, None, entry_path);
             }
         }
@@ -212,7 +207,7 @@ impl ProjectPacker {
     ) -> Result<(), PackError> {
         let dir_name = dir_path
             .file_name()
-            .ok_or_else(|| PackError::InvalidUtf8Path(dir_path.to_string()))?;
+            .ok_or_else(|| PackError::MissingFileName(dir_path.to_owned()))?;
 
         let is_wad = dir_name.to_ascii_lowercase().ends_with(".wad.client");
         let wad_name = is_wad.then(|| dir_name.to_string());
@@ -223,12 +218,15 @@ impl ProjectPacker {
         let strip_base = if is_wad { dir_path } else { layer_dir };
 
         let pattern = dir_path.join("**/*");
-        for file in glob::glob(pattern.as_str())?
-            .filter_map(Result::ok)
-            .filter(|e| e.is_file())
-        {
-            let file_path = to_utf8_path(file)?;
-            let rel_path = strip_prefix(&file_path, strip_base)?;
+        let matches =
+            glob::glob(pattern.as_str()).map_err(|source| PackError::InvalidGlobPattern {
+                pattern: pattern.to_string(),
+                source: Box::new(source),
+            })?;
+
+        for file in matches.filter_map(Result::ok).filter(|e| e.is_file()) {
+            let file_path = file.into_utf8()?;
+            let rel_path = file_path.strip_prefix_normalized(strip_base)?;
             self.push_chunk(rel_path, layer, wad_name.clone(), file_path);
         }
 
@@ -253,11 +251,11 @@ impl ProjectPacker {
     fn scan_meta_files(&mut self) -> Result<(), PackError> {
         let readme_path = self.project_root.join("README.md");
         if readme_path.exists() {
-            self.readme = Some(read_text_file(&readme_path)?);
+            self.readme = Some(readme_path.read_bytes()?);
         }
 
         if let Some(license_path) = find_license_file(&self.project_root) {
-            self.license_text = Some(read_text_file(&license_path)?);
+            self.license_text = Some(license_path.read_bytes()?);
         }
 
         let thumbnail_path = self
@@ -286,14 +284,15 @@ impl ProjectPacker {
             if layer.name == "base" {
                 continue;
             }
-            builder = builder
-                .with_layer(ModpkgLayerBuilder::new(&layer.name).with_priority(layer.priority));
+            builder = builder.with_layer(
+                ModpkgLayerBuilder::new(&layer.name)
+                    .map_err(PackError::Builder)?
+                    .with_priority(layer.priority),
+            );
         }
 
         // Metadata
-        builder = builder
-            .with_metadata(self.build_metadata()?)
-            .map_err(PackError::Builder)?;
+        builder = builder.with_metadata(self.build_metadata()?);
 
         // Content chunks
         let mut file_map = ChunkFileMap::new();
@@ -318,26 +317,21 @@ impl ProjectPacker {
         }
 
         // Meta chunks
-        if let Some(readme) = &self.readme {
-            builder = builder.with_readme(readme).map_err(PackError::Builder)?;
+        if let Some(readme) = self.readme {
+            builder = builder.with_readme(readme);
         }
-        if let Some(license_text) = &self.license_text {
-            builder = builder
-                .with_license_text(license_text)
-                .map_err(PackError::Builder)?;
+        if let Some(license_text) = self.license_text {
+            builder = builder.with_license_text(license_text);
         }
         if let Some(thumbnail) = self.thumbnail {
-            builder = builder
-                .with_thumbnail(thumbnail)
-                .map_err(PackError::Builder)?;
+            builder = builder.with_thumbnail(thumbnail);
         }
 
         Ok((builder, file_map))
     }
 
     fn build_metadata(&self) -> Result<ModpkgMetadata, PackError> {
-        let version = semver::Version::parse(&self.mod_project.version)
-            .map_err(|e| PackError::InvalidVersion(e.to_string()))?;
+        let version = semver::Version::parse(&self.mod_project.version)?;
 
         Ok(ModpkgMetadata {
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -377,9 +371,7 @@ impl ProjectPacker {
 
 fn validate_project(mod_project: &ModProject, project_root: &Utf8Path) -> Result<(), PackError> {
     for layer in &mod_project.layers {
-        if !is_valid_slug(&layer.name) {
-            return Err(PackError::InvalidLayerName(layer.name.clone()));
-        }
+        Slug::new(&layer.name).map_err(PackError::InvalidLayerName)?;
         if layer.name == "base" && layer.priority != 0 {
             return Err(PackError::InvalidBaseLayerPriority(layer.priority));
         }
@@ -451,26 +443,4 @@ fn build_layer_metadata(mod_project: &ModProject) -> Vec<ModpkgLayerMetadata> {
     }
 
     layers
-}
-
-// ---------------------------------------------------------------------------
-// Error mapping for the shared utilities in [`crate::utils`]
-// ---------------------------------------------------------------------------
-
-/// [`read_text_file_lossy`] with the path attached to any IO failure.
-fn read_text_file(path: &Utf8Path) -> Result<String, PackError> {
-    read_text_file_lossy(path).map_err(|source| PackError::ReadFile {
-        path: path.to_owned(),
-        source,
-    })
-}
-
-/// [`crate::utils::utf8_path_from`], as a [`PackError`].
-fn to_utf8_path(path: std::path::PathBuf) -> Result<Utf8PathBuf, PackError> {
-    utf8_path_from(path).map_err(PackError::InvalidUtf8Path)
-}
-
-/// [`strip_path_prefix`], as a [`PackError`].
-fn strip_prefix(path: &Utf8Path, base: &Utf8Path) -> Result<String, PackError> {
-    strip_path_prefix(path, base).map_err(|e| PackError::Io(io::Error::other(e.to_string())))
 }

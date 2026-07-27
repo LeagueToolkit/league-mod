@@ -10,6 +10,7 @@ use std::{
 
 pub mod builder;
 mod chunk;
+mod chunk_path;
 mod decoder;
 pub mod error;
 mod extractor;
@@ -17,17 +18,20 @@ mod license;
 mod metadata;
 mod read;
 mod readme;
+mod slug;
 mod thumbnail;
 pub mod utils;
 
 #[cfg(feature = "project")]
 pub mod project;
 
+pub use chunk_path::ChunkPath;
 pub use decoder::ModpkgDecoder;
 pub use extractor::ModpkgExtractor;
 pub use license::*;
 pub use metadata::*;
 pub use readme::*;
+pub use slug::Slug;
 pub use thumbnail::*;
 pub use utils::*;
 
@@ -126,8 +130,8 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         path: &str,
         layer: Option<&str>,
     ) -> Result<(u64, u64), ModpkgError> {
-        let normalized = utils::normalize_chunk_path(path);
-        let literal_hash = hash_chunk_name(&normalized);
+        let normalized = ChunkPath::new(path);
+        let literal_hash = normalized.hash();
         let layer_hash = match layer {
             Some(name) => hash_layer_name(name),
             None => NO_LAYER_HASH,
@@ -137,15 +141,15 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             return Ok((literal_hash, layer_hash));
         }
 
-        // Try hex-encoded chunk name fallback (e.g., "abcdef1234567890.dds")
-        let filename_lower = Path::new(&normalized)
+        // Try hex-encoded chunk name fallback (e.g., "abcdef1234567890.dds").
+        // The path is already lowercase, so the file name is too.
+        let file_name = Path::new(normalized.as_str())
             .file_name()
             .and_then(|s| s.to_str())
-            .map(str::to_lowercase)
-            .unwrap_or_else(|| normalized.to_lowercase());
+            .unwrap_or(normalized.as_str());
 
-        if utils::is_hex_chunk_name(&filename_lower) {
-            if let Some(base) = filename_lower.split('.').next() {
+        if utils::is_hex_chunk_name(file_name) {
+            if let Some(base) = file_name.split('.').next() {
                 if let Ok(parsed) = u64::from_str_radix(base, 16) {
                     if self.chunks.contains_key(&(parsed, layer_hash)) {
                         return Ok((parsed, layer_hash));
@@ -349,7 +353,7 @@ mod tests {
 
         let test_data = [0xAA; 100];
         let path = "test.bin";
-        let path_hash = hash_chunk_name(path);
+        let path_hash = ChunkPath::new(path).hash();
         let layer_name = "base";
         let layer_hash = hash_layer_name(layer_name);
 

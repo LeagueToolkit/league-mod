@@ -21,12 +21,13 @@ pub mod thumbnail;
 mod tests;
 
 pub use packer::ProjectPacker;
-pub use thumbnail::{load_thumbnail, MAX_THUMBNAIL_SIZE};
+pub use thumbnail::{load_thumbnail, ThumbnailError, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
+use crate::error::{EncodingError, InvalidSlugError, ReadFileError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
-use ltk_mod_project::ModProject;
+use ltk_mod_project::{ModProject, ModProjectError};
 use std::io;
 
 // ---------------------------------------------------------------------------
@@ -35,52 +36,81 @@ use std::io;
 
 /// Error type for project packing operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PackError {
-    #[error("IO error: {0}")]
+    #[error("IO error")]
     Io(#[from] io::Error),
 
-    #[error("Failed to read {path}: {source}")]
-    ReadFile {
-        path: Utf8PathBuf,
-        source: io::Error,
-    },
+    #[error(transparent)]
+    ReadFile(#[from] ReadFileError),
 
-    #[error("Builder error: {0}")]
+    #[error("Builder error")]
     Builder(#[from] ModpkgBuilderError),
 
     #[error("Config file not found in project directory: {0}")]
     ConfigNotFound(Utf8PathBuf),
 
-    #[error("Failed to load project config: {0}")]
-    ConfigError(String),
+    #[error("Failed to load project config")]
+    Config(#[from] ModProjectError),
 
     #[error("Layer directory missing: {layer} at {path}")]
     LayerDirMissing { layer: String, path: Utf8PathBuf },
 
-    #[error("Invalid layer name: {0}")]
-    InvalidLayerName(String),
+    #[error("Invalid layer name")]
+    InvalidLayerName(#[source] InvalidSlugError),
 
     #[error("Base layer must have priority 0, got: {0}")]
     InvalidBaseLayerPriority(i32),
 
-    #[error("Failed to process thumbnail: {0}")]
-    ThumbnailError(String),
+    #[error("Failed to process thumbnail")]
+    Thumbnail(#[from] ThumbnailError),
 
-    #[error("Invalid version format: {0}")]
-    InvalidVersion(String),
+    #[error("Invalid mod version")]
+    InvalidVersion(#[from] semver::Error),
 
-    #[error("Glob pattern error: {0}")]
-    GlobError(#[from] glob::PatternError),
+    /// A content directory could not be turned into a valid glob pattern.
+    ///
+    /// Reachable from user input: a directory named `[base]` produces a
+    /// pattern the glob parser rejects.
+    #[error("Invalid glob pattern: {pattern}")]
+    InvalidGlobPattern {
+        pattern: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
-    #[error("Invalid UTF-8 path: {0}")]
-    InvalidUtf8Path(String),
+    #[error(transparent)]
+    Encoding(#[from] EncodingError),
+
+    #[error("Path has no file name: {0}")]
+    MissingFileName(Utf8PathBuf),
+
+    #[error(transparent)]
+    StripPrefix(#[from] StripPrefixError),
 }
 
 /// Result of a successful pack operation.
 #[derive(Debug)]
 pub struct PackResult {
+    output_path: Utf8PathBuf,
+}
+
+impl PackResult {
+    pub(crate) fn new(output_path: impl Into<Utf8PathBuf>) -> Self {
+        Self {
+            output_path: output_path.into(),
+        }
+    }
+
     /// The path to the created `.modpkg` file.
-    pub output_path: Utf8PathBuf,
+    pub fn output_path(&self) -> &Utf8Path {
+        &self.output_path
+    }
+
+    /// Consume the result, yielding the output path.
+    pub fn into_output_path(self) -> Utf8PathBuf {
+        self.output_path
+    }
 }
 
 // ---------------------------------------------------------------------------

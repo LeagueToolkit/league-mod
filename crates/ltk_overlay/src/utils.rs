@@ -65,8 +65,8 @@ pub fn normalize_rel_path_for_hash(rel_path: &Utf8Path, _bytes: &[u8]) -> String
 ///    path names.
 ///
 /// 2. **Named path**: Otherwise, the path is normalized via
-///    [`normalize_rel_path_for_hash`] and hashed with
-///    [`ltk_modpkg::utils::hash_chunk_name`] (xxHash3).
+///    [`normalize_rel_path_for_hash`] and hashed as a
+///    [`ltk_modpkg::ChunkPath`] (xxHash64).
 pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
     let file_name = rel_path.file_name().unwrap_or("");
     let file_stem = Utf8Path::new(file_name).file_stem().unwrap_or("");
@@ -81,9 +81,7 @@ pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
 
     // Otherwise, compute from normalized path
     let normalized_rel = normalize_rel_path_for_hash(rel_path, bytes);
-    Ok(ltk_modpkg::utils::hash_chunk_name(
-        &ltk_modpkg::utils::normalize_chunk_path(&normalized_rel),
-    ))
+    Ok(ltk_modpkg::ChunkPath::new(normalized_rel).hash())
 }
 
 /// Compute a deterministic fingerprint for a WAD's override set.

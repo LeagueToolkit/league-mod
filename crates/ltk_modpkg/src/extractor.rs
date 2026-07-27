@@ -227,11 +227,8 @@ mod tests {
         ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
             .with_readme(readme)
-            .unwrap()
             .with_license_text(license_text)
-            .unwrap()
             .with_thumbnail(thumbnail.clone())
-            .unwrap()
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.bin")
@@ -287,7 +284,11 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
-            .with_layer(ModpkgLayerBuilder::new(custom_layer).with_priority(1))
+            .with_layer(
+                ModpkgLayerBuilder::new(custom_layer)
+                    .unwrap()
+                    .with_priority(1),
+            )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path(path)
