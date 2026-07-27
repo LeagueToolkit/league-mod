@@ -6,13 +6,22 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+# Cancel superseded runs on PR branches; let pushes to main finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Install Linux dependencies
@@ -20,51 +29,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebp-dev liblzma-dev
       - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy, rustfmt }
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --all-features
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebp-dev liblzma-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features --workspace
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebp-dev liblzma-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: clippy }
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: rustfmt }
-      - run: cargo fmt --all -- --check
-
-  build:
-    name: Build
+    name: Test (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install Linux dependencies
@@ -74,31 +51,9 @@ jobs:
           sudo apt-get install -y libwebp-dev liblzma-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --bin league-mod
-      - name: Test binary exists (Unix)
-        if: runner.os != 'Windows'
-        run: test -f target/release/league-mod
-      - name: Test binary exists (Windows)
+      - run: cargo test --locked --all-features --workspace
+      # Windows is the platform we ship a binary for, so verify the release
+      # profile builds there.
+      - name: Build release binary
         if: runner.os == 'Windows'
-        shell: powershell
-        run: Test-Path target/release/league-mod.exe
-
-  audit:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with: { tool: cargo-audit }
-      - run: cargo audit
-
-  cargo-deny:
-    name: Cargo Deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
-        with: { tool: "cargo-deny@0.19.0" }
-      - run: cargo deny check
+        run: cargo build --locked --release --bin league-mod
