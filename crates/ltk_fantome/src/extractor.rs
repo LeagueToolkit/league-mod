@@ -1,6 +1,5 @@
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, Write};
-use std::path::Path;
+use std::io::{Cursor, Read, Seek};
 
 use camino::Utf8Path;
 use image::ImageFormat;
@@ -41,57 +40,32 @@ impl<R: Read + Seek> FantomeExtractor<R> {
 
     /// Set the WAD hashtable for resolving path hashes to human-readable paths.
     ///
-    /// If not set, extracted files will use hex hashes as filenames.
-    pub fn with_hashtable(mut self, hashtable: WadHashtable) -> Self {
-        self.hashtable = Some(hashtable);
+    /// Accepts an `Option` as well as a hashtable, so a caller that may or may
+    /// not have one does not need a separate setter. Without a hashtable,
+    /// extracted files are named by their hex hash.
+    pub fn with_hashtable(mut self, hashtable: impl Into<Option<WadHashtable>>) -> Self {
+        self.hashtable = hashtable.into();
         self
-    }
-
-    /// Set the WAD hashtable from an optional value.
-    pub fn with_hashtable_opt(mut self, hashtable: Option<WadHashtable>) -> Self {
-        self.hashtable = hashtable;
-        self
-    }
-
-    /// Validate the archive structure.
-    pub fn validate(&mut self) -> Result<(), FantomeExtractError> {
-        Ok(())
     }
 
     /// Read the metadata from the Fantome package.
     pub fn read_metadata(&mut self) -> Result<FantomeInfo, FantomeExtractError> {
-        // Try common variations of the metadata path (case-insensitive search)
-        let metadata_paths = ["META/info.json", "meta/info.json", "Meta/info.json"];
+        // Entry names are matched case-insensitively: archives in the wild
+        // spell the directory `META`, `meta` and `Meta`.
+        let index = (0..self.archive.len()).find(|i| {
+            self.archive
+                .by_index(*i)
+                .is_ok_and(|file| file.name().eq_ignore_ascii_case("META/info.json"))
+        });
+
+        let Some(index) = index else {
+            return Err(FantomeExtractError::MissingMetadata);
+        };
 
         let mut info_content = String::new();
-        let mut found = false;
-
-        for path in &metadata_paths {
-            if let Ok(mut info_file) = self.archive.by_name(path) {
-                info_file.read_to_string(&mut info_content)?;
-                found = true;
-                break;
-            }
-        }
-
-        // If not found by exact path, search case-insensitively
-        if !found {
-            for i in 0..self.archive.len() {
-                let file = self.archive.by_index(i)?;
-                let name = file.name().to_lowercase();
-                if name == "meta/info.json" {
-                    drop(file);
-                    let mut info_file = self.archive.by_index(i)?;
-                    info_file.read_to_string(&mut info_content)?;
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if !found {
-            return Err(FantomeExtractError::MissingMetadata);
-        }
+        self.archive
+            .by_index(index)?
+            .read_to_string(&mut info_content)?;
 
         // Strip UTF-8 BOM if present
         let info_content = info_content.trim_start_matches('\u{feff}').trim();
@@ -107,19 +81,17 @@ impl<R: Read + Seek> FantomeExtractor<R> {
     /// Extract the Fantome package to the specified output directory.
     ///
     /// This will:
-    /// 1. Validate the archive structure
-    /// 2. Extract WAD contents to content/base/
-    /// 3. Extract README.md if present
+    /// 1. Extract WAD contents to content/base/
+    /// 2. Extract README.md if present
+    /// 3. Extract the license text if present
     /// 4. Extract thumbnail image if present
     /// 5. Create a mod.config.json file
     ///
     /// Returns the mod project configuration that was created.
     pub fn extract_to(
         &mut self,
-        output_dir: &Path,
+        output_dir: &Utf8Path,
     ) -> Result<FantomeExtractResult, FantomeExtractError> {
-        self.validate()?;
-
         let info = self.read_metadata()?;
         let mod_project = ModProject {
             name: slug::slugify(&info.name),
@@ -137,40 +109,27 @@ impl<R: Read + Seek> FantomeExtractor<R> {
         };
 
         if !output_dir.exists() {
-            std::fs::create_dir_all(output_dir)?;
+            std::fs::create_dir_all(output_dir)
+                .map_err(|source| FantomeExtractError::write(output_dir, source))?;
         }
 
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
 
-            if file_name.starts_with("WAD/") {
-                let relative_path = file_name.strip_prefix("WAD/").unwrap();
+            if let Some(relative_path) = file_name.strip_prefix("WAD/") {
+                let output_file_path = output_dir.join("content").join("base").join(relative_path);
 
-                // Check if this is a packed WAD file (directly under WAD/, ends with .wad.client etc.)
-                if !file.is_dir() && !relative_path.contains('/') && is_wad_file_name(relative_path)
-                {
-                    // Extract packed WAD file using WadExtractor
-                    let wad_output_dir =
-                        output_dir.join("content").join("base").join(relative_path);
-                    extract_packed_wad(&mut file, &wad_output_dir, self.hashtable.as_ref())?;
+                if file.is_dir() {
+                    create_dir(&output_file_path)?;
+                } else if !relative_path.contains('/') && is_wad_file_name(relative_path) {
+                    // A packed WAD directly under WAD/, unpacked by WadExtractor
+                    // rather than written out as a file.
+                    extract_packed_wad(&mut file, &output_file_path, self.hashtable.as_ref())?;
                 } else {
-                    // Extract WAD folder content to content/base/
-                    let output_file_path =
-                        output_dir.join("content").join("base").join(relative_path);
-
-                    if file.is_dir() {
-                        std::fs::create_dir_all(&output_file_path)?;
-                    } else {
-                        if let Some(parent) = output_file_path.parent() {
-                            std::fs::create_dir_all(parent)?;
-                        }
-                        let mut outfile = File::create(&output_file_path)?;
-                        std::io::copy(&mut file, &mut outfile)?;
-                    }
+                    extract_entry(&mut file, &output_file_path)?;
                 }
-            } else if file_name.starts_with("RAW/") {
-                let relative_path = file_name.strip_prefix("RAW/").unwrap();
+            } else if let Some(relative_path) = file_name.strip_prefix("RAW/") {
                 if relative_path.is_empty() {
                     continue;
                 }
@@ -178,39 +137,46 @@ impl<R: Read + Seek> FantomeExtractor<R> {
                 let output_file_path = output_dir.join("RAW").join(relative_path);
 
                 if file.is_dir() {
-                    std::fs::create_dir_all(&output_file_path)?;
+                    create_dir(&output_file_path)?;
                 } else {
-                    if let Some(parent) = output_file_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    let mut outfile = File::create(&output_file_path)?;
-                    std::io::copy(&mut file, &mut outfile)?;
+                    extract_entry(&mut file, &output_file_path)?;
                 }
             } else if file_name == "META/README.md" {
-                // Extract README
-                let output_file_path = output_dir.join("README.md");
-                let mut outfile = File::create(&output_file_path)?;
-                std::io::copy(&mut file, &mut outfile)?;
+                extract_entry(&mut file, &output_dir.join("README.md"))?;
             } else if let Some(license_name) = license_entry_target(&file_name) {
-                // Extract the license text
-                let output_file_path = output_dir.join(license_name);
-                let mut outfile = File::create(&output_file_path)?;
-                std::io::copy(&mut file, &mut outfile)?;
+                extract_entry(&mut file, &output_dir.join(license_name))?;
             } else if file_name == "META/image.png" {
                 // Extract and convert thumbnail to WebP
-                let output_file_path = output_dir.join("thumbnail.webp");
-                extract_thumbnail(&mut file, &output_file_path)?;
+                extract_thumbnail(&mut file, &output_dir.join("thumbnail.webp"))?;
             }
         }
 
-        // Write mod.config.json
-        let config_path = output_dir.join("mod.config.json");
-        let config_content = serde_json::to_string_pretty(&mod_project)?;
-        let mut config_file = File::create(config_path)?;
-        config_file.write_all(config_content.as_bytes())?;
+        mod_project.save(&output_dir.join("mod.config.json"))?;
 
         Ok(FantomeExtractResult { mod_project })
     }
+}
+
+/// Write one archive entry to `output_path`, creating its parent directories.
+fn extract_entry<R: Read>(
+    entry: &mut R,
+    output_path: &Utf8Path,
+) -> Result<(), FantomeExtractError> {
+    let write_error = |source| FantomeExtractError::write(output_path, source);
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(write_error)?;
+    }
+
+    let mut outfile = File::create(output_path).map_err(write_error)?;
+    std::io::copy(entry, &mut outfile).map_err(write_error)?;
+
+    Ok(())
+}
+
+/// Create a directory an archive entry names, and its parents.
+fn create_dir(path: &Utf8Path) -> Result<(), FantomeExtractError> {
+    std::fs::create_dir_all(path).map_err(|source| FantomeExtractError::write(path, source))
 }
 
 /// Match a `META/LICENSE*` archive entry case-insensitively and return the file
@@ -235,15 +201,18 @@ fn is_wad_file_name(name: &str) -> bool {
 /// Extract and convert a PNG thumbnail to WebP format.
 fn extract_thumbnail<R: Read>(
     reader: &mut R,
-    output_path: &Path,
+    output_path: &Utf8Path,
 ) -> Result<(), FantomeExtractError> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
 
-    let img = image::load_from_memory_with_format(&data, ImageFormat::Png)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let thumbnail_error =
+        |source: image::ImageError| FantomeExtractError::Thumbnail(Box::new(source));
 
-    img.save(output_path).map_err(std::io::Error::other)?;
+    let img =
+        image::load_from_memory_with_format(&data, ImageFormat::Png).map_err(thumbnail_error)?;
+
+    img.save(output_path).map_err(thumbnail_error)?;
 
     Ok(())
 }
@@ -251,7 +220,7 @@ fn extract_thumbnail<R: Read>(
 /// Extract a packed WAD file to a directory using WadExtractor
 fn extract_packed_wad<R: Read>(
     wad_reader: &mut R,
-    output_dir: &Path,
+    output_dir: &Utf8Path,
     hashtable: Option<&WadHashtable>,
 ) -> Result<(), FantomeExtractError> {
     let mut wad_data = Vec::new();
@@ -260,20 +229,13 @@ fn extract_packed_wad<R: Read>(
     let cursor = Cursor::new(wad_data);
     let mut wad = Wad::mount(cursor)?;
 
-    std::fs::create_dir_all(output_dir)?;
+    std::fs::create_dir_all(output_dir)
+        .map_err(|source| FantomeExtractError::write(output_dir, source))?;
 
-    let output_dir_utf8 = Utf8Path::from_path(output_dir).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UTF-8 path")
-    })?;
-
-    if let Some(ht) = hashtable {
-        let extractor = WadExtractor::new(ht);
-        extractor.extract_all(&mut wad, output_dir_utf8)?;
-    } else {
-        let resolver = HexPathResolver;
-        let extractor = WadExtractor::new(&resolver);
-        extractor.extract_all(&mut wad, output_dir_utf8)?;
-    }
+    match hashtable {
+        Some(hashtable) => WadExtractor::new(hashtable).extract_all(&mut wad, output_dir)?,
+        None => WadExtractor::new(&HexPathResolver).extract_all(&mut wad, output_dir)?,
+    };
 
     Ok(())
 }
@@ -281,10 +243,16 @@ fn extract_packed_wad<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
-    use tempfile::tempdir;
+    use camino::Utf8PathBuf;
+    use std::io::{Cursor, Write};
+    use tempfile::{TempDir, tempdir};
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    /// The temp directory's path, which extraction takes as UTF-8.
+    fn utf8_dir(dir: &TempDir) -> Utf8PathBuf {
+        Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap()
+    }
 
     fn create_test_fantome() -> Vec<u8> {
         let buffer = Vec::new();
@@ -319,7 +287,7 @@ mod tests {
         let mut extractor = FantomeExtractor::new(cursor).unwrap();
 
         let temp_dir = tempdir().unwrap();
-        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        let result = extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
 
         assert_eq!(result.mod_project.display_name, "Test Mod");
         assert_eq!(result.mod_project.version, "1.0.0");
@@ -365,7 +333,7 @@ mod tests {
             let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
 
             let temp_dir = tempdir().unwrap();
-            extractor.extract_to(temp_dir.path()).unwrap();
+            extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
 
             let extracted = temp_dir.path().join(expected_file);
             assert!(
@@ -389,7 +357,7 @@ mod tests {
 
         let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
         let temp_dir = tempdir().unwrap();
-        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        let result = extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
 
         assert_eq!(
             result.mod_project.license,
@@ -412,7 +380,7 @@ mod tests {
 
         let mut extractor = FantomeExtractor::new(Cursor::new(data)).unwrap();
         let temp_dir = tempdir().unwrap();
-        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        let result = extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
 
         assert_eq!(
             result.mod_project.license,
@@ -429,7 +397,7 @@ mod tests {
         let mut extractor = FantomeExtractor::new(Cursor::new(fantome_data)).unwrap();
 
         let temp_dir = tempdir().unwrap();
-        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        let result = extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
 
         assert_eq!(result.mod_project.license, None);
         assert!(!temp_dir.path().join("LICENSE").exists());
@@ -463,7 +431,7 @@ mod tests {
         let mut extractor = FantomeExtractor::new(cursor).unwrap();
 
         let temp_dir = tempdir().unwrap();
-        let result = extractor.extract_to(temp_dir.path()).unwrap();
+        let result = extractor.extract_to(&utf8_dir(&temp_dir)).unwrap();
         assert_eq!(result.mod_project.display_name, "Test");
 
         // Check that RAW files were extracted
