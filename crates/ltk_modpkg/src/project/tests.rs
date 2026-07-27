@@ -25,7 +25,7 @@ fn new_rejects_invalid_layer_slug() {
 
     let err = ProjectPacker::with_mod_project(project, root.clone()).unwrap_err();
     assert!(
-        matches!(err, PackError::InvalidLayerName(ref n) if n == "UPPERCASE"),
+        matches!(err, PackError::InvalidLayerName(ref e) if e.value() == "UPPERCASE"),
         "Expected InvalidLayerName, got: {err}"
     );
 }

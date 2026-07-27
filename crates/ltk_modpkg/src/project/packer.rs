@@ -379,7 +379,7 @@ impl ProjectPacker {
 
 fn validate_project(mod_project: &ModProject, project_root: &Utf8Path) -> Result<(), PackError> {
     for layer in &mod_project.layers {
-        Slug::new(&layer.name).map_err(|_| PackError::InvalidLayerName(layer.name.clone()))?;
+        Slug::new(&layer.name).map_err(PackError::InvalidLayerName)?;
         if layer.name == "base" && layer.priority != 0 {
             return Err(PackError::InvalidBaseLayerPriority(layer.priority));
         }

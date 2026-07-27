@@ -24,7 +24,7 @@ pub use packer::ProjectPacker;
 pub use thumbnail::{load_thumbnail, ThumbnailError, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
-use crate::error::{EncodingError, ReadTextError, StripPrefixError};
+use crate::error::{EncodingError, InvalidSlugError, ReadTextError, StripPrefixError};
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use ltk_mod_project::ModProject;
@@ -56,8 +56,8 @@ pub enum PackError {
     #[error("Layer directory missing: {layer} at {path}")]
     LayerDirMissing { layer: String, path: Utf8PathBuf },
 
-    #[error("Invalid layer name: {0}")]
-    InvalidLayerName(String),
+    #[error("Invalid layer name")]
+    InvalidLayerName(#[source] InvalidSlugError),
 
     #[error("Base layer must have priority 0, got: {0}")]
     InvalidBaseLayerPriority(i32),
