@@ -51,10 +51,7 @@ impl WadHashtable {
 
     /// Loads hashtable entries from all files in a directory recursively.
     ///
-    /// A directory that does not exist is not an error: hashtables are an
-    /// optional aid to extraction, and a caller pointing at a directory the
-    /// user has not created yet should get an empty table rather than a
-    /// failure.
+    /// A directory that does not exist loads nothing and is not an error.
     pub fn add_from_dir(&mut self, dir: impl AsRef<Utf8Path>) -> Result<(), WadHashtableError> {
         let dir_path = dir.as_ref();
         if !dir_path.exists() {
@@ -94,9 +91,8 @@ impl WadHashtable {
 
     /// Loads hashtable entries from anything readable.
     ///
-    /// Use this for a hashtable that does not come from a file on disk. Errors
-    /// carry no path, so prefer [`add_from_file`](Self::add_from_file) when
-    /// there is one to name.
+    /// Errors carry no path; prefer [`add_from_file`](Self::add_from_file)
+    /// when there is a file to name.
     pub fn add_from_reader(&mut self, reader: impl BufRead) -> Result<(), std::io::Error> {
         for line in reader.lines() {
             let line = line?;

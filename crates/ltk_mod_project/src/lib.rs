@@ -52,9 +52,6 @@ impl WellKnownModTag {
     ];
 
     /// The tag's spelling in a config file.
-    ///
-    /// Must stay in step with the `rename_all` attribute above;
-    /// `as_str_matches_serde` holds it there.
     pub fn as_str(self) -> &'static str {
         match self {
             WellKnownModTag::LeagueOfLegends => "league-of-legends",
@@ -76,9 +73,8 @@ impl WellKnownModTag {
 
     /// The tag a config file spelling names, if it names one.
     ///
-    /// Not `FromStr`: an unrecognized spelling is not an error here, it is a
-    /// [`ModTag::Custom`], so the caller wants an `Option` rather than a
-    /// `Result` it has to discard.
+    /// Returns `None` rather than an error: an unrecognized spelling is a
+    /// [`ModTag::Custom`], not a failure.
     pub fn from_name(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tag| tag.as_str() == value)
     }
@@ -118,8 +114,6 @@ impl From<&str> for ModTag {
 
 impl From<String> for ModTag {
     fn from(s: String) -> Self {
-        // Matches on the borrowed form so a well-known tag does not keep the
-        // allocation the caller handed over.
         match WellKnownModTag::from_name(&s) {
             Some(tag) => ModTag::Known(tag),
             None => ModTag::Custom(s),
@@ -149,9 +143,6 @@ impl WellKnownMap {
     ];
 
     /// The map's spelling in a config file.
-    ///
-    /// Must stay in step with the `rename_all` attribute above;
-    /// `as_str_matches_serde` holds it there.
     pub fn as_str(self) -> &'static str {
         match self {
             WellKnownMap::SummonersRift => "summoners-rift",
@@ -164,8 +155,7 @@ impl WellKnownMap {
 
     /// The map a config file spelling names, if it names one.
     ///
-    /// Not `FromStr`, for the same reason as
-    /// [`WellKnownModTag::from_name`].
+    /// Returns `None` rather than an error, as [`WellKnownModTag::from_name`].
     pub fn from_name(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|map| map.as_str() == value)
     }
@@ -214,10 +204,9 @@ impl From<String> for ModMap {
 
 /// Describes a mod project configuration file
 ///
-/// The `Default` impl exists for struct update syntax
-/// (`ModProject { name, ..Default::default() }`), so that a field added here
-/// does not break every caller that builds one. A default-constructed project
-/// is empty rather than valid, and is not meant to be written out as-is.
+/// `Default` is for struct update syntax
+/// (`ModProject { name, ..Default::default() }`). A default project is empty,
+/// not valid.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProject {
     /// The name of the mod
@@ -351,8 +340,7 @@ impl ModProject {
 
     /// Render the project as the text of a config file.
     ///
-    /// JSON is pretty-printed, since the result is a file a mod author edits by
-    /// hand rather than something only a machine reads.
+    /// JSON is pretty-printed; the result is a file a mod author edits by hand.
     pub fn to_config_string(&self, format: ConfigFormat) -> Result<String, ModProjectError> {
         let result = match format {
             ConfigFormat::Json => serde_json::to_string_pretty(self).map_err(SerializeError::Json),
@@ -365,9 +353,8 @@ impl ModProject {
 
 /// Represents a layer in a mod project
 ///
-/// As with [`ModProject`], `Default` is here for struct update syntax rather
-/// than to describe a usable layer: it has no name. Use
-/// [`base`](ModProjectLayer::base) for the layer every project starts with.
+/// As with [`ModProject`], `Default` is for struct update syntax; it has no
+/// name. Use [`base`](ModProjectLayer::base) for the layer every project has.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProjectLayer {
     /// The name of the layer
@@ -462,8 +449,7 @@ impl ModProjectLayer {
         }
     }
 
-    /// Whether this is the base layer, which every project has and which the
-    /// Fantome format is limited to.
+    /// Whether this is the base layer, the only one Fantome archives carry.
     pub fn is_base(&self) -> bool {
         self.name == Self::BASE_NAME
     }

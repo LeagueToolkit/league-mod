@@ -40,9 +40,8 @@ impl<R: Read + Seek> FantomeExtractor<R> {
 
     /// Set the WAD hashtable for resolving path hashes to human-readable paths.
     ///
-    /// Accepts an `Option` as well as a hashtable, so a caller that may or may
-    /// not have one does not need a separate setter. Without a hashtable,
-    /// extracted files are named by their hex hash.
+    /// Accepts a hashtable or an `Option`. Without one, extracted files are
+    /// named by their hex hash.
     pub fn with_hashtable(mut self, hashtable: impl Into<Option<WadHashtable>>) -> Self {
         self.hashtable = hashtable.into();
         self
