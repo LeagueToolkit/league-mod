@@ -32,7 +32,9 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT rather than GITHUB_TOKEN: PRs opened with GITHUB_TOKEN do not
+          # trigger workflow runs, so release PRs never got CI.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
   # Release unpublished packages.
   release-plz-release:
@@ -53,7 +55,7 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # Build Windows binaries and attach to releases
