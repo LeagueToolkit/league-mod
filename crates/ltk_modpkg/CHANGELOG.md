@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.6.0...ltk_modpkg-v0.7.0) - 2026-07-28
+
+### Added
+
+- [**breaking**] add support for license files
+
+### Fixed
+
+- [**breaking**] stop hiding error causes behind category messages
+- [**breaking**] store readme and license as bytes, not lossy UTF-8
+
+### Other
+
+- Merge pull request #186 from LeagueToolkit/refactor/overlay-error-variants
+- *(ltk_modpkg)* move proptest and tempfile to dev-dependencies
+- [**breaking**] add PackageFormat, drop duplicated helpers
+- [**breaking**] rework ltk_mod_project errors and paths
+- [**breaking**] tidy error variant names and Display strings
+- [**breaking**] stop stringifying config and version errors
+- [**breaking**] carry InvalidSlugError on PackError::InvalidLayerName
+- [**breaking**] give thumbnail failures a real error type
+- [**breaking**] keep third-party error types out of the public API
+- [**breaking**] seal the public error API
+- [**breaking**] validate layer names through a Slug newtype
+- [**breaking**] add ChunkPath, replacing hash_chunk_name
+- [**breaking**] replace the packer's path wrappers with extension traits
+- [**breaking**] move requested_compression onto ModpkgCompression
+
 ## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.5.0...ltk_modpkg-v0.6.0) - 2026-07-03
 
 ### Added
