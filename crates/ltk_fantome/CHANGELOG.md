@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.6.1...ltk_fantome-v0.7.0) - 2026-07-28
+
+### Added
+
+- [**breaking**] add support for license files
+
+### Fixed
+
+- [**breaking**] stop hiding error causes behind category messages
+
+### Other
+
+- [**breaking**] add PackageFormat, drop duplicated helpers
+- cut rationale prose from the new API docs
+- [**breaking**] give ltk_fantome typed errors and camino paths
+
 ## [0.6.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.6.0...ltk_fantome-v0.6.1) - 2026-07-06
 
 ### Other

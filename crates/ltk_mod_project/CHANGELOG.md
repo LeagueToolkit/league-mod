@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.5.0...ltk_mod_project-v0.6.0) - 2026-07-28
+
+### Added
+
+- add emote, summoner-icon and companion tags
+- [**breaking**] add support for license files
+
+### Fixed
+
+- [**breaking**] stop hiding error causes behind category messages
+
+### Other
+
+- [**breaking**] add PackageFormat, drop duplicated helpers
+- cut rationale prose from the new API docs
+- [**breaking**] drop find_license_file_std
+- [**breaking**] rework ltk_mod_project errors and paths
+
 ## [0.5.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.4.1...ltk_mod_project-v0.5.0) - 2026-07-03
 
 ### Added
