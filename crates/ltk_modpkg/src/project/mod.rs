@@ -2,6 +2,12 @@
 //!
 //! This module requires the `project` feature to be enabled.
 //!
+//! Packing is filtered by the project's `.modignore` files, if any exist
+//! (at the project root and nested inside `content/`): files their
+//! gitignore-style patterns exclude are not packed, and the ignore files
+//! themselves are never packed. [`PackOptions`] controls the filter, and
+//! the skipped entries are reported on [`PackResult::ignored_files`].
+//!
 //! # Example
 //!
 //! ```ignore
@@ -20,7 +26,7 @@ pub mod thumbnail;
 #[cfg(test)]
 mod tests;
 
-pub use packer::ProjectPacker;
+pub use packer::{IgnoreMode, PackOptions, ProjectPacker};
 pub use thumbnail::{load_thumbnail, ThumbnailError, MAX_THUMBNAIL_SIZE};
 
 use crate::builder::ModpkgBuilderError;
@@ -68,15 +74,23 @@ pub enum PackError {
     #[error("Invalid mod version")]
     InvalidVersion(#[from] semver::Error),
 
-    /// A content directory could not be turned into a valid glob pattern.
-    ///
-    /// Reachable from user input: a directory named `[base]` produces a
-    /// pattern the glob parser rejects.
-    #[error("Invalid glob pattern: {pattern}")]
-    InvalidGlobPattern {
-        pattern: String,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+    /// The project's `.modignore` could not be loaded: the file is
+    /// unreadable, or a pattern in it does not parse. A broken pattern fails
+    /// the pack rather than silently shipping files the author excluded.
+    #[error(transparent)]
+    Ignore(#[from] ltk_mod_project::ModIgnoreError),
+
+    /// A content directory or file could not be read during the scan.
+    #[error(transparent)]
+    Walk(#[from] ltk_mod_project::ContentWalkError),
+
+    /// An [`IgnoreMode::Explicit`] filter was built for a different project
+    /// root than the packer was given, so it would relate every scanned path
+    /// to the wrong content dir and quietly filter wrong.
+    #[error("Ignore filter is rooted at {filter_root}, but the project's content dir is {project_content_dir}")]
+    IgnoreRootMismatch {
+        filter_root: Utf8PathBuf,
+        project_content_dir: Utf8PathBuf,
     },
 
     #[error(transparent)]
@@ -93,12 +107,14 @@ pub enum PackError {
 #[derive(Debug)]
 pub struct PackResult {
     output_path: Utf8PathBuf,
+    ignored: Vec<Utf8PathBuf>,
 }
 
 impl PackResult {
-    pub(crate) fn new(output_path: impl Into<Utf8PathBuf>) -> Self {
+    pub(crate) fn new(output_path: impl Into<Utf8PathBuf>, ignored: Vec<Utf8PathBuf>) -> Self {
         Self {
             output_path: output_path.into(),
+            ignored,
         }
     }
 
@@ -110,6 +126,18 @@ impl PackResult {
     /// Consume the result, yielding the output path.
     pub fn into_output_path(self) -> Utf8PathBuf {
         self.output_path
+    }
+
+    /// The entries `.modignore` excluded from the archive, in traversal
+    /// order. A pruned directory appears once; the files beneath it are not
+    /// enumerated.
+    pub fn ignored_files(&self) -> &[Utf8PathBuf] {
+        &self.ignored
+    }
+
+    /// `ignored_files().len()`, for reporting.
+    pub fn ignored_count(&self) -> usize {
+        self.ignored.len()
     }
 }
 

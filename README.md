@@ -32,6 +32,10 @@ This workspace contains the following crates:
 
 ### `league-mod` - CLI Tool
 
+> **Deprecated:** the `league-mod` CLI no longer receives new features and
+> will be retired in the future. The library crates below remain the
+> supported way to build mod tooling.
+
 The main command-line interface for mod developers and users.
 
 **Features:**
@@ -142,6 +146,7 @@ A typical mod project follows this structure:
 ```
 my-mod/
 ├── mod.config.json           # Project configuration
+├── .modignore                # Files to exclude from packing (optional)
 ├── content/                  # Mod content organized by layers
 │   ├── base/                 # Base layer (priority 0)
 |   |   ├── Aatrox.wad.client # Mods for the Aatrox wad file
@@ -156,6 +161,29 @@ my-mod/
 ├── LICENSE                   # License text (optional, also LICENSE.md/.txt)
 └── README.md                 # Project documentation/description
 ```
+
+### Ignoring files
+
+A `.modignore` file at the project root lists gitignore-style patterns for
+files under `content/` that should not be packed (working files like `.psd`
+sources, scratch directories, OS junk). Patterns follow gitignore rules:
+`#` comments, `!` negation, directory-only patterns (`cache/`), last match
+wins. Root-file patterns are relative to `content/`, and ignore files nest
+like git's: any directory under `content/` may hold its own `.modignore`
+whose patterns are relative to that directory, with deeper files overriding
+shallower ones. Matching is case-insensitive, because the game resolves
+packed paths case-insensitively. The `.modignore` files themselves are never
+packed, and the same filter is applied when building a live overlay, so what
+you test is what you ship.
+
+Two things trip people up. Always use `/` in patterns, even on Windows: a
+backslash is gitignore's escape character, so `base\scratch` matches nothing
+you meant. And to keep a single file inside an otherwise ignored folder,
+ignore the folder's contents rather than the folder: `scratch/*` followed by
+`!scratch/keep.bin` works, `scratch/` does not, because nothing under an
+excluded directory can be re-included. See the
+[wiki](https://wiki.leaguetoolkit.dev/making-mods/mod-projects/#ignore-files)
+for details.
 
 ### Licensing
 

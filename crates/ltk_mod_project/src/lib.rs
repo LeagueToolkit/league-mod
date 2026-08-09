@@ -7,11 +7,16 @@ use std::fmt;
 mod config_format;
 pub mod error;
 mod license_file;
+mod modignore;
 mod package_format;
 
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
 pub use license_file::{canonical_license_file_name, find_license_file, LICENSE_FILE_NAMES};
+pub use modignore::{
+    ContentWalk, ContentWalkError, ModIgnore, ModIgnoreError, ModIgnoreMatch, ModIgnoreRule,
+    MODIGNORE_FILE_NAME,
+};
 pub use package_format::PackageFormat;
 
 /// Well-known mod tags for common mod categories.

@@ -2,7 +2,7 @@ use camino::Utf8Path;
 use image::ImageFormat;
 use indexmap::IndexMap;
 use ltk_mod_project::{
-    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, PackageFormat,
+    ModIgnore, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, PackageFormat,
     canonical_license_file_name, find_license_file,
 };
 use serde::{Deserialize, Serialize};
@@ -138,10 +138,30 @@ pub fn get_unsupported_layers(mod_project: &ModProject) -> Vec<&ModProjectLayer>
 }
 
 /// Pack a mod project into a Fantome .zip format
+///
+/// Files under `content/` that the project's `.modignore` excludes are not
+/// packed; a missing `.modignore` excludes nothing. Use
+/// [`pack_to_fantome_with_ignore`] to supply the filter yourself.
 pub fn pack_to_fantome<W: Write + std::io::Seek>(
     writer: W,
     mod_project: &ModProject,
     project_root: &Utf8Path,
+) -> Result<(), FantomePackError> {
+    let ignore = ModIgnore::load(project_root)?;
+
+    pack_to_fantome_with_ignore(writer, mod_project, project_root, &ignore)
+}
+
+/// [`pack_to_fantome`], with a caller-supplied `.modignore` filter.
+///
+/// The filter must have been constructed with the same `project_root`, or
+/// the walk fails rather than silently matching nothing. Pass
+/// [`ModIgnore::empty`] to pack everything.
+pub fn pack_to_fantome_with_ignore<W: Write + std::io::Seek>(
+    writer: W,
+    mod_project: &ModProject,
+    project_root: &Utf8Path,
+    ignore: &ModIgnore,
 ) -> Result<(), FantomePackError> {
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
@@ -149,7 +169,7 @@ pub fn pack_to_fantome<W: Write + std::io::Seek>(
         .unix_permissions(0o755);
 
     // Pack base layer WAD files
-    pack_base_layer(&mut zip, project_root, &options)?;
+    pack_base_layer(&mut zip, project_root, ignore, &options)?;
 
     // Pack metadata
     pack_metadata(&mut zip, mod_project, project_root, &options)?;
@@ -161,6 +181,7 @@ pub fn pack_to_fantome<W: Write + std::io::Seek>(
 fn pack_base_layer<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
     project_root: &Utf8Path,
+    ignore: &ModIgnore,
     options: &SimpleFileOptions,
 ) -> Result<(), FantomePackError> {
     let base_layer_path = project_root.join("content").join("base");
@@ -177,45 +198,49 @@ fn pack_base_layer<W: Write + std::io::Seek>(
     for entry in entries {
         let entry = entry.map_err(|source| FantomePackError::read(&base_layer_path, source))?;
 
-        if entry.path().is_dir() && entry.file_name().ends_with(".wad.client") {
+        // Case-insensitive, as the modpkg packer and overlay builder detect
+        // WAD directories: `Aatrox.WAD.Client` must not silently vanish
+        // from one format only.
+        let is_wad = entry
+            .file_name()
+            .to_ascii_lowercase()
+            .ends_with(".wad.client");
+        if entry.path().is_dir() && is_wad {
             let zip_prefix = format!("WAD/{}", entry.file_name());
-            pack_wad_directory(zip, entry.path(), &zip_prefix, options)?;
+            pack_wad_directory(zip, ignore, entry.path(), &zip_prefix, options)?;
         }
     }
 
     Ok(())
 }
 
-/// Write every file under `wad_dir` into the archive beneath `zip_prefix`.
-///
-/// Descends rather than walking flat, so each entry name is built from the one
-/// above it. There is no relative path to recover, and so no prefix that could
-/// fail to strip.
+/// Write every file under `wad_dir` into the archive beneath `zip_prefix`,
+/// skipping whatever `.modignore` excludes. An ignored `wad_dir` contributes
+/// nothing.
 fn pack_wad_directory<W: Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
+    ignore: &ModIgnore,
     wad_dir: &Utf8Path,
     zip_prefix: &str,
     options: &SimpleFileOptions,
 ) -> Result<(), FantomePackError> {
-    let entries = wad_dir
-        .read_dir_utf8()
-        .map_err(|source| FantomePackError::read(wad_dir, source))?;
+    for file in ignore.walk(wad_dir) {
+        let file_path = file.map_err(|error| {
+            let (path, source) = error.into_parts();
+            FantomePackError::read(path, source)
+        })?;
 
-    for entry in entries {
-        let entry = entry.map_err(|source| FantomePackError::read(wad_dir, source))?;
-        let entry_type = entry
-            .file_type()
-            .map_err(|source| FantomePackError::read(entry.path(), source))?;
+        // The walker only yields paths under the directory it was given, so
+        // the prefix always strips.
+        let rel_path = file_path
+            .strip_prefix(wad_dir)
+            .expect("walked path must sit under the walked directory");
 
         // Archive separators are always `/`, whatever the host uses.
-        let entry_zip_path = format!("{}/{}", zip_prefix, entry.file_name());
+        let entry_zip_path = format!("{}/{}", zip_prefix, rel_path.as_str().replace('\\', "/"));
 
-        if entry_type.is_dir() {
-            pack_wad_directory(zip, entry.path(), &entry_zip_path, options)?;
-        } else {
-            zip.start_file(entry_zip_path, *options)?;
-            copy_file_into(zip, entry.path())?;
-        }
+        zip.start_file(entry_zip_path, *options)?;
+        copy_file_into(zip, &file_path)?;
     }
 
     Ok(())
@@ -562,6 +587,106 @@ mod tests {
         assert!(
             serde_json::from_str::<FantomeInfo>(typoed).is_err(),
             "a misspelled license key must not parse as a URL-less license"
+        );
+    }
+
+    #[test]
+    fn pack_skips_modignored_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        let wad_dir = root.join("content").join("base").join("Test.wad.client");
+        std::fs::write(wad_dir.join("source.psd"), b"working file").unwrap();
+        std::fs::write(root.join(".modignore"), "*.psd\n").unwrap();
+
+        let mut buffer = Cursor::new(Vec::new());
+        pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap();
+
+        buffer.set_position(0);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+
+        // The rest of the WAD directory is packed as before.
+        assert!(archive.by_name("WAD/Test.wad.client/data.bin").is_ok());
+        assert!(archive.by_name("WAD/Test.wad.client/source.psd").is_err());
+    }
+
+    #[test]
+    fn pack_detects_wad_directories_case_insensitively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        let wad_dir = root.join("content").join("base").join("Upper.WAD.Client");
+        std::fs::create_dir_all(&wad_dir).unwrap();
+        std::fs::write(wad_dir.join("data.bin"), b"data").unwrap();
+
+        let mut buffer = Cursor::new(Vec::new());
+        pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap();
+
+        buffer.set_position(0);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+
+        // The entry keeps the author's spelling; only detection is folded.
+        assert!(archive.by_name("WAD/Upper.WAD.Client/data.bin").is_ok());
+    }
+
+    #[test]
+    fn pack_applies_nested_modignore_and_never_archives_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        let wad_dir = root.join("content").join("base").join("Test.wad.client");
+        std::fs::write(wad_dir.join("source.psd"), b"working file").unwrap();
+        std::fs::write(wad_dir.join(".modignore"), "*.psd\n").unwrap();
+
+        let mut buffer = Cursor::new(Vec::new());
+        pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap();
+
+        buffer.set_position(0);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+
+        assert!(archive.by_name("WAD/Test.wad.client/data.bin").is_ok());
+        assert!(archive.by_name("WAD/Test.wad.client/source.psd").is_err());
+        assert!(
+            archive.by_name("WAD/Test.wad.client/.modignore").is_err(),
+            "filter metadata leaked into the archive"
+        );
+    }
+
+    #[test]
+    fn pack_with_explicit_empty_ignore_packs_everything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        let wad_dir = root.join("content").join("base").join("Test.wad.client");
+        std::fs::write(wad_dir.join("source.psd"), b"working file").unwrap();
+        std::fs::write(root.join(".modignore"), "*.psd\n").unwrap();
+
+        let mut buffer = Cursor::new(Vec::new());
+        let ignore = ltk_mod_project::ModIgnore::empty(&root);
+        pack_to_fantome_with_ignore(&mut buffer, &test_project(None), &root, &ignore).unwrap();
+
+        buffer.set_position(0);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+        assert!(archive.by_name("WAD/Test.wad.client/source.psd").is_ok());
+    }
+
+    #[test]
+    fn pack_with_invalid_modignore_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+        std::fs::write(root.join(".modignore"), "a{b\n").unwrap();
+
+        let mut buffer = Cursor::new(Vec::new());
+        let error = pack_to_fantome(&mut buffer, &test_project(None), &root).unwrap_err();
+
+        assert!(
+            matches!(error, FantomePackError::Ignore(_)),
+            "expected Ignore, got {error:?}"
         );
     }
 

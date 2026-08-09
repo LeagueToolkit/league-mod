@@ -97,6 +97,13 @@ pub enum Error {
     #[error("Invalid mod directory: {0}")]
     InvalidModDir(Utf8PathBuf),
 
+    /// A mod project's `.modignore` could not be loaded (used by
+    /// [`FsModContent`](crate::FsModContent)). Failing beats filtering
+    /// differently than packing would: what the overlay injects for testing
+    /// must be what the package ships.
+    #[error(transparent)]
+    Ignore(#[from] ltk_mod_project::ModIgnoreError),
+
     /// Catch-all for errors from content providers and other sources.
     #[error("{0}")]
     Other(String),

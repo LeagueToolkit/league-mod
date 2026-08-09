@@ -1,3 +1,10 @@
+//! The `league-mod` CLI.
+//!
+//! Deprecated: this crate no longer receives new features and will be
+//! retired. New functionality lands in the library crates only; for
+//! example, `.modignore` filtering lives in `ltk_mod_project` and is applied
+//! by the packers, not surfaced here.
+
 use clap::builder::{styling::AnsiColor, Styles};
 use clap::ColorChoice;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};

@@ -540,6 +540,317 @@ fn license_survives_a_pack_extract_round_trip() {
     assert_eq!(fs::read(out.join("LICENSE")).unwrap(), original);
 }
 
+// -- modignore tests -------------------------------------------------------
+
+#[test]
+fn modignore_excludes_matching_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/tex.dds", b"dds");
+    create_content_file(&root, "base", "X.wad.client/src.psd", b"psd");
+    fs::write(root.join(".modignore"), "*.psd\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "tex.dds"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p == "src.psd"));
+
+    assert_eq!(
+        result.ignored_files(),
+        [root
+            .join("content")
+            .join("base")
+            .join("X.wad.client")
+            .join("src.psd")]
+    );
+    assert_eq!(result.ignored_count(), 1);
+}
+
+#[test]
+fn modignore_directory_pattern_prunes_a_subtree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/data/ok.bin", b"ok");
+    create_content_file(&root, "base", "X.wad.client/scratch/a.bin", b"a");
+    create_content_file(&root, "base", "X.wad.client/scratch/deep/b.bin", b"b");
+    fs::write(root.join(".modignore"), "scratch/\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "data/ok.bin"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p.contains("scratch")));
+
+    // The directory is recorded once; its files are not enumerated.
+    assert_eq!(
+        result.ignored_files(),
+        [root
+            .join("content")
+            .join("base")
+            .join("X.wad.client")
+            .join("scratch")]
+    );
+}
+
+#[test]
+fn modignore_negation_reincludes_a_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/drop.psd", b"d");
+    create_content_file(&root, "base", "X.wad.client/keep.psd", b"k");
+    create_content_file(&root, "base", "X.wad.client/tex.dds", b"t");
+    fs::write(root.join(".modignore"), "*.psd\n!keep.psd\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "keep.psd"));
+    assert!(modpkg.chunk_paths.values().any(|p| p == "tex.dds"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p == "drop.psd"));
+
+    assert_eq!(
+        result.ignored_files(),
+        [root
+            .join("content")
+            .join("base")
+            .join("X.wad.client")
+            .join("drop.psd")]
+    );
+}
+
+#[test]
+fn modignore_filters_layer_root_files_and_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "loose.bin", b"b");
+    create_content_file(&root, "base", "loose.psd", b"p");
+    create_content_file(&root, "base", "notes/todo.txt", b"t");
+    fs::write(root.join(".modignore"), "*.psd\nnotes/\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "loose.bin"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p == "loose.psd"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p.contains("todo")));
+
+    assert_eq!(result.ignored_count(), 2);
+}
+
+#[test]
+fn modignore_disabled_packs_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/src.psd", b"psd");
+    fs::write(root.join(".modignore"), "*.psd\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let options = PackOptions {
+        ignore: IgnoreMode::Disabled,
+    };
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project_and_options(project, root.clone(), options)
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "src.psd"));
+    assert_eq!(result.ignored_count(), 0);
+}
+
+#[test]
+fn absent_modignore_packs_everything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/tex.dds", b"dds");
+    create_content_file(&root, "base", "X.wad.client/src.psd", b"psd");
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "tex.dds"));
+    assert!(modpkg.chunk_paths.values().any(|p| p == "src.psd"));
+    assert_eq!(result.ignored_count(), 0);
+}
+
+/// A directory named like a glob pattern used to be a pack error
+/// (`InvalidGlobPattern`); the walker has no pattern to reject.
+#[test]
+fn glob_special_directory_names_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "[base]/file.bin", b"data");
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "[base]/file.bin"));
+}
+
+#[test]
+fn nested_modignore_filters_its_subtree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/tex.dds", b"dds");
+    create_content_file(&root, "base", "X.wad.client/src.psd", b"psd");
+    create_content_file(&root, "base", "Y.wad.client/src.psd", b"psd");
+    fs::write(root.join("content/base/X.wad.client/.modignore"), "*.psd\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    // The nested filter governs only its own WAD directory.
+    let modpkg = mount_modpkg(&output);
+    let x_idx = modpkg.wad_index("x.wad.client").unwrap();
+    let y_idx = modpkg.wad_index("y.wad.client").unwrap();
+    let base_idx = modpkg.layer_index("base").unwrap();
+    assert_eq!(modpkg.chunks_for_wad_layer(x_idx, base_idx).len(), 1);
+    assert_eq!(modpkg.chunks_for_wad_layer(y_idx, base_idx).len(), 1);
+
+    assert_eq!(
+        result.ignored_files(),
+        [root
+            .join("content")
+            .join("base")
+            .join("X.wad.client")
+            .join("src.psd")]
+    );
+}
+
+#[test]
+fn modignore_files_are_not_packed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "loose.bin", b"b");
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    // Ignore files everywhere they can occur: layer root and inside a WAD.
+    fs::write(root.join("content/base/.modignore"), "# nothing\n").unwrap();
+    fs::write(root.join("content/base/X.wad.client/.modignore"), "\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    let result = ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "loose.bin"));
+    assert!(
+        !modpkg
+            .chunk_paths
+            .values()
+            .any(|p| p.contains(".modignore")),
+        "filter metadata leaked into the archive"
+    );
+    assert_eq!(result.ignored_count(), 0);
+}
+
+#[test]
+fn modignore_matching_is_case_insensitive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/Thumbs.db", b"junk");
+    create_content_file(&root, "base", "X.wad.client/tex.dds", b"dds");
+    fs::write(root.join(".modignore"), "thumbs.db\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let output = root.join("build/out.modpkg");
+    ProjectPacker::with_mod_project(project, root.clone())
+        .unwrap()
+        .pack(&output)
+        .unwrap();
+
+    let modpkg = mount_modpkg(&output);
+    assert!(modpkg.chunk_paths.values().any(|p| p == "tex.dds"));
+    assert!(!modpkg.chunk_paths.values().any(|p| p == "Thumbs.db"));
+}
+
+#[test]
+fn explicit_ignore_with_wrong_root_fails_construction() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let elsewhere = root.join("elsewhere");
+    let options = PackOptions {
+        ignore: IgnoreMode::Explicit(ltk_mod_project::ModIgnore::empty(&elsewhere)),
+    };
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let err =
+        ProjectPacker::with_mod_project_and_options(project, root.clone(), options).unwrap_err();
+
+    assert!(
+        matches!(err, PackError::IgnoreRootMismatch { .. }),
+        "expected IgnoreRootMismatch, got: {err}"
+    );
+}
+
+#[test]
+fn invalid_modignore_pattern_fails_the_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+    fs::write(root.join(".modignore"), "a{b\n").unwrap();
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+    let err = ProjectPacker::with_mod_project(project, root.clone()).unwrap_err();
+
+    assert!(
+        matches!(err, PackError::Ignore(_)),
+        "expected an Ignore error, got: {err}"
+    );
+}
+
 // -- utility tests ---------------------------------------------------------
 
 #[test]
