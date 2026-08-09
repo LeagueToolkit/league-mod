@@ -104,7 +104,18 @@ fn convert_pack_error(err: PackError, project_root: &Utf8Path) -> miette::Report
         PackError::ConfigNotFound(_) => {
             CliError::config_not_found(project_root.as_std_path().to_owned()).into()
         }
-        other => miette!("Failed to pack mod: {}", other),
+        other => {
+            // The source chain carries the actionable detail (which
+            // `.modignore` line is broken, the underlying IO cause);
+            // Display alone would drop it.
+            let mut message = format!("Failed to pack mod: {other}");
+            let mut source = std::error::Error::source(&other);
+            while let Some(err) = source {
+                message.push_str(&format!(": {err}"));
+                source = err.source();
+            }
+            miette!("{}", message)
+        }
     }
 }
 

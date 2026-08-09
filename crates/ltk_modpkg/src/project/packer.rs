@@ -10,7 +10,8 @@ use crate::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{
-    find_license_file, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense,
+    find_license_file, ModIgnore, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense,
+    MODIGNORE_FILE_NAME,
 };
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -20,6 +21,56 @@ use super::PackResult;
 
 /// Maps `(path_hash, layer_hash)` to the source file on disk for each chunk.
 type ChunkFileMap = HashMap<(u64, u64), Utf8PathBuf>;
+
+/// Options for constructing a [`ProjectPacker`].
+///
+/// Scanning happens inside the constructor, so options must be supplied
+/// there: see [`ProjectPacker::new_with_options`] and
+/// [`ProjectPacker::with_mod_project_and_options`].
+///
+/// # Example
+///
+/// ```no_run
+/// use camino::Utf8PathBuf;
+/// use ltk_modpkg::project::{IgnoreMode, PackOptions, ProjectPacker};
+///
+/// // Pack everything, whatever `.modignore` says.
+/// let packer = ProjectPacker::new_with_options(
+///     Utf8PathBuf::from("path/to/my-mod"),
+///     PackOptions::default().with_ignore(IgnoreMode::Disabled),
+/// )?;
+/// # Ok::<(), ltk_modpkg::project::PackError>(())
+/// ```
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct PackOptions {
+    /// Where the `.modignore` filter comes from.
+    pub ignore: IgnoreMode,
+}
+
+impl PackOptions {
+    /// Replace the ignore mode. The struct is `#[non_exhaustive]`, so this
+    /// is how callers outside the crate set it.
+    pub fn with_ignore(mut self, ignore: IgnoreMode) -> Self {
+        self.ignore = ignore;
+        self
+    }
+}
+
+/// Where a packer's `.modignore` filter comes from.
+#[derive(Debug, Clone, Default)]
+pub enum IgnoreMode {
+    /// Load `<project_root>/.modignore`; a missing file filters nothing.
+    #[default]
+    FromProject,
+    /// Pack everything, whatever `.modignore` says.
+    Disabled,
+    /// Use a filter the caller already built. It must have been constructed
+    /// with the same project root the packer is given; construction fails
+    /// with [`PackError::IgnoreRootMismatch`] otherwise, rather than letting
+    /// the filter silently match nothing.
+    Explicit(ModIgnore),
+}
 
 /// Packs a mod project directory into a `.modpkg` archive.
 ///
@@ -47,7 +98,11 @@ type ChunkFileMap = HashMap<(u64, u64), Utf8PathBuf>;
 pub struct ProjectPacker {
     mod_project: ModProject,
     project_root: Utf8PathBuf,
+    ignore: ModIgnore,
     chunks: Vec<ChunkEntry>,
+    /// Entries `.modignore` excluded during the scan. A pruned directory is
+    /// recorded once; the files beneath it are not enumerated.
+    ignored: Vec<Utf8PathBuf>,
     readme: Option<Vec<u8>>,
     license_text: Option<Vec<u8>>,
     thumbnail: Option<Vec<u8>>,
@@ -70,11 +125,20 @@ impl ProjectPacker {
     /// Create a new packer by loading the mod project config from a directory.
     ///
     /// Looks for `mod.config.json` or `mod.config.toml` in `project_root`,
-    /// validates the project, and scans all layer directories for content.
+    /// validates the project, and scans all layer directories for content,
+    /// filtered by the project's `.modignore` if one exists.
     pub fn new(project_root: Utf8PathBuf) -> Result<Self, PackError> {
+        Self::new_with_options(project_root, PackOptions::default())
+    }
+
+    /// [`new`](Self::new), with explicit [`PackOptions`].
+    pub fn new_with_options(
+        project_root: Utf8PathBuf,
+        options: PackOptions,
+    ) -> Result<Self, PackError> {
         let mod_project = ModProject::load(&project_root)?;
 
-        Self::with_mod_project(mod_project, project_root)
+        Self::with_mod_project_and_options(mod_project, project_root, options)
     }
 
     /// Create a new packer with an already-loaded mod project config.
@@ -86,12 +150,41 @@ impl ProjectPacker {
         mod_project: ModProject,
         project_root: Utf8PathBuf,
     ) -> Result<Self, PackError> {
+        Self::with_mod_project_and_options(mod_project, project_root, PackOptions::default())
+    }
+
+    /// [`with_mod_project`](Self::with_mod_project), with explicit
+    /// [`PackOptions`].
+    pub fn with_mod_project_and_options(
+        mod_project: ModProject,
+        project_root: Utf8PathBuf,
+        options: PackOptions,
+    ) -> Result<Self, PackError> {
         validate_project(&mod_project, &project_root)?;
+
+        let ignore = match options.ignore {
+            IgnoreMode::FromProject => ModIgnore::load(&project_root)?,
+            IgnoreMode::Disabled => ModIgnore::empty(&project_root),
+            IgnoreMode::Explicit(ignore) => {
+                // A filter rooted elsewhere would relate every scanned path
+                // to the wrong content dir and quietly filter wrong.
+                let expected = project_root.join("content");
+                if ignore.content_dir() != expected {
+                    return Err(PackError::IgnoreRootMismatch {
+                        filter_root: ignore.content_dir().to_owned(),
+                        project_content_dir: expected,
+                    });
+                }
+                ignore
+            }
+        };
 
         let mut packer = Self {
             mod_project,
             project_root,
+            ignore,
             chunks: Vec::new(),
+            ignored: Vec::new(),
             readme: None,
             license_text: None,
             thumbnail: None,
@@ -103,20 +196,32 @@ impl ProjectPacker {
         Ok(packer)
     }
 
+    /// The entries `.modignore` excluded during the scan, in traversal order.
+    ///
+    /// A pruned directory appears once; the files beneath it are not
+    /// enumerated. Read this before [`pack_to_writer`](Self::pack_to_writer),
+    /// which consumes the packer; [`pack`](Self::pack) carries the list over
+    /// to its [`PackResult`].
+    pub fn ignored_files(&self) -> &[Utf8PathBuf] {
+        &self.ignored
+    }
+
     /// Pack to a file on disk, creating parent directories if needed.
     ///
     /// Returns [`PackResult`] with the output path on success.
-    pub fn pack(self, output_path: &Utf8Path) -> Result<PackResult, PackError> {
+    pub fn pack(mut self, output_path: &Utf8Path) -> Result<PackResult, PackError> {
         if let Some(parent) = output_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent)?;
             }
         }
 
+        let ignored = std::mem::take(&mut self.ignored);
+
         let mut writer = BufWriter::new(File::create(output_path)?);
         self.pack_to_writer(&mut writer)?;
 
-        Ok(PackResult::new(output_path))
+        Ok(PackResult::new(output_path, ignored))
     }
 
     /// Pack to an arbitrary writer.
@@ -188,11 +293,35 @@ impl ProjectPacker {
             let entry = entry?;
             let entry_path = entry.path().into_utf8()?;
 
+            // Ignore files are filter metadata, never content.
+            if entry_path
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(MODIGNORE_FILE_NAME))
+            {
+                continue;
+            }
+
             if entry_path.is_dir() {
                 self.scan_directory(&layer_dir, &entry_path, layer)?;
             } else if entry_path.is_file() {
+                // Parents matter here: ignoring the layer directory itself
+                // must drop its loose files too.
+                if self
+                    .ignore
+                    .matched_with_parents(&entry_path, false)
+                    .is_ignored()
+                {
+                    self.ignored.push(entry_path);
+                    continue;
+                }
+
                 let rel_path = entry_path.strip_prefix_normalized(&layer_dir)?;
-                self.push_chunk(rel_path, layer, None, entry_path);
+                self.chunks.push(ChunkEntry {
+                    rel_path,
+                    layer_name: layer.name.clone(),
+                    wad_name: None,
+                    file_path: entry_path,
+                });
             }
         }
 
@@ -217,35 +346,21 @@ impl ProjectPacker {
         // so the directory name is preserved in the chunk path.
         let strip_base = if is_wad { dir_path } else { layer_dir };
 
-        let pattern = dir_path.join("**/*");
-        let matches =
-            glob::glob(pattern.as_str()).map_err(|source| PackError::InvalidGlobPattern {
-                pattern: pattern.to_string(),
-                source: Box::new(source),
-            })?;
-
-        for file in matches.filter_map(Result::ok).filter(|e| e.is_file()) {
-            let file_path = file.into_utf8()?;
+        let mut walk = self.ignore.walk(dir_path);
+        for file in walk.by_ref() {
+            let file_path = file?;
             let rel_path = file_path.strip_prefix_normalized(strip_base)?;
-            self.push_chunk(rel_path, layer, wad_name.clone(), file_path);
+            self.chunks.push(ChunkEntry {
+                rel_path,
+                layer_name: layer.name.clone(),
+                wad_name: wad_name.clone(),
+                file_path,
+            });
         }
 
-        Ok(())
-    }
+        self.ignored.extend(walk.into_skipped());
 
-    fn push_chunk(
-        &mut self,
-        rel_path: String,
-        layer: &ModProjectLayer,
-        wad_name: Option<String>,
-        file_path: Utf8PathBuf,
-    ) {
-        self.chunks.push(ChunkEntry {
-            rel_path,
-            layer_name: layer.name.clone(),
-            wad_name,
-            file_path,
-        });
+        Ok(())
     }
 
     fn scan_meta_files(&mut self) -> Result<(), PackError> {

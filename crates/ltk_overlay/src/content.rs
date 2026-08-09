@@ -13,7 +13,7 @@
 
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::ModProject;
+use ltk_mod_project::{ModIgnore, ModProject};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Compute a content fingerprint from an archive file's size and modification time.
@@ -167,8 +167,22 @@ pub trait ModContentProvider: Send + Sync {
 ///
 /// Only subdirectories under each layer whose name ends in `.wad.client`
 /// (case-insensitive) are recognized as WAD targets.
+///
+/// `.modignore` files (at the mod directory root and nested inside
+/// `content/`) filter the content exactly as packing does: files they
+/// exclude are not injected into the overlay, so what an author tests is
+/// what the package ships. The
+/// [fingerprint](ModContentProvider::content_fingerprint) applies the same
+/// filter, so edits to an ignored file do not invalidate the rebuild cache.
+///
+/// The filter is loaded once per provider and shared by every method, so
+/// one build reads the ignore files (and walks the tree to find nested
+/// ones) exactly once, and the fingerprint decides against the same filter
+/// the reads use. Create a provider per build; a long-lived one would keep
+/// serving the snapshot it loaded first and miss `.modignore` edits.
 pub struct FsModContent {
     mod_dir: Utf8PathBuf,
+    ignore: std::sync::OnceLock<ModIgnore>,
 }
 
 impl FsModContent {
@@ -176,7 +190,22 @@ impl FsModContent {
     ///
     /// The directory must contain a `mod.config.json` and a `content/` subdirectory.
     pub fn new(mod_dir: Utf8PathBuf) -> Self {
-        Self { mod_dir }
+        Self {
+            mod_dir,
+            ignore: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The `.modignore` filter, loaded on first use and cached for the
+    /// provider's lifetime. A load failure is returned each call rather
+    /// than cached, so a fixed file is picked up on retry.
+    fn ignore(&self) -> Result<&ModIgnore> {
+        if let Some(ignore) = self.ignore.get() {
+            return Ok(ignore);
+        }
+
+        let loaded = ModIgnore::load(&self.mod_dir)?;
+        Ok(self.ignore.get_or_init(|| loaded))
     }
 }
 
@@ -194,6 +223,8 @@ impl ModContentProvider for FsModContent {
             return Ok(Vec::new());
         }
 
+        let ignore = self.ignore()?;
+
         let mut wads = Vec::new();
         let entries = std::fs::read_dir(layer_dir.as_std_path())
             .map_err(|source| Error::read(&layer_dir, source))?;
@@ -209,6 +240,9 @@ impl ModContentProvider for FsModContent {
             if !name.to_ascii_lowercase().ends_with(".wad.client") {
                 continue;
             }
+            if ignore.is_ignored(&layer_dir.join(name), true) {
+                continue;
+            }
             wads.push(name.to_string());
         }
         Ok(wads)
@@ -220,44 +254,37 @@ impl ModContentProvider for FsModContent {
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let wad_dir = self.mod_dir.join("content").join(layer).join(wad_name);
+        let ignore = self.ignore()?;
+
         let mut results = Vec::new();
-        let mut stack = vec![wad_dir.clone()];
+        for file in ignore.walk(&wad_dir) {
+            let utf8_path = file.map_err(|error| {
+                let (path, source) = error.into_parts();
+                Error::Read { path, source }
+            })?;
 
-        while let Some(dir) = stack.pop() {
-            let entries =
-                std::fs::read_dir(dir.as_std_path()).map_err(|source| Error::read(&dir, source))?;
-            for entry in entries {
-                let entry = entry.map_err(|source| Error::read(&dir, source))?;
-                let path = entry.path();
-
-                let utf8_path = match Utf8PathBuf::from_path_buf(path) {
-                    Ok(p) => p,
-                    Err(p) => {
-                        tracing::warn!("Skipping non-UTF-8 path: {}", p.display());
-                        continue;
-                    }
-                };
-
-                if utf8_path.as_std_path().is_dir() {
-                    stack.push(utf8_path);
-                    continue;
-                }
-
-                let rel = utf8_path
-                    .strip_prefix(&wad_dir)
-                    .unwrap_or(&utf8_path)
-                    .as_str()
-                    .replace('\\', "/");
-                let bytes = std::fs::read(utf8_path.as_std_path())
-                    .map_err(|source| Error::read(&utf8_path, source))?;
-                results.push((Utf8PathBuf::from(rel), bytes));
-            }
+            let rel = utf8_path
+                .strip_prefix(&wad_dir)
+                .unwrap_or(&utf8_path)
+                .as_str()
+                .replace('\\', "/");
+            let bytes = std::fs::read(utf8_path.as_std_path())
+                .map_err(|source| Error::read(&utf8_path, source))?;
+            results.push((Utf8PathBuf::from(rel), bytes));
         }
         Ok(results)
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
         use xxhash_rust::xxh3::xxh3_64;
+
+        fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
+            meta.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        }
 
         // Collect (path, size, mtime) for all files under content/, plus the
         // project config — string overrides live in mod.config.json/.toml, so
@@ -269,13 +296,26 @@ impl ModContentProvider for FsModContent {
             let Ok(meta) = std::fs::metadata(config_path.as_std_path()) else {
                 continue;
             };
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            entries.push((config_name.to_string(), meta.len(), mtime));
+            entries.push((config_name.to_string(), meta.len(), mtime_secs(&meta)));
+        }
+
+        // The same filter as `read_wad_overrides`, or an edit to an ignored
+        // file would invalidate the rebuild cache for no reason.
+        let ignore = self.ignore()?;
+
+        // Every ignore file shapes which content is read, so each one is
+        // part of the cache key: the walk never yields them, and an edited,
+        // added, or deleted `.modignore` must trigger a rebuild.
+        for path in ignore.source_files() {
+            let Ok(meta) = std::fs::metadata(path.as_std_path()) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(&self.mod_dir)
+                .unwrap_or(path)
+                .as_str()
+                .replace('\\', "/");
+            entries.push((rel, meta.len(), mtime_secs(&meta)));
         }
 
         let content_dir = self.mod_dir.join("content");
@@ -283,42 +323,23 @@ impl ModContentProvider for FsModContent {
             return Ok(Some(0));
         }
 
-        let mut stack = vec![content_dir];
-
-        while let Some(dir) = stack.pop() {
-            let read_dir = match std::fs::read_dir(dir.as_std_path()) {
-                Ok(rd) => rd,
-                Err(_) => continue,
-            };
-            for entry in read_dir {
-                let entry = entry?;
-                let path = entry.path();
-                let utf8_path = match Utf8PathBuf::from_path_buf(path) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-
-                if utf8_path.as_std_path().is_dir() {
-                    stack.push(utf8_path);
+        if content_dir.as_std_path().exists() {
+            for file in ignore.walk(&content_dir) {
+                // Fingerprinting is opportunistic: an unreadable directory is
+                // skipped here, as before, and surfaces on the read path.
+                let Ok(utf8_path) = file else {
                     continue;
-                }
+                };
 
                 let meta = std::fs::metadata(utf8_path.as_std_path())
                     .map_err(|source| Error::read(&utf8_path, source))?;
-                let size = meta.len();
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
 
                 let rel = utf8_path
                     .strip_prefix(&self.mod_dir)
                     .unwrap_or(&utf8_path)
                     .as_str()
                     .replace('\\', "/");
-                entries.push((rel, size, mtime));
+                entries.push((rel, meta.len(), mtime_secs(&meta)));
             }
         }
 
@@ -449,5 +470,141 @@ mod tests {
             .collect();
         assert!(paths.contains(&"file1.bin".to_string()));
         assert!(paths.contains(&"subdir/file2.bin".to_string()));
+    }
+
+    #[test]
+    fn test_modignore_filters_wad_overrides() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        fs::write(
+            mod_dir.join("content/base/Test.wad.client/source.psd"),
+            b"working file",
+        )
+        .unwrap();
+        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
+
+        let mut provider = FsModContent::new(mod_dir);
+        let overrides = provider
+            .read_wad_overrides("base", "Test.wad.client")
+            .unwrap();
+
+        let paths: Vec<String> = overrides
+            .iter()
+            .map(|(p, _)| p.as_str().replace('\\', "/"))
+            .collect();
+        assert!(paths.contains(&"file1.bin".to_string()));
+        assert!(paths.contains(&"subdir/file2.bin".to_string()));
+        assert!(!paths.contains(&"source.psd".to_string()));
+    }
+
+    #[test]
+    fn test_modignore_hides_a_fully_ignored_wad() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        fs::write(mod_dir.join(".modignore"), "Test.wad.client/\n").unwrap();
+
+        let mut provider = FsModContent::new(mod_dir);
+        assert!(provider.list_layer_wads("base").unwrap().is_empty());
+        assert!(
+            provider
+                .read_wad_overrides("base", "Test.wad.client")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Editing an ignored file must not invalidate the rebuild cache: the
+    /// fingerprint uses the same filter as the read.
+    #[test]
+    fn test_fingerprint_is_stable_across_ignored_file_edits() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let psd = mod_dir.join("content/base/Test.wad.client/source.psd");
+        fs::write(&psd, b"v1").unwrap();
+        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
+
+        let provider = FsModContent::new(mod_dir);
+        let before = provider.content_fingerprint().unwrap();
+
+        // A different size, so this does not depend on mtime granularity.
+        fs::write(&psd, b"version two, considerably larger").unwrap();
+        let after = provider.content_fingerprint().unwrap();
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_fingerprint_changes_when_modignore_changes() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        // One provider per build: the filter is a per-provider snapshot.
+        let before = FsModContent::new(mod_dir.clone())
+            .content_fingerprint()
+            .unwrap();
+
+        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
+        let after = FsModContent::new(mod_dir.clone())
+            .content_fingerprint()
+            .unwrap();
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn test_nested_modignore_filters_wad_overrides() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        fs::write(
+            mod_dir.join("content/base/Test.wad.client/source.psd"),
+            b"working file",
+        )
+        .unwrap();
+        fs::write(
+            mod_dir.join("content/base/Test.wad.client/.modignore"),
+            "*.psd\n",
+        )
+        .unwrap();
+
+        let mut provider = FsModContent::new(mod_dir);
+        let overrides = provider
+            .read_wad_overrides("base", "Test.wad.client")
+            .unwrap();
+
+        let paths: Vec<String> = overrides
+            .iter()
+            .map(|(p, _)| p.as_str().replace('\\', "/"))
+            .collect();
+        assert!(paths.contains(&"file1.bin".to_string()));
+        assert!(!paths.contains(&"source.psd".to_string()));
+        // The ignore file itself is filter metadata, not an override.
+        assert!(!paths.contains(&".modignore".to_string()));
+    }
+
+    #[test]
+    fn test_fingerprint_changes_when_a_nested_modignore_appears() {
+        let dir = create_test_mod_dir();
+        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let before = FsModContent::new(mod_dir.clone())
+            .content_fingerprint()
+            .unwrap();
+
+        // The walk never yields ignore files, so without explicit statting
+        // this edit would be invisible to the cache.
+        fs::write(
+            mod_dir.join("content/base/Test.wad.client/.modignore"),
+            "*.psd\n",
+        )
+        .unwrap();
+        let after = FsModContent::new(mod_dir.clone())
+            .content_fingerprint()
+            .unwrap();
+
+        assert_ne!(before, after);
     }
 }

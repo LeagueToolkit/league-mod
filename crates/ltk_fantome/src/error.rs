@@ -14,6 +14,12 @@ pub enum FantomePackError {
     #[error("No base layer to pack: {0} does not exist")]
     MissingBaseLayer(Utf8PathBuf),
 
+    /// The project's `.modignore` could not be loaded: the file is
+    /// unreadable, or a pattern in it does not parse. A broken pattern fails
+    /// the pack rather than silently shipping files the author excluded.
+    #[error(transparent)]
+    Ignore(#[from] ltk_mod_project::ModIgnoreError),
+
     /// A file in the project could not be read.
     #[error("Failed to read {path}")]
     Read {
