@@ -114,14 +114,14 @@ pub enum CliError {
     )]
     FantomeExtractionFailed {
         #[source]
-        source: ltk_fantome::FantomeExtractError,
+        source: ltk_mod_project::fantome::FantomeImportError,
     },
 
     #[error("Fantome packing failed")]
     #[diagnostic(code(fantome::packing_failed))]
     FantomePackingFailed {
         #[source]
-        source: ltk_fantome::FantomePackError,
+        source: ltk_mod_project::PackError<ltk_mod_project::fantome::FantomePackError>,
     },
 }
 

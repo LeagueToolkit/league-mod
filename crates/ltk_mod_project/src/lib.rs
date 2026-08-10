@@ -6,16 +6,28 @@ use std::fmt;
 
 mod config_format;
 pub mod error;
+mod import;
 mod license_file;
 mod modignore;
+pub mod pack;
 mod package_format;
+
+#[cfg(feature = "fantome")]
+pub mod fantome;
+#[cfg(feature = "modpkg")]
+pub mod modpkg;
 
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
+pub use import::ImportFormat;
 pub use license_file::{canonical_license_file_name, find_license_file, LICENSE_FILE_NAMES};
 pub use modignore::{
     ContentWalk, ContentWalkError, ModIgnore, ModIgnoreError, ModIgnoreMatch, ModIgnoreRule,
     MODIGNORE_FILE_NAME,
+};
+pub use pack::{
+    IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackReport, PlannedFile,
+    PlannedLayer, PlannedLicense, ProjectPacker,
 };
 pub use package_format::PackageFormat;
 
@@ -368,6 +380,17 @@ impl ModProject {
         }
     }
 
+    /// The project's layers other than the base layer.
+    ///
+    /// Useful for warning about data loss when targeting a format that only
+    /// stores the base layer, like Fantome.
+    pub fn non_base_layers(&self) -> Vec<&ModProjectLayer> {
+        self.layers
+            .iter()
+            .filter(|layer| !layer.is_base())
+            .collect()
+    }
+
     /// Render the project as the text of a config file.
     ///
     /// JSON is pretty-printed; the result is a file a mod author edits by hand.
@@ -479,7 +502,7 @@ impl ModProjectLayer {
         }
     }
 
-    /// Whether this is the base layer, the only one Fantome archives carry.
+    /// Whether this is the base layer, the one every project has.
     pub fn is_base(&self) -> bool {
         self.name == Self::BASE_NAME
     }
@@ -1016,5 +1039,43 @@ url = "https://example.com/terms"
             ..Default::default()
         };
         assert!(!other.is_base());
+    }
+
+    #[test]
+    fn non_base_layers_excludes_only_base() {
+        let project = create_example_project();
+
+        let names: Vec<&str> = project
+            .non_base_layers()
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect();
+        assert_eq!(names, ["chroma1"]);
+    }
+
+    #[test]
+    fn package_file_name_per_format() {
+        let project = ModProject {
+            name: "test-mod".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            project.package_file_name(None, PackageFormat::Modpkg),
+            "test-mod_1.0.0.modpkg"
+        );
+        assert_eq!(
+            project.package_file_name(Some("custom".to_string()), PackageFormat::Modpkg),
+            "custom.modpkg"
+        );
+        assert_eq!(
+            project.package_file_name(Some("custom.modpkg".to_string()), PackageFormat::Modpkg),
+            "custom.modpkg"
+        );
+        assert_eq!(
+            project.package_file_name(None, PackageFormat::Fantome),
+            "test-mod_1.0.0.fantome"
+        );
     }
 }

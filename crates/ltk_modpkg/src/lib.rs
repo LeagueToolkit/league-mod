@@ -21,9 +21,6 @@ mod slug;
 mod thumbnail;
 pub mod utils;
 
-#[cfg(feature = "project")]
-pub mod project;
-
 pub use chunk_path::ChunkPath;
 pub use decoder::ModpkgDecoder;
 pub use error::{EncodingError, InvalidSlugError, ModpkgError, ReadFileError, StripPrefixError};

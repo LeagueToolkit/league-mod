@@ -23,26 +23,8 @@ binrw = "0.14.1"
 itertools = "0.14.0"
 zstd = "0.13"
 semver = { version = "1.0.27", features = ["serde"] }
-image = { version = "0.25", default-features = false, features = [
-    "webp",
-    "png",
-    "jpeg",
-    "gif",
-    "bmp",
-    "tiff",
-    "ico",
-] }
-webp = "0.3"
-webp-animation = "0.9"
 
 camino = { workspace = true }
-
-# Optional: for packing from mod projects
-ltk_mod_project = { version = "0.5.0", path = "../ltk_mod_project", optional = true }
-
-[features]
-default = []
-project = ["ltk_mod_project"]
 
 [dependencies.xxhash-rust]
 version = "0.8.15"

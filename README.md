@@ -73,7 +73,6 @@ Library for reading, writing, and manipulating the modpkg binary format.
 - Zstd compression
 - Layer-based file organization
 - Chunk-based data storage with metadata
-- High-level project packing (with `project` feature)
 
 ### `ltk_mod_core` - Shared Core Library
 
@@ -85,13 +84,19 @@ Shared utilities used by both the CLI and GUI applications.
 
 ### `ltk_mod_project` - Configuration Library
 
-Handles mod project configuration files and metadata structures.
+Handles mod project configuration files, metadata structures, and packing
+projects to distributable formats.
 
 **Features:**
 - JSON/TOML config support
 - Layer system
 - Author, license, readme and distribution metadata
 - File transformer configuration
+- `.modignore` content filtering
+- Format-neutral packing driver (`ProjectPacker`) with pluggable format
+  backends (`PackFormat`): `.modpkg` via the `modpkg` feature, `.fantome`
+  via the `fantome` feature
+- Fantome-to-project import (`ImportFormat` / `FantomeImporter`)
 
 ### `ltk-manager` - Desktop GUI Application
 

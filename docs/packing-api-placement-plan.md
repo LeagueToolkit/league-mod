@@ -1,8 +1,34 @@
 # Plan: move project packing into ltk_mod_project
 
-Status: proposed, not started. Target: its own branch/PR (suggested name
-`refactor/packing-api`), after `feat/modignore` lands - it moves code that
-branch created (`IgnoreMode`, the ignore plumbing, their tests).
+Status: implemented on `refactor/packing-api`, with one design revision on
+top of the plan as written: packing is trait-based rather than
+per-format entry points, so the modpkg and fantome APIs line up.
+
+- `ltk_mod_project::ProjectPacker` is the single, format-neutral driver. It
+  loads/validates the project, resolves `PackOptions`/`IgnoreMode`, walks
+  `content/` exactly once with the `.modignore` filter, and produces a
+  `PackPlan` (files per layer with WAD association, plus resolved
+  readme/license/thumbnail paths).
+- A format is a value implementing `PackFormat` (`fn pack(self, &PackPlan)`)
+  that only encodes: `modpkg::ModpkgFormat<W>` and `fantome::FantomeFormat<W>`
+  behind their features. The trait is public, so external formats can be
+  driven the same way. No per-format free functions
+  (`pack_from_project*`, `pack_to_fantome`) survive.
+- Errors are layered: generic `PackError<E>` holds the driver's shared
+  variants once (scan, ignore, walk, layer layout) and a transparent
+  `Format(E)` carries the format's own error (`ModpkgPackError`,
+  `FantomePackError`).
+- Import mirrors this with an `ImportFormat` trait and
+  `fantome::FantomeImporter` (replacing `import_project`), so a future
+  modpkg importer lands into an existing shape.
+- Behavior alignments that fall out of the shared driver: fantome packs now
+  validate configured layer directories and base priority like modpkg, and
+  pick up an unconfigured `thumbnail.webp` like modpkg.
+- Format-crate side as planned: `ltk_fantome` gained `FantomeWriter` and
+  `FantomeReader` (replacing `FantomeExtractor`; errors are the trimmed
+  `FantomeExtractError` plus `FantomeWriteError`).
+- The optional fold of the CLI's name/version validation into
+  `validate_project` was left out; it stays a follow-up.
 
 ## Problem
 
