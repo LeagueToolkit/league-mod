@@ -77,7 +77,7 @@ impl OverlayBuilder {
     /// Distribute override path hashes to all affected WADs (lightweight).
     ///
     /// Returns a map of `relative_wad_path -> set of path_hashes`. No byte data
-    /// is involved — only routing via [`OverrideMeta::route_targets`]: every
+    /// is involved - only routing via [`OverrideMeta::route_targets`]: every
     /// game WAD that contains the hash, plus the mod's declared WAD for new
     /// entries and cross-WAD imports (chunks the mod ships under a WAD that
     /// doesn't already contain them).
@@ -198,8 +198,8 @@ impl OverlayBuilder {
     /// (see [`ChunkSources`]), into a [`ResolvedChunk`], then the flat result is
     /// spread across the per-WAD maps the patch step consumes:
     ///
-    /// - **Mod overrides** — read from each mod's content provider.
-    /// - **String patches** — the game's stringtable rebuilt with merged overrides.
+    /// - **Mod overrides** - read from each mod's content provider.
+    /// - **String patches** - the game's stringtable rebuilt with merged overrides.
     ///
     /// All bytes are uncompressed; the writer compresses them. A chunk routed to
     /// several WADs shares one buffer, so each WAD compresses the same input and
@@ -284,8 +284,8 @@ impl OverlayBuilder {
     /// Resolve synthetic stringtable patches into uncompressed bytes: the game's
     /// own stringtable chunk rebuilt with the locale's merged key overrides.
     ///
-    /// A read/patch failure is logged and that locale left unpatched — the WAD is
-    /// still written, just without the string patch — instead of failing the build.
+    /// A read/patch failure is logged and that locale left unpatched - the WAD is
+    /// still written, just without the string patch - instead of failing the build.
     /// A missing plan is an internal invariant violation and is a hard error.
     fn resolve_string_patches(
         &self,

@@ -2,8 +2,8 @@
 //!
 //! Fantome archives only support a single "base" layer. WAD content is stored
 //! under the `WAD/` directory, either as:
-//! - **Directory WADs**: `WAD/{name}.wad.client/{file}` — individual override files
-//! - **Packed WADs**: `WAD/{name}.wad.client` — complete WAD files unpacked in-memory into overrides
+//! - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
+//! - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
 //!
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
@@ -26,7 +26,7 @@ use zip::read::ZipFile;
 /// archive with "Invalid checksum". The check only fires on the trailing EOF
 /// `read()`, which `Take(size)` never issues. `Take` also caps the read at the
 /// declared `uncompressed_size` so a bogus (huge) size can't drive an unbounded
-/// allocation — we use `Vec::new()` (not `with_capacity`) for the same reason.
+/// allocation - we use `Vec::new()` (not `with_capacity`) for the same reason.
 ///
 /// Integrity is intentionally **not** verified (that's the whole point of this
 /// helper). We also do not require the byte count to equal the declared size:
@@ -141,8 +141,8 @@ impl FantomeIndex {
 ///
 /// Fantome archives only support a single "base" layer. WAD content is stored
 /// under the `WAD/` directory, either as:
-/// - **Directory WADs**: `WAD/{name}.wad.client/{file}` — individual override files
-/// - **Packed WADs**: `WAD/{name}.wad.client` — complete WAD files unpacked in-memory into overrides
+/// - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
+/// - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
 pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: FantomeIndex,
@@ -278,7 +278,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             return Ok(results);
         }
 
-        // Try packed WAD — extract all chunks as hex-hash files
+        // Try packed WAD - extract all chunks as hex-hash files
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
             let mut results = Vec::with_capacity(path_hashes.len());
@@ -353,7 +353,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             return Ok(bytes);
         }
 
-        // Try packed WAD — extract specific chunk by hex hash filename
+        // Try packed WAD - extract specific chunk by hex hash filename
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
                 .file_stem()
@@ -791,7 +791,7 @@ mod tests {
     fn loads_archive_with_bad_crc32() {
         // Some Fantome creators emit incorrect CRC32 values in the ZIP central
         // directory. The zip crate's CRC check would otherwise reject these
-        // archives with "Invalid checksum" — verify we tolerate that and read
+        // archives with "Invalid checksum" - verify we tolerate that and read
         // the underlying data correctly.
         let cursor = make_fantome_zip_corrupt_crc(&[
             ("META/info.json", &make_info_json("Bad CRC Mod")),
@@ -816,7 +816,7 @@ mod tests {
 
     #[test]
     fn loads_packed_wad_with_bad_crc32() {
-        // A packed WAD is mounted via Wad::mount during FantomeContent::new — the
+        // A packed WAD is mounted via Wad::mount during FantomeContent::new - the
         // downstream "WAD mounting" path the fix targets. Verify it and the packed
         // branch of read_wad_override_file tolerate a corrupt CRC.
         const PACKED_PAYLOAD: &[u8] = b"packed_payload_bytes";

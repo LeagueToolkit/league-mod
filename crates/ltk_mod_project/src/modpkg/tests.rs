@@ -5,7 +5,8 @@ use crate::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
-use ltk_modpkg::{Modpkg, ModpkgCompression, LICENSE_CHUNK_PATH};
+use ltk_modpkg::builder::ModpkgBuilderError;
+use ltk_modpkg::{ChunkKey, ChunkPath, LayerHash, Modpkg, ModpkgCompression, LICENSE_CHUNK_PATH};
 use std::fs;
 use std::io::Cursor;
 
@@ -81,6 +82,95 @@ fn invalid_layer_slug_fails_the_pack() {
     );
 }
 
+/// A file shared by several WADs (the game requires it to be byte-identical
+/// in all of them) packs as one chunk registered under each WAD.
+#[test]
+fn same_path_in_two_wads_with_identical_content_packs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(
+        &root,
+        "base",
+        "Aatrox.wad.client/data/shared.bin",
+        b"shared",
+    );
+    create_content_file(&root, "base", "Ahri.wad.client/data/shared.bin", b"shared");
+
+    let (modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
+
+    let key = ChunkKey::new(
+        ChunkPath::new("data/shared.bin").hash(),
+        LayerHash::from_name("base"),
+    );
+    let layer_idx = modpkg.layer_index("base").expect("base layer");
+    for wad in ["aatrox.wad.client", "ahri.wad.client"] {
+        let wad_idx = modpkg.wad_index(wad).expect("wad in table");
+        assert_eq!(
+            modpkg.chunks_for_wad_layer(wad_idx, layer_idx),
+            [key],
+            "{wad} should hold the shared chunk"
+        );
+    }
+}
+
+#[test]
+fn same_path_in_two_wads_with_inconsistent_content_fails_the_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "Aatrox.wad.client/data/shared.bin", b"a");
+    create_content_file(&root, "base", "Ahri.wad.client/data/shared.bin", b"b");
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let err = try_pack(project, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PackError::Format(ModpkgPackError::Builder(
+                ModpkgBuilderError::InconsistentChunk {
+                    ref path,
+                    ref first_wad,
+                    ref second_wad,
+                    ..
+                }
+            )) if path == "data/shared.bin"
+                && first_wad == "aatrox.wad.client"
+                && second_wad == "ahri.wad.client"
+        ),
+        "Expected InconsistentChunk, got: {err}"
+    );
+}
+
+/// Windows and macOS collapse file-name case, so this collision can only be
+/// created on a case-sensitive file system.
+#[cfg(target_os = "linux")]
+#[test]
+fn case_variant_paths_in_one_wad_fail_the_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    // Chunk paths are case-insensitive, so these hash to the same chunk.
+    create_content_file(&root, "base", "Aatrox.wad.client/data/shared.bin", b"a");
+    create_content_file(&root, "base", "Aatrox.wad.client/data/SHARED.bin", b"b");
+
+    let project = test_mod_project(vec![ModProjectLayer::base()]);
+
+    let err = try_pack(project, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PackError::Format(ModpkgPackError::DuplicateChunkPath {
+                ref rel_path,
+                ref layer,
+                ..
+            }) if rel_path.eq_ignore_ascii_case("data/shared.bin") && layer == "base"
+        ),
+        "Expected DuplicateChunkPath, got: {err}"
+    );
+}
+
 // -- packing tests ----------------------------------------------------------
 
 #[test]
@@ -93,14 +183,14 @@ fn pack_single_wad() {
 
     let (modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
 
-    assert_eq!(modpkg.wads.len(), 1);
-    assert_eq!(modpkg.wads.values().next().unwrap(), "graves.wad.client");
+    assert_eq!(modpkg.wads().len(), 1);
+    assert_eq!(modpkg.wads().values().next().unwrap(), "graves.wad.client");
 
     let layer_idx = modpkg.layer_index("base").expect("base layer");
     let wad_idx = modpkg.wad_index("graves.wad.client").unwrap();
     assert_eq!(modpkg.chunks_for_wad_layer(wad_idx, layer_idx).len(), 2);
 
-    for path in modpkg.chunk_paths.values() {
+    for path in modpkg.chunk_paths().values() {
         assert!(
             !path.contains("graves.wad.client"),
             "WAD prefix leaked: {path}"
@@ -117,9 +207,9 @@ fn pack_non_wad_directory_preserves_path() {
 
     let (modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
 
-    assert_eq!(modpkg.wads.len(), 0);
+    assert_eq!(modpkg.wads().len(), 0);
     assert!(modpkg
-        .chunk_paths
+        .chunk_paths()
         .values()
         .any(|p| p == "some_dir/file.bin"));
 }
@@ -146,8 +236,8 @@ fn pack_multi_wad_multi_layer() {
 
     let (modpkg, _) = pack(project, &root);
 
-    assert_eq!(modpkg.wads.len(), 2);
-    let wad_names: Vec<&str> = modpkg.wads.values().map(|s| s.as_str()).collect();
+    assert_eq!(modpkg.wads().len(), 2);
+    let wad_names: Vec<&str> = modpkg.wads().values().map(|s| s.as_str()).collect();
     assert!(wad_names.contains(&"aatrox.wad.client"));
     assert!(wad_names.contains(&"map11.wad.client"));
 
@@ -243,7 +333,7 @@ fn pack_stores_license_text_compressed() {
 
     let (mut modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
 
-    let chunk = *modpkg.get_chunk(LICENSE_CHUNK_PATH, None).unwrap();
+    let chunk = *modpkg.chunk(LICENSE_CHUNK_PATH, None).unwrap();
     assert_eq!(chunk.compression, ModpkgCompression::Zstd);
     assert!(
         chunk.compressed_size < chunk.uncompressed_size,
@@ -274,7 +364,7 @@ fn pack_stores_incompressible_license_text_raw() {
 
     let (mut modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
 
-    let chunk = *modpkg.get_chunk(LICENSE_CHUNK_PATH, None).unwrap();
+    let chunk = *modpkg.chunk(LICENSE_CHUNK_PATH, None).unwrap();
     assert_eq!(chunk.compression, ModpkgCompression::None);
     assert_eq!(chunk.compressed_size, chunk.uncompressed_size);
 
@@ -406,8 +496,8 @@ fn modignore_excludes_matching_files() {
 
     let (modpkg, report) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
 
-    assert!(modpkg.chunk_paths.values().any(|p| p == "tex.dds"));
-    assert!(!modpkg.chunk_paths.values().any(|p| p == "src.psd"));
+    assert!(modpkg.chunk_paths().values().any(|p| p == "tex.dds"));
+    assert!(!modpkg.chunk_paths().values().any(|p| p == "src.psd"));
 
     assert_eq!(
         report.ignored_files(),

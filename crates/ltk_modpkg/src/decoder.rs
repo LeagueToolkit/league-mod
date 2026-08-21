@@ -48,7 +48,7 @@ mod tests {
         builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder},
         Modpkg,
     };
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
 
     #[test]
     fn test_decoder() {
@@ -63,15 +63,11 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::Zstd),
             );
 
         builder
-            .build_to_writer(&mut cursor, |_, cursor| {
-                cursor.write_all(&test_data)?;
-                Ok(())
-            })
+            .build_to_writer(&mut cursor, |_| Ok(test_data.to_vec()))
             .expect("Failed to build Modpkg");
 
         // Reset cursor and mount the modpkg
@@ -79,12 +75,11 @@ mod tests {
         let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
 
         // Get the test.bin chunk (not the metadata chunk)
-        let test_path_hash = crate::ChunkPath::new("test.bin").hash();
-        let base_layer_hash = crate::hash_layer_name("base");
-        let chunk = modpkg
-            .chunks
-            .get(&(test_path_hash, base_layer_hash))
-            .expect("test.bin chunk not found");
+        let key = crate::ChunkKey::new(
+            crate::ChunkPath::new("test.bin").hash(),
+            crate::LayerHash::from_name("base"),
+        );
+        let chunk = *modpkg.chunks().get(&key).expect("test.bin chunk not found");
 
         // Create a decoder and test it
         let mut decoder = ModpkgDecoder {
@@ -92,11 +87,11 @@ mod tests {
         };
 
         // Test raw loading
-        let raw_data = decoder.load_chunk_raw(chunk).unwrap();
+        let raw_data = decoder.load_chunk_raw(&chunk).unwrap();
         assert_eq!(raw_data.len(), chunk.compressed_size as usize);
 
         // Test decompressed loading
-        let decompressed_data = decoder.load_chunk_decompressed(chunk).unwrap();
+        let decompressed_data = decoder.load_chunk_decompressed(&chunk).unwrap();
         assert_eq!(decompressed_data.len(), chunk.uncompressed_size as usize);
         assert_eq!(&decompressed_data[..], &test_data[..]);
     }

@@ -33,21 +33,15 @@ pub fn normalize_rel_path_for_hash(rel_path: &Utf8Path, _bytes: &[u8]) -> String
     // Special case: strip `.ltk` suffix patterns from the filename
     let last = parts.pop().unwrap();
     let stripped = if let Some(idx) = last.to_ascii_lowercase().find(".ltk.") {
-        // Remove .ltk - e.g., "file.ltk.bin" -> "file.bin"
-        // idx points to the '.', we want to keep it and append from after '.ltk'
         format!("{}{}", &last[..idx], &last[idx + 4..])
     } else if last.to_ascii_lowercase().ends_with(".ltk") {
-        // Remove .ltk suffix - e.g., "file.ltk" -> "file"
         last[..last.len().saturating_sub(4)].to_string()
     } else {
         last
     };
     parts.push(stripped);
 
-    // Join using '/'
     let joined = parts.join("/");
-
-    // If we stripped to empty (rare), fall back to original filename
     if joined.is_empty() {
         return rel_path.as_str().replace('\\', "/");
     }
@@ -79,9 +73,11 @@ pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
         return Ok(v);
     }
 
-    // Otherwise, compute from normalized path
-    let normalized_rel = normalize_rel_path_for_hash(rel_path, bytes);
-    Ok(ltk_modpkg::ChunkPath::new(normalized_rel).hash())
+    Ok(
+        ltk_modpkg::ChunkPath::new(normalize_rel_path_for_hash(rel_path, bytes))
+            .hash()
+            .value(),
+    )
 }
 
 /// Compute a deterministic fingerprint for a WAD's override set.
@@ -109,7 +105,7 @@ pub fn compute_wad_overrides_fingerprint<B: AsRef<[u8]>>(overrides: &HashMap<u64
 
 /// Compute a deterministic fingerprint from pre-computed `(path_hash, content_hash)` pairs.
 ///
-/// This is the metadata-based equivalent of [`compute_wad_overrides_fingerprint`] —
+/// This is the metadata-based equivalent of [`compute_wad_overrides_fingerprint`] -
 /// it produces an identical `u64` for the same set of overrides, but uses pre-computed
 /// content hashes from the metadata cache instead of hashing raw bytes.
 ///
@@ -250,6 +246,7 @@ mod tests {
                         rel_path: Utf8PathBuf::from("dummy"),
                     },
                     fallback_wad: None,
+                    unlocalized_wad: None,
                     linked_bins: Vec::new(),
                 },
             );

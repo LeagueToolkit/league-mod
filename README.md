@@ -194,7 +194,7 @@ for details.
 
 A project declares its license in two independent places:
 
-- The **`license` field** in `mod.config.json` names the terms — either an SPDX
+- The **`license` field** in `mod.config.json` names the terms - either an SPDX
   identifier (`"license": "MIT"`) or a custom object
   (`"license": { "name": "My License", "url": "https://example.com/terms" }`,
   where `url` is optional).

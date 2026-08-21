@@ -6,9 +6,8 @@ use std::fs::File;
 use std::io::{self, Seek, Write};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_fantome::{FantomeWriteError, FantomeWriter};
+use ltk_fantome::{FantomeInfo, FantomeWriteError, FantomeWriter};
 
-use super::convert::fantome_info_from_project;
 use crate::{PackFormat, PackPlan};
 
 /// Failure to encode a pack plan as a Fantome archive.
@@ -127,7 +126,7 @@ fn pack_metadata<W: Write + Seek>(
     writer: &mut FantomeWriter<W>,
     plan: &PackPlan<'_>,
 ) -> Result<(), FantomePackError> {
-    writer.write_info(&fantome_info_from_project(plan.project()))?;
+    writer.write_info(&FantomeInfo::from(plan.project()))?;
 
     if let Some(readme) = plan.readme() {
         let mut file =

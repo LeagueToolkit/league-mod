@@ -26,7 +26,7 @@
 //!
 //! League validates a chunk shared across WADs by its **compressed** checksum, so
 //! a chunk routed to several WADs must be given to each build as the same
-//! uncompressed input — deterministic compression then yields identical copies.
+//! uncompressed input - deterministic compression then yields identical copies.
 
 use crate::error::{Error, Result};
 use byteorder::{LE, WriteBytesExt};

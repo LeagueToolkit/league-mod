@@ -2,11 +2,7 @@ use std::io::{Read, Seek};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{
-    chunk::{NO_LAYER_INDEX, NO_WAD_INDEX},
-    error::ModpkgError,
-    Modpkg,
-};
+use crate::{error::ModpkgError, Modpkg};
 
 /// The path to the license text chunk.
 pub const LICENSE_CHUNK_PATH: &str = "_meta_/license";
@@ -60,13 +56,13 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     ///
     /// Returns [`ModpkgError::MissingChunk`] if the package ships no license text.
     pub fn load_license_text(&mut self) -> Result<Vec<u8>, ModpkgError> {
-        let chunk = *self.get_chunk(LICENSE_CHUNK_PATH, None)?;
+        let chunk = *self.chunk(LICENSE_CHUNK_PATH, None)?;
 
-        if chunk.layer_index != NO_LAYER_INDEX || chunk.wad_index != NO_WAD_INDEX {
+        if chunk.layer().is_some() || chunk.wad().is_some() {
             return Err(ModpkgError::InvalidMetaChunk);
         }
 
-        let data = self.load_chunk_decompressed(&chunk)?;
+        let data = self.decoder().load_chunk_decompressed(&chunk)?;
 
         Ok(data.into_vec())
     }

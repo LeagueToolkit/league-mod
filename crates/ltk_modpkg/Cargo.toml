@@ -24,8 +24,6 @@ itertools = "0.14.0"
 zstd = "0.13"
 semver = { version = "1.0.27", features = ["serde"] }
 
-camino = { workspace = true }
-
 [dependencies.xxhash-rust]
 version = "0.8.15"
 features = ["xxh3", "xxh64"]

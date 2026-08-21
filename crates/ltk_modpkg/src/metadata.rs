@@ -1,9 +1,4 @@
-use crate::{
-    chunk::{NO_LAYER_INDEX, NO_WAD_INDEX},
-    error::ModpkgError,
-    license::ModpkgLicense,
-    Modpkg,
-};
+use crate::{error::ModpkgError, license::ModpkgLicense, Modpkg};
 use indexmap::IndexMap;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -15,13 +10,15 @@ pub const METADATA_CHUNK_PATH: &str = "_meta_/info.msgpack";
 impl<TSource: Read + Seek> Modpkg<TSource> {
     /// Load the metadata chunk from the mod package.
     pub fn load_metadata(&mut self) -> Result<ModpkgMetadata, ModpkgError> {
-        let chunk = *self.get_chunk(METADATA_CHUNK_PATH, None)?;
+        let chunk = *self.chunk(METADATA_CHUNK_PATH, None)?;
 
-        if chunk.layer_index != NO_LAYER_INDEX || chunk.wad_index != NO_WAD_INDEX {
+        if chunk.layer().is_some() || chunk.wad().is_some() {
             return Err(ModpkgError::InvalidMetaChunk);
         }
 
-        ModpkgMetadata::read(&mut Cursor::new(self.load_chunk_decompressed(&chunk)?))
+        ModpkgMetadata::read(&mut Cursor::new(
+            self.decoder().load_chunk_decompressed(&chunk)?,
+        ))
     }
 }
 

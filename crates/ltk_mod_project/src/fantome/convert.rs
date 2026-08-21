@@ -28,17 +28,19 @@ impl From<FantomeLicense> for ModProjectLicense {
 }
 
 /// The `META/info.json` metadata a project packs to.
-pub fn fantome_info_from_project(mod_project: &ModProject) -> FantomeInfo {
-    FantomeInfo {
-        name: mod_project.display_name.clone(),
-        author: format_authors(&mod_project.authors),
-        version: mod_project.version.clone(),
-        description: mod_project.description.clone(),
-        license: mod_project.license.as_ref().map(FantomeLicense::from),
-        tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
-        champions: mod_project.champions.clone(),
-        maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
-        layers: build_fantome_layers(mod_project),
+impl From<&ModProject> for FantomeInfo {
+    fn from(mod_project: &ModProject) -> Self {
+        Self {
+            name: mod_project.display_name.clone(),
+            author: format_authors(&mod_project.authors),
+            version: mod_project.version.clone(),
+            description: mod_project.description.clone(),
+            license: mod_project.license.as_ref().map(FantomeLicense::from),
+            tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
+            champions: mod_project.champions.clone(),
+            maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
+            layers: build_fantome_layers(mod_project),
+        }
     }
 }
 
@@ -47,20 +49,22 @@ pub fn fantome_info_from_project(mod_project: &ModProject) -> FantomeInfo {
 /// The project name is the display name slugified, since Fantome carries no
 /// separate machine name; layers reset to the default base layer, the only
 /// one the format stores content for.
-pub fn project_from_fantome_info(info: FantomeInfo) -> ModProject {
-    ModProject {
-        name: slug::slugify(&info.name),
-        display_name: info.name,
-        version: info.version,
-        description: info.description,
-        authors: vec![ModProjectAuthor::Name(info.author)],
-        license: info.license.map(ModProjectLicense::from),
-        tags: info.tags.into_iter().map(ModTag::from).collect(),
-        champions: info.champions,
-        maps: info.maps.into_iter().map(ModMap::from).collect(),
-        transformers: vec![],
-        layers: default_layers(),
-        thumbnail: None,
+impl From<FantomeInfo> for ModProject {
+    fn from(info: FantomeInfo) -> Self {
+        Self {
+            name: slug::slugify(&info.name),
+            display_name: info.name,
+            version: info.version,
+            description: info.description,
+            authors: vec![ModProjectAuthor::Name(info.author)],
+            license: info.license.map(ModProjectLicense::from),
+            tags: info.tags.into_iter().map(ModTag::from).collect(),
+            champions: info.champions,
+            maps: info.maps.into_iter().map(ModMap::from).collect(),
+            transformers: vec![],
+            layers: default_layers(),
+            thumbnail: None,
+        }
     }
 }
 

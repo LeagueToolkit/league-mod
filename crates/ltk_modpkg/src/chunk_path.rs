@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 use xxhash_rust::xxh64;
 
+use crate::PathHash;
+
 /// A chunk path in canonical form: lowercase, forward slashes.
 ///
 /// This is the path the file has *inside its target WAD*, matching what the
@@ -31,12 +33,12 @@ pub struct ChunkPath(String);
 impl ChunkPath {
     /// Normalize `path` into a chunk path.
     pub fn new(path: impl AsRef<str>) -> Self {
-        Self(crate::utils::normalize_chunk_path(path.as_ref()))
+        Self(path.as_ref().to_lowercase().replace('\\', "/"))
     }
 
     /// The xxhash64 of the canonical path, as stored in the chunk table.
-    pub fn hash(&self) -> u64 {
-        xxh64::xxh64(self.0.as_bytes(), 0)
+    pub fn hash(&self) -> PathHash {
+        PathHash::new(xxh64::xxh64(self.0.as_bytes(), 0))
     }
 
     pub fn as_str(&self) -> &str {
@@ -119,7 +121,7 @@ mod tests {
     fn hash_matches_xxhash64_of_the_canonical_string() {
         assert_eq!(
             ChunkPath::new(IN_WAD).hash(),
-            xxh64::xxh64(CANONICAL.as_bytes(), 0)
+            PathHash::new(xxh64::xxh64(CANONICAL.as_bytes(), 0))
         );
     }
 }

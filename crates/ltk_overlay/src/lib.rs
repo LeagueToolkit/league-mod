@@ -8,24 +8,24 @@
 //!
 //! The overlay build process has four stages:
 //!
-//! 1. **Indexing** — Scan the game's `DATA/FINAL` directory and mount every
+//! 1. **Indexing** - Scan the game's `DATA/FINAL` directory and mount every
 //!    `.wad.client` file. Build two indexes:
 //!    - *Filename index*: WAD filename (case-insensitive) -> filesystem paths
 //!    - *Hash index*: chunk path hash (`u64`) -> list of WAD files containing it
 //!
-//! 2. **Collecting overrides** — For each enabled mod (in order), read its layer
+//! 2. **Collecting overrides** - For each enabled mod (in order), read its layer
 //!    structure and WAD override files through the [`ModContentProvider`] trait.
 //!    Each override file is resolved to a `u64` path hash (either parsed from a hex
 //!    filename or computed from the normalized path). All overrides are collected
 //!    into a single `HashMap<u64, Vec<u8>>`. When multiple mods override the same
 //!    hash, the first mod in the list (highest priority) wins.
 //!
-//! 3. **Distributing to WADs** — Using the hash index, each override is distributed
+//! 3. **Distributing to WADs** - Using the hash index, each override is distributed
 //!    to *every* game WAD that contains that path hash ("cross-WAD matching"). This
 //!    means a single skin texture override will automatically be applied to both
 //!    the champion WAD and any map WAD that shares the same asset.
 //!
-//! 4. **Patching WADs** — For each affected game WAD, a patched copy is built in the
+//! 4. **Patching WADs** - For each affected game WAD, a patched copy is built in the
 //!    overlay directory. The patched WAD contains all original chunks plus the
 //!    overrides, with optimizations for audio files (kept uncompressed) and chunk
 //!    deduplication.
@@ -47,7 +47,7 @@
 //! fingerprints. On the next build:
 //!
 //! - **Exact match**: mod list, per-mod content fingerprints, and game
-//!   fingerprint match, and every overlay WAD exists on disk — the build is
+//!   fingerprint match, and every overlay WAD exists on disk - the build is
 //!   skipped entirely. Content fingerprints participate so that mutable
 //!   sources (e.g. a workshop project directory edited between test runs)
 //!   invalidate the skip even though their mod ID is unchanged.
@@ -55,7 +55,7 @@
 //!   content changed. Per-WAD override fingerprints are compared and only WADs
 //!   whose inputs changed are re-patched. Stale WADs (no longer needed) are
 //!   removed.
-//! - **Full rebuild**: game fingerprint or state version changed — all overlay WADs
+//! - **Full rebuild**: game fingerprint or state version changed - all overlay WADs
 //!   are wiped and rebuilt from scratch.
 //!
 //! The game index (`GameIndex`) is also cached to disk to avoid re-mounting every

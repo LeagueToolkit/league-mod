@@ -22,7 +22,6 @@ mod pack;
 #[cfg(test)]
 mod tests;
 
-pub use convert::{fantome_info_from_project, project_from_fantome_info};
 pub use import::{FantomeImportError, FantomeImporter};
 pub use ltk_fantome::WadHashtable;
 pub use pack::{FantomeFormat, FantomePackError};

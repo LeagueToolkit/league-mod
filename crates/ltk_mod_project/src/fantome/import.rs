@@ -6,7 +6,6 @@ use std::io::{Read, Seek};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeExtractError, FantomeReader, WadHashtable};
 
-use super::convert::project_from_fantome_info;
 use crate::{ImportFormat, ModProject, ModProjectError};
 
 /// Failure to import a Fantome archive as a mod project.
@@ -106,7 +105,7 @@ impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
         let mut reader = FantomeReader::new(self.reader)?;
 
         let info = reader.read_info()?;
-        let mod_project = project_from_fantome_info(info);
+        let mod_project = ModProject::from(info);
 
         if !output_dir.exists() {
             std::fs::create_dir_all(output_dir)
