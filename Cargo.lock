@@ -1337,25 +1337,13 @@ dependencies = [
 
 [[package]]
 name = "ltk_io_ext"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cefeb90ba24a3a1a3ee79aaf40f1f222137ec514bd9276af047e15f412de04bf"
-dependencies = [
- "byteorder",
- "glam",
- "ltk_primitives 0.2.4",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ltk_io_ext"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092554284ee9c83dda80408d9370800aa188e5c2da99bee36a3b06c733ced258"
 dependencies = [
  "byteorder",
  "glam",
- "ltk_primitives 0.3.5",
+ "ltk_primitives",
  "thiserror 1.0.69",
 ]
 
@@ -1399,7 +1387,7 @@ dependencies = [
  "byteorder",
  "indexmap",
  "itertools",
- "ltk_io_ext 0.2.1",
+ "ltk_io_ext",
  "proptest",
  "proptest-derive",
  "rmp-serde",
@@ -1442,17 +1430,6 @@ dependencies = [
 
 [[package]]
 name = "ltk_primitives"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c77dca1c463ef7ce047c80bb42fbad4d23eb1265a0f0d821fa7451d0be0a6811"
-dependencies = [
- "byteorder",
- "glam",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ltk_primitives"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c42f3eddcad904acfbdaa7d62efa643e8cad771b27b6a56a24eeabcfc80f94"
@@ -1485,7 +1462,7 @@ dependencies = [
  "flate2",
  "itertools",
  "ltk_file",
- "ltk_io_ext 0.4.4",
+ "ltk_io_ext",
  "memchr",
  "num_enum",
  "rsa",
