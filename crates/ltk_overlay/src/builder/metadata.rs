@@ -20,7 +20,7 @@ use xxhash_rust::xxh3::xxh3_64;
 /// stringtable chunks, lazy copies byte-identical to game originals that are
 /// not cross-WAD imports) are stripped. Filtering runs last so the WAD-routing
 /// overlap heuristics still see the mod's full chunk set, and the filtered
-/// result is what gets cached —
+/// result is what gets cached -
 /// both filter inputs (mod content, game content) are covered by the cache's
 /// invalidation keys.
 pub(crate) fn collect_single_mod_metadata(
@@ -69,6 +69,7 @@ fn build_override_meta(source: OverrideSource, bytes: &[u8]) -> Result<(u64, Ove
             uncompressed_size: bytes.len(),
             source,
             fallback_wad: None,
+            unlocalized_wad: None,
             linked_bins: crate::linked_bins::parse_linked_bins(bytes).unwrap_or_default(),
         },
     ))
@@ -150,7 +151,7 @@ fn collect_wad_dir_metadata(
         .collect::<Result<_>>()?;
 
     let path_hashes: Vec<u64> = entries.iter().map(|(path_hash, _)| *path_hash).collect();
-    let fallback_wad = resolve_fallback_wad(
+    let fallback = resolve_fallback_wad(
         &enabled_mod.id,
         wad_name,
         &path_hashes,
@@ -159,7 +160,8 @@ fn collect_wad_dir_metadata(
     )?;
 
     for (path_hash, mut meta) in entries {
-        meta.fallback_wad = fallback_wad.clone();
+        meta.fallback_wad = fallback.wad.clone();
+        meta.unlocalized_wad = fallback.unlocalized.clone();
         mod_meta.insert(path_hash, meta);
     }
 
@@ -173,6 +175,18 @@ fn collect_wad_dir_metadata(
     Ok(())
 }
 
+/// Where one mod WAD directory's overrides go when a chunk hash matches no
+/// game WAD. Both fields land on every [`OverrideMeta`] collected from that
+/// directory.
+#[derive(Debug, Clone, Default)]
+struct FallbackTargets {
+    /// The game WAD the mod's declared WAD directory resolves to.
+    wad: Option<Utf8PathBuf>,
+    /// [`Self::wad`]'s unlocalized sibling, when the mod declared a localized
+    /// WAD. See [`OverrideMeta::unlocalized_wad`].
+    unlocalized: Option<Utf8PathBuf>,
+}
+
 /// Resolve the game WAD that a mod WAD target's overrides fall back to when
 /// a chunk hash matches no game WAD.
 ///
@@ -180,13 +194,16 @@ fn collect_wad_dir_metadata(
 /// unknown name (e.g. "Spirit-Blossom-Rift.wad.client") is matched by chunk-hash
 /// overlap against the game WADs. With no overlap either, returns `None` and
 /// the overrides are routed by hash matching only.
+///
+/// Only a name the game knows carries an unlocalized sibling: an overlap match
+/// is a guess about content, not a placement the mod declared.
 fn resolve_fallback_wad(
     mod_id: &str,
     wad_name: &str,
     path_hashes: &[u64],
     game_index: &GameIndex,
     game_dir: &Utf8Path,
-) -> Result<Option<Utf8PathBuf>> {
+) -> Result<FallbackTargets> {
     match game_index.find_wad(wad_name) {
         Ok(original_wad_path) => {
             let relative_game_path = original_wad_path
@@ -203,7 +220,10 @@ fn resolve_fallback_wad(
                 relative_game_path
             );
 
-            Ok(Some(relative_game_path))
+            Ok(FallbackTargets {
+                wad: Some(relative_game_path),
+                unlocalized: resolve_unlocalized_wad(mod_id, wad_name, game_index, game_dir),
+            })
         }
         Err(Error::WadNotFound(_)) => match game_index.find_best_matching_wad(path_hashes) {
             Some(best_wad) => {
@@ -215,7 +235,10 @@ fn resolve_fallback_wad(
                     best_wad
                 );
 
-                Ok(Some(best_wad))
+                Ok(FallbackTargets {
+                    wad: Some(best_wad),
+                    unlocalized: None,
+                })
             }
             None => {
                 tracing::warn!(
@@ -225,14 +248,67 @@ fn resolve_fallback_wad(
                     wad_name
                 );
 
-                Ok(None)
+                Ok(FallbackTargets::default())
             }
         },
         Err(other) => Err(other),
     }
 }
 
-/// Collect RAW overrides into `mod_meta` — files identified by game asset path
+/// The game-relative path of `wad_name`'s unlocalized sibling, when `wad_name`
+/// is localized and the game ships the sibling.
+///
+/// `None` leaves routing exactly as it was, so a mod that placed its content
+/// correctly is unaffected. An ambiguous sibling (the same filename in two
+/// directories) is declined rather than guessed at.
+fn resolve_unlocalized_wad(
+    mod_id: &str,
+    wad_name: &str,
+    game_index: &GameIndex,
+    game_dir: &Utf8Path,
+) -> Option<Utf8PathBuf> {
+    let sibling = unlocalized_wad_name(wad_name)?;
+    let relative = game_index
+        .find_wad(&sibling)
+        .ok()?
+        .strip_prefix(game_dir)
+        .ok()?
+        .to_path_buf();
+
+    tracing::info!(
+        "Mod='{}' declared localized WAD '{}'; also routing new chunks to '{}'",
+        mod_id,
+        wad_name,
+        relative
+    );
+
+    Some(relative)
+}
+
+/// `Graves.en_US.wad.client` -> `graves.wad.client`, or `None` when `wad_name`
+/// carries no locale tag. Lowercase, which [`GameIndex::find_wad`] accepts.
+fn unlocalized_wad_name(wad_name: &str) -> Option<String> {
+    const SUFFIX: &str = ".wad.client";
+
+    let lowercase = wad_name.to_ascii_lowercase();
+    let stem = lowercase.strip_suffix(SUFFIX)?;
+    let (base, tag) = stem.rsplit_once('.')?;
+    (!base.is_empty() && is_locale_tag(tag)).then(|| format!("{base}{SUFFIX}"))
+}
+
+/// Whether `tag` is a League locale tag: two letters, an underscore, two more
+/// (`en_US`). The game's only other dotted WAD names are platform tags
+/// (`Bootstrap.windows`, `ShaderCache.dx11`), which carry no underscore.
+fn is_locale_tag(tag: &str) -> bool {
+    let Some((language, region)) = tag.split_once('_') else {
+        return false;
+    };
+    [language, region]
+        .iter()
+        .all(|part| part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_alphabetic()))
+}
+
+/// Collect RAW overrides into `mod_meta` - files identified by game asset path
 /// that get routed to the correct WADs via hash matching in
 /// [`OverlayBuilder::distribute_override_hashes`].
 fn collect_raw_metadata(
@@ -266,9 +342,9 @@ fn collect_raw_metadata(
     Ok(())
 }
 
-/// Route any overrides that still have no fallback target — e.g. RAW files
+/// Route any overrides that still have no fallback target - e.g. RAW files
 /// introducing brand-new assets, or WAD-layer overrides whose own chunks didn't
-/// overlap any game WAD — to the game WAD that the majority of THIS mod's
+/// overlap any game WAD - to the game WAD that the majority of THIS mod's
 /// chunks map to.
 ///
 /// Without this they would be dropped at distribution time; placing them
@@ -309,11 +385,11 @@ fn route_unroutable_to_dominant_wad(
 /// Filter out override metadata that should not be included in the overlay.
 ///
 /// This performs three filtering passes:
-/// 1. SubChunkTOC entries — always stripped to prevent game corruption.
-/// 2. Stringtable chunks — mods must not ship `lol.stringtable` overrides;
+/// 1. SubChunkTOC entries - always stripped to prevent game corruption.
+/// 2. Stringtable chunks - mods must not ship `lol.stringtable` overrides;
 ///    layer `string_overrides` are the only supported way to modify game
 ///    strings, and the game's own stringtable is always the patch base.
-/// 3. Lazy overrides — mod files identical to game originals, detected by
+/// 3. Lazy overrides - mod files identical to game originals, detected by
 ///    comparing pre-computed content hashes against game originals. Identical
 ///    files that are cross-WAD imports (shipped under a WAD directory whose
 ///    game WAD lacks the chunk) survive this pass and route like any other
@@ -361,7 +437,7 @@ pub(crate) fn filter_override_metadata(
         );
     }
 
-    // Filter out lazy overrides — mod files identical to game originals.
+    // Filter out lazy overrides - mod files identical to game originals.
     // Use pre-computed content_hash from metadata instead of re-reading bytes.
     //
     // Exception: a byte-identical file shipped under a WAD directory whose game
@@ -421,7 +497,7 @@ fn collect_or_cache_mod_metadata(
     game_index: &GameIndex,
     game_dir: &Utf8Path,
 ) -> Result<HashMap<u64, OverrideMeta>> {
-    // Cache hit — reconstruct from cached data without reading any files.
+    // Cache hit - reconstruct from cached data without reading any files.
     if let Some(fp) = fingerprint
         && let Some(cached) = meta_cache.get_mod_meta(&enabled_mod.id, fp)
     {
@@ -435,7 +511,7 @@ fn collect_or_cache_mod_metadata(
         return Ok(cached.reconstruct(&enabled_mod.id));
     }
 
-    // Cache miss — collect fresh metadata from mod content.
+    // Cache miss - collect fresh metadata from mod content.
     tracing::info!("Mod={} cache miss, reading files", enabled_mod.id);
     let mod_meta = collect_single_mod_metadata(enabled_mod, game_index, game_dir)?;
 
@@ -886,6 +962,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from(rel_path),
             },
             fallback_wad: None,
+            unlocalized_wad: None,
             linked_bins: Vec::new(),
         };
 
@@ -1073,6 +1150,7 @@ mod tests {
                     content_hash: 0x5678,
                     uncompressed_size: 100,
                     target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
+                    unlocalized_wad: None,
                     source_layer: Some("base".to_string()),
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
@@ -1083,6 +1161,7 @@ mod tests {
                     content_hash: 0xEF01,
                     uncompressed_size: 200,
                     target_wad: None,
+                    unlocalized_wad: None,
                     source_layer: None,
                     source_wad_name: None,
                     source_rel_path: "assets/raw/file.bin".to_string(),
@@ -1105,5 +1184,97 @@ mod tests {
             vec!["data/characters/test/test.bin".to_string()]
         );
         assert!(meta[&0xABCD].linked_bins.is_empty());
+    }
+
+    #[test]
+    fn a_locale_tag_names_the_unlocalized_sibling() {
+        assert_eq!(
+            unlocalized_wad_name("Graves.en_US.wad.client").as_deref(),
+            Some("graves.wad.client")
+        );
+        // Mods write the name however they like, and `find_wad` is case-insensitive.
+        assert_eq!(
+            unlocalized_wad_name("graves.EN_us.wad.client").as_deref(),
+            Some("graves.wad.client")
+        );
+        assert_eq!(
+            unlocalized_wad_name("Map11.ko_KR.wad.client").as_deref(),
+            Some("map11.wad.client")
+        );
+    }
+
+    #[test]
+    fn platform_and_plain_wad_names_have_no_sibling() {
+        // The game's other dotted names, which must not read as locales.
+        assert_eq!(unlocalized_wad_name("Bootstrap.windows.wad.client"), None);
+        assert_eq!(unlocalized_wad_name("ShaderCache.dx11.wad.client"), None);
+
+        assert_eq!(unlocalized_wad_name("Graves.wad.client"), None);
+        assert_eq!(unlocalized_wad_name(".en_US.wad.client"), None);
+        assert_eq!(unlocalized_wad_name("Graves.en_US.wad"), None);
+        assert_eq!(unlocalized_wad_name("Graves.eng_US.wad.client"), None);
+        assert_eq!(unlocalized_wad_name("Graves.en_U5.wad.client"), None);
+    }
+
+    /// A game index holding `wad_name -> <champions>/<file>` for each entry.
+    fn champion_wad_index(champions: &Utf8Path, files: &[&str]) -> GameIndex {
+        GameIndex {
+            wad_index: files
+                .iter()
+                .map(|file| (file.to_ascii_lowercase(), vec![champions.join(file)]))
+                .collect(),
+            hash_index: HashMap::new(),
+            game_fingerprint: 0,
+            subchunktoc_blocked: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn declaring_a_localized_wad_resolves_both_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+        let champions = game_dir.join("DATA/FINAL/Champions");
+        let game_index = champion_wad_index(
+            &champions,
+            &["Graves.wad.client", "Graves.en_US.wad.client"],
+        );
+
+        let localized =
+            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index, game_dir)
+                .unwrap();
+        assert_eq!(
+            localized.wad.as_deref(),
+            Some(Utf8Path::new(
+                "DATA/FINAL/Champions/Graves.en_US.wad.client"
+            ))
+        );
+        assert_eq!(
+            localized.unlocalized.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Champions/Graves.wad.client"))
+        );
+
+        // A mod that placed its content correctly gets no second target.
+        let plain =
+            resolve_fallback_wad("m", "Graves.wad.client", &[], &game_index, game_dir).unwrap();
+        assert_eq!(
+            plain.wad.as_deref(),
+            Some(Utf8Path::new("DATA/FINAL/Champions/Graves.wad.client"))
+        );
+        assert_eq!(plain.unlocalized, None);
+    }
+
+    #[test]
+    fn a_sibling_the_game_does_not_ship_is_not_invented() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game_dir_std = tmp.path().join("Game");
+        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
+        let champions = game_dir.join("DATA/FINAL/Champions");
+        let game_index = champion_wad_index(&champions, &["Graves.en_US.wad.client"]);
+
+        let resolved =
+            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index, game_dir)
+                .unwrap();
+        assert_eq!(resolved.unlocalized, None);
     }
 }

@@ -46,7 +46,7 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 /// Implementors provide access to mod project metadata, layer structure,
 /// and WAD override data without prescribing how content is stored or read.
 ///
-/// All mod WAD content is treated as **overlays** — individual file overrides
+/// All mod WAD content is treated as **overlays** - individual file overrides
 /// that get patched on top of the original game WADs. There is no concept of
 /// full WAD replacement; every mod contributes individual chunks.
 ///
@@ -54,8 +54,8 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 ///
 /// Implementations must be [`Send`] + [`Sync`]:
 ///
-/// - **`Send`** — the builder moves providers across threads.
-/// - **`Sync`** — [`content_fingerprint`](Self::content_fingerprint) takes `&self`
+/// - **`Send`** - the builder moves providers across threads.
+/// - **`Sync`** - [`content_fingerprint`](Self::content_fingerprint) takes `&self`
 ///   and may be called concurrently via `par_iter()`. This method should only read
 ///   filesystem metadata (stat calls), so it should not require mutation.
 ///
@@ -73,8 +73,8 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 pub trait ModContentProvider: Send + Sync {
     /// Return the mod's project configuration.
     ///
-    /// This provides the mod name, version, description, author list, and — most
-    /// importantly — the layer definitions that control how overrides are applied.
+    /// This provides the mod name, version, description, author list, and - most
+    /// importantly - the layer definitions that control how overrides are applied.
     fn mod_project(&mut self) -> Result<ModProject>;
 
     /// List WAD targets that have override content in the given layer.
@@ -287,7 +287,7 @@ impl ModContentProvider for FsModContent {
         }
 
         // Collect (path, size, mtime) for all files under content/, plus the
-        // project config — string overrides live in mod.config.json/.toml, so
+        // project config - string overrides live in mod.config.json/.toml, so
         // config edits must change the fingerprint even when content/ doesn't.
         let mut entries: Vec<(String, u64, u64)> = Vec::new();
 

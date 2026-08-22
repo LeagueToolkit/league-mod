@@ -1,24 +1,15 @@
-use crate::ModpkgCompression;
+use crate::{LayerIndex, ModpkgCompression, PathHash, WadIndex};
 use binrw::binrw;
 
-/// Layer index value indicating that a chunk does not belong to any layer
-pub const NO_LAYER_INDEX: u32 = 0xffffffff;
-
-/// Wad index value indicating that a chunk does not belong to any `wad` file
-pub const NO_WAD_INDEX: u32 = 0xffffffff;
-
-/// Layer hash value used for chunks that do not belong to any layer
-pub const NO_LAYER_HASH: u64 = u64::MAX;
-
-/// Wad hash value used for chunks that do not belong to any `wad` file
-#[allow(dead_code)] // May be used in future features
-pub const NO_WAD_HASH: u64 = u64::MAX;
-
+/// A chunk's table-of-contents record, as stored on disk.
+///
+/// This is a plain data record: mutating a copy of it changes nothing in the
+/// archive it came from.
 #[binrw]
 #[brw(little)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct ModpkgChunk {
-    pub path_hash: u64,
+    pub path_hash: PathHash,
 
     pub data_offset: u64,
     pub compression: ModpkgCompression,
@@ -29,21 +20,30 @@ pub struct ModpkgChunk {
     pub uncompressed_checksum: u64,
 
     pub path_index: u32,
-    pub layer_index: u32,
-    pub wad_index: u32,
+    pub layer_index: LayerIndex,
+    pub wad_index: WadIndex,
 }
 
 impl ModpkgChunk {
-    pub fn size_of() -> usize {
-        (std::mem::size_of::<u64>() * 6) + (std::mem::size_of::<u32>() * 3) + 1
-    }
+    /// The size in bytes of one record in the table of contents.
+    pub const RECORD_SIZE: usize =
+        (std::mem::size_of::<u64>() * 6) + (std::mem::size_of::<u32>() * 3) + 1;
 
-    /// Get the layer index as an Option, where NO_LAYER_INDEX represents None (no layer)
-    pub fn layer(&self) -> Option<u32> {
-        if self.layer_index == NO_LAYER_INDEX {
+    /// The chunk's layer table position, or `None` for meta chunks.
+    pub fn layer(&self) -> Option<LayerIndex> {
+        if self.layer_index == LayerIndex::NONE {
             None
         } else {
             Some(self.layer_index)
+        }
+    }
+
+    /// The chunk's WAD table position, or `None` for meta chunks.
+    pub fn wad(&self) -> Option<WadIndex> {
+        if self.wad_index == WadIndex::NONE {
+            None
+        } else {
+            Some(self.wad_index)
         }
     }
 }
@@ -57,12 +57,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_size_of() {
+    fn record_size_matches_the_written_layout() {
         let chunk = ModpkgChunk::default();
 
         let mut writer = Cursor::new(Vec::new());
         chunk.write(&mut writer).unwrap();
 
-        assert_eq!(writer.position() as usize, ModpkgChunk::size_of());
+        assert_eq!(writer.position() as usize, ModpkgChunk::RECORD_SIZE);
     }
 }

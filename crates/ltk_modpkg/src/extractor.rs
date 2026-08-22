@@ -6,9 +6,8 @@ use std::{
 };
 
 use crate::{
-    chunk::{ModpkgChunk, NO_LAYER_HASH},
-    error::ModpkgError,
-    Modpkg, LICENSE_CHUNK_PATH, README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
+    chunk::ModpkgChunk, error::ModpkgError, LayerHash, Modpkg, LICENSE_CHUNK_PATH,
+    README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
 };
 
 /// Extractor for ModPkg archives.
@@ -39,16 +38,15 @@ impl<'modpkg, TSource: Read + Seek> ModpkgExtractor<'modpkg, TSource> {
         fs::create_dir_all(output_dir)?;
 
         // Group chunks by layer
-        let mut chunks_by_layer: HashMap<u64, Vec<ModpkgChunk>> = HashMap::new();
+        let mut chunks_by_layer: HashMap<LayerHash, Vec<ModpkgChunk>> = HashMap::new();
 
         for (key, chunk) in &self.modpkg.chunks {
-            let (_, layer_hash) = *key;
-            chunks_by_layer.entry(layer_hash).or_default().push(*chunk);
+            chunks_by_layer.entry(key.layer).or_default().push(*chunk);
         }
 
         // Extract chunks for each layer
         for (layer_hash, chunks) in chunks_by_layer {
-            if layer_hash == NO_LAYER_HASH {
+            if layer_hash == LayerHash::NONE {
                 self.extract_meta_chunks(&chunks, output_dir)?;
                 continue;
             }
@@ -139,7 +137,7 @@ impl<'modpkg, TSource: Read + Seek> ModpkgExtractor<'modpkg, TSource> {
         layer: &str,
         output_dir: impl AsRef<Path>,
     ) -> Result<PathBuf, ModpkgError> {
-        let chunk = *self.modpkg.get_chunk(path, Some(layer))?;
+        let chunk = *self.modpkg.chunk(path, Some(layer))?;
         self.extract_chunk(&chunk, output_dir)
     }
 }
@@ -166,7 +164,7 @@ mod tests {
         builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder},
         ModpkgCompression,
     };
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
     use tempfile::tempdir;
 
     #[test]
@@ -184,15 +182,11 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path(path)
-                    .unwrap()
                     .with_compression(ModpkgCompression::None),
             );
 
         builder
-            .build_to_writer(&mut cursor, |_, cursor| {
-                cursor.write_all(&test_data)?;
-                Ok(())
-            })
+            .build_to_writer(&mut cursor, |_| Ok(test_data.to_vec()))
             .expect("Failed to build Modpkg");
 
         // Reset cursor and mount the modpkg
@@ -232,13 +226,9 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("test.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None),
             )
-            .build_to_writer(&mut cursor, |_, cursor| {
-                cursor.write_all(&[0xAA; 100])?;
-                Ok(())
-            })
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 100]))
             .expect("Failed to build Modpkg");
 
         cursor.set_position(0);
@@ -292,26 +282,23 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path(path)
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer(base_layer),
             )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path(path)
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer(custom_layer),
             );
 
         builder
-            .build_to_writer(&mut cursor, |chunk, cursor| {
-                if chunk.layer == base_layer {
-                    cursor.write_all(&base_data)?;
+            .build_to_writer(&mut cursor, |chunk| {
+                if chunk.layer() == base_layer {
+                    Ok(base_data.to_vec())
                 } else {
-                    cursor.write_all(&custom_data)?;
+                    Ok(custom_data.to_vec())
                 }
-                Ok(())
             })
             .expect("Failed to build Modpkg");
 

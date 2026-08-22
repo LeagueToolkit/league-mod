@@ -4,7 +4,7 @@
 //!
 //! Regression coverage for the bug where such chunks were stripped as "lazy
 //! overrides" (byte-identical to the game original) or routed only to the WAD
-//! that already contained them — either way never reaching the mod's target
+//! that already contained them - either way never reaching the mod's target
 //! WAD, so the asset failed to load in-game.
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -96,7 +96,7 @@ fn read_chunk(wad_path: &Utf8Path, chunk_path: &str) -> Option<Vec<u8>> {
     Some(wad.load_chunk_decompressed(&chunk).unwrap().to_vec())
 }
 
-/// The stored `(compression_type, compressed checksum)` for a chunk — the pair
+/// The stored `(compression_type, compressed checksum)` for a chunk - the pair
 /// League compares across WADs when validating a shared chunk.
 fn chunk_identity(wad_path: &Utf8Path, chunk_path: &str) -> Option<(WadChunkCompression, u64)> {
     let file = fs::File::open(wad_path.as_std_path()).unwrap();

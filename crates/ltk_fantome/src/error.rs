@@ -1,64 +1,14 @@
-//! Errors returned when packing, extracting, and loading Fantome data.
+//! Errors returned when reading, writing, and loading Fantome data.
 //!
-//! Packing and extracting have separate types: neither can produce the other's
+//! Reading and writing have separate types: neither can produce the other's
 //! failures, so a merged enum would force matches on unreachable cases.
 
 use camino::Utf8PathBuf;
 use thiserror::Error;
 
-/// Failure to pack a mod project into a Fantome archive.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum FantomePackError {
-    /// The project has no `content/base` directory, so there is nothing to pack.
-    #[error("No base layer to pack: {0} does not exist")]
-    MissingBaseLayer(Utf8PathBuf),
+pub use crate::writer::FantomeWriteError;
 
-    /// The project's `.modignore` could not be loaded: the file is
-    /// unreadable, or a pattern in it does not parse. A broken pattern fails
-    /// the pack rather than silently shipping files the author excluded.
-    #[error(transparent)]
-    Ignore(#[from] ltk_mod_project::ModIgnoreError),
-
-    /// A file in the project could not be read.
-    #[error("Failed to read {path}")]
-    Read {
-        path: Utf8PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// The archive could not be written.
-    #[error("Failed to write the archive")]
-    Zip(#[from] zip::result::ZipError),
-
-    /// An IO failure with no single project file to blame.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    /// `META/info.json` could not be produced from the project.
-    #[error("Failed to serialize META/info.json")]
-    Json(#[from] serde_json::Error),
-
-    /// The thumbnail could not be read, or re-encoded as the PNG Fantome stores.
-    #[error("Failed to convert the thumbnail {path}")]
-    Thumbnail {
-        path: Utf8PathBuf,
-        #[source]
-        source: Box<image::ImageError>,
-    },
-}
-
-impl FantomePackError {
-    pub(crate) fn read(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
-        Self::Read {
-            path: path.into(),
-            source,
-        }
-    }
-}
-
-/// Failure to extract a Fantome archive.
+/// Failure to extract from a Fantome archive.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum FantomeExtractError {
@@ -82,10 +32,6 @@ pub enum FantomeExtractError {
     #[error("Failed to parse META/info.json")]
     Json(#[from] serde_json::Error),
 
-    /// The extracted project's `mod.config.json` could not be written.
-    #[error(transparent)]
-    Config(#[from] ltk_mod_project::ModProjectError),
-
     /// A packed WAD inside the archive could not be extracted.
     #[error("Failed to extract a WAD")]
     Wad(#[from] ltk_wad::WadError),
@@ -93,11 +39,6 @@ pub enum FantomeExtractError {
     /// The archive has no `META/info.json`.
     #[error("Missing info.json metadata file")]
     MissingMetadata,
-
-    /// `META/image.png` could not be decoded, or re-encoded as the project
-    /// thumbnail.
-    #[error("Failed to convert the thumbnail")]
-    Thumbnail(#[source] Box<image::ImageError>),
 }
 
 impl FantomeExtractError {

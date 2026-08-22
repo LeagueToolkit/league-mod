@@ -8,9 +8,8 @@ use std::{
 use ltk_io_ext::ReaderExt;
 
 use crate::{
-    chunk::{ModpkgChunk, NO_LAYER_HASH, NO_LAYER_INDEX},
-    error::ModpkgError,
-    hash_layer_name, hash_wad_name, ChunkPath, Modpkg, ModpkgLayer,
+    chunk::ModpkgChunk, error::ModpkgError, ChunkKey, ChunkPath, LayerHash, LayerIndex, Modpkg,
+    ModpkgLayer, PathHash, WadHash, WadIndex,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -37,28 +36,36 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
 
         let (layer_indices, layers) = read_layers(&mut reader)?;
         let (chunk_path_indices, chunk_paths) = read_chunk_paths(&mut reader)?;
-        let (wads_indices, wads) = read_wads(&mut reader)?;
+        let (wad_indices, wads) = read_wads(&mut reader)?;
 
         // Skip alignment
         let position = reader.stream_position()?;
         reader.seek(SeekFrom::Current(((8 - (position % 8)) % 8) as i64))?;
 
         let mut chunks = HashMap::new();
-        let mut chunks_by_wad_layer: HashMap<(u32, u32), Vec<(u64, u64)>> = HashMap::new();
+        let mut chunks_by_wad_layer: HashMap<(WadIndex, LayerIndex), Vec<ChunkKey>> =
+            HashMap::new();
         for _ in 0..chunk_count {
             let chunk = ModpkgChunk::read(&mut reader)?;
-            let layer_hash = if chunk.layer_index == NO_LAYER_INDEX {
-                NO_LAYER_HASH
+            let layer_hash = if chunk.layer_index == LayerIndex::NONE {
+                LayerHash::NONE
             } else {
-                layer_indices[chunk.layer_index as usize]
+                layer_indices[chunk.layer_index.value() as usize]
             };
 
-            let key = (chunk.path_hash, layer_hash);
+            let key = ChunkKey::new(chunk.path_hash, layer_hash);
             chunks_by_wad_layer
                 .entry((chunk.wad_index, chunk.layer_index))
                 .or_default()
                 .push(key);
-            chunks.insert(key, chunk);
+
+            if let Some(existing) = chunks.insert(key, chunk) {
+                if (existing.uncompressed_checksum, existing.uncompressed_size)
+                    != (chunk.uncompressed_checksum, chunk.uncompressed_size)
+                {
+                    return Err(ModpkgError::ChunksInconsistent(chunk.path_hash));
+                }
+            }
         }
 
         drop(reader);
@@ -69,7 +76,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
             layers,
             chunk_path_indices,
             chunk_paths,
-            wads_indices,
+            wad_indices,
             wads,
             chunks,
             chunks_by_wad_layer,
@@ -80,13 +87,13 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
 
 fn read_layers<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(Vec<u64>, HashMap<u64, ModpkgLayer>), ModpkgError> {
+) -> Result<(Vec<LayerHash>, HashMap<LayerHash, ModpkgLayer>), ModpkgError> {
     let layer_count = reader.read_u32::<LE>()?;
     let mut layer_indices = Vec::with_capacity(layer_count as usize);
     let mut layers = HashMap::with_capacity(layer_count as usize);
     for _ in 0..layer_count {
         let layer = ModpkgLayer::read(reader)?;
-        let layer_hash = hash_layer_name(&layer.name);
+        let layer_hash = LayerHash::from_name(&layer.name);
         layers.insert(layer_hash, layer);
         layer_indices.push(layer_hash);
     }
@@ -95,7 +102,7 @@ fn read_layers<R: Read + Seek>(
 
 fn read_chunk_paths<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(Vec<u64>, HashMap<u64, String>), ModpkgError> {
+) -> Result<(Vec<PathHash>, HashMap<PathHash, String>), ModpkgError> {
     let chunk_paths_count = reader.read_u32::<LE>()?;
     let mut chunk_path_indices = Vec::with_capacity(chunk_paths_count as usize);
     let mut chunk_paths = HashMap::with_capacity(chunk_paths_count as usize);
@@ -110,13 +117,13 @@ fn read_chunk_paths<R: Read + Seek>(
 
 fn read_wads<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(Vec<u64>, HashMap<u64, String>), ModpkgError> {
+) -> Result<(Vec<WadHash>, HashMap<WadHash, String>), ModpkgError> {
     let wads_count = reader.read_u32::<LE>()?;
     let mut wads_indices = Vec::with_capacity(wads_count as usize);
     let mut wads = HashMap::with_capacity(wads_count as usize);
     for _ in 0..wads_count {
         let wad = reader.read_str_until_nul()?;
-        let wad_hash = hash_wad_name(&wad);
+        let wad_hash = WadHash::from_name(&wad);
         wads.insert(wad_hash, wad);
         wads_indices.push(wad_hash);
     }

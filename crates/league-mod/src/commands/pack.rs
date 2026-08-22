@@ -5,9 +5,9 @@ use crate::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
-use ltk_fantome::{get_unsupported_layers, pack_to_fantome};
-use ltk_mod_project::{ConfigFormat, ModProject};
-use ltk_modpkg::project::{self as modpkg_project, PackError};
+use ltk_mod_project::fantome::FantomeFormat;
+use ltk_mod_project::modpkg::{ModpkgFormat, ModpkgPackError};
+use ltk_mod_project::{ConfigFormat, ModProject, PackError, PackageFormat, ProjectPacker};
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use std::fs::File;
 use std::io::BufWriter;
@@ -72,12 +72,15 @@ fn pack_to_modpkg(
         }
     }
 
-    let modpkg_file_name = modpkg_project::create_file_name(&mod_project, args.file_name);
+    let modpkg_file_name = mod_project.package_file_name(args.file_name, PackageFormat::Modpkg);
     let output_path = output_dir.join(&modpkg_file_name);
 
-    // Use the shared packing logic from ltk_modpkg
-    modpkg_project::pack_from_project_with_config(project_root, &output_path, &mod_project)
-        .map_err(|e| convert_pack_error(e, project_root))?;
+    let file = File::create(&output_path).into_diagnostic()?;
+    let writer = BufWriter::new(file);
+
+    ProjectPacker::new(mod_project, project_root.to_owned())
+        .pack(ModpkgFormat::new(writer))
+        .map_err(convert_pack_error)?;
 
     println_pad!(
         "{}\n{} {}",
@@ -89,20 +92,17 @@ fn pack_to_modpkg(
     Ok(())
 }
 
-/// Convert PackError to a miette diagnostic with CLI-friendly error messages.
-fn convert_pack_error(err: PackError, project_root: &Utf8Path) -> miette::Report {
+/// Convert a pack error to a miette diagnostic with CLI-friendly error messages.
+fn convert_pack_error(err: PackError<ModpkgPackError>) -> miette::Report {
     match err {
         PackError::LayerDirMissing { layer, path } => {
             CliError::layer_directory_missing(layer, path.into_std_path_buf()).into()
         }
-        PackError::InvalidLayerName(e) => {
+        PackError::Format(ModpkgPackError::InvalidLayerName(e)) => {
             CliError::invalid_layer_name(e.value().to_string(), None).into()
         }
         PackError::InvalidBaseLayerPriority(priority) => {
             CliError::invalid_base_layer_priority(priority).into()
-        }
-        PackError::ConfigNotFound(_) => {
-            CliError::config_not_found(project_root.as_std_path().to_owned()).into()
         }
         other => {
             // The source chain carries the actionable detail (which
@@ -146,13 +146,14 @@ fn pack_to_fantome_format(
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
-    let fantome_file_name = ltk_fantome::create_file_name(&mod_project, args.file_name);
+    let fantome_file_name = mod_project.package_file_name(args.file_name, PackageFormat::Fantome);
     let output_path = output_dir.join(&fantome_file_name);
 
     let file = File::create(&output_path).into_diagnostic()?;
     let writer = BufWriter::new(file);
 
-    pack_to_fantome(writer, &mod_project, project_root)
+    ProjectPacker::new(mod_project, project_root.to_owned())
+        .pack(FantomeFormat::new(writer))
         .map_err(|source| CliError::FantomePackingFailed { source })?;
 
     println_pad!(
@@ -168,7 +169,7 @@ fn pack_to_fantome_format(
 }
 
 fn warn_about_unsupported_layers(mod_project: &ModProject) {
-    let non_base_layers = get_unsupported_layers(mod_project);
+    let non_base_layers = mod_project.non_base_layers();
 
     if !non_base_layers.is_empty() {
         println_pad!(

@@ -39,7 +39,7 @@ marked *(pinned)* have a test asserting the behavior.
   phrase accordingly.
 - **Over-ignoring succeeds silently.** A filter that hides an entire layer
   still produces a valid, empty archive. The data to warn exists
-  (`PackResult::ignored_files`, `ContentWalk::skipped`) but no shipped
+  (`PackReport::ignored_files`, `ContentWalk::skipped`) but no shipped
   consumer surfaces it yet; ltk-manager should.
 
 ## Implementation semantics (rustdoc-level)

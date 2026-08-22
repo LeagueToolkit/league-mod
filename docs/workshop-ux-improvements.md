@@ -11,7 +11,7 @@ Embed a file tree viewer inside the project detail page showing the actual `cont
 - Allow drag-and-drop of game assets (textures, models, etc.) directly into the file tree
 - Show file type icons (`.dds`, `.skn`, `.bin`, etc.) and file sizes
 - Right-click context menu: Open in Explorer, Delete, Move to Layer, Rename
-- This is the single most impactful missing feature — right now there's no way to see or manage the actual mod files from the UI
+- This is the single most impactful missing feature - right now there's no way to see or manage the actual mod files from the UI
 
 ### Hot Reload / Watch Mode
 
@@ -23,7 +23,7 @@ Embed a file tree viewer inside the project detail page showing the actual `cont
 
 ### Template System
 
-"New Project from Template" — ship templates for common mod types.
+"New Project from Template" - ship templates for common mod types.
 
 - Templates for: champion skin, map skin, HUD mod, sound mod
 - Templates pre-populate the correct WAD structure and directory layout
@@ -74,7 +74,7 @@ Pin frequently worked-on projects to the top of the grid.
 
 Show a small health indicator (green/yellow/red dot) on every project card.
 
-- Don't wait for the pack dialog to surface issues — show them proactively
+- Don't wait for the pack dialog to surface issues - show them proactively
 - Click the indicator to see the full validation breakdown
 - Run validation in the background on startup and cache results
 
@@ -104,7 +104,7 @@ Make thumbnail management more intuitive.
 
 - Drag-and-drop thumbnail upload (not just file picker)
 - Crop/resize tool in a modal (simple aspect ratio enforcement for 16:9)
-- "Capture from Game" workflow hint — link to a screenshot tool or instructions
+- "Capture from Game" workflow hint - link to a screenshot tool or instructions
 - Auto-generate placeholder thumbnails with gradient backgrounds based on project name
 
 ### Progress & Activity
@@ -139,7 +139,7 @@ Polish that makes the app feel professional.
 
 Share full editable project workspaces between team members.
 
-- "Export Project" — zip entire project directory (not pack as .modpkg, but the full editable workspace)
+- "Export Project" - zip entire project directory (not pack as .modpkg, but the full editable workspace)
 - "Import Project" from zip
 - Preserves all layers, configs, thumbnails, content
 
@@ -230,13 +230,13 @@ Reduce confusion around complex concepts.
 
 Power-user efficiency.
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+N` | New Project |
+| Shortcut | Action               |
+| -------- | -------------------- |
+| `Ctrl+N` | New Project          |
 | `Ctrl+P` | Pack current project |
-| `Ctrl+F` | Focus search |
-| `Ctrl+S` | Save current form |
-| `Esc` | Back to project list |
+| `Ctrl+F` | Focus search         |
+| `Ctrl+S` | Save current form    |
+| `Esc`    | Back to project list |
 
 Show shortcut hints in button tooltips.
 
@@ -288,10 +288,10 @@ Version control for serious modders.
 
 The five highest-impact improvements to tackle first:
 
-| Priority | Feature | Why |
-|----------|---------|-----|
-| 1 | **Content File Browser** | Without this, modders constantly switch between the app and file explorer. Table stakes for a professional modding tool. |
-| 2 | **Always-On Validation Indicators** | Proactive quality feedback on cards eliminates the "pack and pray" workflow. |
-| 3 | **Skeleton Loading + Animations** | Cheapest way to make the whole app feel significantly more polished. |
-| 4 | **Sort / Filter / Tags** | Essential once a modder has more than ~10 projects. |
-| 5 | **Hot Reload Dev Mode** | The feature that would make modders *choose* this tool over alternatives. |
+| Priority | Feature                             | Why                                                                                                                      |
+| -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 1        | **Content File Browser**            | Without this, modders constantly switch between the app and file explorer. Table stakes for a professional modding tool. |
+| 2        | **Always-On Validation Indicators** | Proactive quality feedback on cards eliminates the "pack and pray" workflow.                                             |
+| 3        | **Skeleton Loading + Animations**   | Cheapest way to make the whole app feel significantly more polished.                                                     |
+| 4        | **Sort / Filter / Tags**            | Essential once a modder has more than ~10 projects.                                                                      |
+| 5        | **Hot Reload Dev Mode**             | The feature that would make modders *choose* this tool over alternatives.                                                |

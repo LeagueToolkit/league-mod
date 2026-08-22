@@ -4,12 +4,12 @@
 //! all `.wad.client` files under the game's `DATA/FINAL` directory. It provides two
 //! kinds of lookups that the builder relies on:
 //!
-//! 1. **Filename lookup** ([`find_wad`](GameIndex::find_wad)) — Resolve a WAD name
+//! 1. **Filename lookup** ([`find_wad`](GameIndex::find_wad)) - Resolve a WAD name
 //!    like `"Aatrox.wad.client"` (as listed by a mod) to its full filesystem path.
 //!    The lookup is case-insensitive. If the same filename appears in multiple
 //!    locations, an [`AmbiguousWad`](crate::Error::AmbiguousWad) error is returned.
 //!
-//! 2. **Hash lookup** ([`find_wads_with_hash`](GameIndex::find_wads_with_hash)) —
+//! 2. **Hash lookup** ([`find_wads_with_hash`](GameIndex::find_wads_with_hash)) -
 //!    Given a chunk path hash (`u64`), return *all* WAD files that contain a chunk
 //!    with that hash. This powers cross-WAD matching: a single mod override can be
 //!    distributed to every game WAD that shares the same asset.
@@ -37,7 +37,7 @@ const CACHE_VERSION: u32 = 3;
 /// Serializable representation of a [`GameIndex`] for disk caching.
 ///
 /// Uses MessagePack (via `rmp-serde`) for fast binary serialization with native
-/// `u64` keys — no hex encoding needed.
+/// `u64` keys - no hex encoding needed.
 #[derive(Serialize, Deserialize)]
 struct GameIndexCache {
     version: u32,
@@ -70,7 +70,7 @@ pub struct GameIndex {
 
     /// Fingerprint derived from WAD file sizes and modification times.
     ///
-    /// Used to detect game patches — if the fingerprint changes between builds,
+    /// Used to detect game patches - if the fingerprint changes between builds,
     /// the overlay must be fully rebuilt even if the enabled mod list hasn't changed.
     pub game_fingerprint: u64,
 
@@ -112,7 +112,7 @@ impl GameIndex {
 
         tracing::info!("Building game index from {}", data_final_dir);
 
-        // Single directory walk — reused by all three index-building functions.
+        // Single directory walk - reused by all three index-building functions.
         let wad_paths = collect_wad_paths_sorted(&data_final_dir)?;
 
         let wad_index = build_wad_filename_index(&wad_paths);
@@ -144,7 +144,7 @@ impl GameIndex {
     /// 3. The game fingerprint (derived from WAD file sizes/timestamps) matches
     ///
     /// If the cache is stale or missing, a fresh index is built and saved to
-    /// the cache path (best-effort — save failures are logged but not fatal).
+    /// the cache path (best-effort - save failures are logged but not fatal).
     ///
     /// # Arguments
     ///
@@ -481,7 +481,7 @@ struct WadMountResult {
     chunk_hashes: Vec<u64>,
 }
 
-/// Mount a single WAD and extract chunk path hashes (TOC only — no data I/O).
+/// Mount a single WAD and extract chunk path hashes (TOC only - no data I/O).
 fn mount_and_extract_hashes(
     abs_path: &Utf8Path,
     relative_path: Utf8PathBuf,
@@ -516,7 +516,7 @@ fn mount_and_extract_hashes(
 /// `(path_hash, content_hash)` pairs.
 ///
 /// Errors opening or mounting the WAD, or decompressing an individual chunk, are logged and
-/// skipped — the WAD contributes whatever it could read (an empty vec if it can't be opened or
+/// skipped - the WAD contributes whatever it could read (an empty vec if it can't be opened or
 /// mounted). Used by [`GameIndex::compute_content_hashes_batch`].
 fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<u64>) -> Vec<(u64, u64)> {
     use ltk_wad::Wad;

@@ -12,10 +12,12 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::sync::{Arc, Mutex};
 
-/// Mirror of the crate-private `strings::stringtable_chunk_hash` — the WAD
+/// Mirror of the crate-private `strings::stringtable_chunk_hash` - the WAD
 /// chunk path hash of `data/menu/{locale}/lol.stringtable`.
 fn stringtable_chunk_hash(locale: &str) -> u64 {
-    ltk_modpkg::ChunkPath::new(format!("data/menu/{locale}/lol.stringtable")).hash()
+    ltk_modpkg::ChunkPath::new(format!("data/menu/{locale}/lol.stringtable"))
+        .hash()
+        .value()
 }
 
 fn make_stringtable(entries: &[(&str, &str)]) -> Vec<u8> {
@@ -507,7 +509,7 @@ fn higher_priority_mod_wins_string_conflicts() {
     builder.build().unwrap();
 
     // Position 0 has the highest priority, even against a locale-specific
-    // bucket further down the list — mirroring chunk conflict resolution.
+    // bucket further down the list - mirroring chunk conflict resolution.
     assert_eq!(
         read_overlay_table(&env.overlay_root, "en_US").get_key("contested"),
         Some("Front")
@@ -553,7 +555,7 @@ fn editing_overrides_rebuilds_only_localized_wad() {
     );
 
     // The exact-match skip keys on the enabled-mod id list, so an in-place
-    // config edit needs a changed id (or a forced rebuild) to get past it —
+    // config edit needs a changed id (or a forced rebuild) to get past it -
     // same as any other in-place content edit. With the skip bypassed, the
     // per-WAD fingerprint (derived from the merged override map) must pick up
     // the change and rebuild exactly the localized WAD.
