@@ -24,13 +24,14 @@
 //!    Call [`build_patched_wad`](crate::wad_builder::build_patched_wad).
 //! 7. Persist the new [`OverlayState`] with per-WAD fingerprints.
 
-mod metadata;
+pub(crate) mod metadata;
 mod resolve;
 
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
+use crate::skin_integrity::{SkinIntegrityOffender, collect_skin_integrity_offenders};
 use crate::state::OverlayState;
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -464,6 +465,11 @@ pub struct OverlayBuilder {
     /// [`build`](Self::build), drained via
     /// [`take_linked_bin_offenders`](Self::take_linked_bin_offenders).
     last_linked_bin_offenders: Vec<LinkedBinOffender>,
+    /// Mods whose overridden base skin violates the in-game verifier's
+    /// closed-world assertion, from the most recent [`build`](Self::build),
+    /// drained via
+    /// [`take_skin_integrity_offenders`](Self::take_skin_integrity_offenders).
+    last_skin_integrity_offenders: Vec<SkinIntegrityOffender>,
 }
 
 impl OverlayBuilder {
@@ -488,6 +494,7 @@ impl OverlayBuilder {
             progress_callback: None,
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
+            last_skin_integrity_offenders: Vec::new(),
         }
     }
 
@@ -510,6 +517,19 @@ impl OverlayBuilder {
     /// previous build are restored from the persisted overlay state.
     pub fn take_linked_bin_offenders(&mut self) -> Vec<LinkedBinOffender> {
         std::mem::take(&mut self.last_linked_bin_offenders)
+    }
+
+    /// Drain the base-skin integrity offenders detected during the most recent
+    /// [`build`](Self::build).
+    ///
+    /// Each entry is a mod whose overridden `skin0.bin` leaves the base skin's
+    /// mesh references unresolvable in the overlay WAD the game will load —
+    /// which the in-game verifier treats as a hard failure. Returns an empty
+    /// vector when the last build found none. On an exact-match skip the
+    /// offenders from the previous build are restored from the persisted
+    /// overlay state.
+    pub fn take_skin_integrity_offenders(&mut self) -> Vec<SkinIntegrityOffender> {
+        std::mem::take(&mut self.last_skin_integrity_offenders)
     }
 
     /// Analyze a single mod's WAD footprint without building or modifying any
@@ -599,6 +619,7 @@ impl OverlayBuilder {
 
         // Reset per-build outputs; each return path sets these as appropriate.
         self.last_linked_bin_offenders = Vec::new();
+        self.last_skin_integrity_offenders = Vec::new();
 
         let effective_blocked = self.effective_blocked_wads();
 
@@ -733,6 +754,24 @@ impl OverlayBuilder {
 
         self.sweep_unexpected_overlay_files(&new_wad_fingerprints);
 
+        // Verify base-skin integrity against the overlay WADs now on disk
+        // (built and reused alike) — the same closed-world check the in-game
+        // verifier enforces, run ahead of time so a broken mod can be surfaced
+        // per-mod instead of failing the whole overlay at injection.
+        self.last_skin_integrity_offenders = collect_skin_integrity_offenders(
+            &self.game_dir,
+            &self.overlay_root,
+            &all_meta,
+            &wad_hash_sets,
+            &game_index,
+        );
+        if !self.last_skin_integrity_offenders.is_empty() {
+            tracing::info!(
+                "Base-skin check: {} mod(s) violate base-skin integrity",
+                self.last_skin_integrity_offenders.len()
+            );
+        }
+
         let reused_paths: Vec<Utf8PathBuf> = wads_to_reuse
             .iter()
             .map(|p| self.overlay_root.join(p))
@@ -747,6 +786,7 @@ impl OverlayBuilder {
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
+        state.skin_integrity_offenders = self.last_skin_integrity_offenders.clone();
         state.save(&state_path)?;
 
         let total_wads = built_paths.len() as u32;
@@ -849,6 +889,7 @@ impl OverlayBuilder {
 
         self.sweep_unexpected_overlay_files(&state.wad_fingerprints);
         self.last_linked_bin_offenders = state.linked_bin_offenders.clone();
+        self.last_skin_integrity_offenders = state.skin_integrity_offenders.clone();
         self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
 
         Some(OverlayBuildResult {

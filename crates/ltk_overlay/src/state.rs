@@ -14,6 +14,7 @@
 
 use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
+use crate::skin_integrity::SkinIntegrityOffender;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -101,6 +102,12 @@ pub struct OverlayState {
     /// re-surface the same advisory without recomputing.
     #[serde(default)]
     pub linked_bin_offenders: Vec<LinkedBinOffender>,
+
+    /// Mods whose overridden base skin violates the closed-world assertion the
+    /// in-game verifier enforces, as computed during the last build. Persisted
+    /// for the same reason as `linked_bin_offenders`.
+    #[serde(default)]
+    pub skin_integrity_offenders: Vec<SkinIntegrityOffender>,
 }
 
 impl Default for OverlayState {
@@ -114,6 +121,7 @@ impl Default for OverlayState {
             string_override_locales: Vec::new(),
             wad_fingerprints: BTreeMap::new(),
             linked_bin_offenders: Vec::new(),
+            skin_integrity_offenders: Vec::new(),
         }
     }
 }
@@ -146,6 +154,7 @@ impl OverlayState {
             string_override_locales,
             wad_fingerprints,
             linked_bin_offenders: Vec::new(),
+            skin_integrity_offenders: Vec::new(),
         }
     }
 
