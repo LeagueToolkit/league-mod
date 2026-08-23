@@ -140,8 +140,8 @@ fn content_edit_invalidates_exact_match_skip() {
     assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V2_EDITED");
 }
 
-/// Overlay files no build state accounts for — e.g. WADs written by a build
-/// that died before saving `overlay.json`, or leftover `.tmp` files — must be
+/// Overlay files no build state accounts for - e.g. WADs written by a build
+/// that died before saving `overlay.json`, or leftover `.tmp` files - must be
 /// removed on the next build, exact-match skip included, because the injector
 /// serves everything in the overlay directory.
 #[test]
@@ -201,7 +201,7 @@ fn orphan_overlay_files_are_swept_on_exact_match_skip() {
 }
 
 /// A failing WAD build must not leave a partial file at the destination path
-/// (or a `.tmp` beside it) — the injector would serve it to the game.
+/// (or a `.tmp` beside it) - the injector would serve it to the game.
 #[test]
 fn failed_wad_build_leaves_no_partial_file() {
     let tmp = tempfile::tempdir().unwrap();
@@ -219,7 +219,9 @@ fn failed_wad_build_leaves_no_partial_file() {
         HashSet::from([resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap()]);
 
     let result = build_patched_wad(&src, &dst, &override_hashes, |_hash| -> Result<Vec<u8>> {
-        Err("override source vanished mid-build".to_string().into())
+        Err(ltk_overlay::Error::Other(
+            "override source vanished mid-build".to_string(),
+        ))
     });
 
     assert!(result.is_err());
@@ -231,7 +233,7 @@ fn failed_wad_build_leaves_no_partial_file() {
 }
 
 /// The patched WAD must carry the source WAD's header signature and checksum
-/// verbatim — Riot's RSA signature over the original TOC is the provenance
+/// verbatim - Riot's RSA signature over the original TOC is the provenance
 /// record that ltk_sig's merged-WAD verification recovers from overlay files.
 #[test]
 fn patched_wad_preserves_original_signature_and_checksum() {

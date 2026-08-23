@@ -3,9 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use camino::Utf8PathBuf;
 use colored::Colorize;
 use ltk_mod_project::{ModProject, ModProjectAuthor};
-use miette::IntoDiagnostic;
+use miette::{miette, IntoDiagnostic};
 
 use crate::println_pad;
 use crate::utils::{is_valid_slug, validate_mod_name};
@@ -81,12 +82,11 @@ fn create_mod_project_file(
     let mod_project =
         create_default_mod_project(Some(name.to_string()), Some(display_name.to_string()));
 
-    let mod_project_file_content = serde_json::to_string_pretty(&mod_project).into_diagnostic()?;
-    std::fs::write(
-        mod_project_dir_path.as_ref().join("mod.config.json"),
-        mod_project_file_content,
-    )
-    .into_diagnostic()?;
+    let config_path =
+        Utf8PathBuf::from_path_buf(mod_project_dir_path.as_ref().join("mod.config.json"))
+            .map_err(|path| miette!("Project path is not valid UTF-8: {}", path.display()))?;
+
+    mod_project.save(&config_path).into_diagnostic()?;
 
     Ok(())
 }

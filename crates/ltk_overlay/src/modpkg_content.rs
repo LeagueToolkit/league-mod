@@ -7,8 +7,8 @@
 use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer};
-use ltk_modpkg::Modpkg;
+use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
+use ltk_modpkg::{ChunkKey, Modpkg, ModpkgLicense, PathHash, WadIndex};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
@@ -35,14 +35,11 @@ impl<R: Read + Seek> ModpkgContent<R> {
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
-        let metadata = self
-            .modpkg
-            .load_metadata()
-            .map_err(|e| Error::Other(format!("Failed to load modpkg metadata: {}", e)))?;
+        let metadata = self.modpkg.load_metadata()?;
 
         let mut layers: Vec<ModProjectLayer> = self
             .modpkg
-            .layers
+            .layers()
             .values()
             .map(|l| {
                 let meta_layer = metadata.layers.iter().find(|ml| ml.name == l.name);
@@ -73,7 +70,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
                 .into_iter()
                 .map(|a| ModProjectAuthor::Name(a.name))
                 .collect(),
-            license: None,
+            license: convert_license(metadata.license),
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -90,12 +87,12 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         };
 
         let mut wad_names = Vec::new();
-        for (wad_idx, _) in self.modpkg.wads_indices.iter().enumerate() {
+        for wad_idx in (0..self.modpkg.wad_count()).map(|i| WadIndex::new(i as u32)) {
             if !self
                 .modpkg
-                .chunks_for_wad_layer(wad_idx as u32, layer_index)
+                .chunks_for_wad_layer(wad_idx, layer_index)
                 .is_empty()
-                && let Some(name) = self.modpkg.wad_name_for_index(wad_idx as u32)
+                && let Some(name) = self.modpkg.wad_name_for_index(wad_idx)
             {
                 wad_names.push(name.to_string());
             }
@@ -119,7 +116,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         };
 
         // Use secondary index to get chunk keys for this WAD+layer
-        let chunk_keys: Vec<(u64, u64)> = self
+        let chunk_keys: Vec<ChunkKey> = self
             .modpkg
             .chunks_for_wad_layer(wad_index, layer_index)
             .to_vec();
@@ -129,17 +126,17 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         }
 
         // Collect relative paths for each chunk (before mutable borrow for batch load).
-        let mut rel_paths: HashMap<u64, String> = HashMap::with_capacity(chunk_keys.len());
-        for &(path_hash, _) in &chunk_keys {
-            match self.modpkg.chunk_paths.get(&path_hash) {
+        let mut rel_paths: HashMap<PathHash, String> = HashMap::with_capacity(chunk_keys.len());
+        for key in &chunk_keys {
+            match self.modpkg.chunk_paths().get(&key.path) {
                 Some(path) => {
-                    rel_paths.insert(path_hash, path.clone());
+                    rel_paths.insert(key.path, path.clone());
                 }
                 None => {
                     tracing::warn!(
-                        "modpkg chunk {:016x} (layer='{}', wad='{}') has no recorded path; \
+                        "modpkg chunk {} (layer='{}', wad='{}') has no recorded path; \
                          the override will be skipped",
-                        path_hash,
+                        key.path,
                         layer,
                         wad_name
                     );
@@ -148,13 +145,11 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         }
 
         // Batch load all chunks in offset-sorted order for sequential I/O
-        let batch = self.modpkg.load_chunks_batch(&chunk_keys).map_err(|e| {
-            Error::Other(format!("Failed to batch decompress modpkg chunks: {}", e))
-        })?;
+        let batch = self.modpkg.load_chunks_batch(&chunk_keys)?;
 
         let mut results = Vec::with_capacity(batch.len());
-        for (path_hash, _layer_hash, data) in batch {
-            if let Some(rel) = rel_paths.get(&path_hash) {
+        for (key, data) in batch {
+            if let Some(rel) = rel_paths.get(&key.path) {
                 results.push((Utf8PathBuf::from(rel.as_str()), data.into_vec()));
             }
         }
@@ -168,19 +163,13 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         _wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
-        let layer_hash = ltk_modpkg::hash_layer_name(layer);
-        let normalized = ltk_modpkg::utils::normalize_chunk_path(rel_path.as_str());
-        let path_hash = ltk_modpkg::utils::hash_chunk_name(&normalized);
+        let key = ChunkKey::new(
+            ltk_modpkg::ChunkPath::new(rel_path.as_str()).hash(),
+            ltk_modpkg::LayerHash::from_name(layer),
+        );
 
-        let bytes = self
-            .modpkg
-            .load_chunk_decompressed_by_hash(path_hash, layer_hash)
-            .map_err(|e| {
-                Error::Other(format!(
-                    "Failed to decompress modpkg chunk {:016x}: {}",
-                    path_hash, e
-                ))
-            })?;
+        // `ModpkgError` already names the chunk it failed on.
+        let bytes = self.modpkg.load_chunk_decompressed(key)?;
 
         Ok(bytes.into_vec())
     }
@@ -199,13 +188,60 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     }
 }
 
+/// Map a package's license declaration back to its mod project form.
+fn convert_license(license: ModpkgLicense) -> Option<ModProjectLicense> {
+    match license {
+        ModpkgLicense::None => None,
+        ModpkgLicense::Spdx { spdx_id } => Some(ModProjectLicense::Spdx(spdx_id)),
+        ModpkgLicense::Custom { name, url } => Some(ModProjectLicense::Custom { name, url }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::content::ModContentProvider;
     use ltk_modpkg::builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder};
     use ltk_modpkg::{Modpkg, ModpkgCompression};
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
+
+    #[test]
+    fn mod_project_surfaces_license() {
+        let mut cursor = Cursor::new(Vec::new());
+
+        let metadata = ltk_modpkg::ModpkgMetadata {
+            license: ModpkgLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            },
+            ..Default::default()
+        };
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_metadata(metadata)
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("data\\skin0.bin")
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
+            )
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
+            .unwrap();
+
+        cursor.set_position(0);
+        let modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+        let mut content = ModpkgContent::new(modpkg);
+
+        assert_eq!(
+            content.mod_project().unwrap().license,
+            Some(ModProjectLicense::Custom {
+                name: "My License".to_string(),
+                url: None,
+            })
+        );
+    }
 
     #[test]
     fn list_layer_wads_with_wad_index() {
@@ -217,7 +253,6 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\characters\\graves\\skin0.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base")
                     .with_wad("Graves.wad.client"),
@@ -225,17 +260,13 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("assets\\texture.tex")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base")
                     .with_wad("Graves.wad.client"),
             );
 
         builder
-            .build_to_writer(&mut cursor, |_chunk, cursor| {
-                cursor.write_all(&[0xAA; 10])?;
-                Ok(())
-            })
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
             .unwrap();
 
         cursor.set_position(0);
@@ -258,17 +289,13 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\skin0.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base")
                     .with_wad("Graves.wad.client"),
             );
 
         builder
-            .build_to_writer(&mut cursor, |_chunk, cursor| {
-                cursor.write_all(file_data)?;
-                Ok(())
-            })
+            .build_to_writer(&mut cursor, |_| Ok(file_data.to_vec()))
             .unwrap();
 
         cursor.set_position(0);
@@ -290,11 +317,14 @@ mod tests {
 
         let builder = ModpkgBuilder::default()
             .with_layer(ModpkgLayerBuilder::base())
-            .with_layer(ModpkgLayerBuilder::new("loading-screen").with_priority(1))
+            .with_layer(
+                ModpkgLayerBuilder::new("loading-screen")
+                    .unwrap()
+                    .with_priority(1),
+            )
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\base_file.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("base")
                     .with_wad("Graves.wad.client"),
@@ -302,20 +332,18 @@ mod tests {
             .with_chunk(
                 ModpkgChunkBuilder::new()
                     .with_path("data\\loading.bin")
-                    .unwrap()
                     .with_compression(ModpkgCompression::None)
                     .with_layer("loading-screen")
                     .with_wad("Graves.wad.client"),
             );
 
         builder
-            .build_to_writer(&mut cursor, |chunk, cursor| {
+            .build_to_writer(&mut cursor, |chunk| {
                 if chunk.layer() == "base" {
-                    cursor.write_all(b"base_data")?;
+                    Ok(b"base_data".to_vec())
                 } else {
-                    cursor.write_all(b"loading_data")?;
+                    Ok(b"loading_data".to_vec())
                 }
-                Ok(())
             })
             .unwrap();
 

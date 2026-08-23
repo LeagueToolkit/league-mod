@@ -5,7 +5,9 @@ use crate::println_pad;
 use crate::utils::config::load_config;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
-use ltk_fantome::{FantomeExtractError, FantomeExtractor, WadHashtable};
+use ltk_fantome::FantomeExtractError;
+use ltk_mod_project::fantome::{FantomeImportError, FantomeImporter, WadHashtable};
+use ltk_mod_project::PackageFormat;
 use ltk_modpkg::{Modpkg, ModpkgExtractor};
 use miette::{IntoDiagnostic, Result};
 
@@ -34,11 +36,8 @@ pub fn extract_mod_package(args: ExtractModPackageArgs) -> Result<()> {
         ));
     }
 
-    // Check if it is a fantome file (ends with .fantome)
-    if let Some(extension) = file_path.extension() {
-        if extension == "fantome" {
-            return extract_fantome_package(args);
-        }
+    if PackageFormat::from_path(file_path) == Some(PackageFormat::Fantome) {
+        return extract_fantome_package(args);
     }
 
     let file = File::open(file_path)
@@ -116,31 +115,28 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
         output_dir.as_str().bright_white().bold()
     );
 
-    let mut extractor = FantomeExtractor::new(file)
-        .map_err(map_fantome_error)?
-        .with_hashtable_opt(hashtable);
-    extractor
-        .extract_to(output_dir.as_std_path())
-        .map_err(map_fantome_error)?;
+    let importer = FantomeImporter::new(file);
+    match &hashtable {
+        Some(ht) => importer.with_hashtable(ht).import(&output_dir),
+        None => importer.import(&output_dir),
+    }
+    .map_err(map_fantome_error)?;
     println_pad!("{}", "✅ Extraction complete!".bright_green().bold());
     Ok(())
 }
 
-/// Map FantomeExtractError to CliError for user-friendly error messages.
-fn map_fantome_error(err: FantomeExtractError) -> CliError {
+/// Map FantomeImportError to CliError for user-friendly error messages.
+///
+/// Only the WAD case is pulled out, for its help text. Everything else is
+/// carried as a source so miette prints the whole chain, which is where the
+/// path that failed now lives.
+fn map_fantome_error(err: FantomeImportError) -> CliError {
     match err {
-        FantomeExtractError::Wad(e) => CliError::WadExtractionFailed {
-            message: e.to_string(),
-        },
-        FantomeExtractError::Io(e) => CliError::IoError { source: e },
-        FantomeExtractError::Zip(e) => CliError::IoError {
-            source: std::io::Error::other(e),
-        },
-        FantomeExtractError::Json(e) => CliError::IoError {
-            source: std::io::Error::other(e),
-        },
-        FantomeExtractError::MissingMetadata => CliError::IoError {
-            source: std::io::Error::other("Missing info.json metadata file"),
-        },
+        FantomeImportError::Extract(FantomeExtractError::Wad(source)) => {
+            CliError::WadExtractionFailed {
+                message: source.to_string(),
+            }
+        }
+        source => CliError::FantomeExtractionFailed { source },
     }
 }

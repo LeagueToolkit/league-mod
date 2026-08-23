@@ -1,6 +1,6 @@
 # ltk_modpkg
 
-A Rust library for reading, writing, and packing `.modpkg` archives — the binary mod distribution format for League of Legends mods in the [League Mod Toolkit](https://github.com/LeagueToolkit/league-mod).
+A Rust library for reading, writing, and packing `.modpkg` archives, the binary mod distribution format for League of Legends mods in the [League Mod Toolkit](https://github.com/LeagueToolkit/league-mod).
 
 ## Overview
 
@@ -8,11 +8,14 @@ A `.modpkg` file is a binary container that stores mod content organized by laye
 
 This crate provides:
 
-- **Reading** — mount a modpkg from any `Read + Seek` source and access chunks by path hash
-- **Writing** — build a modpkg from scratch using `ModpkgBuilder`
-- **Project packing** — scan a mod project directory and produce a modpkg in one call (requires `project` feature)
-- **Extraction** — extract modpkg contents back to disk
-- **Metadata** — read/write msgpack-encoded mod metadata
+- **Reading**: mount a modpkg from any `Read + Seek` source and access chunks by path hash
+- **Writing**: build a modpkg from scratch using `ModpkgBuilder`
+- **Extraction**: extract modpkg contents back to disk
+- **Metadata**: read/write msgpack-encoded mod metadata
+
+Packing a mod *project* directory into a modpkg lives in the `ltk_mod_project`
+crate (its `modpkg` cargo feature), whose `ModpkgFormat` backend drives
+`ModpkgBuilder` from here.
 
 ## Usage
 
@@ -35,26 +38,19 @@ for wad_name in modpkg.wads.values() {
 }
 ```
 
-### Packing a mod project (requires `project` feature)
+### Packing a mod project
+
+Project packing lives in `ltk_mod_project` behind its `modpkg` feature. The
+format-neutral `ProjectPacker` scans the project; `ModpkgFormat` encodes it:
 
 ```rust
-use ltk_modpkg::project::ProjectPacker;
-use camino::Utf8PathBuf;
+use ltk_mod_project::modpkg::ModpkgFormat;
+use ltk_mod_project::ProjectPacker;
 
 // Loads mod.config.json/toml automatically from the project directory
-let packer = ProjectPacker::new(Utf8PathBuf::from("my-mod"))?;
-packer.pack("build/my-mod_1.0.0.modpkg".into())?;
-```
-
-Or pack to an in-memory buffer:
-
-```rust
-use ltk_modpkg::project::ProjectPacker;
-use camino::Utf8PathBuf;
-
-let mut buffer = std::io::Cursor::new(Vec::new());
-ProjectPacker::new(Utf8PathBuf::from("my-mod"))?
-    .pack_to_writer(&mut buffer)?;
+let packer = ProjectPacker::from_dir("my-mod")?;
+let file = std::fs::File::create("build/my-mod_1.0.0.modpkg")?;
+packer.pack(ModpkgFormat::new(file))?;
 ```
 
 ### Building a modpkg programmatically
@@ -81,15 +77,9 @@ builder.build_to_writer(&mut output, |chunk, cursor| {
 })?;
 ```
 
-## Features
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `project` | no | Enables `ProjectPacker` and mod project packing from disk. Adds `ltk_mod_project` dependency. |
-
 ## Project structure
 
-The expected mod project layout (used by `ProjectPacker`):
+The expected mod project layout (used by `ltk_mod_project`'s `ProjectPacker`):
 
 ```
 my-mod/

@@ -2,8 +2,8 @@
 //!
 //! Fantome archives only support a single "base" layer. WAD content is stored
 //! under the `WAD/` directory, either as:
-//! - **Directory WADs**: `WAD/{name}.wad.client/{file}` — individual override files
-//! - **Packed WADs**: `WAD/{name}.wad.client` — complete WAD files unpacked in-memory into overrides
+//! - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
+//! - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
 //!
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
@@ -11,7 +11,9 @@
 use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, default_layers};
+use ltk_mod_project::{
+    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, default_layers,
+};
 use ltk_wad::Wad;
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
@@ -24,7 +26,7 @@ use zip::read::ZipFile;
 /// archive with "Invalid checksum". The check only fires on the trailing EOF
 /// `read()`, which `Take(size)` never issues. `Take` also caps the read at the
 /// declared `uncompressed_size` so a bogus (huge) size can't drive an unbounded
-/// allocation — we use `Vec::new()` (not `with_capacity`) for the same reason.
+/// allocation - we use `Vec::new()` (not `with_capacity`) for the same reason.
 ///
 /// Integrity is intentionally **not** verified (that's the whole point of this
 /// helper). We also do not require the byte count to equal the declared size:
@@ -139,8 +141,8 @@ impl FantomeIndex {
 ///
 /// Fantome archives only support a single "base" layer. WAD content is stored
 /// under the `WAD/` directory, either as:
-/// - **Directory WADs**: `WAD/{name}.wad.client/{file}` — individual override files
-/// - **Packed WADs**: `WAD/{name}.wad.client` — complete WAD files unpacked in-memory into overrides
+/// - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
+/// - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
 pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: FantomeIndex,
@@ -150,22 +152,17 @@ pub struct FantomeContent<R: Read + Seek> {
 
 impl<R: Read + Seek> FantomeContent<R> {
     pub fn new(reader: R) -> Result<Self> {
-        let mut archive = ZipArchive::new(reader)
-            .map_err(|e| Error::Other(format!("Failed to open fantome archive: {}", e)))?;
+        let mut archive = ZipArchive::new(reader)?;
         let index = FantomeIndex::build(&mut archive);
 
         // Mount all packed WADs upfront, reading via the stored entry path.
         let mut packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>> = HashMap::new();
         for (wad_key, zip_path) in &index.packed_wad_paths {
-            let mut entry = archive.by_name(zip_path).map_err(|e| {
-                Error::Other(format!("Failed to read packed WAD '{}': {}", zip_path, e))
-            })?;
-            let wad_data = read_zip_entry_bytes(&mut entry).map_err(|e| {
-                Error::Other(format!(
-                    "Failed to read packed WAD data '{}': {}",
-                    zip_path, e
-                ))
-            })?;
+            let mut entry = archive
+                .by_name(zip_path)
+                .map_err(|source| Error::archive_entry(zip_path, source))?;
+            let wad_data = read_zip_entry_bytes(&mut entry)
+                .map_err(|source| Error::archive_entry(zip_path, source))?;
 
             let wad = Wad::mount(Cursor::new(wad_data))?;
             packed_wads.insert(wad_key.clone(), wad);
@@ -196,15 +193,16 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         let mut info_file = self
             .archive
             .by_name(info_name)
-            .map_err(|e| Error::Other(format!("Failed to read info.json: {}", e)))?;
+            .map_err(|source| Error::archive_entry(info_name.as_str(), source))?;
         let info_bytes = read_zip_entry_bytes(&mut info_file)
-            .map_err(|e| Error::Other(format!("Failed to read info.json content: {}", e)))?;
-        let info_content = String::from_utf8(info_bytes)
-            .map_err(|e| Error::Other(format!("info.json is not valid UTF-8: {}", e)))?;
+            .map_err(|source| Error::archive_entry(info_name.as_str(), source))?;
 
-        let info_content = info_content.trim_start_matches('\u{feff}').trim();
-        let info: ltk_fantome::FantomeInfo = serde_json::from_str(info_content)
-            .map_err(|e| Error::Other(format!("Failed to parse fantome info.json: {}", e)))?;
+        // Some Fantome tools write a UTF-8 BOM, which serde_json rejects.
+        // Invalid UTF-8 past that point surfaces as a parse error.
+        let info_json = info_bytes
+            .strip_prefix(b"\xEF\xBB\xBF")
+            .unwrap_or(&info_bytes);
+        let info: ltk_fantome::FantomeInfo = serde_json::from_slice(info_json)?;
 
         // Map declared layers so per-layer string overrides survive; fantome WAD
         // content itself is still base-layer only.
@@ -234,7 +232,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             version: info.version,
             description: info.description,
             authors: vec![ModProjectAuthor::Name(info.author)],
-            license: None,
+            license: info.license.map(ModProjectLicense::from),
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -271,16 +269,16 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 let mut entry = self
                     .archive
                     .by_name(zip_path)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
                 let bytes = read_zip_entry_bytes(&mut entry)
-                    .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
                 results.push((Utf8PathBuf::from(rel_path), bytes));
             }
 
             return Ok(results);
         }
 
-        // Try packed WAD — extract all chunks as hex-hash files
+        // Try packed WAD - extract all chunks as hex-hash files
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
             let mut results = Vec::with_capacity(path_hashes.len());
@@ -308,9 +306,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             let mut entry = self
                 .archive
                 .by_name(zip_path)
-                .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             let bytes = read_zip_entry_bytes(&mut entry)
-                .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             results.push((Utf8PathBuf::from(rel_path), bytes));
         }
 
@@ -349,13 +347,13 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             let mut entry = self
                 .archive
                 .by_name(&zip_path)
-                .map_err(|e| Error::Other(format!("Failed to read ZIP entry: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             let bytes = read_zip_entry_bytes(&mut entry)
-                .map_err(|e| Error::Other(format!("Failed to read ZIP entry data: {}", e)))?;
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
             return Ok(bytes);
         }
 
-        // Try packed WAD — extract specific chunk by hex hash filename
+        // Try packed WAD - extract specific chunk by hex hash filename
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
             let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
                 .file_stem()
@@ -398,14 +396,12 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             ))
         })?;
 
-        let mut entry = self.archive.by_name(&zip_path).map_err(|e| {
-            Error::Other(format!(
-                "Failed to read RAW ZIP entry '{}': {}",
-                zip_path, e
-            ))
-        })?;
+        let mut entry = self
+            .archive
+            .by_name(&zip_path)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
         read_zip_entry_bytes(&mut entry)
-            .map_err(|e| Error::Other(format!("Failed to read RAW ZIP entry data: {}", e)))
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
@@ -522,11 +518,19 @@ mod tests {
     }
 
     fn make_info_json(name: &str) -> Vec<u8> {
+        make_info_json_with_license(name, None)
+    }
+
+    fn make_info_json_with_license(
+        name: &str,
+        license: Option<ltk_fantome::FantomeLicense>,
+    ) -> Vec<u8> {
         serde_json::to_vec(&ltk_fantome::FantomeInfo {
             name: name.to_string(),
             author: "Author".to_string(),
             version: "1.0.0".to_string(),
             description: "Desc".to_string(),
+            license,
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
@@ -557,6 +561,23 @@ mod tests {
     }
 
     #[test]
+    fn mod_project_surfaces_license() {
+        let cursor = make_fantome_zip(&[(
+            "META/info.json",
+            &make_info_json_with_license(
+                "Licensed Mod",
+                Some(ltk_fantome::FantomeLicense::Spdx("MIT".to_string())),
+            ),
+        )]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        assert_eq!(
+            content.mod_project().unwrap().license,
+            Some(ModProjectLicense::Spdx("MIT".to_string()))
+        );
+    }
+
+    #[test]
     fn mod_project_missing_info_json() {
         let cursor = make_fantome_zip(&[("WAD/test.wad.client/file", b"data")]);
         let mut content = FantomeContent::new(cursor).unwrap();
@@ -572,6 +593,7 @@ mod tests {
                 author: "Author".to_string(),
                 version: "1.0.0".to_string(),
                 description: "Desc".to_string(),
+                license: None,
                 tags: Vec::new(),
                 champions: Vec::new(),
                 maps: Vec::new(),
@@ -769,7 +791,7 @@ mod tests {
     fn loads_archive_with_bad_crc32() {
         // Some Fantome creators emit incorrect CRC32 values in the ZIP central
         // directory. The zip crate's CRC check would otherwise reject these
-        // archives with "Invalid checksum" — verify we tolerate that and read
+        // archives with "Invalid checksum" - verify we tolerate that and read
         // the underlying data correctly.
         let cursor = make_fantome_zip_corrupt_crc(&[
             ("META/info.json", &make_info_json("Bad CRC Mod")),
@@ -794,7 +816,7 @@ mod tests {
 
     #[test]
     fn loads_packed_wad_with_bad_crc32() {
-        // A packed WAD is mounted via Wad::mount during FantomeContent::new — the
+        // A packed WAD is mounted via Wad::mount during FantomeContent::new - the
         // downstream "WAD mounting" path the fix targets. Verify it and the packed
         // branch of read_wad_override_file tolerate a corrupt CRC.
         const PACKED_PAYLOAD: &[u8] = b"packed_payload_bytes";

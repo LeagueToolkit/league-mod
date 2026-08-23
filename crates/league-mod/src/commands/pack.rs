@@ -5,13 +5,12 @@ use crate::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
-use ltk_fantome::{get_unsupported_layers, pack_to_fantome};
-use ltk_mod_project::ModProject;
-use ltk_modpkg::project::{self as modpkg_project, PackError};
+use ltk_mod_project::fantome::FantomeFormat;
+use ltk_mod_project::modpkg::{ModpkgFormat, ModpkgPackError};
+use ltk_mod_project::{ConfigFormat, ModProject, PackError, PackageFormat, ProjectPacker};
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum PackFormat {
@@ -31,7 +30,7 @@ pub struct PackModProjectArgs {
 
 pub fn pack_mod_project(args: PackModProjectArgs) -> Result<()> {
     let config_path = resolve_config_path(args.config_path.clone())?;
-    let mod_project = load_config(&config_path)?;
+    let mod_project = ModProject::load_from_file(&config_path).into_diagnostic()?;
 
     validate_mod_name(&mod_project.name)?;
     validate_version_format(&mod_project.version)?;
@@ -44,12 +43,9 @@ pub fn pack_mod_project(args: PackModProjectArgs) -> Result<()> {
 
 fn pack_to_modpkg(
     args: PackModProjectArgs,
-    config_path: PathBuf,
+    config_path: Utf8PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
-    let config_path = Utf8PathBuf::try_from(config_path)
-        .into_diagnostic()
-        .wrap_err("Config path is not valid UTF-8")?;
     let project_root = config_path.parent().unwrap();
 
     println_pad!(
@@ -76,12 +72,15 @@ fn pack_to_modpkg(
         }
     }
 
-    let modpkg_file_name = modpkg_project::create_file_name(&mod_project, args.file_name);
+    let modpkg_file_name = mod_project.package_file_name(args.file_name, PackageFormat::Modpkg);
     let output_path = output_dir.join(&modpkg_file_name);
 
-    // Use the shared packing logic from ltk_modpkg
-    modpkg_project::pack_from_project_with_config(project_root, &output_path, &mod_project)
-        .map_err(|e| convert_pack_error(e, project_root))?;
+    let file = File::create(&output_path).into_diagnostic()?;
+    let writer = BufWriter::new(file);
+
+    ProjectPacker::new(mod_project, project_root.to_owned())
+        .pack(ModpkgFormat::new(writer))
+        .map_err(convert_pack_error)?;
 
     println_pad!(
         "{}\n{} {}",
@@ -93,32 +92,38 @@ fn pack_to_modpkg(
     Ok(())
 }
 
-/// Convert PackError to a miette diagnostic with CLI-friendly error messages.
-fn convert_pack_error(err: PackError, project_root: &Utf8Path) -> miette::Report {
+/// Convert a pack error to a miette diagnostic with CLI-friendly error messages.
+fn convert_pack_error(err: PackError<ModpkgPackError>) -> miette::Report {
     match err {
         PackError::LayerDirMissing { layer, path } => {
             CliError::layer_directory_missing(layer, path.into_std_path_buf()).into()
         }
-        PackError::InvalidLayerName(name) => CliError::invalid_layer_name(name, None).into(),
+        PackError::Format(ModpkgPackError::InvalidLayerName(e)) => {
+            CliError::invalid_layer_name(e.value().to_string(), None).into()
+        }
         PackError::InvalidBaseLayerPriority(priority) => {
             CliError::invalid_base_layer_priority(priority).into()
         }
-        PackError::ConfigNotFound(_) => {
-            CliError::config_not_found(project_root.as_std_path().to_owned()).into()
+        other => {
+            // The source chain carries the actionable detail (which
+            // `.modignore` line is broken, the underlying IO cause);
+            // Display alone would drop it.
+            let mut message = format!("Failed to pack mod: {other}");
+            let mut source = std::error::Error::source(&other);
+            while let Some(err) = source {
+                message.push_str(&format!(": {err}"));
+                source = err.source();
+            }
+            miette!("{}", message)
         }
-        other => miette!("Failed to pack mod: {}", other),
     }
 }
 
 fn pack_to_fantome_format(
     args: PackModProjectArgs,
-    config_path: PathBuf,
+    config_path: Utf8PathBuf,
     mod_project: ModProject,
 ) -> Result<()> {
-    let config_path = Utf8PathBuf::try_from(config_path)
-        .into_diagnostic()
-        .wrap_err("Config path is not valid UTF-8")?;
-
     println_pad!(
         "{} {}",
         "Packing mod project to Fantome format:"
@@ -141,14 +146,15 @@ fn pack_to_fantome_format(
         std::fs::create_dir_all(&output_dir).into_diagnostic()?;
     }
 
-    let fantome_file_name = ltk_fantome::create_file_name(&mod_project, args.file_name);
+    let fantome_file_name = mod_project.package_file_name(args.file_name, PackageFormat::Fantome);
     let output_path = output_dir.join(&fantome_file_name);
 
     let file = File::create(&output_path).into_diagnostic()?;
     let writer = BufWriter::new(file);
 
-    pack_to_fantome(writer, &mod_project, project_root.as_std_path())
-        .map_err(|e| miette!("Failed to pack to Fantome format: {}", e))?;
+    ProjectPacker::new(mod_project, project_root.to_owned())
+        .pack(FantomeFormat::new(writer))
+        .map_err(|source| CliError::FantomePackingFailed { source })?;
 
     println_pad!(
         "{}\n{} {}",
@@ -163,7 +169,7 @@ fn pack_to_fantome_format(
 }
 
 fn warn_about_unsupported_layers(mod_project: &ModProject) {
-    let non_base_layers = get_unsupported_layers(mod_project);
+    let non_base_layers = mod_project.non_base_layers();
 
     if !non_base_layers.is_empty() {
         println_pad!(
@@ -199,64 +205,29 @@ fn warn_about_unsupported_layers(mod_project: &ModProject) {
 
 // Config utils
 
-fn resolve_config_path(config_path: Option<String>) -> Result<PathBuf> {
+fn resolve_config_path(config_path: Option<String>) -> Result<Utf8PathBuf> {
     match config_path {
-        Some(path) => Ok(PathBuf::from(path)),
+        Some(path) => Ok(Utf8PathBuf::from(path)),
         None => {
             let cwd = std::env::current_dir().into_diagnostic()?;
+            let cwd = Utf8PathBuf::try_from(cwd)
+                .into_diagnostic()
+                .wrap_err("Working directory is not valid UTF-8")?;
+
             resolve_correct_config_extension(&cwd)
         }
     }
 }
 
-fn resolve_correct_config_extension(project_dir: &Path) -> Result<PathBuf> {
-    // JSON first, then TOML
-    let config_extensions = ["json", "toml"];
-
-    for ext in config_extensions {
-        let config_path = project_dir.join(format!("mod.config.{}", ext));
+fn resolve_correct_config_extension(project_dir: &Utf8Path) -> Result<Utf8PathBuf> {
+    for format in ConfigFormat::ALL {
+        let config_path = project_dir.join(format.file_name());
         if config_path.exists() {
             return Ok(config_path);
         }
     }
 
-    Err(CliError::config_not_found(project_dir.to_owned()).into())
-}
-
-fn load_config(config_path: &Path) -> Result<ModProject> {
-    let config_extension = config_path.extension().unwrap_or_default();
-
-    match config_extension.to_str() {
-        Some("json") => {
-            let file = File::open(config_path).into_diagnostic().with_context(|| {
-                format!("Failed to open config file: {}", config_path.display())
-            })?;
-            serde_json::from_reader(file)
-                .into_diagnostic()
-                .with_context(|| {
-                    format!(
-                        "Failed to parse JSON config file: {}",
-                        config_path.display()
-                    )
-                })
-        }
-        Some("toml") => {
-            let content = std::fs::read_to_string(config_path)
-                .into_diagnostic()
-                .with_context(|| {
-                    format!("Failed to read config file: {}", config_path.display())
-                })?;
-            toml::from_str(&content).into_diagnostic().with_context(|| {
-                format!(
-                    "Failed to parse TOML config file: {}",
-                    config_path.display()
-                )
-            })
-        }
-        _ => Err(miette!(
-            "Invalid config file extension, expected mod.config.json or mod.config.toml"
-        )),
-    }
+    Err(CliError::config_not_found(project_dir.as_std_path().to_owned()).into())
 }
 
 fn resolve_output_dir(output_dir: &str, config_path: &Utf8Path) -> Result<Utf8PathBuf> {

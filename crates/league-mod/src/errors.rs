@@ -106,6 +106,23 @@ pub enum CliError {
         help("The packed WAD file could not be extracted. The file may be corrupted or in an unsupported format.")
     )]
     WadExtractionFailed { message: String },
+
+    #[error("Fantome extraction failed")]
+    #[diagnostic(
+        code(fantome::extraction_failed),
+        help("The archive may be corrupt, or may not be a Fantome package.")
+    )]
+    FantomeExtractionFailed {
+        #[source]
+        source: ltk_mod_project::fantome::FantomeImportError,
+    },
+
+    #[error("Fantome packing failed")]
+    #[diagnostic(code(fantome::packing_failed))]
+    FantomePackingFailed {
+        #[source]
+        source: ltk_mod_project::PackError<ltk_mod_project::fantome::FantomePackError>,
+    },
 }
 
 impl CliError {

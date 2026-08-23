@@ -32,6 +32,10 @@ This workspace contains the following crates:
 
 ### `league-mod` - CLI Tool
 
+> **Deprecated:** the `league-mod` CLI no longer receives new features and
+> will be retired in the future. The library crates below remain the
+> supported way to build mod tooling.
+
 The main command-line interface for mod developers and users.
 
 **Features:**
@@ -69,7 +73,6 @@ Library for reading, writing, and manipulating the modpkg binary format.
 - Zstd compression
 - Layer-based file organization
 - Chunk-based data storage with metadata
-- High-level project packing (with `project` feature)
 
 ### `ltk_mod_core` - Shared Core Library
 
@@ -81,13 +84,19 @@ Shared utilities used by both the CLI and GUI applications.
 
 ### `ltk_mod_project` - Configuration Library
 
-Handles mod project configuration files and metadata structures.
+Handles mod project configuration files, metadata structures, and packing
+projects to distributable formats.
 
 **Features:**
 - JSON/TOML config support
 - Layer system
 - Author, license, readme and distribution metadata
 - File transformer configuration
+- `.modignore` content filtering
+- Format-neutral packing driver (`ProjectPacker`) with pluggable format
+  backends (`PackFormat`): `.modpkg` via the `modpkg` feature, `.fantome`
+  via the `fantome` feature
+- Fantome-to-project import (`ImportFormat` / `FantomeImporter`)
 
 ### `ltk-manager` - Desktop GUI Application
 
@@ -142,6 +151,7 @@ A typical mod project follows this structure:
 ```
 my-mod/
 ├── mod.config.json           # Project configuration
+├── .modignore                # Files to exclude from packing (optional)
 ├── content/                  # Mod content organized by layers
 │   ├── base/                 # Base layer (priority 0)
 |   |   ├── Aatrox.wad.client # Mods for the Aatrox wad file
@@ -153,8 +163,50 @@ my-mod/
 │   ├── high_res/             # High resolution layer
 │   └── gameplay/             # Gameplay modifications layer
 ├── build/                    # Output directory for .modpkg files
+├── LICENSE                   # License text (optional, also LICENSE.md/.txt)
 └── README.md                 # Project documentation/description
 ```
+
+### Ignoring files
+
+A `.modignore` file at the project root lists gitignore-style patterns for
+files under `content/` that should not be packed (working files like `.psd`
+sources, scratch directories, OS junk). Patterns follow gitignore rules:
+`#` comments, `!` negation, directory-only patterns (`cache/`), last match
+wins. Root-file patterns are relative to `content/`, and ignore files nest
+like git's: any directory under `content/` may hold its own `.modignore`
+whose patterns are relative to that directory, with deeper files overriding
+shallower ones. Matching is case-insensitive, because the game resolves
+packed paths case-insensitively. The `.modignore` files themselves are never
+packed, and the same filter is applied when building a live overlay, so what
+you test is what you ship.
+
+Two things trip people up. Always use `/` in patterns, even on Windows: a
+backslash is gitignore's escape character, so `base\scratch` matches nothing
+you meant. And to keep a single file inside an otherwise ignored folder,
+ignore the folder's contents rather than the folder: `scratch/*` followed by
+`!scratch/keep.bin` works, `scratch/` does not, because nothing under an
+excluded directory can be re-included. See the
+[wiki](https://wiki.leaguetoolkit.dev/making-mods/mod-projects/#ignore-files)
+for details.
+
+### Licensing
+
+A project declares its license in two independent places:
+
+- The **`license` field** in `mod.config.json` names the terms - either an SPDX
+  identifier (`"license": "MIT"`) or a custom object
+  (`"license": { "name": "My License", "url": "https://example.com/terms" }`,
+  where `url` is optional).
+- A **`LICENSE` file** at the project root carries the text. `LICENSE`,
+  `LICENSE.md`, and `LICENSE.txt` are recognized, matched case-insensitively
+  and in that precedence order.
+
+Either, both, or neither may be present; nothing hard-fails on a mismatch. Both
+formats carry the license through: `.modpkg` stores the text in a compressed
+`_meta_/license` chunk, `.fantome` in a `META/LICENSE` entry (keeping the source
+file's extension, e.g. `META/LICENSE.md`). Extracting either format writes the
+license back to the project root under the name it was packed with.
 
 ## 📖 Quick Start
 
@@ -181,6 +233,7 @@ Edit `mod.config.json` to add metadata, authors, and configure layers:
   "version": "1.0.0",
   "description": "A complete visual overhaul for Aatrox",
   "authors": ["Your Name"],
+  "license": "MIT",
   "layers": [
     {
       "name": "base",

@@ -100,9 +100,9 @@ pub struct OverrideMeta {
     pub uncompressed_size: usize,
     pub(crate) source: OverrideSource,
     /// WAD path to route this override to when the game index has no match
-    /// (i.e. the override adds a new chunk not present in any game WAD).
-    /// Derived from the mod's directory structure during collection.
     pub(crate) fallback_wad: Option<Utf8PathBuf>,
+    /// The unlocalized sibling of [`Self::fallback_wad`]
+    pub(crate) unlocalized_wad: Option<Utf8PathBuf>,
     /// Linked-file dependency paths declared by this override when it is a League
     /// property-bin (`PROP`/`PTCH`); empty otherwise. Parsed once in pass 1 and
     /// cached so the linked-bin pre-flight needs no re-decompression.
@@ -110,16 +110,7 @@ pub struct OverrideMeta {
 }
 
 impl OverrideMeta {
-    /// Whether this override is a cross-WAD import: a file the mod explicitly
-    /// ships under a WAD directory whose resolved game WAD does not already
-    /// contain the chunk. Mods do this to make an asset from another WAD (which
-    /// may not be mounted in-game) loadable from their own target WAD, so the
-    /// chunk must be *added* to `fallback_wad` rather than only routed to the
-    /// WADs that already hold it.
-    ///
-    /// Only [`OverrideSource::LayerWad`] entries qualify — a WAD directory is an
-    /// explicit placement, while RAW overrides carry no target of their own
-    /// (their `fallback_wad` is a routing heuristic, not a declaration).
+    /// Whether this override is a cross-WAD import
     pub(crate) fn is_cross_wad_import(&self, path_hash: u64, game_index: &GameIndex) -> bool {
         if !matches!(self.source, OverrideSource::LayerWad { .. }) {
             return false;
@@ -136,11 +127,14 @@ impl OverrideMeta {
 
     /// The game-relative WAD paths this override routes to.
     ///
-    /// - Every game WAD containing `path_hash` — a shared chunk is fanned out
+    /// - Every game WAD containing `path_hash` - a shared chunk is fanned out
     ///   to all of its holders so every loaded copy stays checksum-consistent.
     /// - Additionally `fallback_wad` when no WAD hash-matched, or when the
     ///   override is a [cross-WAD import](Self::is_cross_wad_import) whose
     ///   declared WAD is missing from the matches.
+    /// - Additionally [`unlocalized_wad`](Self::unlocalized_wad) whenever
+    ///   `fallback_wad` is taken, so a chunk declared into a localized WAD also
+    ///   reaches players on other locales and the integrity scan can resolve it.
     ///
     /// An empty result means the override cannot be routed anywhere and is
     /// dropped. This is the single source of truth shared by
@@ -161,6 +155,11 @@ impl OverrideMeta {
             && (targets.is_empty() || self.is_cross_wad_import(path_hash, game_index))
         {
             targets.push(fallback);
+            if let Some(unlocalized) = self.unlocalized_wad.as_deref()
+                && !targets.contains(&unlocalized)
+            {
+                targets.push(unlocalized);
+            }
         }
 
         targets
@@ -172,7 +171,7 @@ impl OverrideMeta {
 /// Each enabled mod contributes override files through its [`ModContentProvider`].
 /// Mods are processed in the order they appear in the `enabled_mods` list passed to
 /// [`OverlayBuilder::set_enabled_mods`]. Position 0 (first in the list) has the
-/// **highest** priority — when two mods override the same path hash, the mod
+/// **highest** priority - when two mods override the same path hash, the mod
 /// closer to the front of the list wins.
 pub struct EnabledMod {
     /// Unique identifier for the mod (used in state tracking and logging).
@@ -212,7 +211,7 @@ impl EnabledMod {
 
         Some(match &self.enabled_layers {
             Some(layers) => {
-                // Exclude BASE_LAYER_NAME before hashing — it's always implicitly
+                // Exclude BASE_LAYER_NAME before hashing - it's always implicitly
                 // active via is_layer_active, so {"extras"} and {"base","extras"}
                 // should produce the same fingerprint.
                 let mut sorted: Vec<&str> = layers
@@ -333,9 +332,9 @@ pub struct AffectedWad {
     pub path: Box<str>,
     /// Number of the mod's distinct overrides that land in this WAD.
     ///
-    /// A single override whose chunk hash exists in several game WADs — e.g. a
+    /// A single override whose chunk hash exists in several game WADs - e.g. a
     /// champion *base* chunk that the game physically duplicates into every map
-    /// WAD — contributes to each WAD's count. Summed across a report's WADs this
+    /// WAD - contributes to each WAD's count. Summed across a report's WADs this
     /// therefore exceeds [`ModWadReport::override_count`] when a mod's content
     /// spills across WADs. The asymmetry (a large count in the mod's real target
     /// WAD, small equal counts in the WADs it bleeds into) is what distinguishes
@@ -350,9 +349,9 @@ pub struct AffectedWad {
 /// potential WAD footprint regardless of which other mods are enabled
 /// alongside it.
 ///
-/// Overrides that can never reach the overlay — SubChunkTOC entries,
+/// Overrides that can never reach the overlay - SubChunkTOC entries,
 /// mod-shipped stringtable chunks, and lazy overrides byte-identical to the
-/// game originals whose declared WAD already holds the chunk — are excluded
+/// game originals whose declared WAD already holds the chunk - are excluded
 /// before the report is computed, so the reported footprint matches the WADs
 /// an overlay build of this mod alone would actually write.
 ///
@@ -391,7 +390,7 @@ impl ModWadReport {
     /// Build a report from one mod's collected override metadata.
     ///
     /// Each override contributes to every WAD returned by
-    /// [`OverrideMeta::route_targets`] — the same routing the build itself
+    /// [`OverrideMeta::route_targets`] - the same routing the build itself
     /// uses: hash-matched game WADs, plus the mod's declared WAD for new
     /// entries and cross-WAD imports.
     pub(crate) fn from_meta(
@@ -478,11 +477,11 @@ impl OverlayBuilder {
     ///
     /// # Arguments
     ///
-    /// * `game_dir` — Path to the League of Legends `Game/` directory. Must contain
+    /// * `game_dir` - Path to the League of Legends `Game/` directory. Must contain
     ///   a `DATA/FINAL` subdirectory with `.wad.client` files.
-    /// * `overlay_root` — Directory where patched WAD files will be written
+    /// * `overlay_root` - Directory where patched WAD files will be written
     ///   (e.g. `profiles/default/overlay`).
-    /// * `state_dir` — Directory for `overlay.json` and `game_index.bin`
+    /// * `state_dir` - Directory for `overlay.json` and `game_index.bin`
     ///   (e.g. the profile folder `profiles/default/`).
     pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf, state_dir: Utf8PathBuf) -> Self {
         Self {
@@ -549,14 +548,13 @@ impl OverlayBuilder {
     ) -> Result<ModWadReport> {
         let data_final_dir = game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(format!(
-                "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
-                game_dir
-            )
-            .into());
+            return Err(Error::Other(format!(
+                "League path does not contain Game/DATA/FINAL. Game dir: '{game_dir}'"
+            )));
         }
 
-        std::fs::create_dir_all(state_dir.as_std_path())?;
+        std::fs::create_dir_all(state_dir.as_std_path())
+            .map_err(|source| Error::write(state_dir, source))?;
         let cache_path = state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(game_dir, &cache_path)?;
 
@@ -611,8 +609,8 @@ impl OverlayBuilder {
 
     /// Build the overlay with incremental rebuild support (two-pass).
     ///
-    /// 1. If the overlay state matches exactly — including every mod's content
-    ///    fingerprint — and all WAD files exist → skip.
+    /// 1. If the overlay state matches exactly - including every mod's content
+    ///    fingerprint - and all WAD files exist → skip.
     /// 2. If the game fingerprint and state version match → incremental rebuild
     ///    (only re-patch WADs whose override fingerprint changed).
     /// 3. Otherwise → full rebuild (wipe and rebuild everything).
@@ -635,15 +633,16 @@ impl OverlayBuilder {
 
         let data_final_dir = self.game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(format!(
+            return Err(Error::Other(format!(
                 "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
                 self.game_dir
-            )
-            .into());
+            )));
         }
 
-        std::fs::create_dir_all(self.overlay_root.as_std_path())?;
-        std::fs::create_dir_all(self.state_dir.as_std_path())?;
+        std::fs::create_dir_all(self.overlay_root.as_std_path())
+            .map_err(|source| Error::write(&self.overlay_root, source))?;
+        std::fs::create_dir_all(self.state_dir.as_std_path())
+            .map_err(|source| Error::write(&self.state_dir, source))?;
 
         let cache_path = self.state_dir.join("game_index.bin");
         let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
@@ -822,7 +821,8 @@ impl OverlayBuilder {
         // Remove previous state so build() sees no match
         let state_path = self.state_dir.join("overlay.json");
         if state_path.as_std_path().exists() {
-            std::fs::remove_file(state_path.as_std_path())?;
+            std::fs::remove_file(state_path.as_std_path())
+                .map_err(|source| Error::write(&state_path, source))?;
         }
         self.clean_overlay_wads()?;
         self.build()
@@ -852,7 +852,7 @@ impl OverlayBuilder {
 
     /// Try the exact-match skip: when the previous state matches the current
     /// configuration and every recorded overlay WAD still exists on disk, the
-    /// overlay is already up to date — finish the build without patching
+    /// overlay is already up to date - finish the build without patching
     /// anything and return its result. Returns `None` when a real build is
     /// needed.
     #[allow(clippy::too_many_arguments)]
@@ -909,7 +909,7 @@ impl OverlayBuilder {
     /// override entry per target locale into `all_meta` (pass 1).
     ///
     /// Returns the patch plans keyed by stringtable chunk hash. Only the plan
-    /// (merged override map + fingerprint) is computed here — the base table is
+    /// (merged override map + fingerprint) is computed here - the base table is
     /// read and patched lazily in pass 2, and only for WADs being rebuilt, so
     /// unchanged overrides never touch the game stringtable on incremental builds.
     fn build_string_patch_plans(
@@ -949,7 +949,7 @@ impl OverlayBuilder {
             };
             let wad_rel_path = wad_abs_path
                 .strip_prefix(&self.game_dir)
-                .map_err(|_| format!("WAD path is not under Game/: {}", wad_abs_path))?
+                .map_err(|_| Error::Other(format!("WAD path is not under Game/: {wad_abs_path}")))?
                 .to_path_buf();
 
             let chunk_hash = strings::stringtable_chunk_hash(&locale);
@@ -992,8 +992,8 @@ impl OverlayBuilder {
     /// parent directories.
     ///
     /// The injector serves the entire overlay directory, so orphans no state
-    /// ever recorded — e.g. WADs from a build killed before it saved
-    /// `overlay.json` — would reach the game and can fail its integrity scan.
+    /// ever recorded - e.g. WADs from a build killed before it saved
+    /// `overlay.json` - would reach the game and can fail its integrity scan.
     /// Runs on every build path, including the exact-match skip. Removal is
     /// best-effort: an undeletable file is logged and left for the next sweep.
     fn sweep_unexpected_overlay_files(&self, expected: &BTreeMap<String, u64>) {
@@ -1007,7 +1007,7 @@ impl OverlayBuilder {
             .map(|k| Self::normalize_overlay_rel(k))
             .collect();
 
-        // Collect first, delete after — removing entries (and their emptied
+        // Collect first, delete after - removing entries (and their emptied
         // parents) mid-walk would race the open directory handles.
         let mut to_remove: Vec<std::path::PathBuf> = Vec::new();
         let mut stack = vec![data_dir.into_std_path_buf()];
@@ -1062,7 +1062,8 @@ impl OverlayBuilder {
     fn clean_overlay_wads(&self) -> Result<()> {
         let data_dir = self.overlay_root.join("DATA");
         if data_dir.as_std_path().exists() {
-            std::fs::remove_dir_all(data_dir.as_std_path())?;
+            std::fs::remove_dir_all(data_dir.as_std_path())
+                .map_err(|source| Error::write(&data_dir, source))?;
         }
         Ok(())
     }
@@ -1159,6 +1160,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/file.bin"),
             },
             fallback_wad: None,
+            unlocalized_wad: None,
             linked_bins: Vec::new(),
         };
         assert_eq!(meta.content_hash, 0x1234);
@@ -1176,6 +1178,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("data/x.bin"),
             },
             fallback_wad: None,
+            unlocalized_wad: None,
             linked_bins: Vec::new(),
         }
     }
@@ -1210,7 +1213,7 @@ mod tests {
             ModWadReport::from_meta("aatrox-skin".to_string(), &mod_meta, None, &game_index);
 
         // Champion WAD holds both overrides; each map holds only the spilled base
-        // chunk — the asymmetry that lets a consumer pick the champion as primary.
+        // chunk - the asymmetry that lets a consumer pick the champion as primary.
         // Entries are sorted by path and deduplicated.
         assert_eq!(
             report.affected_wads,
@@ -1268,6 +1271,62 @@ mod tests {
     }
 
     #[test]
+    fn route_targets_carries_a_localized_declaration_to_its_sibling() {
+        let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
+        let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
+        let game_index = game_index_with_hashes(HashMap::new());
+
+        // A brand-new asset declared into the localized WAD. Only that WAD would
+        // hold it, which no other locale installs and the integrity scan never
+        // reads, so the sibling carries it too.
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(graves_en.clone());
+        meta.unlocalized_wad = Some(graves.clone());
+        assert_eq!(
+            meta.route_targets(0xF00D, &game_index),
+            vec![graves_en.as_path(), graves.as_path()]
+        );
+    }
+
+    #[test]
+    fn route_targets_leaves_localized_content_in_its_own_wad() {
+        let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
+        let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
+        let mut hash_index = HashMap::new();
+        hash_index.insert(0x1_0CA1_u64, vec![graves_en.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        // Genuinely localized content hash-matches the localized WAD, so it never
+        // reaches the fallback and the sibling stays out of it.
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(graves_en.clone());
+        meta.unlocalized_wad = Some(graves.clone());
+        assert_eq!(
+            meta.route_targets(0x1_0CA1, &game_index),
+            vec![graves_en.as_path()]
+        );
+    }
+
+    #[test]
+    fn route_targets_never_repeats_the_sibling() {
+        let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
+        let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
+        let mut hash_index = HashMap::new();
+        hash_index.insert(0xBA5E_u64, vec![graves.clone()]);
+        let game_index = game_index_with_hashes(hash_index);
+
+        // An existing asset misplaced into the localized WAD: the hash match
+        // already names the sibling, so only the declared WAD is added.
+        let mut meta = dummy_meta();
+        meta.fallback_wad = Some(graves_en.clone());
+        meta.unlocalized_wad = Some(graves.clone());
+        assert_eq!(
+            meta.route_targets(0xBA5E, &game_index),
+            vec![graves.as_path(), graves_en.as_path()]
+        );
+    }
+
+    #[test]
     fn route_targets_ignores_heuristic_fallback_for_raw_sources() {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
@@ -1276,7 +1335,7 @@ mod tests {
         let game_index = game_index_with_hashes(hash_index);
 
         // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
-        // declared placement — hash matches must not be widened by it.
+        // declared placement - hash matches must not be widened by it.
         let meta = OverrideMeta {
             content_hash: 1,
             uncompressed_size: 1,
@@ -1285,6 +1344,7 @@ mod tests {
                 rel_path: Utf8PathBuf::from("assets/x.bin"),
             },
             fallback_wad: Some(aatrox.clone()),
+            unlocalized_wad: None,
             linked_bins: Vec::new(),
         };
         assert_eq!(

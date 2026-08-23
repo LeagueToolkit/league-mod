@@ -26,7 +26,7 @@
 //!
 //! League validates a chunk shared across WADs by its **compressed** checksum, so
 //! a chunk routed to several WADs must be given to each build as the same
-//! uncompressed input — deterministic compression then yields identical copies.
+//! uncompressed input - deterministic compression then yields identical copies.
 
 use crate::error::{Error, Result};
 use byteorder::{LE, WriteBytesExt};
@@ -98,7 +98,8 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
     resolve_override: impl FnMut(u64) -> Result<B>,
 ) -> Result<PatchedWadStats> {
     if let Some(parent) = dst_wad_path.parent() {
-        std::fs::create_dir_all(parent.as_std_path())?;
+        std::fs::create_dir_all(parent.as_std_path())
+            .map_err(|source| Error::write(parent, source))?;
     }
 
     let tmp_path = Utf8PathBuf::from(format!("{dst_wad_path}.tmp"));
@@ -110,7 +111,8 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
         resolve_override,
     ) {
         Ok(stats) => {
-            std::fs::rename(tmp_path.as_std_path(), dst_wad_path.as_std_path())?;
+            std::fs::rename(tmp_path.as_std_path(), dst_wad_path.as_std_path())
+                .map_err(|source| Error::write(dst_wad_path, source))?;
             Ok(stats)
         }
         Err(e) => {
@@ -131,8 +133,10 @@ fn write_patched_wad<B: AsRef<[u8]>>(
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
-    let file = File::open(src_wad_path.as_std_path())?;
-    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let file = File::open(src_wad_path.as_std_path())
+        .map_err(|source| Error::read(src_wad_path, source))?;
+    let mmap =
+        unsafe { memmap2::Mmap::map(&file).map_err(|source| Error::read(src_wad_path, source))? };
     let wad = Wad::mount(Cursor::new(&mmap[..]))?;
     let chunks = wad.chunks();
 
@@ -164,9 +168,12 @@ fn write_patched_wad<B: AsRef<[u8]>>(
 
     let mut overrides_applied = 0usize;
 
+    // Only the open is attributed; the byteorder writes that follow go to the
+    // same file, and wrapping each one would drown the logic.
     let mut writer = BufWriter::with_capacity(
         WRITE_BUFFER_SIZE,
-        std::fs::File::create(out_path.as_std_path())?,
+        std::fs::File::create(out_path.as_std_path())
+            .map_err(|source| Error::write(out_path, source))?,
     );
 
     // Write header

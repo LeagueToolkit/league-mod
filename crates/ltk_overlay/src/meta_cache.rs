@@ -13,6 +13,10 @@ use std::collections::HashMap;
 
 /// Current cache format version. Bump when the serialized format changes.
 ///
+/// v6: records `unlocalized_wad`, so overrides declared into a localized WAD
+/// also reach its unlocalized sibling. A v5 cache would keep routing them to
+/// the localized WAD alone and must be discarded.
+///
 /// v5: keeps byte-identical cross-WAD imports; v4 caches were filtered under
 /// the old lazy rule that dropped those imports entirely, so they must be
 /// discarded.
@@ -20,7 +24,7 @@ use std::collections::HashMap;
 /// v4: cached metadata is now post-filter (SubChunkTOC / stringtable / lazy
 /// overrides already stripped); v3 caches hold unfiltered entries and must be
 /// discarded.
-const CACHE_VERSION: u32 = 5;
+const CACHE_VERSION: u32 = 6;
 
 /// Serializable cache entry for a single override.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -35,6 +39,11 @@ pub struct CachedOverride {
     /// Relative WAD path this override targets (if known from directory structure).
     /// `None` for raw overrides that are routed by hash matching only.
     pub target_wad: Option<String>,
+
+    /// `target_wad`'s unlocalized sibling when the mod declared a localized WAD
+    /// directory. `None` otherwise.
+    #[serde(default)]
+    pub unlocalized_wad: Option<String>,
 
     /// Source layer name. `None` for raw overrides.
     pub source_layer: Option<String>,
@@ -94,6 +103,7 @@ impl CachedModMeta {
                     uncompressed_size: entry.uncompressed_size,
                     source,
                     fallback_wad: entry.target_wad.as_ref().map(Utf8PathBuf::from),
+                    unlocalized_wad: entry.unlocalized_wad.as_ref().map(Utf8PathBuf::from),
                     linked_bins: entry.linked_bins.clone(),
                 },
             );
@@ -136,6 +146,10 @@ impl CachedModMeta {
                     content_hash: meta.content_hash,
                     uncompressed_size: meta.uncompressed_size,
                     target_wad: meta.fallback_wad.as_ref().map(|p| p.as_str().to_string()),
+                    unlocalized_wad: meta
+                        .unlocalized_wad
+                        .as_ref()
+                        .map(|p| p.as_str().to_string()),
                     source_layer,
                     source_wad_name,
                     source_rel_path,
@@ -215,12 +229,14 @@ impl OverrideMetaCache {
     /// Save cache to disk.
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent.as_std_path())?;
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| Error::cache_write(path, source))?;
         }
 
-        let bytes = rmp_serde::to_vec_named(self)
-            .map_err(|e| Error::Other(format!("Failed to serialize override meta cache: {}", e)))?;
-        std::fs::write(path.as_std_path(), bytes)?;
+        let bytes =
+            rmp_serde::to_vec_named(self).map_err(|source| Error::cache_write(path, source))?;
+        std::fs::write(path.as_std_path(), bytes)
+            .map_err(|source| Error::cache_write(path, source))?;
 
         tracing::debug!("Override meta cache saved to {}", path);
         Ok(())
@@ -275,6 +291,7 @@ mod tests {
                     content_hash: 0x5678,
                     uncompressed_size: 100,
                     target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
+                    unlocalized_wad: None,
                     source_layer: Some("base".to_string()),
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),

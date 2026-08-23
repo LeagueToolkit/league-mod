@@ -36,7 +36,7 @@ pub fn info_mod_package(args: InfoModPackageArgs) -> miette::Result<()> {
     );
 
     println_pad!("\n{}", "🏗️  Layers:".bright_magenta().bold());
-    for layer in modpkg.layers.values() {
+    for layer in modpkg.layers().values() {
         // Try to find a matching layer metadata entry (to show display_name/description).
         let layer_meta = metadata.layers.iter().find(|lm| lm.name == layer.name);
         let layer_display_name = layer_meta.and_then(|lm| lm.display_name.as_deref());

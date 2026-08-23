@@ -12,7 +12,7 @@
 //! - **Full rebuild** (version or game fingerprint mismatch): the overlay is
 //!   wiped and rebuilt from scratch.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
 use crate::skin_integrity::SkinIntegrityOffender;
 use camino::Utf8Path;
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 /// Current schema version. Bump this when the state format changes
 /// incompatibly, or when build semantics change such that WADs on disk may no
-/// longer match what a fresh build would produce — any state file with a
+/// longer match what a fresh build would produce - any state file with a
 /// different version triggers a full rebuild.
 const CURRENT_VERSION: u32 = 5;
 
@@ -50,7 +50,7 @@ const CURRENT_VERSION: u32 = 5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
-    /// Schema version (current: `5`). Used for forward compatibility — if a
+    /// Schema version (current: `5`). Used for forward compatibility - if a
     /// future version changes the format, old overlays won't match.
     pub version: u32,
 
@@ -92,7 +92,7 @@ pub struct OverlayState {
     /// Key: relative WAD path (e.g. `"DATA/FINAL/Champions/Aatrox.wad.client"`).
     /// Value: deterministic hash of the overrides applied to that WAD.
     ///
-    /// Used for incremental rebuilds — only WADs whose fingerprint changed
+    /// Used for incremental rebuilds - only WADs whose fingerprint changed
     /// need to be re-patched.
     #[serde(default)]
     pub wad_fingerprints: BTreeMap<String, u64>,
@@ -172,7 +172,8 @@ impl OverlayState {
             return Ok(None);
         }
 
-        let contents = std::fs::read_to_string(path.as_std_path())?;
+        let contents = std::fs::read_to_string(path.as_std_path())
+            .map_err(|source| Error::read(path, source))?;
         let state: Self = serde_json::from_str(&contents)?;
         Ok(Some(state))
     }
@@ -186,11 +187,13 @@ impl OverlayState {
     /// * `path` - Path where the overlay.json state file should be written
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent.as_std_path())?;
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| Error::write(parent, source))?;
         }
 
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path.as_std_path(), contents)?;
+        std::fs::write(path.as_std_path(), contents)
+            .map_err(|source| Error::write(path, source))?;
         Ok(())
     }
 
@@ -212,7 +215,7 @@ impl OverlayState {
     /// * `enabled_mod_ids` - Current list of enabled mod IDs
     /// * `mod_fingerprints` - Current per-mod content fingerprints, or `None`
     ///   when any enabled mod's provider could not compute one. `None` never
-    ///   matches — without a complete fingerprint set there is no way to prove
+    ///   matches - without a complete fingerprint set there is no way to prove
     ///   the mod content is unchanged, so the skip must not be taken.
     /// * `game_fingerprint` - Current game fingerprint
     /// * `blocked_wads` - Current sorted list of blocked WAD filenames
@@ -590,7 +593,7 @@ mod tests {
     fn test_v4_state_triggers_full_rebuild() {
         // A v4 state file (no modFingerprints) deserializes with an empty map,
         // and the version bump makes both the exact-match skip and the
-        // incremental path reject it — one clean rebuild on upgrade.
+        // incremental path reject it - one clean rebuild on upgrade.
         let mods = vec!["mod1".to_string()];
         let v4_json = r#"{"version":4,"enabledMods":["mod1"],"gameFingerprint":1234}"#;
         let old: OverlayState = serde_json::from_str(v4_json).unwrap();

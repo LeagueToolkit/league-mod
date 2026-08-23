@@ -1,38 +1,30 @@
-# Fantome
+# ltk_fantome
 
-A Rust library for creating League of Legends mods in the legacy Fantome format.
+A Rust library for reading and writing the legacy `.fantome` archive format (renamed ZIP files) used by League of Legends mod managers before the introduction of the newer `.modpkg` format.
 
 ## Overview
 
-The `fantome` crate provides functionality to pack mod projects into the legacy `.fantome` format (renamed ZIP files) that are compatible with any current (future legacy) mod managers. This format was widely used in the League of Legends modding community before the introduction of the newer `.modpkg` format.
+This is a format crate: it knows the archive layout (`META/info.json`, `WAD/` and `RAW/` entries, license and thumbnail conventions) and nothing about mod projects. It provides:
 
-## Usage
+- **Metadata types**: `FantomeInfo`, `FantomeLicense`, `FantomeLayerInfo`
+- **Writing**: `FantomeWriter` writes an archive entry by entry, owning the zip flavor and entry naming conventions
+- **Reading**: `FantomeReader` parses `META/info.json` and extracts `WAD/` and `RAW/` contents into caller-chosen directories, unpacking packed WADs through a `WadHashtable`
 
-### Basic Example
+Packing a mod *project* into a Fantome archive, and importing an archive back into a project directory, live in the `ltk_mod_project` crate (its `fantome` cargo feature): its `FantomeFormat` and `FantomeImporter` backends compose the writer and reader from here.
 
 ```rust
-use fantome::pack_to_fantome;
-use mod_project::ModProject;
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::Path;
+use ltk_mod_project::fantome::FantomeFormat;
+use ltk_mod_project::ProjectPacker;
 
-// Load your mod project configuration
-let mod_project = ModProject::load("mod.config.json")?;
-let project_root = Path::new(".");
-
-// Create output file
-let file = File::create("my_mod.fantome")?;
-let writer = BufWriter::new(file);
-
-// Pack to Fantome format
-pack_to_fantome(writer, &mod_project, project_root)?;
+// Loads mod.config.json/toml automatically from the project directory
+let packer = ProjectPacker::from_dir("my-mod")?;
+let file = std::fs::File::create("build/my-mod_1.0.0.fantome")?;
+packer.pack(FantomeFormat::new(file))?;
 ```
-
 
 ## Integration with League Mod Toolkit
 
-This crate is primarily used through the `league-mod` CLI tool:
+The format is also reachable through the `league-mod` CLI tool:
 
 ```bash
 # Pack to Fantome format
@@ -42,22 +34,7 @@ league-mod pack --format fantome
 league-mod pack --format fantome --file-name "my-mod.fantome"
 ```
 
-When packing to Fantome format, the CLI will warn users if their project contains additional layers that won't be included.
-
-## Project Structure Requirements
-
-For the library to work correctly, your mod project should follow this structure:
-
-```
-my-mod/
-├── mod.config.json           # Project configuration
-├── content/                  # Mod content
-│   └── base/                 # Base layer (required)
-│       ├── Aatrox.wad.client/
-│       └── Map11.wad.client/
-├── README.md                 # Optional project documentation
-└── thumbnail.webp            # Optional thumbnail (any format)
-```
+Fantome stores only a project's base layer; the CLI warns when a project contains additional layers that will not be included.
 
 ## Contributing
 

@@ -15,7 +15,7 @@ authors = ["LeagueToolkit"]
 # LeagueToolkit crates
 ltk_wad = { workspace = true }
 ltk_file = "0.2.8"
-ltk_mod_project = { version = "0.5.0", path = "../ltk_mod_project" }
+ltk_mod_project = { version = "0.5.0", path = "../ltk_mod_project", features = ["fantome"] }
 ltk_modpkg = { version = "0.6.0", path = "../ltk_modpkg" }
 ltk_fantome = { version = "0.6.1", path = "../ltk_fantome" }
 ltk_sanitize = { version = "0.1.0", path = "../ltk_sanitize" }

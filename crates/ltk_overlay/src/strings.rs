@@ -9,7 +9,7 @@
 //!
 //! The game's own stringtable is always the patch base: mod-shipped
 //! `lol.stringtable` chunk overrides are rejected during metadata collection
-//! (see [`blocked_stringtable_hashes`]) — `string_overrides` are the only
+//! (see [`blocked_stringtable_hashes`]) - `string_overrides` are the only
 //! supported way to modify game strings.
 //!
 //! # Merge semantics
@@ -21,11 +21,11 @@
 //!   layers overwrite lower ones).
 //! - Within a layer, the [`DEFAULT_LOCALE`] bucket applies before the
 //!   locale-specific bucket, so a locale-specific entry beats `"default"` in the
-//!   same layer — but never beats a higher-priority mod's `"default"` entry.
+//!   same layer - but never beats a higher-priority mod's `"default"` entry.
 //! - Keys are canonicalized to lowercase before merging (RST hashing lowercases
 //!   field names, so case variants of one key address the same table entry).
 //!   Buckets and keys keep their config document order, so when duplicates
-//!   collide — case variants of a bucket or key — the later entry in the file
+//!   collide - case variants of a bucket or key - the later entry in the file
 //!   wins.
 //!
 //! # Key syntax
@@ -94,16 +94,16 @@ pub(crate) fn stringtable_chunk_path(locale: &str) -> String {
 
 /// The WAD chunk path hash of [`stringtable_chunk_path`] for `locale`.
 pub(crate) fn stringtable_chunk_hash(locale: &str) -> u64 {
-    ltk_modpkg::utils::hash_chunk_name(&ltk_modpkg::utils::normalize_chunk_path(
-        &stringtable_chunk_path(locale),
-    ))
+    ltk_modpkg::ChunkPath::new(stringtable_chunk_path(locale))
+        .hash()
+        .value()
 }
 
 /// Path hashes of the `lol.stringtable` chunks for every locale installed in
 /// the game.
 ///
-/// Mods must not override these chunks directly — the game's stringtable is
-/// always the string-patch base — so any mod override with one of these path
+/// Mods must not override these chunks directly - the game's stringtable is
+/// always the string-patch base - so any mod override with one of these path
 /// hashes is rejected during metadata filtering. Hash-based matching catches
 /// stringtables regardless of whether the mod ships them under a plaintext
 /// path or a raw hash filename.
@@ -115,7 +115,7 @@ pub(crate) fn blocked_stringtable_hashes(game_index: &GameIndex) -> HashSet<u64>
         .collect()
 }
 
-/// Parse a raw-hash key — exactly 16 hex digits (a full 64-bit hash) — into
+/// Parse a raw-hash key - exactly 16 hex digits (a full 64-bit hash) - into
 /// its `u64` value.
 fn parse_raw_hash_key(key: &str) -> Option<u64> {
     if key.len() != 16 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -127,7 +127,7 @@ fn parse_raw_hash_key(key: &str) -> Option<u64> {
 /// A planned stringtable patch for one locale, computed in pass 1.
 ///
 /// Carries everything needed to lazily generate the patched chunk bytes in
-/// pass 2 — the base table is only read (and the RST only parsed) when the
+/// pass 2 - the base table is only read (and the RST only parsed) when the
 /// target WAD actually needs rebuilding.
 pub(crate) struct StringPatchPlan {
     /// Lowercase locale, e.g. `"en_us"`.
@@ -203,6 +203,9 @@ impl StringPatchPlan {
                 chunk_path: Utf8PathBuf::from(stringtable_chunk_path(&self.locale)),
             },
             fallback_wad: Some(self.wad_rel_path.clone()),
+            // A stringtable patch is per-locale by construction, so it belongs
+            // in the localized WAD alone.
+            unlocalized_wad: None,
             linked_bins: Vec::new(),
         }
     }
@@ -212,7 +215,7 @@ impl StringPatchPlan {
 /// case-insensitively, in document order.
 ///
 /// All case variants are returned, so duplicate buckets like `"en_US"` and
-/// `"EN_US"` merge in the order they appear in the config — the later bucket
+/// `"EN_US"` merge in the order they appear in the config - the later bucket
 /// wins conflicts.
 fn buckets<'a>(
     string_overrides: &'a IndexMap<String, IndexMap<String, String>>,
@@ -262,7 +265,7 @@ pub(crate) fn collect_effective_overrides(
     Ok(per_locale)
 }
 
-/// Apply one layer's overrides for `locale` onto the effective map — the
+/// Apply one layer's overrides for `locale` onto the effective map - the
 /// [`DEFAULT_LOCALE`] bucket first, then the locale-specific one.
 fn apply_layer_overrides(
     effective: &mut BTreeMap<String, String>,
@@ -283,7 +286,7 @@ fn apply_layer_overrides(
     }
 }
 
-/// Validate an override key and canonicalize it to lowercase — RST hashing
+/// Validate an override key and canonicalize it to lowercase - RST hashing
 /// lowercases field names, so case variants of one key must collide in the
 /// merge map for mod/layer priority to apply.
 ///
@@ -309,7 +312,8 @@ pub(crate) fn read_game_chunk(
     chunk_hash: u64,
 ) -> Result<Vec<u8>> {
     let abs_path = game_dir.join(wad_rel_path);
-    let file = std::fs::File::open(abs_path.as_std_path())?;
+    let file = std::fs::File::open(abs_path.as_std_path())
+        .map_err(|source| Error::read(&abs_path, source))?;
     let mut wad = ltk_wad::Wad::mount(file)?;
 
     let chunk = *wad.chunks().get(chunk_hash).ok_or_else(|| {
@@ -457,7 +461,7 @@ mod tests {
     fn apply_overrides_named_and_hash_keys() {
         let base = table_bytes(&[("game_client_quit", "Quit"), ("untouched", "Original")]);
 
-        // Full 64-bit (untruncated) XXH3 of the key — ltk_rst masks it to the
+        // Full 64-bit (untruncated) XXH3 of the key - ltk_rst masks it to the
         // table's hash width on insert, so get_key("added_key") must find it.
         let full_hash = xxhash_rust::xxh3::xxh3_64("added_key".as_bytes());
 
@@ -516,7 +520,7 @@ mod tests {
     fn merge_canonicalizes_key_case() {
         // Case variants of a key address the same RST entry (hashing lowercases
         // field names), so they must collide during the merge for mod priority
-        // to apply — the front mod wins even though the spellings differ.
+        // to apply - the front mod wins even though the spellings differ.
         let mut mods = vec![
             strings_mod(
                 "front",
@@ -553,8 +557,8 @@ mod tests {
 
     #[test]
     fn merge_keeps_brace_keys_as_named_keys() {
-        // Brace syntax has no special meaning — only bare 16-hex-digit keys are
-        // raw hashes — so a braced key passes through as an ordinary
+        // Brace syntax has no special meaning - only bare 16-hex-digit keys are
+        // raw hashes - so a braced key passes through as an ordinary
         // (lowercased) field name and hashes as a literal string.
         let mut mods = vec![strings_mod(
             "m",
