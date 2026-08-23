@@ -241,10 +241,10 @@ fn dangling_reference_is_flagged_and_persisted() {
     assert_eq!(build_and_take_offenders(&root, &mod_dir), offenders);
 }
 
-/// A dangling *texture* reference is a known authoring idiom, tolerated by
-/// the default [`ltk_overlay::SkinPolicy`] — reported nowhere as an offender.
+/// The Texture property is not checked at all — a dangling texture
+/// reference (a known authoring idiom) is never an offender.
 #[test]
-fn dangling_texture_is_tolerated() {
+fn dangling_texture_is_ignored() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
     write_game(&root.join("Game"));

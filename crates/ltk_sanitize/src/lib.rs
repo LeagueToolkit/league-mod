@@ -49,7 +49,7 @@ pub mod source;
 
 pub use check::{
     BaselineAnomaly, ChunkChecksums, RefMissingKind, RefReport, RefStatus, SkinCheckOutcome,
-    SkinIntegrity, SkinPolicy, check_base_skin,
+    SkinIntegrity, check_base_skin,
 };
 pub use resolve::{
     CorruptBin, MAX_LINKED_BINS, ResolveError, ResolveOutcome, ResolvedBinObject,

@@ -44,10 +44,7 @@ pub enum RefMissingKind {
     Misplaced { found_in: Vec<String> },
     /// In the TOC, but its bytes could not be read (load/decompression
     /// failure) — present in name only, so the closed world is violated
-    /// just the same. Never tolerated (see
-    /// [`SkinPolicy::allow_dangling_texture`]): unlike a dangling
-    /// reference, a stored chunk exists and admits attacker-controlled
-    /// bytes.
+    /// just the same.
     Unreadable { reason: String },
 }
 
@@ -92,17 +89,16 @@ pub enum RefStatus {
     /// exactly what vanilla renders.
     Unmodified,
     /// Present but rendering different content than the original entry's
-    /// same slot: the bytes changed, the reference was repointed at
-    /// another asset (vanilla or not — the skin-unlock shape lands here),
-    /// or the original entry does not set this slot at all. Not a
-    /// correctness violation. Carries the merged chunk's
+    /// same slot: the bytes changed, or the reference was repointed at
+    /// another asset (vanilla or not — the skin-unlock shape lands here).
+    /// Not a correctness violation. Carries the merged chunk's
     /// fingerprints so consumers that attest modified assets (e.g.
     /// against a known-fingerprint set) never re-fetch it. A mere
     /// re-compression of untouched bytes does not land here — content
     /// comparison classifies it [`RefStatus::Unmodified`] — so modified
     /// means the slot's rendered bytes really differ from vanilla's, or
-    /// the original side could not prove them equal (slot unset there, or
-    /// its chunk unreadable).
+    /// the original side could not prove them equal (its chunk
+    /// unreadable).
     Modified {
         /// The merged chunk's fingerprints. Always real: a chunk whose
         /// bytes cannot be read classifies as
@@ -127,77 +123,10 @@ pub struct RefReport {
 }
 
 impl RefReport {
-    /// Whether this reference counts as a violation under `policy`. A
-    /// tolerated reference keeps its [`RefStatus::Missing`] status in the
-    /// report — only the verdict changes.
-    pub fn violates(&self, policy: SkinPolicy) -> bool {
-        match &self.status {
-            // Present in name only: a stored chunk exists, so the
-            // dangling-texture tolerance's rationale (no bytes admitted)
-            // never applies.
-            RefStatus::Missing(RefMissingKind::Unreadable { .. }) => true,
-            RefStatus::Missing(_) => {
-                !(policy.allow_dangling_texture && self.slot == MeshSlot::Texture)
-            }
-            RefStatus::Unmodified | RefStatus::Modified { .. } => false,
-        }
-    }
-}
-
-/// Verdict policy for judging a [`SkinIntegrity`] report.
-///
-/// Classification is always the full truth; the policy only decides which
-/// facts count as violations. **Every consumer of the check — mod manager,
-/// CLI, and the in-game verifier once it bootstraps from this crate — must
-/// use the same policy**, or ahead-of-time predictions diverge from in-game
-/// enforcement.
-///
-/// The policy is deliberately defined on the per-WAD view (does the
-/// reference resolve *in this WAD*), because that is all the in-game
-/// verifier can ever see.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SkinPolicy {
-    /// Tolerate a **set** texture slot whose reference does not resolve in
-    /// this WAD. This is a known authoring idiom (a dangling path
-    /// suppresses the vanilla base texture) and is safe to wave through: a
-    /// dangling reference admits no attacker-controlled bytes — there is no
-    /// chunk to load, scan, or swap — so the closed-world anti-evasion
-    /// property is unaffected. For the same reason the tolerance never
-    /// covers a reference that is present but unreadable
-    /// ([`RefMissingKind::Unreadable`]) — there a stored chunk does exist.
-    ///
-    /// The sibling idiom — *removing* the texture property from the skin
-    /// entry — needs no policy at all: texture is not a required slot
-    /// (see [`MeshSlot::is_required`]), so an unset texture is clean even
-    /// under [`SkinPolicy::strict`]. It is equally safe (no bytes
-    /// admitted), and it never vouches as a stock slot either — an unset
-    /// slot produces no [`RefReport`] to read [`RefStatus::Unmodified`]
-    /// from.
-    ///
-    /// Never extended to skeleton/simple-skin (dangling ones are malformed
-    /// skins), and never applied to the original-WAD baseline. A tolerated
-    /// missing texture also never counts as a *stock* slot for any
-    /// "unchanged slot vouches" rule — it is modified-but-tolerated.
-    pub allow_dangling_texture: bool,
-}
-
-impl Default for SkinPolicy {
-    /// The blessed shared default: dangling texture references tolerated.
-    fn default() -> Self {
-        Self {
-            allow_dangling_texture: true,
-        }
-    }
-}
-
-impl SkinPolicy {
-    /// Fail-closed judgment: every missing reference is a violation
-    /// regardless of slot. For audits and for matching the legacy in-game
-    /// behavior.
-    pub fn strict() -> Self {
-        Self {
-            allow_dangling_texture: false,
-        }
+    /// Whether this reference violates the closed-world assertion: any
+    /// reference that is not usable from the merged WAD.
+    pub fn is_violation(&self) -> bool {
+        matches!(self.status, RefStatus::Missing(_))
     }
 }
 
@@ -243,17 +172,17 @@ pub struct SkinIntegrity {
 
 impl SkinIntegrity {
     /// Whether anything about this base skin violates the closed-world
-    /// assertion under `policy` (and would fail in-game verification).
-    pub fn is_broken(&self, policy: SkinPolicy) -> bool {
+    /// assertion (and would fail in-game verification).
+    pub fn is_broken(&self) -> bool {
         self.resolve_error.is_some()
             || !self.missing_required.is_empty()
             || !self.corrupt.is_empty()
-            || self.refs.iter().any(|r| r.violates(policy))
+            || self.refs.iter().any(RefReport::is_violation)
     }
 
-    /// Human-readable violation lines under `policy`, suitable for logs and
-    /// user-facing diagnostics. Empty when the mod is fine.
-    pub fn violations(&self, policy: SkinPolicy) -> Vec<String> {
+    /// Human-readable violation lines, suitable for logs and user-facing
+    /// diagnostics. Empty when the mod is fine.
+    pub fn violations(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Some(err) = &self.resolve_error {
             out.push(format!("base-skin entry could not be resolved: {err}"));
@@ -268,7 +197,7 @@ impl SkinIntegrity {
             ));
         }
         for r in &self.refs {
-            if !r.violates(policy) {
+            if !r.is_violation() {
                 continue;
             }
             match &r.status {
@@ -375,7 +304,6 @@ pub fn check_base_skin(
     merged: &mut dyn ChunkSource,
     champion: &str,
     world: Option<&dyn Fn(u64) -> Vec<String>>,
-    policy: SkinPolicy,
 ) -> SkinCheckOutcome {
     let root_bin_path = skin0_bin_path(champion);
     let root_hash = *WadHash::hash_str(&root_bin_path);
@@ -420,20 +348,17 @@ pub fn check_base_skin(
     let resolved = match outcome.entry {
         Ok(resolved) => resolved,
         Err(err) => {
-            return report(
-                SkinIntegrity {
-                    champion: champion.to_owned(),
-                    bin_path: root_bin_path.clone(),
-                    bin_name_hash: root_hash,
-                    resolve_error: Some(err),
-                    object: None,
-                    original_object,
-                    missing_required: Vec::new(),
-                    refs: Vec::new(),
-                    corrupt: outcome.corrupt,
-                },
-                policy,
-            );
+            return report(SkinIntegrity {
+                champion: champion.to_owned(),
+                bin_path: root_bin_path.clone(),
+                bin_name_hash: root_hash,
+                resolve_error: Some(err),
+                object: None,
+                original_object,
+                missing_required: Vec::new(),
+                refs: Vec::new(),
+                corrupt: outcome.corrupt,
+            });
         }
     };
 
@@ -460,9 +385,9 @@ pub fn check_base_skin(
                     // untrusted (a hostile WAD can declare the vanilla
                     // value over different bytes), and zstd is not
                     // canonical (a repack re-encodes untouched bytes into
-                    // a different TOC checksum). A slot the original entry
-                    // does not set has no counterpart to be equal to —
-                    // always Modified.
+                    // a different TOC checksum). Baseline validation
+                    // guarantees the original entry sets every checked
+                    // slot; the None arm is defensive.
                     match original_slot {
                         Some(hash) if original_content_matches(original, hash, &checksums) => {
                             RefStatus::Unmodified
@@ -492,20 +417,17 @@ pub fn check_base_skin(
         });
     }
 
-    report(
-        SkinIntegrity {
-            champion: champion.to_owned(),
-            bin_path: resolved.bin_path,
-            bin_name_hash: resolved.bin_name_hash,
-            resolve_error: None,
-            object: Some(resolved.object),
-            original_object,
-            missing_required: mesh_refs.missing_required_slots(),
-            refs,
-            corrupt: outcome.corrupt,
-        },
-        policy,
-    )
+    report(SkinIntegrity {
+        champion: champion.to_owned(),
+        bin_path: resolved.bin_path,
+        bin_name_hash: resolved.bin_name_hash,
+        resolve_error: None,
+        object: Some(resolved.object),
+        original_object,
+        missing_required: mesh_refs.missing_required_slots(),
+        refs,
+        corrupt: outcome.corrupt,
+    })
 }
 
 /// Whether the original WAD's chunk at `name_hash` — the **original
@@ -574,8 +496,8 @@ fn anomaly(baseline: BaselineAnomaly) -> SkinCheckOutcome {
     SkinCheckOutcome::BaselineAnomaly(baseline)
 }
 
-fn report(integrity: SkinIntegrity, policy: SkinPolicy) -> SkinCheckOutcome {
-    for line in integrity.violations(policy) {
+fn report(integrity: SkinIntegrity) -> SkinCheckOutcome {
+    for line in integrity.violations() {
         tracing::warn!("Base-skin violation for {}: {line}", integrity.champion);
     }
     SkinCheckOutcome::Report(Box::new(integrity))
@@ -697,7 +619,6 @@ mod tests {
         original_contents: &BTreeMap<u64, Vec<u8>>,
         merged_contents: &BTreeMap<u64, Vec<u8>>,
         world: Option<&dyn Fn(u64) -> Vec<String>>,
-        policy: SkinPolicy,
     ) -> SkinCheckOutcome {
         let mut original = build_wad(original_contents);
         let mut merged = build_wad(merged_contents);
@@ -706,7 +627,6 @@ mod tests {
             &mut WadChunkSource(&mut merged),
             CHAMP,
             world,
-            policy,
         )
     }
 
@@ -725,39 +645,34 @@ mod tests {
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
         assert_eq!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::SkippedUnmodified
         );
     }
 
     #[test]
-    fn modified_texture_with_all_refs_present_is_clean() {
+    fn modified_mesh_with_all_refs_present_is_clean() {
         let original = original_contents();
         let mut merged = original.clone();
         merged.insert(
             chunk_hash(ROOT),
             skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
         );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
 
         // The Modified status must carry both fingerprints of the merged
         // chunk: the TOC checksum exactly as a ChunkSource over the merged
         // WAD reports it, and the xxh3 of the decompressed bytes.
         let mut merged_wad = build_wad(&merged);
-        let tex_checksum = WadChunkSource(&mut merged_wad)
-            .checksum(chunk_hash(TEX))
-            .expect("merged texture chunk");
+        let skn_checksum = WadChunkSource(&mut merged_wad)
+            .checksum(chunk_hash(SKN))
+            .expect("merged mesh chunk");
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::default()));
-        assert!(report.violations(SkinPolicy::default()).is_empty());
+        assert!(!report.is_broken());
+        assert!(report.violations().is_empty());
         assert_eq!(report.bin_path, ROOT);
         let statuses: Vec<_> = report
             .refs
@@ -768,13 +683,12 @@ mod tests {
             statuses,
             vec![
                 (MeshSlot::Skeleton, RefStatus::Unmodified),
-                (MeshSlot::SimpleSkin, RefStatus::Unmodified),
                 (
-                    MeshSlot::Texture,
+                    MeshSlot::SimpleSkin,
                     RefStatus::Modified {
                         checksums: ChunkChecksums {
-                            checksum: tex_checksum,
-                            decompressed_checksum: xxh3_64(b"MODDED-texture"),
+                            checksum: skn_checksum,
+                            decompressed_checksum: xxh3_64(b"MODDED-mesh"),
                         }
                     }
                 ),
@@ -802,25 +716,24 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_chunk_is_missing_and_never_tolerated() {
+    fn unreadable_chunk_is_missing_and_a_violation() {
         // The TOC checksum is declared by the untrusted WAD; a chunk whose
         // bytes cannot be read is present in name only, so it classifies
-        // as Missing(Unreadable) — a violation even for a texture slot
-        // under the default policy, because unlike a dangling reference a
-        // stored chunk exists.
+        // as Missing(Unreadable) — a closed-world violation: unlike a
+        // dangling reference, a stored chunk exists.
         let original = original_contents();
         let mut merged = original.clone();
         merged.insert(
             chunk_hash(ROOT),
             skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
         );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
 
         let mut original_wad = build_wad(&original);
         let mut merged_wad = build_wad(&merged);
         let mut merged_source = BrokenChunk {
             inner: WadChunkSource(&mut merged_wad),
-            broken: chunk_hash(TEX),
+            broken: chunk_hash(SKN),
         };
 
         let SkinCheckOutcome::Report(report) = check_base_skin(
@@ -828,16 +741,15 @@ mod tests {
             &mut merged_source,
             CHAMP,
             NO_WORLD,
-            SkinPolicy::default(),
         ) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken(SkinPolicy::default()));
+        assert!(report.is_broken());
         assert!(matches!(
-            &report.refs[2].status,
+            &report.refs[1].status,
             RefStatus::Missing(RefMissingKind::Unreadable { .. })
         ));
-        let violations = report.violations(SkinPolicy::default());
+        let violations = report.violations();
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("cannot be read"));
     }
@@ -863,7 +775,7 @@ mod tests {
     #[test]
     fn recompressed_untouched_asset_reads_unmodified() {
         // The mod repacked the WAD: skin0.bin is genuinely modified, but
-        // the texture chunk carries the original bytes under a different
+        // the mesh chunk carries the original bytes under a different
         // TOC checksum. Content comparison must classify it Unmodified.
         let original = original_contents();
         let mut merged = original.clone();
@@ -876,7 +788,7 @@ mod tests {
         let mut merged_wad = build_wad(&merged);
         let mut merged_source = RecompressedChunk {
             inner: WadChunkSource(&mut merged_wad),
-            repacked: chunk_hash(TEX),
+            repacked: chunk_hash(SKN),
         };
 
         let SkinCheckOutcome::Report(report) = check_base_skin(
@@ -884,11 +796,10 @@ mod tests {
             &mut merged_source,
             CHAMP,
             NO_WORLD,
-            SkinPolicy::default(),
         ) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(!report.is_broken());
         let statuses: Vec<_> = report
             .refs
             .iter()
@@ -899,7 +810,6 @@ mod tests {
             vec![
                 (MeshSlot::Skeleton, RefStatus::Unmodified),
                 (MeshSlot::SimpleSkin, RefStatus::Unmodified),
-                (MeshSlot::Texture, RefStatus::Unmodified),
             ]
         );
     }
@@ -926,7 +836,7 @@ mod tests {
 
     #[test]
     fn spoofed_toc_checksum_on_asset_reads_modified() {
-        // The merged texture ships different bytes but DECLARES the
+        // The merged mesh ships different bytes but DECLARES the
         // original slot's TOC checksum. Declared checksums are untrusted;
         // only the decompressed comparison may conclude Unmodified, so
         // the spoof must classify Modified — with the real decompressed
@@ -937,18 +847,18 @@ mod tests {
             chunk_hash(ROOT),
             skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
         );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
 
         let mut original_wad = build_wad(&original);
-        let vanilla_tex_checksum = WadChunkSource(&mut original_wad)
-            .checksum(chunk_hash(TEX))
-            .expect("original texture chunk");
+        let vanilla_skn_checksum = WadChunkSource(&mut original_wad)
+            .checksum(chunk_hash(SKN))
+            .expect("original mesh chunk");
 
         let mut merged_wad = build_wad(&merged);
         let mut merged_source = SpoofedChecksum {
             inner: WadChunkSource(&mut merged_wad),
-            spoofed: chunk_hash(TEX),
-            declared: vanilla_tex_checksum,
+            spoofed: chunk_hash(SKN),
+            declared: vanilla_skn_checksum,
         };
 
         let SkinCheckOutcome::Report(report) = check_base_skin(
@@ -956,14 +866,13 @@ mod tests {
             &mut merged_source,
             CHAMP,
             NO_WORLD,
-            SkinPolicy::default(),
         ) else {
             panic!("expected a report");
         };
         assert!(matches!(
-            &report.refs[2].status,
+            &report.refs[1].status,
             RefStatus::Modified { checksums }
-                if checksums.decompressed_checksum == xxh3_64(b"MODDED-texture")
+                if checksums.decompressed_checksum == xxh3_64(b"MODDED-mesh")
         ));
     }
 
@@ -1000,7 +909,6 @@ mod tests {
             &mut merged_source,
             CHAMP,
             NO_WORLD,
-            SkinPolicy::default(),
         ) else {
             panic!("expected a report, not SkippedUnmodified");
         };
@@ -1031,8 +939,7 @@ mod tests {
                 &mut WadChunkSource(&mut original_wad),
                 &mut merged_source,
                 CHAMP,
-                NO_WORLD,
-                SkinPolicy::default(),
+                NO_WORLD
             ),
             SkinCheckOutcome::SkippedUnmodified
         );
@@ -1051,28 +958,21 @@ mod tests {
         // vouch as stock.
         let alt_skl = "ASSETS/Characters/Testchamp/Skins/Skin02/alt.skl";
         let alt_skn = "ASSETS/Characters/Testchamp/Skins/Skin02/alt.skn";
-        let alt_tex = "ASSETS/Characters/Testchamp/Skins/Skin02/alt_TX_CM.tex";
 
         let mut original = original_contents();
         original.insert(chunk_hash(alt_skl), b"alt-skeleton-data".to_vec());
         original.insert(chunk_hash(alt_skn), b"alt-mesh-data".to_vec());
-        original.insert(chunk_hash(alt_tex), b"alt-texture-data".to_vec());
 
         let mut merged = original.clone();
         merged.insert(
             chunk_hash(ROOT),
-            skin_bin(Some(alt_skl), Some(alt_skn), Some(alt_tex), 2.0),
+            skin_bin(Some(alt_skl), Some(alt_skn), None, 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::strict()));
+        assert!(!report.is_broken());
         for r in &report.refs {
             assert!(
                 matches!(r.status, RefStatus::Modified { .. }),
@@ -1103,47 +1003,11 @@ mod tests {
             skin_bin(Some(alias), Some(SKN), Some(TEX), 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::strict()));
+        assert!(!report.is_broken());
         assert_eq!(report.refs[0].status, RefStatus::Unmodified);
-    }
-
-    #[test]
-    fn texture_set_where_original_unsets_it_reads_modified() {
-        // Material-override champions (Evelynn, Mel, Yuumi) set no
-        // texture. A mod that sets one — even pointing at a vanilla chunk
-        // already in the WAD — has no vanilla counterpart to be equal to:
-        // Modified, never Unmodified.
-        let mut original = original_contents();
-        original.insert(chunk_hash(ROOT), skin_bin(Some(SKL), Some(SKN), None, 1.0));
-
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken(SkinPolicy::strict()));
-        assert!(matches!(
-            &report.refs[2].status,
-            RefStatus::Modified { checksums }
-                if checksums.decompressed_checksum == xxh3_64(b"texture-data")
-        ));
     }
 
     #[test]
@@ -1158,13 +1022,13 @@ mod tests {
             chunk_hash(ROOT),
             skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
         );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
 
         let mut original_wad = build_wad(&original);
         let mut merged_wad = build_wad(&merged);
         let mut original_source = BrokenChunk {
             inner: WadChunkSource(&mut original_wad),
-            broken: chunk_hash(TEX),
+            broken: chunk_hash(SKN),
         };
 
         let SkinCheckOutcome::Report(report) = check_base_skin(
@@ -1172,97 +1036,40 @@ mod tests {
             &mut WadChunkSource(&mut merged_wad),
             CHAMP,
             NO_WORLD,
-            SkinPolicy::default(),
         ) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(!report.is_broken());
         assert!(matches!(
-            &report.refs[2].status,
-            RefStatus::Modified { checksums } if checksums.decompressed_checksum == xxh3_64(b"MODDED-texture")
+            &report.refs[1].status,
+            RefStatus::Modified { checksums } if checksums.decompressed_checksum == xxh3_64(b"MODDED-mesh")
         ));
     }
 
     #[test]
-    fn removed_texture_property_is_clean_even_under_strict() {
-        // The sibling idiom to a dangling texture reference: the mod
-        // *unsets* the texture property entirely. Texture is not a
-        // required slot, so this is clean under both policies — and it
-        // leaves no texture ref on record at all, so it can never vouch
-        // as a stock slot either.
+    fn dangling_texture_reference_is_ignored() {
+        // The Texture property is not checked at all: a dangling texture
+        // reference (the authoring idiom for suppressing the vanilla base
+        // texture) produces no ref report and no violation.
+        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
         let original = original_contents();
         let mut merged = original.clone();
-        merged.insert(chunk_hash(ROOT), skin_bin(Some(SKL), Some(SKN), None, 2.0));
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
+        );
 
-        let SkinCheckOutcome::Report(report) =
-            check(&original, &merged, Some(&empty_world), SkinPolicy::strict())
-        else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::strict()));
-        assert!(!report.is_broken(SkinPolicy::default()));
-        assert!(report.missing_required.is_empty());
+        assert!(!report.is_broken());
+        assert!(report.violations().is_empty());
         let slots: Vec<_> = report.refs.iter().map(|r| r.slot).collect();
         assert_eq!(slots, vec![MeshSlot::Skeleton, MeshSlot::SimpleSkin]);
     }
 
     #[test]
-    fn dangling_texture_is_a_violation_under_strict_policy() {
-        // The mod's skin bin references a texture path that exists nowhere —
-        // a broken/outdated mod (e.g. the asset was removed from the game).
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) =
-            check(&original, &merged, Some(&empty_world), SkinPolicy::strict())
-        else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken(SkinPolicy::strict()));
-        assert_eq!(
-            report.refs[2].status,
-            RefStatus::Missing(RefMissingKind::Everywhere)
-        );
-        assert_eq!(report.violations(SkinPolicy::strict()).len(), 1);
-    }
-
-    #[test]
-    fn dangling_texture_is_tolerated_by_default_policy() {
-        // Same setup under the blessed default: a dangling texture is a
-        // known authoring idiom — still reported as Missing, but not a
-        // violation.
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken(SkinPolicy::default()));
-        assert!(report.violations(SkinPolicy::default()).is_empty());
-        // The fact is still on record — only the verdict changed.
-        assert_eq!(
-            report.refs[2].status,
-            RefStatus::Missing(RefMissingKind::Everywhere)
-        );
-    }
-
-    #[test]
-    fn dangling_skeleton_is_never_tolerated() {
+    fn dangling_skeleton_is_a_violation() {
         let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.skl";
         let original = original_contents();
         let mut merged = original.clone();
@@ -1271,26 +1078,21 @@ mod tests {
             skin_bin(Some(stale), Some(SKN), Some(TEX), 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken(SkinPolicy::default()));
-        assert_eq!(report.violations(SkinPolicy::default()).len(), 1);
+        assert!(report.is_broken());
+        assert_eq!(report.violations().len(), 1);
     }
 
     #[test]
     fn misplaced_reference_names_the_wads_that_have_it() {
-        let custom = "ASSETS/Characters/Testchamp/Skins/Base/custom.tex";
+        let custom = "ASSETS/Characters/Testchamp/Skins/Base/custom.skn";
         let original = original_contents();
         let mut merged = original.clone();
         merged.insert(
             chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(custom), 2.0),
+            skin_bin(Some(SKL), Some(custom), Some(TEX), 2.0),
         );
 
         let world = |hash: u64| {
@@ -1300,41 +1102,34 @@ mod tests {
                 Vec::new()
             }
         };
-        let SkinCheckOutcome::Report(report) =
-            check(&original, &merged, Some(&world), SkinPolicy::strict())
-        else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&world)) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken(SkinPolicy::strict()));
+        assert!(report.is_broken());
         assert_eq!(
-            report.refs[2].status,
+            report.refs[1].status,
             RefStatus::Missing(RefMissingKind::Misplaced {
                 found_in: vec!["Testchamp.en_US.wad.client".to_string()]
             })
         );
-        assert!(report.violations(SkinPolicy::strict())[0].contains("wrong WAD"));
-        // The policy is per-WAD (the in-game view cannot tell Misplaced from
-        // Everywhere), so the default tolerates a misplaced texture too.
-        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(report.violations()[0].contains("wrong WAD"));
     }
 
     #[test]
     fn missing_reference_without_world_is_unknown() {
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
+        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.skn";
         let original = original_contents();
         let mut merged = original.clone();
         merged.insert(
             chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
+            skin_bin(Some(SKL), Some(stale), Some(TEX), 2.0),
         );
 
-        let SkinCheckOutcome::Report(report) =
-            check(&original, &merged, NO_WORLD, SkinPolicy::default())
-        else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, NO_WORLD) else {
             panic!("expected a report");
         };
         assert_eq!(
-            report.refs[2].status,
+            report.refs[1].status,
             RefStatus::Missing(RefMissingKind::Unknown)
         );
     }
@@ -1345,15 +1140,10 @@ mod tests {
         let mut merged = original.clone();
         merged.insert(chunk_hash(ROOT), skin_bin(None, Some(SKN), Some(TEX), 2.0));
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken(SkinPolicy::default()));
+        assert!(report.is_broken());
         assert_eq!(report.missing_required, vec![MeshSlot::Skeleton]);
     }
 
@@ -1363,15 +1153,10 @@ mod tests {
         let mut merged = original.clone();
         merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(report.is_broken(SkinPolicy::default()));
+        assert!(report.is_broken());
         assert!(matches!(
             report.resolve_error,
             Some(ResolveError::EntryNotFound { .. })
@@ -1403,12 +1188,7 @@ mod tests {
         );
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
 
@@ -1421,7 +1201,7 @@ mod tests {
         assert_eq!(skin_scale(&report.original_object), 1.0);
         // The summarized fields stay derivable from the object handed out,
         // so a consumer never has to re-resolve to go deeper.
-        assert_eq!(skin_mesh_refs(object).texture.as_deref(), Some(TEX));
+        assert_eq!(skin_mesh_refs(object).simple_skin.as_deref(), Some(SKN));
     }
 
     #[test]
@@ -1430,12 +1210,7 @@ mod tests {
         let mut merged = original.clone();
         merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
         // `object` is None exactly when the entry could not be resolved,
@@ -1461,15 +1236,10 @@ mod tests {
         );
         merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
 
-        let SkinCheckOutcome::Report(report) = check(
-            &original,
-            &merged,
-            Some(&empty_world),
-            SkinPolicy::default(),
-        ) else {
+        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
             panic!("expected a report");
         };
-        assert!(!report.is_broken(SkinPolicy::default()));
+        assert!(!report.is_broken());
         assert_eq!(report.bin_path, CONCAT);
     }
 
@@ -1482,7 +1252,7 @@ mod tests {
         let merged = original_contents();
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRootMissing { .. })
         ));
     }
@@ -1494,7 +1264,7 @@ mod tests {
         merged.remove(&chunk_hash(ROOT));
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::MergedRootMissing { .. })
         ));
     }
@@ -1506,7 +1276,7 @@ mod tests {
         let merged = original_contents();
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalCorruptBin(_))
         ));
     }
@@ -1524,7 +1294,7 @@ mod tests {
         );
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalMissingRequiredSlot(
                 MeshSlot::Skeleton
             ))
@@ -1543,7 +1313,7 @@ mod tests {
         merged.insert(chunk_hash(SKL), b"modded-skeleton".to_vec());
 
         assert!(matches!(
-            check(&original, &merged, NO_WORLD, SkinPolicy::default()),
+            check(&original, &merged, NO_WORLD),
             SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRefUnresolved {
                 slot: MeshSlot::Skeleton,
                 ..

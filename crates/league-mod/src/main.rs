@@ -83,11 +83,6 @@ pub enum Commands {
         /// Game directory (or install root); defaults to the configured League path
         #[arg(long)]
         game_dir: Option<String>,
-
-        /// Fail-closed judgment: flag every missing reference, including
-        /// dangling texture refs the default policy tolerates
-        #[arg(long)]
-        strict: bool,
     },
     /// Manage application configuration
     Config {
@@ -168,11 +163,9 @@ fn main() -> Result<()> {
         Commands::Sanitize {
             file_path,
             game_dir,
-            strict,
         } => sanitize_mod(SanitizeModArgs {
             file_path,
             game_dir,
-            strict,
         }),
         Commands::Config { action } => match action {
             ConfigAction::Show => config_cmd::show_config(),

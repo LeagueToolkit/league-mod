@@ -116,6 +116,6 @@ pub use fantome_content::FantomeContent;
 pub use game_index::GameIndex;
 pub use linked_bins::LinkedBinOffender;
 pub use modpkg_content::ModpkgContent;
-pub use skin_integrity::{SkinIntegrityOffender, SkinPolicy};
+pub use skin_integrity::SkinIntegrityOffender;
 pub use state::OverlayState;
 pub use strings::StringOverrideMode;

@@ -6,25 +6,19 @@ use std::fmt;
 use ltk_hash::{BinHash, Hash as _};
 use ltk_meta::{BinObject, PropertyValueEnum};
 
-/// Which of a skin's three mesh assets a reference or diagnostic refers to.
+/// Which of a skin's two checked mesh assets a reference or diagnostic
+/// refers to.
 ///
-/// `Skeleton` and `SimpleSkin` are required — every base-game `skin0` sets
-/// them (empirically 172/172), so a skin without one is malformed — while
-/// `Texture` is optional: material-override skins (Evelynn, Mel, Yuumi)
-/// omit it. Note that optionality is about the *property being unset*; a
-/// property that is set must still resolve.
+/// Both are required: every base-game `skin0` sets them (empirically
+/// 172/172), so a skin without one is malformed. The entry's `Texture`
+/// property is deliberately not checked — it is optional (material-override
+/// skins like Evelynn, Mel, and Yuumi omit it) and a dangling texture
+/// reference is a known authoring idiom for suppressing the vanilla base
+/// texture, so it carries no correctness signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshSlot {
     Skeleton,
     SimpleSkin,
-    Texture,
-}
-
-impl MeshSlot {
-    /// Whether every base-game `skin0` sets this slot.
-    pub fn is_required(self) -> bool {
-        !matches!(self, MeshSlot::Texture)
-    }
 }
 
 impl fmt::Display for MeshSlot {
@@ -32,7 +26,6 @@ impl fmt::Display for MeshSlot {
         f.write_str(match self {
             MeshSlot::Skeleton => "skeleton",
             MeshSlot::SimpleSkin => "simple-skin",
-            MeshSlot::Texture => "texture",
         })
     }
 }
@@ -48,8 +41,6 @@ pub struct SkinMeshRefs {
     pub skeleton: Option<String>,
     /// `SkinMeshProperties.SimpleSkin` (`.skn`).
     pub simple_skin: Option<String>,
-    /// `SkinMeshProperties.Texture` (`.tex`/`.dds`).
-    pub texture: Option<String>,
 }
 
 impl SkinMeshRefs {
@@ -59,7 +50,6 @@ impl SkinMeshRefs {
         match slot {
             MeshSlot::Skeleton => self.skeleton.as_deref(),
             MeshSlot::SimpleSkin => self.simple_skin.as_deref(),
-            MeshSlot::Texture => self.texture.as_deref(),
         }
     }
 
@@ -68,13 +58,12 @@ impl SkinMeshRefs {
         [
             (MeshSlot::Skeleton, self.skeleton.as_deref()),
             (MeshSlot::SimpleSkin, self.simple_skin.as_deref()),
-            (MeshSlot::Texture, self.texture.as_deref()),
         ]
         .into_iter()
         .filter_map(|(slot, path)| path.map(|p| (slot, p)))
     }
 
-    /// Required slots (see [`MeshSlot::is_required`]) the entry does not set.
+    /// Slots the entry does not set — every checked slot is required.
     pub fn missing_required_slots(&self) -> Vec<MeshSlot> {
         let mut missing = Vec::new();
         if self.skeleton.is_none() {
@@ -87,9 +76,11 @@ impl SkinMeshRefs {
     }
 }
 
-/// Extract the mesh references from one `SkinCharacterDataProperties`
-/// object (its `SkinMeshProperties` embed). Unset properties stay `None` —
-/// judging that is [`SkinMeshRefs::missing_required_slots`]' job.
+/// Extract the checked mesh references from one
+/// `SkinCharacterDataProperties` object (its `SkinMeshProperties` embed).
+/// The `Texture` property is deliberately not read (see [`MeshSlot`]).
+/// Unset properties stay `None` — judging that is
+/// [`SkinMeshRefs::missing_required_slots`]' job.
 pub fn skin_mesh_refs(object: &BinObject) -> SkinMeshRefs {
     let mesh_prop = BinHash::hash_str("SkinMeshProperties");
 
@@ -97,7 +88,6 @@ pub fn skin_mesh_refs(object: &BinObject) -> SkinMeshRefs {
         entry_hash: *object.path_hash,
         skeleton: None,
         simple_skin: None,
-        texture: None,
     };
     let mesh_properties = match object.properties.get(&mesh_prop) {
         Some(PropertyValueEnum::Embedded(embedded)) => Some(&embedded.0.properties),
@@ -111,7 +101,6 @@ pub fn skin_mesh_refs(object: &BinObject) -> SkinMeshRefs {
         };
         refs.skeleton = string_of("Skeleton");
         refs.simple_skin = string_of("SimpleSkin");
-        refs.texture = string_of("Texture");
     }
     refs
 }
@@ -211,8 +200,12 @@ mod tests {
         assert_eq!(refs.entry_hash, *h("Characters/Testchamp/Skins/Skin0"));
         assert_eq!(refs.skeleton.as_deref(), Some(SKL));
         assert_eq!(refs.simple_skin.as_deref(), Some(SKN));
-        assert_eq!(refs.texture.as_deref(), Some(TEX));
-        assert_eq!(refs.slots().count(), 3);
+        // The Texture property is present in the bin but never extracted.
+        let slots: Vec<_> = refs.slots().collect();
+        assert_eq!(
+            slots,
+            vec![(MeshSlot::Skeleton, SKL), (MeshSlot::SimpleSkin, SKN)]
+        );
         assert!(refs.missing_required_slots().is_empty());
     }
 
@@ -230,28 +223,6 @@ mod tests {
             refs.missing_required_slots(),
             vec![MeshSlot::Skeleton, MeshSlot::SimpleSkin]
         );
-    }
-
-    #[test]
-    fn missing_texture_is_not_a_missing_required_slot() {
-        let mesh = values::Embedded(values::Struct {
-            class_hash: h("SkinMeshDataProperties"),
-            properties: IndexMap::from([
-                (h("Skeleton"), values::String::from(SKL).into()),
-                (h("SimpleSkin"), values::String::from(SKN).into()),
-            ]),
-            meta: NoMeta,
-        });
-        let object = BinObject::<NoMeta>::builder(
-            h("Characters/Testchamp/Skins/Skin0"),
-            h("SkinCharacterDataProperties"),
-        )
-        .property(h("SkinMeshProperties"), mesh)
-        .build();
-
-        let refs = skin_mesh_refs(&object);
-        assert_eq!(refs.slots().count(), 2);
-        assert!(refs.missing_required_slots().is_empty());
     }
 
     #[test]
