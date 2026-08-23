@@ -17,6 +17,7 @@ use std::io::{Cursor, Write};
 const CHAMP: &str = "testchamp";
 const ROOT: &str = "data/characters/testchamp/skins/skin0.bin";
 const CONCAT: &str = "data/testchamp_skin0_concat.bin";
+const BROKEN: &str = "data/testchamp_skin0_broken.bin";
 const SKL: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body.skl";
 const SKN: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body.skn";
 const TEX: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body_TX_CM.tex";
@@ -414,6 +415,91 @@ fn corrupt_merged_bin_is_a_mod_anomaly() {
     ));
 }
 
+/// A root bin that defines nothing and links `BROKEN` (unreadable) before
+/// `CONCAT` (which defines the entry): the walk records the corruption,
+/// keeps going, and resolves.
+fn contents_with_corrupt_link_before(entry_bin: Vec<u8>) -> BTreeMap<u64, Vec<u8>> {
+    let mut contents = original_contents();
+    contents.insert(
+        chunk_hash(ROOT),
+        bin_bytes(&Bin::builder().dependency(BROKEN).dependency(CONCAT).build()),
+    );
+    contents.insert(chunk_hash(BROKEN), b"not a property bin".to_vec());
+    contents.insert(chunk_hash(CONCAT), entry_bin);
+    contents
+}
+
+#[test]
+fn corrupt_linked_bin_does_not_sink_a_resolved_skin() {
+    // The entry resolved from a readable bin, so the corruption is carried
+    // on the result for the consumer to weigh -- not a mod anomaly.
+    let original = original_contents();
+    let merged = contents_with_corrupt_link_before(skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0));
+
+    let skin = modified(check(&original, &merged, NO_WORLD));
+    assert_eq!(skin.bin_path, CONCAT);
+    assert_eq!(skin_scale(&skin.object), 2.0);
+    assert_eq!(
+        skin.corrupt_bins
+            .iter()
+            .map(|c| c.bin_path.as_str())
+            .collect::<Vec<_>>(),
+        vec![BROKEN]
+    );
+}
+
+#[test]
+fn a_clean_resolve_carries_no_corrupt_bins() {
+    let original = original_contents();
+    let mut merged = original.clone();
+    merged.insert(
+        chunk_hash(ROOT),
+        skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+    );
+
+    assert!(
+        modified(check(&original, &merged, NO_WORLD))
+            .corrupt_bins
+            .is_empty()
+    );
+}
+
+#[test]
+fn corrupt_linked_bin_does_not_mask_a_definitive_resolve_error() {
+    // WrongClass is a verdict the walk reached on its own: the entry WAS
+    // found. Reporting the incidental corruption instead would name the
+    // wrong cause.
+    let original = original_contents();
+    let wrong_class = bin_bytes(
+        &Bin::builder()
+            .object(
+                BinObject::<NoMeta>::builder(h("Characters/Testchamp/Skins/Skin0"), h("NotASkin"))
+                    .build(),
+            )
+            .build(),
+    );
+    let merged = contents_with_corrupt_link_before(wrong_class);
+
+    assert!(matches!(
+        mod_anomaly(check(&original, &merged, NO_WORLD)),
+        ModAnomaly::Resolve(ResolveError::WrongClass { .. })
+    ));
+}
+
+#[test]
+fn corrupt_linked_bin_explains_an_unfound_entry() {
+    // Nothing defines the entry, and an unreadable bin is the likeliest
+    // place it went: report that, not the bare EntryNotFound.
+    let original = original_contents();
+    let merged = contents_with_corrupt_link_before(bin_bytes(&Bin::builder().build()));
+
+    let anomaly = mod_anomaly(check(&original, &merged, NO_WORLD));
+    let ModAnomaly::CorruptBin(corrupt) = anomaly else {
+        panic!("expected CorruptBin, got {anomaly:?}");
+    };
+    assert_eq!(corrupt.bin_path, BROKEN);
+}
+
 #[test]
 fn linked_bin_cycles_terminate() {
     let original = original_contents();
@@ -449,6 +535,27 @@ fn corrupt_original_is_a_baseline_anomaly() {
         check(&original, &merged, NO_WORLD),
         SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalCorruptBin(_))
     ));
+}
+
+#[test]
+fn corrupt_bin_the_original_resolved_past_is_not_a_baseline_anomaly() {
+    // Mirror of the merged side: the baseline entry resolved from a
+    // readable linked bin, so the corrupt one is logged, not blamed -- and
+    // the mod still gets judged.
+    let original =
+        contents_with_corrupt_link_before(skin_bin(Some(SKL), Some(SKN), Some(TEX), 1.0));
+    let mut merged = original.clone();
+    merged.insert(
+        chunk_hash(ROOT),
+        skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+    );
+
+    let skin = modified(check(&original, &merged, NO_WORLD));
+    assert_eq!(skin.bin_path, ROOT);
+    assert_eq!(skin_scale(&skin.object), 2.0);
+    // The baseline came from the bin past the corrupt one.
+    assert_eq!(skin_scale(&skin.original_object), 1.0);
+    assert!(skin.corrupt_bins.is_empty());
 }
 
 #[test]

@@ -17,11 +17,13 @@
 //!   us, not shown as a mod diagnostic.
 //! - [`SkinCheckOutcome::ModAnomaly`] — the mod's problem, the mirror of
 //!   the baseline judgment applied to the merged side: unresolvable skin
-//!   entry, corrupt bin in the skin graph, missing required slot, or a
-//!   mesh reference that is not usable from this WAD.
+//!   entry (reported as the corrupt bin in the skin graph when that is
+//!   what hid it), missing required slot, or a mesh reference that is not
+//!   usable from this WAD.
 //! - [`SkinCheckOutcome::Modified`] — the mod modified the base skin and
-//!   it satisfies the assertion; carries the parsed entries of both sides
-//!   and the merged fingerprints.
+//!   it satisfies the assertion; carries the parsed entries of both sides,
+//!   the merged fingerprints, and any bins the resolve walk could not read
+//!   but did not need.
 
 use ltk_hash::{BinHash, Hash as _, WadHash};
 use ltk_meta::BinObject;
@@ -29,7 +31,9 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use thiserror::Error;
 
-use crate::resolve::{CorruptBin, ResolveError, resolve_bin_entry_with};
+use crate::resolve::{
+    CorruptBin, ResolveError, ResolveOutcome, ResolvedBinObject, resolve_bin_entry_with,
+};
 use crate::skin::{
     MeshSlot, SkinMeshRefs, skin_character_data_class, skin_mesh_refs, skin0_bin_path,
     skin0_entry_hash,
@@ -143,6 +147,9 @@ pub enum BaselineAnomaly {
     #[error("merged WAD is missing '{bin_path}', which the original WAD contains")]
     MergedRootMissing { bin_path: String },
 
+    /// A bin in the original's skin graph could not be read or parsed, and
+    /// the baseline entry was never found. Corruption the walk survived is
+    /// only logged, never this anomaly.
     #[error("original WAD has a corrupt bin '{}': {}", .0.bin_path, .0.reason)]
     OriginalCorruptBin(CorruptBin),
 
@@ -159,10 +166,19 @@ pub enum BaselineAnomaly {
 /// The mod broke the closed-world assertion — its base skin would fail
 /// in-game verification. The merged-side mirror of [`BaselineAnomaly`]:
 /// the first violation encountered, judged in the same fail-closed order
-/// the baseline uses (corrupt bin, unresolvable entry, missing required
-/// slot, unusable reference).
+/// the baseline uses (unresolvable entry, missing required slot, unusable
+/// reference).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModAnomaly {
+    /// A bin in the merged skin graph could not be read or parsed, and the
+    /// `skin0` entry was never found — the unreadable bin is the likeliest
+    /// place it went, so it is reported in place of the bare
+    /// [`ResolveError::EntryNotFound`].
+    ///
+    /// Corruption on its own is never this anomaly: the walk does not stop
+    /// for an unreadable bin, so an entry that resolved from a readable one
+    /// is judged normally and the unreadable bins ride along on
+    /// [`ModifiedSkin::corrupt_bins`].
     #[error("corrupt property bin '{}' in the skin graph: {}", .0.bin_path, .0.reason)]
     CorruptBin(CorruptBin),
 
@@ -187,7 +203,9 @@ pub enum ModAnomaly {
 /// A modified base skin that satisfies the closed-world assertion: the
 /// entry resolved, every required mesh slot is set, and every reference is
 /// present and readable in the merged WAD. Any failure on the way is a
-/// [`ModAnomaly`] instead, so nothing here is optional.
+/// [`ModAnomaly`] instead, so nothing here is optional — the one field
+/// that can be empty is [`corrupt_bins`](Self::corrupt_bins), the
+/// corruption the resolve walk survived.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModifiedSkin {
     /// The bin the entry was found in (`skin0.bin` itself or a linked bin).
@@ -207,6 +225,15 @@ pub struct ModifiedSkin {
     pub skeleton: MeshRef,
     /// The `SimpleSkin` reference and how it relates to vanilla.
     pub simple_skin: MeshRef,
+    /// Bins in the merged skin graph that could not be read or parsed, in
+    /// walk order — usually empty. The entry resolved without them, so they
+    /// are not a correctness violation (see [`ModAnomaly::CorruptBin`]),
+    /// but they are parts of the graph this check could not see into: a
+    /// consumer that must vouch for the whole skin (the in-game verifier's
+    /// fast track) should read a non-empty list as "cannot vouch" and fall
+    /// through to its full scan, while a reporting consumer can surface
+    /// them as warnings.
+    pub corrupt_bins: Vec<CorruptBin>,
 }
 
 /// Outcome of checking one champion WAD.
@@ -316,8 +343,9 @@ pub fn check_base_skin(
 }
 
 /// Resolve and judge the merged side, mirroring [`validate_baseline`]'s
-/// fail-closed order: corrupt bin, unresolvable entry, missing required
-/// slot, unusable reference.
+/// fail-closed order: unresolvable entry, missing required slot, unusable
+/// reference. Corruption the resolve walk survived is carried on the
+/// result rather than reported (see [`resolve_or_explain`]).
 #[expect(clippy::too_many_arguments)]
 fn judge_mod(
     original: &mut dyn ChunkSource,
@@ -330,10 +358,10 @@ fn judge_mod(
     original_refs: &SkinMeshRefs,
 ) -> Result<ModifiedSkin, ModAnomaly> {
     let outcome = resolve_bin_entry_with(merged, root_bin_path, entry_hash, Some(skin_class));
-    if let Some(corrupt) = outcome.corrupt.into_iter().next() {
-        return Err(ModAnomaly::CorruptBin(corrupt));
-    }
-    let resolved = outcome.entry.map_err(ModAnomaly::Resolve)?;
+    let (resolved, corrupt_bins) = resolve_or_explain(outcome).map_err(|cause| match cause {
+        Unresolved::Corrupt(corrupt) => ModAnomaly::CorruptBin(corrupt),
+        Unresolved::Resolve(err) => ModAnomaly::Resolve(err),
+    })?;
 
     let merged_refs = skin_mesh_refs(&resolved.object);
     if let Some(&slot) = merged_refs.missing_required_slots().first() {
@@ -352,7 +380,41 @@ fn judge_mod(
         original_object,
         skeleton,
         simple_skin,
+        corrupt_bins,
     })
+}
+
+/// Why a resolve walk produced no entry.
+enum Unresolved {
+    Corrupt(CorruptBin),
+    Resolve(ResolveError),
+}
+
+/// Split a resolve outcome into the entry plus the corruption it survived,
+/// or the failure to report.
+///
+/// Corruption is never a verdict on its own. The walk does not stop for an
+/// unreadable bin ([`resolve_bin_entry_with`]), so an entry defined by a
+/// readable bin is judged normally and the unreadable ones ride along for
+/// the caller to decide about. Corruption becomes the reported failure only
+/// when the entry was never found — an unreadable bin may well have been
+/// the one defining it, and "entry not found" would name the wrong cause.
+/// Every other resolve error is a definitive verdict the walk reached on
+/// its own (the entry was found with the wrong class, the root is absent,
+/// the graph is absurd) and must not be masked by incidental corruption
+/// elsewhere in the graph.
+fn resolve_or_explain(
+    outcome: ResolveOutcome,
+) -> Result<(ResolvedBinObject, Vec<CorruptBin>), Unresolved> {
+    match outcome.entry {
+        Ok(resolved) => Ok((resolved, outcome.corrupt)),
+        Err(err) => Err(match outcome.corrupt.into_iter().next() {
+            Some(corrupt) if matches!(err, ResolveError::EntryNotFound { .. }) => {
+                Unresolved::Corrupt(corrupt)
+            }
+            _ => Unresolved::Resolve(err),
+        }),
+    }
 }
 
 /// Classify one required slot of the merged entry against the original
@@ -460,10 +522,22 @@ fn validate_baseline(
     skin_class: BinHash,
 ) -> Result<(BinObject, SkinMeshRefs), BaselineAnomaly> {
     let outcome = resolve_bin_entry_with(original, root_bin_path, entry_hash, Some(skin_class));
-    if let Some(corrupt) = outcome.corrupt.into_iter().next() {
-        return Err(BaselineAnomaly::OriginalCorruptBin(corrupt));
+    let (resolved, corrupt_bins) = resolve_or_explain(outcome).map_err(|cause| match cause {
+        Unresolved::Corrupt(corrupt) => BaselineAnomaly::OriginalCorruptBin(corrupt),
+        Unresolved::Resolve(err) => BaselineAnomaly::OriginalResolve(err),
+    })?;
+    // Corruption the baseline walk survived is not carried anywhere: an
+    // unreadable bin in the *original* is never the mod's problem to answer
+    // for (the same call `original_sha256` makes for an unreadable original
+    // chunk), and the entry resolved without it. It is still a corrupt
+    // install, so say so where we will see it.
+    for corrupt in corrupt_bins {
+        tracing::warn!(
+            "original WAD has a corrupt bin '{}' ({}); the base-skin entry resolved without it",
+            corrupt.bin_path,
+            corrupt.reason
+        );
     }
-    let resolved = outcome.entry.map_err(BaselineAnomaly::OriginalResolve)?;
 
     let refs = skin_mesh_refs(&resolved.object);
     if let Some(&slot) = refs.missing_required_slots().first() {

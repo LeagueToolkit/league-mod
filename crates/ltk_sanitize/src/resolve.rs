@@ -6,9 +6,13 @@
 //! source until one does.
 //!
 //! Unlike a pure diagnostic walk, corrupt bins encountered along the way are
-//! **recorded** in the [`ResolveOutcome`] rather than only logged: a strict
-//! consumer (the in-game verifier) treats any corruption as fatal, while a
-//! reporting consumer (a mod manager) attaches them to its diagnostics.
+//! **recorded** in the [`ResolveOutcome`] rather than only logged, and the
+//! walk continues — the entry may still be defined by a later linked bin.
+//! What corruption the walk survived is worth is the caller's call: the
+//! base-skin check reports it only when it is what kept the entry from being
+//! found, and otherwise hands it on for a strict consumer (the in-game
+//! verifier) to refuse to vouch on, or a reporting consumer (a mod manager)
+//! to attach to its diagnostics.
 
 use std::collections::{HashSet, VecDeque};
 use std::io::Cursor;
