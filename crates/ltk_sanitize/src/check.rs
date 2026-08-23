@@ -4,22 +4,30 @@
 //! original) against the closed-world assertion the in-game verifier
 //! enforces: the base skin's mesh references must resolve inside this WAD.
 //!
-//! Failures split into two classes with different owners:
+//! Every state the check can end in is a [`SkinCheckOutcome`] variant —
+//! nothing is optional inside any of them:
 //!
-//! - [`SkinIntegrity`] — the mod's problem: unresolvable skin entry, a set
-//!   mesh property whose asset is missing (straight-up broken, shipped to
-//!   the wrong WAD, or referencing an asset the game removed in a past
-//!   patch), corrupt bins in the skin graph.
-//! - [`BaselineAnomaly`] — never the mod's problem: the **original** game
-//!   WAD violates an assumption (corrupt install, or a game patch broke an
-//!   assumption this crate bakes in, e.g. the required-slot rule). These
-//!   should be logged loudly and looked at by us, not shown as a mod
-//!   diagnostic.
+//! - [`SkinCheckOutcome::SkippedUnmodified`] — the merged root bin is
+//!   byte-identical (by decompressed content) to the original; nothing to
+//!   check.
+//! - [`SkinCheckOutcome::BaselineAnomaly`] — never the mod's problem: the
+//!   **original** game WAD violates an assumption (corrupt install, or a
+//!   game patch broke an assumption this crate bakes in, e.g. the
+//!   required-slot rule). These should be logged loudly and looked at by
+//!   us, not shown as a mod diagnostic.
+//! - [`SkinCheckOutcome::ModAnomaly`] — the mod's problem, the mirror of
+//!   the baseline judgment applied to the merged side: unresolvable skin
+//!   entry, corrupt bin in the skin graph, missing required slot, or a
+//!   mesh reference that is not usable from this WAD.
+//! - [`SkinCheckOutcome::Modified`] — the mod modified the base skin and
+//!   it satisfies the assertion; carries the parsed entries of both sides
+//!   and the merged fingerprints.
 
 use ltk_hash::{BinHash, Hash as _, WadHash};
 use ltk_meta::BinObject;
+use sha2::{Digest, Sha256};
+use std::fmt;
 use thiserror::Error;
-use xxhash_rust::xxh3::xxh3_64;
 
 use crate::resolve::{CorruptBin, ResolveError, resolve_bin_entry_with};
 use crate::skin::{
@@ -30,6 +38,9 @@ use crate::source::ChunkSource;
 
 /// Why a referenced asset is missing, as far as the caller's world
 /// knowledge can tell.
+///
+/// Renders as the tail of a "{slot} '{path}' …" sentence (see
+/// [`ModAnomaly::RefMissing`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefMissingKind {
     /// No world lookup was provided — all that is known is that the chunk
@@ -48,183 +59,76 @@ pub enum RefMissingKind {
     Unreadable { reason: String },
 }
 
-/// Both fingerprints of one merged chunk, as attested against
-/// known-fingerprint sets: the TOC checksum and the xxh3 of the
-/// decompressed bytes (stable across re-compression).
-///
-/// They only travel as a pair: the TOC checksum is *declared* by the
-/// (untrusted) merged WAD, not recomputed from the stored bytes, so a
-/// chunk whose bytes cannot even be read must never become attestable
-/// via its declared checksum alone — such a chunk classifies as
-/// [`RefMissingKind::Unreadable`] instead of carrying half a
-/// fingerprint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChunkChecksums {
-    /// TOC checksum as declared by the merged WAD (xxh3 of the stored
-    /// chunk bytes, see [`ChunkSource::checksum`]).
-    pub checksum: u64,
-    /// xxh3 of the decompressed chunk bytes.
-    pub decompressed_checksum: u64,
+impl fmt::Display for RefMissingKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RefMissingKind::Unknown => write!(f, "is missing from this WAD"),
+            RefMissingKind::Everywhere => write!(
+                f,
+                "is missing from this WAD and everywhere else in the game and overlay — \
+                 the mod is likely broken or outdated (the asset may have been removed \
+                 from the game)"
+            ),
+            RefMissingKind::Misplaced { found_in } => write!(
+                f,
+                "is not in this WAD but exists in {} — shipped to the wrong WAD",
+                found_in.join(", ")
+            ),
+            RefMissingKind::Unreadable { reason } => {
+                write!(f, "is in the WAD but cannot be read: {reason}")
+            }
+        }
+    }
 }
 
-/// How a referenced asset relates to the merged and original WADs.
+/// How a present, readable reference relates to the original entry's same
+/// slot. A reference that is *not* usable never gets a status — it fails
+/// the whole check as [`ModAnomaly::RefMissing`].
 ///
-/// The Unmodified/Modified comparison is **slot-to-slot**: the merged
-/// reference is read at *its* path in the merged view, the vanilla
-/// counterpart at the **original entry's** path for the same slot, and the
-/// two contents are compared. It is never path-in-original: looking the
-/// merged path up in the original WAD would classify a repointed slot —
-/// `skin0` aimed at another vanilla asset already in this WAD, the
-/// skin-unlock shape — as Unmodified, because the bytes at that path *are*
-/// vanilla. They are just not the bytes the original slot renders.
+/// The comparison is **slot-to-slot**: the merged reference is read at
+/// *its* path in the merged view, the vanilla counterpart at the
+/// **original entry's** path for the same slot, and the two contents are
+/// compared. It is never path-in-original: looking the merged path up in
+/// the original WAD would classify a repointed slot — `skin0` aimed at
+/// another vanilla asset already in this WAD, the skin-unlock shape — as
+/// Unmodified, because the bytes at that path *are* vanilla. They are
+/// just not the bytes the original slot renders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefStatus {
     /// Renders the same *content* the original entry's same slot renders,
-    /// proven by the decompressed bytes — never by TOC checksums, which
-    /// prove nothing in either direction: the merged one is declared by an
-    /// untrusted WAD (it could declare the vanilla value over different
-    /// bytes), and zstd is not canonical (a repack re-encodes untouched
-    /// bytes into a different TOC checksum). Content decides, not the
-    /// path — a repoint that lands on a byte-identical chunk still renders
-    /// exactly what vanilla renders.
+    /// proven by comparing decompressed bytes. TOC checksums are never
+    /// read at all — they are declared by the untrusted WAD, and zstd is
+    /// not canonical — so neither a hostile declared checksum nor a
+    /// repack of untouched bytes can affect classification. Content
+    /// decides, not the path — a repoint that lands on a byte-identical
+    /// chunk still renders exactly what vanilla renders.
     Unmodified,
     /// Present but rendering different content than the original entry's
     /// same slot: the bytes changed, or the reference was repointed at
     /// another asset (vanilla or not — the skin-unlock shape lands here).
-    /// Not a correctness violation. Carries the merged chunk's
-    /// fingerprints so consumers that attest modified assets (e.g.
-    /// against a known-fingerprint set) never re-fetch it. A mere
-    /// re-compression of untouched bytes does not land here — content
-    /// comparison classifies it [`RefStatus::Unmodified`] — so modified
-    /// means the slot's rendered bytes really differ from vanilla's, or
-    /// the original side could not prove them equal (its chunk
-    /// unreadable).
+    /// Not a correctness violation. Also lands here when the original
+    /// side could not prove equality (its chunk unreadable).
     Modified {
-        /// The merged chunk's fingerprints. Always real: a chunk whose
-        /// bytes cannot be read classifies as
-        /// [`RefMissingKind::Unreadable`], never as modified.
-        checksums: ChunkChecksums,
+        /// SHA-256 of the decompressed chunk bytes — the fingerprint
+        /// consumers attest modified assets with (e.g. against a
+        /// known-fingerprint set) without re-fetching the chunk. Computed
+        /// from the actual bytes, never taken from anything the WAD
+        /// declares, and collision-resistant so a crafted chunk cannot
+        /// impersonate a known asset.
+        sha256: [u8; 32],
     },
-    /// Not usable from the merged WAD — absent, or present but
-    /// unreadable ([`RefMissingKind::Unreadable`]). A closed-world
-    /// violation.
-    Missing(RefMissingKind),
 }
 
-/// One referenced mesh asset and its classification.
+/// One checked mesh reference of a modified skin: present and readable in
+/// the merged WAD (anything else is a [`ModAnomaly::RefMissing`], so it
+/// never appears here).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefReport {
-    pub slot: MeshSlot,
+pub struct MeshRef {
     /// The path exactly as referenced by the bin.
     pub path: String,
     /// xxh64 chunk hash of the (lowercased) path.
     pub name_hash: u64,
     pub status: RefStatus,
-}
-
-impl RefReport {
-    /// Whether this reference violates the closed-world assertion: any
-    /// reference that is not usable from the merged WAD.
-    pub fn is_violation(&self) -> bool {
-        matches!(self.status, RefStatus::Missing(_))
-    }
-}
-
-/// Correctness report for one champion WAD's base skin. Empty
-/// [`violations`](Self::violations) means the mod is fine.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SkinIntegrity {
-    /// Lowercase champion directory name.
-    pub champion: String,
-    /// The bin the skin entry was found in (`skin0.bin` itself or a linked
-    /// bin), or the root bin path when resolution failed.
-    pub bin_path: String,
-    /// xxh64 chunk hash of `bin_path`.
-    pub bin_name_hash: u64,
-    /// Why the skin entry could not be resolved, when it could not.
-    pub resolve_error: Option<ResolveError>,
-    /// The parsed `skin0` entry as the **merged** WAD defines it — the
-    /// object [`refs`](Self::refs) and
-    /// [`missing_required`](Self::missing_required) were derived from.
-    /// `None` exactly when [`resolve_error`](Self::resolve_error) is
-    /// `Some`, since then there was no entry to parse.
-    ///
-    /// Carried so a consumer can read properties this check does not model
-    /// (`SkinClassification`, material overrides, VFX, the rest of the
-    /// `SkinMeshProperties` embed) without re-resolving and re-parsing the
-    /// skin graph — the walk that produced it already followed the
-    /// `linked` bins.
-    pub object: Option<BinObject>,
-    /// The parsed `skin0` entry as the **original** game WAD defines it:
-    /// the vanilla baseline each merged slot was classified against (see
-    /// [`RefStatus`]). Always present — a report only exists once the
-    /// baseline validated, and a baseline that does not is a
-    /// [`BaselineAnomaly`] instead of a report — so a consumer can diff
-    /// merged against vanilla without mounting the original WAD again.
-    pub original_object: BinObject,
-    /// Required mesh slots the skin entry does not set at all.
-    pub missing_required: Vec<MeshSlot>,
-    /// Every set mesh reference and its status.
-    pub refs: Vec<RefReport>,
-    /// Corrupt bins encountered while walking the merged skin graph.
-    pub corrupt: Vec<CorruptBin>,
-}
-
-impl SkinIntegrity {
-    /// Whether anything about this base skin violates the closed-world
-    /// assertion (and would fail in-game verification).
-    pub fn is_broken(&self) -> bool {
-        self.resolve_error.is_some()
-            || !self.missing_required.is_empty()
-            || !self.corrupt.is_empty()
-            || self.refs.iter().any(RefReport::is_violation)
-    }
-
-    /// Human-readable violation lines, suitable for logs and user-facing
-    /// diagnostics. Empty when the mod is fine.
-    pub fn violations(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if let Some(err) = &self.resolve_error {
-            out.push(format!("base-skin entry could not be resolved: {err}"));
-        }
-        for slot in &self.missing_required {
-            out.push(format!("skin0 entry has no {slot} mesh property"));
-        }
-        for corrupt in &self.corrupt {
-            out.push(format!(
-                "corrupt property bin '{}' in the skin graph: {}",
-                corrupt.bin_path, corrupt.reason
-            ));
-        }
-        for r in &self.refs {
-            if !r.is_violation() {
-                continue;
-            }
-            match &r.status {
-                RefStatus::Unmodified | RefStatus::Modified { .. } => {}
-                RefStatus::Missing(RefMissingKind::Everywhere) => out.push(format!(
-                    "{} '{}' is missing from this WAD and everywhere else in the game \
-                     and overlay — the mod is likely broken or outdated (the asset may \
-                     have been removed from the game)",
-                    r.slot, r.path
-                )),
-                RefStatus::Missing(RefMissingKind::Misplaced { found_in }) => out.push(format!(
-                    "{} '{}' is not in this WAD but exists in {} — shipped to the wrong WAD",
-                    r.slot,
-                    r.path,
-                    found_in.join(", ")
-                )),
-                RefStatus::Missing(RefMissingKind::Unknown) => {
-                    out.push(format!("{} '{}' is missing from this WAD", r.slot, r.path))
-                }
-                RefStatus::Missing(RefMissingKind::Unreadable { reason }) => out.push(format!(
-                    "{} '{}' is in the WAD but cannot be read: {reason}",
-                    r.slot, r.path
-                )),
-            }
-        }
-        out
-    }
 }
 
 /// The **original** game WAD violated an assumption of the check. This is
@@ -252,14 +156,65 @@ pub enum BaselineAnomaly {
     OriginalRefUnresolved { slot: MeshSlot, path: String },
 }
 
+/// The mod broke the closed-world assertion — its base skin would fail
+/// in-game verification. The merged-side mirror of [`BaselineAnomaly`]:
+/// the first violation encountered, judged in the same fail-closed order
+/// the baseline uses (corrupt bin, unresolvable entry, missing required
+/// slot, unusable reference).
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ModAnomaly {
+    #[error("corrupt property bin '{}' in the skin graph: {}", .0.bin_path, .0.reason)]
+    CorruptBin(CorruptBin),
+
+    #[error("base-skin entry could not be resolved: {0}")]
+    Resolve(ResolveError),
+
+    #[error("skin0 entry has no {0} mesh property")]
+    MissingRequiredSlot(MeshSlot),
+
+    /// A set mesh reference that is not usable from the merged WAD —
+    /// absent, or present but unreadable. `kind` refines why, as far as
+    /// the caller's world knowledge can tell.
+    #[error("{slot} '{path}' {kind}")]
+    RefMissing {
+        slot: MeshSlot,
+        /// The path exactly as referenced by the bin.
+        path: String,
+        kind: RefMissingKind,
+    },
+}
+
+/// A modified base skin that satisfies the closed-world assertion: the
+/// entry resolved, every required mesh slot is set, and every reference is
+/// present and readable in the merged WAD. Any failure on the way is a
+/// [`ModAnomaly`] instead, so nothing here is optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModifiedSkin {
+    /// The bin the entry was found in (`skin0.bin` itself or a linked bin).
+    pub bin_path: String,
+    /// xxh64 chunk hash of `bin_path`.
+    pub bin_name_hash: u64,
+    /// The parsed `skin0` entry as the merged WAD defines it. Carried so a
+    /// consumer can read properties this check does not model
+    /// (`SkinClassification`, material overrides, VFX) without
+    /// re-resolving and re-parsing the skin graph.
+    pub object: BinObject,
+    /// The parsed `skin0` entry as the original game WAD defines it: the
+    /// vanilla baseline each slot was classified against (see
+    /// [`RefStatus`]).
+    pub original_object: BinObject,
+    /// The `Skeleton` reference and how it relates to vanilla.
+    pub skeleton: MeshRef,
+    /// The `SimpleSkin` reference and how it relates to vanilla.
+    pub simple_skin: MeshRef,
+}
+
 /// Outcome of checking one champion WAD.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkinCheckOutcome {
     /// The merged `skin0.bin` chunk decompresses to the same bytes as the
     /// original — a vanilla base skin, nothing to check. Decided by
-    /// loading both roots and comparing content, never by the declared
-    /// TOC checksum (an untrusted WAD could declare the vanilla value
-    /// over a modified root bin and skip the whole check); a merely
+    /// loading both roots and comparing content, so a merely
     /// re-compressed root bin skips too. (Assumption shared with the
     /// in-game verifier: an unmodified root bin means an unmodified base
     /// skin; a mod would have to modify only a *linked* bin to sidestep
@@ -271,16 +226,20 @@ pub enum SkinCheckOutcome {
     /// lane (nothing can be missing), but a consumer that gates further
     /// scanning on this outcome inherits that blind spot.
     SkippedUnmodified,
-    /// The base skin was checked; see [`SkinIntegrity::is_broken`].
-    ///
-    /// Boxed to keep this enum small: a report carries two parsed bin
-    /// entries, and without the indirection every `SkinCheckOutcome` —
-    /// including the common `SkippedUnmodified` — would pay their size.
-    /// Deref makes reading the report through the box transparent.
-    Report(Box<SkinIntegrity>),
     /// The original WAD violated an assumption — the check could not judge
-    /// the mod at all. See [`BaselineAnomaly`].
+    /// the mod at all. Logged via `tracing::error` with a stable
+    /// `base-skin baseline anomaly` prefix.
     BaselineAnomaly(BaselineAnomaly),
+    /// The mod broke the closed-world assertion and would fail in-game
+    /// verification; its rendered message is the user-facing diagnostic.
+    /// Logged via `tracing::warn`.
+    ModAnomaly(ModAnomaly),
+    /// The base skin is modified and satisfies the assertion. Boxed to
+    /// keep this enum small: the payload carries two parsed bin entries,
+    /// and without the indirection every outcome — including the common
+    /// [`SkippedUnmodified`](Self::SkippedUnmodified) — would pay their
+    /// size.
+    Modified(Box<ModifiedSkin>),
 }
 
 /// Check one champion WAD's base skin in its merged view against the
@@ -295,10 +254,6 @@ pub enum SkinCheckOutcome {
 /// * `world` — optional lookup answering "which other WADs (game or
 ///   overlay) contain this chunk hash?", used to refine missing references
 ///   into [`RefMissingKind::Everywhere`] vs [`RefMissingKind::Misplaced`].
-///
-/// Violations are additionally logged via `tracing::warn`; baseline
-/// anomalies are logged via `tracing::error` with a stable
-/// `base-skin baseline anomaly` prefix so they can be found in logs.
 pub fn check_base_skin(
     original: &mut dyn ChunkSource,
     merged: &mut dyn ChunkSource,
@@ -310,23 +265,21 @@ pub fn check_base_skin(
     let entry_hash = skin0_entry_hash(champion);
     let skin_class = skin_character_data_class();
 
-    if original.checksum(root_hash).is_none() {
+    if !original.contains(root_hash) {
         return anomaly(BaselineAnomaly::OriginalRootMissing {
             bin_path: root_bin_path,
         });
     }
-    if merged.checksum(root_hash).is_none() {
+    if !merged.contains(root_hash) {
         return anomaly(BaselineAnomaly::MergedRootMissing {
             bin_path: root_bin_path,
         });
     }
-    // The vanilla-skin skip is decided by decompressed content, never by
-    // TOC equality: the merged checksum is declared by an untrusted WAD,
-    // which could declare the vanilla value over a modified root bin and
-    // skip the whole check. A root that cannot be read falls through to
-    // the full check, which maps the corruption to its proper diagnostic
-    // (baseline anomaly for the original side, corrupt-bin report for the
-    // merged side).
+    // The vanilla-skin skip compares decompressed content (TOC checksums
+    // are never read — see [`RefStatus`]). A root that cannot be read
+    // falls through to the full check, which maps the corruption to its
+    // proper anomaly (baseline for the original side, mod for the merged
+    // side).
     if let (Ok(original_data), Ok(merged_data)) = (original.load(root_hash), merged.load(root_hash))
         && original_data == merged_data
     {
@@ -344,60 +297,89 @@ pub fn check_base_skin(
             Err(baseline) => return anomaly(baseline),
         };
 
-    let outcome = resolve_bin_entry_with(merged, &root_bin_path, entry_hash, Some(skin_class));
-    let resolved = match outcome.entry {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            return report(SkinIntegrity {
-                champion: champion.to_owned(),
-                bin_path: root_bin_path.clone(),
-                bin_name_hash: root_hash,
-                resolve_error: Some(err),
-                object: None,
-                original_object,
-                missing_required: Vec::new(),
-                refs: Vec::new(),
-                corrupt: outcome.corrupt,
-            });
+    match judge_mod(
+        original,
+        merged,
+        &root_bin_path,
+        entry_hash,
+        skin_class,
+        world,
+        original_object,
+        &original_refs,
+    ) {
+        Ok(modified) => SkinCheckOutcome::Modified(Box::new(modified)),
+        Err(mod_anomaly) => {
+            tracing::warn!("Base-skin violation for {champion}: {mod_anomaly}");
+            SkinCheckOutcome::ModAnomaly(mod_anomaly)
         }
-    };
+    }
+}
 
-    let mesh_refs = skin_mesh_refs(&resolved.object);
-    let mut refs = Vec::new();
-    for (slot, path) in mesh_refs.slots() {
-        let name_hash = *WadHash::hash_str(path);
-        // Two paths, read separately: the merged reference at ITS path in
-        // the merged view, the vanilla counterpart at the ORIGINAL entry's
-        // path for the same slot (see the [`RefStatus`] docs — comparing
-        // at the merged path would bless repointed slots).
-        let original_slot = original_refs
-            .slot_path(slot)
-            .map(|path| *WadHash::hash_str(path));
-        let status = match merged.checksum(name_hash) {
-            Some(checksum) => match merged.load(name_hash) {
-                Ok(data) => {
-                    let checksums = ChunkChecksums {
-                        checksum,
-                        decompressed_checksum: xxh3_64(&data),
-                    };
-                    // Only the decompressed bytes can prove equality, in
-                    // both directions: the declared TOC checksum is
-                    // untrusted (a hostile WAD can declare the vanilla
-                    // value over different bytes), and zstd is not
-                    // canonical (a repack re-encodes untouched bytes into
-                    // a different TOC checksum). Baseline validation
-                    // guarantees the original entry sets every checked
-                    // slot; the None arm is defensive.
-                    match original_slot {
-                        Some(hash) if original_content_matches(original, hash, &checksums) => {
-                            RefStatus::Unmodified
-                        }
-                        _ => RefStatus::Modified { checksums },
-                    }
-                }
-                Err(reason) => RefStatus::Missing(RefMissingKind::Unreadable { reason }),
-            },
-            None => RefStatus::Missing(match world {
+/// Resolve and judge the merged side, mirroring [`validate_baseline`]'s
+/// fail-closed order: corrupt bin, unresolvable entry, missing required
+/// slot, unusable reference.
+#[expect(clippy::too_many_arguments)]
+fn judge_mod(
+    original: &mut dyn ChunkSource,
+    merged: &mut dyn ChunkSource,
+    root_bin_path: &str,
+    entry_hash: BinHash,
+    skin_class: BinHash,
+    world: Option<&dyn Fn(u64) -> Vec<String>>,
+    original_object: BinObject,
+    original_refs: &SkinMeshRefs,
+) -> Result<ModifiedSkin, ModAnomaly> {
+    let outcome = resolve_bin_entry_with(merged, root_bin_path, entry_hash, Some(skin_class));
+    if let Some(corrupt) = outcome.corrupt.into_iter().next() {
+        return Err(ModAnomaly::CorruptBin(corrupt));
+    }
+    let resolved = outcome.entry.map_err(ModAnomaly::Resolve)?;
+
+    let merged_refs = skin_mesh_refs(&resolved.object);
+    if let Some(&slot) = merged_refs.missing_required_slots().first() {
+        return Err(ModAnomaly::MissingRequiredSlot(slot));
+    }
+
+    let mut classify =
+        |slot| classify_slot(original, merged, world, &merged_refs, original_refs, slot);
+    let skeleton = classify(MeshSlot::Skeleton)?;
+    let simple_skin = classify(MeshSlot::SimpleSkin)?;
+
+    Ok(ModifiedSkin {
+        bin_path: resolved.bin_path,
+        bin_name_hash: resolved.bin_name_hash,
+        object: resolved.object,
+        original_object,
+        skeleton,
+        simple_skin,
+    })
+}
+
+/// Classify one required slot of the merged entry against the original
+/// entry's same slot, or fail with the [`ModAnomaly`] it evidences.
+///
+/// Two paths, read separately: the merged reference at ITS path in the
+/// merged view, the vanilla counterpart at the ORIGINAL entry's path for
+/// the same slot (see the [`RefStatus`] docs — comparing at the merged
+/// path would bless repointed slots).
+fn classify_slot(
+    original: &mut dyn ChunkSource,
+    merged: &mut dyn ChunkSource,
+    world: Option<&dyn Fn(u64) -> Vec<String>>,
+    merged_refs: &SkinMeshRefs,
+    original_refs: &SkinMeshRefs,
+    slot: MeshSlot,
+) -> Result<MeshRef, ModAnomaly> {
+    let Some(path) = merged_refs.slot_path(slot) else {
+        return Err(ModAnomaly::MissingRequiredSlot(slot));
+    };
+    let name_hash = *WadHash::hash_str(path);
+
+    if !merged.contains(name_hash) {
+        return Err(ModAnomaly::RefMissing {
+            slot,
+            path: path.to_owned(),
+            kind: match world {
                 None => RefMissingKind::Unknown,
                 Some(lookup) => {
                     let found_in = lookup(name_hash);
@@ -407,55 +389,62 @@ pub fn check_base_skin(
                         RefMissingKind::Misplaced { found_in }
                     }
                 }
-            }),
-        };
-        refs.push(RefReport {
-            slot,
-            path: path.to_owned(),
-            name_hash,
-            status,
+            },
         });
     }
-
-    report(SkinIntegrity {
-        champion: champion.to_owned(),
-        bin_path: resolved.bin_path,
-        bin_name_hash: resolved.bin_name_hash,
-        resolve_error: None,
-        object: Some(resolved.object),
-        original_object,
-        missing_required: mesh_refs.missing_required_slots(),
-        refs,
-        corrupt: outcome.corrupt,
+    let data = match merged.load(name_hash) {
+        Ok(data) => data,
+        // Present in name only: fail closed — a stored chunk exists that
+        // the check could not inspect.
+        Err(reason) => {
+            return Err(ModAnomaly::RefMissing {
+                slot,
+                path: path.to_owned(),
+                kind: RefMissingKind::Unreadable { reason },
+            });
+        }
+    };
+    // One digest serves both purposes: equality against the original
+    // slot's content, and the fingerprint carried on Modified. Baseline
+    // validation guarantees the original entry sets every checked slot;
+    // the None arm is defensive.
+    let sha256: [u8; 32] = Sha256::digest(&data).into();
+    let status = match original_refs.slot_path(slot) {
+        Some(original_path)
+            if original_sha256(original, *WadHash::hash_str(original_path)) == Some(sha256) =>
+        {
+            RefStatus::Unmodified
+        }
+        _ => RefStatus::Modified { sha256 },
+    };
+    Ok(MeshRef {
+        path: path.to_owned(),
+        name_hash,
+        status,
     })
 }
 
-/// Whether the original WAD's chunk at `name_hash` — the **original
-/// entry's** slot reference, not the merged path — decompresses to the same
-/// content the merged chunk was fingerprinted with. This is the sole
-/// equality test (TOC checksums prove nothing: declared by an untrusted
-/// WAD, and not canonical under re-compression). An original that lacks
-/// the chunk, or whose chunk cannot be read, does not match: the merged
-/// side then classifies as
+/// SHA-256 of the original WAD's chunk at `name_hash` — the **original
+/// entry's** slot reference, not the merged path. Comparing these digests
+/// of decompressed content is the sole equality test; TOC checksums are
+/// never consulted (declared by an untrusted WAD, and not canonical under
+/// re-compression). `None` when the original lacks the chunk or cannot
+/// read it — never a match, so the merged side classifies as
 /// [`RefStatus::Modified`] (an unreadable *original* is never the mod's
 /// problem to report, so it maps to no error and no
 /// [`RefMissingKind::Unreadable`], which describes the merged side).
-fn original_content_matches(
-    original: &mut dyn ChunkSource,
-    name_hash: u64,
-    merged: &ChunkChecksums,
-) -> bool {
+fn original_sha256(original: &mut dyn ChunkSource, name_hash: u64) -> Option<[u8; 32]> {
     if !original.contains(name_hash) {
-        return false;
+        return None;
     }
     match original.load(name_hash) {
-        Ok(data) => xxh3_64(&data) == merged.decompressed_checksum,
+        Ok(data) => Some(Sha256::digest(&data).into()),
         Err(reason) => {
             tracing::debug!(
                 "original chunk {name_hash:016x} is unreadable ({reason}); \
                  classifying the merged chunk as modified"
             );
-            false
+            None
         }
     }
 }
@@ -494,830 +483,4 @@ fn validate_baseline(
 fn anomaly(baseline: BaselineAnomaly) -> SkinCheckOutcome {
     tracing::error!("base-skin baseline anomaly: {baseline}");
     SkinCheckOutcome::BaselineAnomaly(baseline)
-}
-
-fn report(integrity: SkinIntegrity) -> SkinCheckOutcome {
-    for line in integrity.violations() {
-        tracing::warn!("Base-skin violation for {}: {line}", integrity.champion);
-    }
-    SkinCheckOutcome::Report(Box::new(integrity))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::source::WadChunkSource;
-    use indexmap::IndexMap;
-    use ltk_meta::property::{NoMeta, values};
-    use ltk_meta::{Bin, BinObject, PropertyValueEnum};
-    use ltk_wad::Wad;
-    use std::collections::BTreeMap;
-    use std::io::{Cursor, Write};
-
-    const CHAMP: &str = "testchamp";
-    const ROOT: &str = "data/characters/testchamp/skins/skin0.bin";
-    const CONCAT: &str = "data/testchamp_skin0_concat.bin";
-    const SKL: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body.skl";
-    const SKN: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body.skn";
-    const TEX: &str = "ASSETS/Characters/Testchamp/Skins/Skin01/body_TX_CM.tex";
-
-    fn h(name: &str) -> BinHash {
-        BinHash::hash_str(name)
-    }
-
-    fn chunk_hash(path: &str) -> u64 {
-        *WadHash::hash_str(path)
-    }
-
-    /// A skin entry whose mesh embed points at the given slot paths; `scale`
-    /// varies the bytes so tests can produce a "modded" variant.
-    fn skin_entry(
-        skeleton: Option<&str>,
-        simple_skin: Option<&str>,
-        texture: Option<&str>,
-        scale: f32,
-    ) -> BinObject {
-        let mut properties = IndexMap::new();
-        if let Some(path) = skeleton {
-            properties.insert(h("Skeleton"), values::String::from(path).into());
-        }
-        if let Some(path) = simple_skin {
-            properties.insert(h("SimpleSkin"), values::String::from(path).into());
-        }
-        if let Some(path) = texture {
-            properties.insert(h("Texture"), values::String::from(path).into());
-        }
-        properties.insert(h("SkinScale"), values::F32::new(scale).into());
-
-        let mesh = values::Embedded(values::Struct {
-            class_hash: h("SkinMeshDataProperties"),
-            properties,
-            meta: NoMeta,
-        });
-
-        BinObject::<NoMeta>::builder(
-            h("Characters/Testchamp/Skins/Skin0"),
-            h("SkinCharacterDataProperties"),
-        )
-        .property(h("SkinMeshProperties"), mesh)
-        .build()
-    }
-
-    fn skin_bin(
-        skeleton: Option<&str>,
-        simple_skin: Option<&str>,
-        texture: Option<&str>,
-        scale: f32,
-    ) -> Vec<u8> {
-        bin_bytes(
-            &Bin::builder()
-                .object(skin_entry(skeleton, simple_skin, texture, scale))
-                .build(),
-        )
-    }
-
-    fn bin_bytes(bin: &Bin) -> Vec<u8> {
-        let mut cursor = Cursor::new(Vec::new());
-        bin.to_writer(&mut cursor).unwrap();
-        cursor.into_inner()
-    }
-
-    /// Build an in-memory WAD from `path hash -> uncompressed contents`.
-    fn build_wad(contents: &BTreeMap<u64, Vec<u8>>) -> Wad<Cursor<Vec<u8>>> {
-        use ltk_wad::{WadBuilder, WadChunkBuilder};
-
-        let mut builder = WadBuilder::default();
-        for &hash in contents.keys() {
-            builder = builder.with_chunk(WadChunkBuilder::default().with_hash(hash));
-        }
-        let mut out = Cursor::new(Vec::new());
-        builder
-            .build_to_writer(&mut out, |hash, cursor| {
-                cursor.write_all(&contents[&hash]).unwrap();
-                Ok(())
-            })
-            .unwrap();
-        out.set_position(0);
-        Wad::mount(out).unwrap()
-    }
-
-    /// A valid original: skin0 references all three slots and every asset
-    /// is present.
-    fn original_contents() -> BTreeMap<u64, Vec<u8>> {
-        BTreeMap::from([
-            (
-                chunk_hash(ROOT),
-                skin_bin(Some(SKL), Some(SKN), Some(TEX), 1.0),
-            ),
-            (chunk_hash(SKL), b"skeleton-data".to_vec()),
-            (chunk_hash(SKN), b"mesh-data".to_vec()),
-            (chunk_hash(TEX), b"texture-data".to_vec()),
-        ])
-    }
-
-    fn check(
-        original_contents: &BTreeMap<u64, Vec<u8>>,
-        merged_contents: &BTreeMap<u64, Vec<u8>>,
-        world: Option<&dyn Fn(u64) -> Vec<String>>,
-    ) -> SkinCheckOutcome {
-        let mut original = build_wad(original_contents);
-        let mut merged = build_wad(merged_contents);
-        check_base_skin(
-            &mut WadChunkSource(&mut original),
-            &mut WadChunkSource(&mut merged),
-            CHAMP,
-            world,
-        )
-    }
-
-    const NO_WORLD: Option<&dyn Fn(u64) -> Vec<String>> = None;
-
-    fn empty_world(_: u64) -> Vec<String> {
-        Vec::new()
-    }
-
-    #[test]
-    fn unmodified_skin0_is_skipped() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        // Even a modified texture does not trigger the check when the skin
-        // bin itself is vanilla.
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
-
-        assert_eq!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::SkippedUnmodified
-        );
-    }
-
-    #[test]
-    fn modified_mesh_with_all_refs_present_is_clean() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
-
-        // The Modified status must carry both fingerprints of the merged
-        // chunk: the TOC checksum exactly as a ChunkSource over the merged
-        // WAD reports it, and the xxh3 of the decompressed bytes.
-        let mut merged_wad = build_wad(&merged);
-        let skn_checksum = WadChunkSource(&mut merged_wad)
-            .checksum(chunk_hash(SKN))
-            .expect("merged mesh chunk");
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        assert!(report.violations().is_empty());
-        assert_eq!(report.bin_path, ROOT);
-        let statuses: Vec<_> = report
-            .refs
-            .iter()
-            .map(|r| (r.slot, r.status.clone()))
-            .collect();
-        assert_eq!(
-            statuses,
-            vec![
-                (MeshSlot::Skeleton, RefStatus::Unmodified),
-                (
-                    MeshSlot::SimpleSkin,
-                    RefStatus::Modified {
-                        checksums: ChunkChecksums {
-                            checksum: skn_checksum,
-                            decompressed_checksum: xxh3_64(b"MODDED-mesh"),
-                        }
-                    }
-                ),
-            ]
-        );
-    }
-
-    /// Delegates to a WAD but refuses to load one chunk, simulating a
-    /// chunk that is present in the TOC but unreadable.
-    struct BrokenChunk<S> {
-        inner: S,
-        broken: u64,
-    }
-
-    impl<S: ChunkSource> ChunkSource for BrokenChunk<S> {
-        fn checksum(&mut self, name_hash: u64) -> Option<u64> {
-            self.inner.checksum(name_hash)
-        }
-        fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {
-            if name_hash == self.broken {
-                return Err("simulated unreadable chunk".to_string());
-            }
-            self.inner.load(name_hash)
-        }
-    }
-
-    #[test]
-    fn unreadable_chunk_is_missing_and_a_violation() {
-        // The TOC checksum is declared by the untrusted WAD; a chunk whose
-        // bytes cannot be read is present in name only, so it classifies
-        // as Missing(Unreadable) — a closed-world violation: unlike a
-        // dangling reference, a stored chunk exists.
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
-
-        let mut original_wad = build_wad(&original);
-        let mut merged_wad = build_wad(&merged);
-        let mut merged_source = BrokenChunk {
-            inner: WadChunkSource(&mut merged_wad),
-            broken: chunk_hash(SKN),
-        };
-
-        let SkinCheckOutcome::Report(report) = check_base_skin(
-            &mut WadChunkSource(&mut original_wad),
-            &mut merged_source,
-            CHAMP,
-            NO_WORLD,
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken());
-        assert!(matches!(
-            &report.refs[1].status,
-            RefStatus::Missing(RefMissingKind::Unreadable { .. })
-        ));
-        let violations = report.violations();
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("cannot be read"));
-    }
-
-    /// Delegates to a WAD but reports a perturbed TOC checksum for one
-    /// chunk while `load` still returns the same bytes — the shape a
-    /// repack produces for an untouched asset (zstd is not canonical).
-    struct RecompressedChunk<S> {
-        inner: S,
-        repacked: u64,
-    }
-
-    impl<S: ChunkSource> ChunkSource for RecompressedChunk<S> {
-        fn checksum(&mut self, name_hash: u64) -> Option<u64> {
-            let checksum = self.inner.checksum(name_hash)?;
-            Some(checksum ^ u64::from(name_hash == self.repacked))
-        }
-        fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {
-            self.inner.load(name_hash)
-        }
-    }
-
-    #[test]
-    fn recompressed_untouched_asset_reads_unmodified() {
-        // The mod repacked the WAD: skin0.bin is genuinely modified, but
-        // the mesh chunk carries the original bytes under a different
-        // TOC checksum. Content comparison must classify it Unmodified.
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-
-        let mut original_wad = build_wad(&original);
-        let mut merged_wad = build_wad(&merged);
-        let mut merged_source = RecompressedChunk {
-            inner: WadChunkSource(&mut merged_wad),
-            repacked: chunk_hash(SKN),
-        };
-
-        let SkinCheckOutcome::Report(report) = check_base_skin(
-            &mut WadChunkSource(&mut original_wad),
-            &mut merged_source,
-            CHAMP,
-            NO_WORLD,
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        let statuses: Vec<_> = report
-            .refs
-            .iter()
-            .map(|r| (r.slot, r.status.clone()))
-            .collect();
-        assert_eq!(
-            statuses,
-            vec![
-                (MeshSlot::Skeleton, RefStatus::Unmodified),
-                (MeshSlot::SimpleSkin, RefStatus::Unmodified),
-            ]
-        );
-    }
-
-    /// Delegates to a WAD but declares a chosen TOC checksum for one
-    /// chunk — the shape of a hostile WAD lying about its stored bytes.
-    struct SpoofedChecksum<S> {
-        inner: S,
-        spoofed: u64,
-        declared: u64,
-    }
-
-    impl<S: ChunkSource> ChunkSource for SpoofedChecksum<S> {
-        fn checksum(&mut self, name_hash: u64) -> Option<u64> {
-            if name_hash == self.spoofed {
-                return Some(self.declared);
-            }
-            self.inner.checksum(name_hash)
-        }
-        fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {
-            self.inner.load(name_hash)
-        }
-    }
-
-    #[test]
-    fn spoofed_toc_checksum_on_asset_reads_modified() {
-        // The merged mesh ships different bytes but DECLARES the
-        // original slot's TOC checksum. Declared checksums are untrusted;
-        // only the decompressed comparison may conclude Unmodified, so
-        // the spoof must classify Modified — with the real decompressed
-        // fingerprint on record, not the lie.
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
-
-        let mut original_wad = build_wad(&original);
-        let vanilla_skn_checksum = WadChunkSource(&mut original_wad)
-            .checksum(chunk_hash(SKN))
-            .expect("original mesh chunk");
-
-        let mut merged_wad = build_wad(&merged);
-        let mut merged_source = SpoofedChecksum {
-            inner: WadChunkSource(&mut merged_wad),
-            spoofed: chunk_hash(SKN),
-            declared: vanilla_skn_checksum,
-        };
-
-        let SkinCheckOutcome::Report(report) = check_base_skin(
-            &mut WadChunkSource(&mut original_wad),
-            &mut merged_source,
-            CHAMP,
-            NO_WORLD,
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(matches!(
-            &report.refs[1].status,
-            RefStatus::Modified { checksums }
-                if checksums.decompressed_checksum == xxh3_64(b"MODDED-mesh")
-        ));
-    }
-
-    #[test]
-    fn spoofed_toc_checksum_on_root_bin_does_not_skip() {
-        // A repointed skin0.bin that DECLARES the vanilla root checksum
-        // must not skip the check as SkippedUnmodified — the skip is
-        // decided by decompressed content, or the whole assertion could
-        // be evaded by one lied-about TOC field.
-        let alt_skl = "ASSETS/Characters/Testchamp/Skins/Skin02/alt.skl";
-        let mut original = original_contents();
-        original.insert(chunk_hash(alt_skl), b"alt-skeleton-data".to_vec());
-
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(alt_skl), Some(SKN), Some(TEX), 2.0),
-        );
-
-        let mut original_wad = build_wad(&original);
-        let vanilla_root_checksum = WadChunkSource(&mut original_wad)
-            .checksum(chunk_hash(ROOT))
-            .expect("original root bin");
-
-        let mut merged_wad = build_wad(&merged);
-        let mut merged_source = SpoofedChecksum {
-            inner: WadChunkSource(&mut merged_wad),
-            spoofed: chunk_hash(ROOT),
-            declared: vanilla_root_checksum,
-        };
-
-        let SkinCheckOutcome::Report(report) = check_base_skin(
-            &mut WadChunkSource(&mut original_wad),
-            &mut merged_source,
-            CHAMP,
-            NO_WORLD,
-        ) else {
-            panic!("expected a report, not SkippedUnmodified");
-        };
-        assert!(matches!(
-            &report.refs[0].status,
-            RefStatus::Modified { checksums }
-                if checksums.decompressed_checksum == xxh3_64(b"alt-skeleton-data")
-        ));
-    }
-
-    #[test]
-    fn recompressed_root_bin_is_skipped() {
-        // The counterpart direction: an untouched skin0.bin whose TOC
-        // checksum changed under a repack still decompresses to vanilla
-        // bytes — content comparison skips it as unmodified.
-        let original = original_contents();
-        let merged = original.clone();
-
-        let mut original_wad = build_wad(&original);
-        let mut merged_wad = build_wad(&merged);
-        let mut merged_source = RecompressedChunk {
-            inner: WadChunkSource(&mut merged_wad),
-            repacked: chunk_hash(ROOT),
-        };
-
-        assert_eq!(
-            check_base_skin(
-                &mut WadChunkSource(&mut original_wad),
-                &mut merged_source,
-                CHAMP,
-                NO_WORLD
-            ),
-            SkinCheckOutcome::SkippedUnmodified
-        );
-    }
-
-    #[test]
-    fn repointed_slots_to_other_vanilla_assets_read_modified() {
-        // The skin-unlock shape (e.g. "Goth Annie"): the mod ships ONLY a
-        // rewritten skin0.bin whose mesh slots point at another skin's
-        // assets, which already sit in the vanilla WAD. Every reference
-        // resolves (the correctness verdict stays clean) and every
-        // referenced chunk holds vanilla bytes — but not the bytes the
-        // original SLOT renders. Slot-to-slot comparison must read
-        // Modified; comparing the merged path against the original WAD's
-        // same path would read Unmodified and let every repointed slot
-        // vouch as stock.
-        let alt_skl = "ASSETS/Characters/Testchamp/Skins/Skin02/alt.skl";
-        let alt_skn = "ASSETS/Characters/Testchamp/Skins/Skin02/alt.skn";
-
-        let mut original = original_contents();
-        original.insert(chunk_hash(alt_skl), b"alt-skeleton-data".to_vec());
-        original.insert(chunk_hash(alt_skn), b"alt-mesh-data".to_vec());
-
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(alt_skl), Some(alt_skn), None, 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        for r in &report.refs {
-            assert!(
-                matches!(r.status, RefStatus::Modified { .. }),
-                "{} must read Modified, got {:?}",
-                r.slot,
-                r.status
-            );
-        }
-        assert!(matches!(
-            &report.refs[0].status,
-            RefStatus::Modified { checksums }
-                if checksums.decompressed_checksum == xxh3_64(b"alt-skeleton-data")
-        ));
-    }
-
-    #[test]
-    fn repointed_slot_with_identical_content_reads_unmodified() {
-        // A repoint that lands on a chunk holding byte-identical content
-        // renders exactly what vanilla renders — content decides, not the
-        // path.
-        let alias = "ASSETS/Characters/Testchamp/Skins/Skin02/copy.skl";
-        let mut original = original_contents();
-        original.insert(chunk_hash(alias), b"skeleton-data".to_vec());
-
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(alias), Some(SKN), Some(TEX), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        assert_eq!(report.refs[0].status, RefStatus::Unmodified);
-    }
-
-    #[test]
-    fn unreadable_original_side_still_classifies_modified() {
-        // When the ORIGINAL chunk cannot be read, content equality cannot
-        // be proven — the merged chunk stays Modified with its
-        // fingerprints intact. Never an error, never Missing(Unreadable):
-        // that kind describes the merged side.
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(SKN), b"MODDED-mesh".to_vec());
-
-        let mut original_wad = build_wad(&original);
-        let mut merged_wad = build_wad(&merged);
-        let mut original_source = BrokenChunk {
-            inner: WadChunkSource(&mut original_wad),
-            broken: chunk_hash(SKN),
-        };
-
-        let SkinCheckOutcome::Report(report) = check_base_skin(
-            &mut original_source,
-            &mut WadChunkSource(&mut merged_wad),
-            CHAMP,
-            NO_WORLD,
-        ) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        assert!(matches!(
-            &report.refs[1].status,
-            RefStatus::Modified { checksums } if checksums.decompressed_checksum == xxh3_64(b"MODDED-mesh")
-        ));
-    }
-
-    #[test]
-    fn dangling_texture_reference_is_ignored() {
-        // The Texture property is not checked at all: a dangling texture
-        // reference (the authoring idiom for suppressing the vanilla base
-        // texture) produces no ref report and no violation.
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.tex";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(stale), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        assert!(report.violations().is_empty());
-        let slots: Vec<_> = report.refs.iter().map(|r| r.slot).collect();
-        assert_eq!(slots, vec![MeshSlot::Skeleton, MeshSlot::SimpleSkin]);
-    }
-
-    #[test]
-    fn dangling_skeleton_is_a_violation() {
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.skl";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(stale), Some(SKN), Some(TEX), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken());
-        assert_eq!(report.violations().len(), 1);
-    }
-
-    #[test]
-    fn misplaced_reference_names_the_wads_that_have_it() {
-        let custom = "ASSETS/Characters/Testchamp/Skins/Base/custom.skn";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(custom), Some(TEX), 2.0),
-        );
-
-        let world = |hash: u64| {
-            if hash == chunk_hash(custom) {
-                vec!["Testchamp.en_US.wad.client".to_string()]
-            } else {
-                Vec::new()
-            }
-        };
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&world)) else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken());
-        assert_eq!(
-            report.refs[1].status,
-            RefStatus::Missing(RefMissingKind::Misplaced {
-                found_in: vec!["Testchamp.en_US.wad.client".to_string()]
-            })
-        );
-        assert!(report.violations()[0].contains("wrong WAD"));
-    }
-
-    #[test]
-    fn missing_reference_without_world_is_unknown() {
-        let stale = "ASSETS/Characters/Testchamp/Skins/Base/gone.skn";
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(stale), Some(TEX), 2.0),
-        );
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, NO_WORLD) else {
-            panic!("expected a report");
-        };
-        assert_eq!(
-            report.refs[1].status,
-            RefStatus::Missing(RefMissingKind::Unknown)
-        );
-    }
-
-    #[test]
-    fn unset_required_slot_is_a_violation() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(chunk_hash(ROOT), skin_bin(None, Some(SKN), Some(TEX), 2.0));
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken());
-        assert_eq!(report.missing_required, vec![MeshSlot::Skeleton]);
-    }
-
-    #[test]
-    fn garbage_merged_skin_bin_is_reported_with_corruption() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(report.is_broken());
-        assert!(matches!(
-            report.resolve_error,
-            Some(ResolveError::EntryNotFound { .. })
-        ));
-        assert_eq!(report.corrupt.len(), 1);
-    }
-
-    /// `SkinMeshProperties.SkinScale`, which the fixtures vary per side —
-    /// the cheapest proof that a parsed entry came from the side it claims.
-    fn skin_scale(object: &BinObject) -> f32 {
-        let Some(PropertyValueEnum::Embedded(mesh)) =
-            object.properties.get(&h("SkinMeshProperties"))
-        else {
-            panic!("skin entry has no SkinMeshProperties embed");
-        };
-        match mesh.0.properties.get(&h("SkinScale")) {
-            Some(PropertyValueEnum::F32(scale)) => scale.value,
-            other => panic!("unexpected SkinScale property: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn report_carries_the_parsed_merged_and_original_skin_entries() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-
-        let object = report.object.as_ref().expect("merged skin entry");
-        assert_eq!(object.path_hash, h("Characters/Testchamp/Skins/Skin0"));
-        assert_eq!(object.class_hash, h("SkinCharacterDataProperties"));
-        // Both sides are handed out, and they are genuinely the two
-        // parses — not the same object twice.
-        assert_eq!(skin_scale(object), 2.0);
-        assert_eq!(skin_scale(&report.original_object), 1.0);
-        // The summarized fields stay derivable from the object handed out,
-        // so a consumer never has to re-resolve to go deeper.
-        assert_eq!(skin_mesh_refs(object).simple_skin.as_deref(), Some(SKN));
-    }
-
-    #[test]
-    fn unresolvable_entry_carries_no_object_but_keeps_the_baseline() {
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        // `object` is None exactly when the entry could not be resolved,
-        // but the validated baseline is always there.
-        assert!(report.resolve_error.is_some());
-        assert!(report.object.is_none());
-        assert_eq!(skin_scale(&report.original_object), 1.0);
-    }
-
-    #[test]
-    fn entry_found_via_linked_bin() {
-        // The mod replaces skin0.bin with one that only links a concat bin;
-        // the skin entry (and a modded texture) live there.
-        let original = original_contents();
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            bin_bytes(&Bin::builder().dependency(CONCAT).build()),
-        );
-        merged.insert(
-            chunk_hash(CONCAT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
-
-        let SkinCheckOutcome::Report(report) = check(&original, &merged, Some(&empty_world)) else {
-            panic!("expected a report");
-        };
-        assert!(!report.is_broken());
-        assert_eq!(report.bin_path, CONCAT);
-    }
-
-    // ------------------------------------------------------------ baseline
-
-    #[test]
-    fn original_without_root_bin_is_an_anomaly() {
-        let mut original = original_contents();
-        original.remove(&chunk_hash(ROOT));
-        let merged = original_contents();
-
-        assert!(matches!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRootMissing { .. })
-        ));
-    }
-
-    #[test]
-    fn merged_that_lost_the_root_bin_is_an_anomaly() {
-        let original = original_contents();
-        let mut merged = original_contents();
-        merged.remove(&chunk_hash(ROOT));
-
-        assert!(matches!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::MergedRootMissing { .. })
-        ));
-    }
-
-    #[test]
-    fn corrupt_original_bin_is_an_anomaly() {
-        let mut original = original_contents();
-        original.insert(chunk_hash(ROOT), b"garbage original".to_vec());
-        let merged = original_contents();
-
-        assert!(matches!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalCorruptBin(_))
-        ));
-    }
-
-    #[test]
-    fn original_missing_required_slot_is_an_anomaly() {
-        // The 172/172 assumption: if a game patch ships a skin0 without a
-        // skeleton, we want to hear about it — not blame the mod.
-        let mut original = original_contents();
-        original.insert(chunk_hash(ROOT), skin_bin(None, Some(SKN), Some(TEX), 1.0));
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-
-        assert!(matches!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalMissingRequiredSlot(
-                MeshSlot::Skeleton
-            ))
-        ));
-    }
-
-    #[test]
-    fn original_with_unresolvable_ref_is_an_anomaly() {
-        let mut original = original_contents();
-        original.remove(&chunk_hash(SKL));
-        let mut merged = original.clone();
-        merged.insert(
-            chunk_hash(ROOT),
-            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
-        );
-        merged.insert(chunk_hash(SKL), b"modded-skeleton".to_vec());
-
-        assert!(matches!(
-            check(&original, &merged, NO_WORLD),
-            SkinCheckOutcome::BaselineAnomaly(BaselineAnomaly::OriginalRefUnresolved {
-                slot: MeshSlot::Skeleton,
-                ..
-            })
-        ));
-    }
 }

@@ -17,7 +17,7 @@ ltk_meta = "0.6.1"
 ltk_hash = "0.4.0"
 thiserror = "2.0"
 tracing = "0.1"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 indexmap = { workspace = true }

@@ -39,8 +39,8 @@ pub struct SkinIntegrityOffender {
     pub wad: String,
     /// Lowercase champion directory name.
     pub champion: String,
-    /// Human-readable violation lines (see
-    /// [`SkinIntegrity::violations`](ltk_sanitize::SkinIntegrity::violations)).
+    /// Human-readable violation lines (rendered
+    /// [`ModAnomaly`](ltk_sanitize::ModAnomaly)s).
     pub violations: Vec<String>,
 }
 
@@ -84,30 +84,7 @@ pub(crate) fn collect_skin_integrity_offenders(
             }
         };
 
-        // Which other WADs — original game WADs or overlay override sets —
-        // contain a hash, to tell "shipped to the wrong WAD" apart from
-        // "missing everywhere".
-        let world = |hash: u64| -> Vec<String> {
-            let mut found: Vec<String> = game_index
-                .find_wads_with_hash(hash)
-                .unwrap_or_default()
-                .iter()
-                .filter(|path| *path != wad_path)
-                .filter_map(|path| path.file_name().map(str::to_string))
-                .collect();
-            for (other_path, hashes) in wad_hash_sets {
-                if other_path == wad_path || !hashes.contains(&hash) {
-                    continue;
-                }
-                if let Some(name) = other_path.file_name() {
-                    let name = name.to_string();
-                    if !found.contains(&name) {
-                        found.push(name);
-                    }
-                }
-            }
-            found
-        };
+        let world = |hash: u64| find_in_other_wads(game_index, wad_hash_sets, wad_path, hash);
 
         match check_base_skin(
             &mut WadChunkSource(&mut original),
@@ -115,29 +92,57 @@ pub(crate) fn collect_skin_integrity_offenders(
             &champion,
             Some(&world),
         ) {
-            SkinCheckOutcome::SkippedUnmodified => {}
+            SkinCheckOutcome::SkippedUnmodified | SkinCheckOutcome::Modified(_) => {}
             SkinCheckOutcome::BaselineAnomaly(anomaly) => {
                 // Already logged by ltk_sanitize with the stable prefix; add
                 // the overlay context so logs pin down which file to look at.
                 tracing::error!("base-skin baseline anomaly in '{wad_path}': {anomaly}");
             }
-            SkinCheckOutcome::Report(report) => {
-                if report.is_broken() {
-                    offenders.push(SkinIntegrityOffender {
-                        mod_id: mod_id.to_string(),
-                        wad: wad_path
-                            .file_name()
-                            .unwrap_or(wad_path.as_str())
-                            .to_string(),
-                        champion,
-                        violations: report.violations(),
-                    });
-                }
+            SkinCheckOutcome::ModAnomaly(anomaly) => {
+                offenders.push(SkinIntegrityOffender {
+                    mod_id: mod_id.to_string(),
+                    wad: wad_path
+                        .file_name()
+                        .unwrap_or(wad_path.as_str())
+                        .to_string(),
+                    champion,
+                    violations: vec![anomaly.to_string()],
+                });
             }
         }
     }
 
     offenders
+}
+
+/// Which other WADs — original game WADs or overlay override sets — contain
+/// `hash`, to tell "shipped to the wrong WAD" apart from "missing
+/// everywhere".
+fn find_in_other_wads(
+    game_index: &GameIndex,
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
+    wad_path: &Utf8Path,
+    hash: u64,
+) -> Vec<String> {
+    let mut found: Vec<String> = game_index
+        .find_wads_with_hash(hash)
+        .unwrap_or_default()
+        .iter()
+        .filter(|path| path.as_path() != wad_path)
+        .filter_map(|path| path.file_name().map(str::to_string))
+        .collect();
+    for (other_path, hashes) in wad_hash_sets {
+        if other_path.as_path() == wad_path || !hashes.contains(&hash) {
+            continue;
+        }
+        if let Some(name) = other_path.file_name() {
+            let name = name.to_string();
+            if !found.contains(&name) {
+                found.push(name);
+            }
+        }
+    }
+    found
 }
 
 fn mount(path: &Utf8Path) -> Result<ltk_wad::Wad<File>, String> {
@@ -201,27 +206,7 @@ pub fn check_single_mod(
             }
         };
 
-        let world = |hash: u64| -> Vec<String> {
-            let mut found: Vec<String> = game_index
-                .find_wads_with_hash(hash)
-                .unwrap_or_default()
-                .iter()
-                .filter(|path| *path != wad_path)
-                .filter_map(|path| path.file_name().map(str::to_string))
-                .collect();
-            for (other_path, hashes) in &wad_hash_sets {
-                if other_path == wad_path || !hashes.contains(&hash) {
-                    continue;
-                }
-                if let Some(name) = other_path.file_name() {
-                    let name = name.to_string();
-                    if !found.contains(&name) {
-                        found.push(name);
-                    }
-                }
-            }
-            found
-        };
+        let world = |hash: u64| find_in_other_wads(&game_index, &wad_hash_sets, wad_path, hash);
 
         mod_source.routed = routed.clone();
         let mut base_source = WadChunkSource(&mut base);
@@ -236,22 +221,20 @@ pub fn check_single_mod(
             &champion,
             Some(&world),
         ) {
-            SkinCheckOutcome::SkippedUnmodified => {}
+            SkinCheckOutcome::SkippedUnmodified | SkinCheckOutcome::Modified(_) => {}
             SkinCheckOutcome::BaselineAnomaly(anomaly) => {
                 tracing::error!("base-skin baseline anomaly in '{wad_path}': {anomaly}");
             }
-            SkinCheckOutcome::Report(report) => {
-                if report.is_broken() {
-                    offenders.push(SkinIntegrityOffender {
-                        mod_id: mod_id.clone(),
-                        wad: wad_path
-                            .file_name()
-                            .unwrap_or(wad_path.as_str())
-                            .to_string(),
-                        champion,
-                        violations: report.violations(),
-                    });
-                }
+            SkinCheckOutcome::ModAnomaly(anomaly) => {
+                offenders.push(SkinIntegrityOffender {
+                    mod_id: mod_id.clone(),
+                    wad: wad_path
+                        .file_name()
+                        .unwrap_or(wad_path.as_str())
+                        .to_string(),
+                    champion,
+                    violations: vec![anomaly.to_string()],
+                });
             }
         }
     }
@@ -262,12 +245,10 @@ pub fn check_single_mod(
 /// [`ChunkSource`] over a single mod's override chunks, read lazily through
 /// its content provider and cached per `(layer, WAD)` directory.
 ///
-/// `checksum` reports the override's *content hash* (xxh3 of the uncompressed
-/// bytes) as a pseudo-checksum: it never equals an original TOC checksum, so
-/// overridden chunks always take the base-skin check's content-comparison
-/// path, where `load` hands back the exact bytes that comparison
-/// fingerprints — byte-identical overrides read as unmodified, everything
-/// else as modified, and violations only ever come from *missing* chunks.
+/// Overridden chunks are judged by content — `load` hands back the exact
+/// bytes the base-skin check compares and fingerprints — so byte-identical
+/// overrides read as unmodified, everything else as modified, and
+/// violations only ever come from *missing* chunks.
 struct ModChunkSource<'a> {
     provider: &'a mut dyn ModContentProvider,
     meta: &'a HashMap<u64, OverrideMeta>,
@@ -344,11 +325,8 @@ fn index_by_hash(entries: Vec<(Utf8PathBuf, Vec<u8>)>) -> HashMap<u64, Vec<u8>> 
 }
 
 impl ChunkSource for ModChunkSource<'_> {
-    fn checksum(&mut self, name_hash: u64) -> Option<u64> {
-        if !self.routed.contains(&name_hash) {
-            return None;
-        }
-        self.meta.get(&name_hash).map(|meta| meta.content_hash)
+    fn contains(&mut self, name_hash: u64) -> bool {
+        self.routed.contains(&name_hash) && self.meta.contains_key(&name_hash)
     }
 
     fn load(&mut self, name_hash: u64) -> Result<Vec<u8>, String> {

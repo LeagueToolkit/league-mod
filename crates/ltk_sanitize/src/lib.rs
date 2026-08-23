@@ -20,19 +20,21 @@
 //! - [`resolve_bin_entry_with`](resolve::resolve_bin_entry_with) resolves a
 //!   bin entry the way the game does (root bin, then `linked` bins), and
 //!   *records* corrupt bins it encounters instead of only logging them.
-//! - [`check_base_skin`](check::check_base_skin) produces the verdict:
-//!   either a per-mod [`SkinIntegrity`](check::SkinIntegrity) report, or a
-//!   [`BaselineAnomaly`](check::BaselineAnomaly) when the **original** game
-//!   WAD violates the assumptions — which is never the mod's fault and must
-//!   be reported separately (corrupt install, or a game patch broke an
-//!   assumption this crate bakes in).
+//! - [`check_base_skin`](check::check_base_skin) produces the verdict as a
+//!   [`SkinCheckOutcome`](check::SkinCheckOutcome): skipped (vanilla base
+//!   skin), a [`ModAnomaly`](check::ModAnomaly) violation owned by the
+//!   mod, a [`ModifiedSkin`](check::ModifiedSkin) that passed, or a
+//!   [`BaselineAnomaly`](check::BaselineAnomaly) when the **original**
+//!   game WAD violates the assumptions — which is never the mod's fault
+//!   and must be reported separately (corrupt install, or a game patch
+//!   broke an assumption this crate bakes in).
 //!
 //! Report types expose hashes as plain integers — `u64` xxh64 chunk hashes,
 //! `u32` fnv1a bin-entry hashes — never as [`ltk_hash`] wrapper types, so a
 //! consumer pinned to a different `ltk_hash` version never hits a type
 //! clash consuming them. The deliberate exception is the parsed skin
-//! entries a report carries — [`SkinIntegrity::object`] (merged) and
-//! [`SkinIntegrity::original_object`] (vanilla baseline) — which are
+//! entries a passing check carries — [`ModifiedSkin::object`] (merged) and
+//! [`ModifiedSkin::original_object`] (vanilla baseline) — which are
 //! [`BinObject`]s, so a consumer that reads them *is* coupled to this
 //! crate's `ltk_meta`. For that reason [`ltk_meta`] and [`BinObject`] are
 //! re-exported here: go through this crate's re-export rather than
@@ -48,8 +50,8 @@ pub mod skin;
 pub mod source;
 
 pub use check::{
-    BaselineAnomaly, ChunkChecksums, RefMissingKind, RefReport, RefStatus, SkinCheckOutcome,
-    SkinIntegrity, check_base_skin,
+    BaselineAnomaly, MeshRef, ModAnomaly, ModifiedSkin, RefMissingKind, RefStatus,
+    SkinCheckOutcome, check_base_skin,
 };
 pub use resolve::{
     CorruptBin, MAX_LINKED_BINS, ResolveError, ResolveOutcome, ResolvedBinObject,

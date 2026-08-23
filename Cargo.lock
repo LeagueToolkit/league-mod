@@ -1505,9 +1505,9 @@ dependencies = [
  "ltk_hash",
  "ltk_meta",
  "ltk_wad",
+ "sha2",
  "thiserror 2.0.18",
  "tracing",
- "xxhash-rust",
 ]
 
 [[package]]
