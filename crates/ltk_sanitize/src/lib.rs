@@ -30,9 +30,17 @@
 //! Report types expose hashes as plain integers — `u64` xxh64 chunk hashes,
 //! `u32` fnv1a bin-entry hashes — never as [`ltk_hash`] wrapper types, so a
 //! consumer pinned to a different `ltk_hash` version never hits a type
-//! clash consuming them. The re-exported [`BinHash`]/[`WadHash`] are for
-//! constructing *inputs* to the resolve/skin helpers; treat this crate's
-//! re-export as the source of truth there.
+//! clash consuming them. The deliberate exception is the parsed skin
+//! entries a report carries — [`SkinIntegrity::object`] (merged) and
+//! [`SkinIntegrity::original_object`] (vanilla baseline) — which are
+//! [`BinObject`]s, so a consumer that reads them *is* coupled to this
+//! crate's `ltk_meta`. For that reason [`ltk_meta`] and [`BinObject`] are
+//! re-exported here: go through this crate's re-export rather than
+//! depending on `ltk_meta` separately. Consumers that only read the
+//! summarized fields stay decoupled as before. The re-exported
+//! [`BinHash`]/[`WadHash`] are for constructing *inputs* to the
+//! resolve/skin helpers; treat this crate's re-export as the source of
+//! truth there.
 
 pub mod check;
 pub mod resolve;
@@ -54,3 +62,4 @@ pub use skin::{
 pub use source::{ChunkSource, VirtualMerge, WadChunkSource};
 
 pub use ltk_hash::{BinHash, Hash, WadHash};
+pub use ltk_meta::{self, BinObject};

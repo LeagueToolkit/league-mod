@@ -17,6 +17,7 @@
 //!   diagnostic.
 
 use ltk_hash::{BinHash, Hash as _, WadHash};
+use ltk_meta::BinObject;
 use thiserror::Error;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -213,6 +214,25 @@ pub struct SkinIntegrity {
     pub bin_name_hash: u64,
     /// Why the skin entry could not be resolved, when it could not.
     pub resolve_error: Option<ResolveError>,
+    /// The parsed `skin0` entry as the **merged** WAD defines it — the
+    /// object [`refs`](Self::refs) and
+    /// [`missing_required`](Self::missing_required) were derived from.
+    /// `None` exactly when [`resolve_error`](Self::resolve_error) is
+    /// `Some`, since then there was no entry to parse.
+    ///
+    /// Carried so a consumer can read properties this check does not model
+    /// (`SkinClassification`, material overrides, VFX, the rest of the
+    /// `SkinMeshProperties` embed) without re-resolving and re-parsing the
+    /// skin graph — the walk that produced it already followed the
+    /// `linked` bins.
+    pub object: Option<BinObject>,
+    /// The parsed `skin0` entry as the **original** game WAD defines it:
+    /// the vanilla baseline each merged slot was classified against (see
+    /// [`RefStatus`]). Always present — a report only exists once the
+    /// baseline validated, and a baseline that does not is a
+    /// [`BaselineAnomaly`] instead of a report — so a consumer can diff
+    /// merged against vanilla without mounting the original WAD again.
+    pub original_object: BinObject,
     /// Required mesh slots the skin entry does not set at all.
     pub missing_required: Vec<MeshSlot>,
     /// Every set mesh reference and its status.
@@ -323,7 +343,12 @@ pub enum SkinCheckOutcome {
     /// scanning on this outcome inherits that blind spot.
     SkippedUnmodified,
     /// The base skin was checked; see [`SkinIntegrity::is_broken`].
-    Report(SkinIntegrity),
+    ///
+    /// Boxed to keep this enum small: a report carries two parsed bin
+    /// entries, and without the indirection every `SkinCheckOutcome` —
+    /// including the common `SkippedUnmodified` — would pay their size.
+    /// Deref makes reading the report through the box transparent.
+    Report(Box<SkinIntegrity>),
     /// The original WAD violated an assumption — the check could not judge
     /// the mod at all. See [`BaselineAnomaly`].
     BaselineAnomaly(BaselineAnomaly),
@@ -374,8 +399,7 @@ pub fn check_base_skin(
     // the full check, which maps the corruption to its proper diagnostic
     // (baseline anomaly for the original side, corrupt-bin report for the
     // merged side).
-    if let (Ok(original_data), Ok(merged_data)) =
-        (original.load(root_hash), merged.load(root_hash))
+    if let (Ok(original_data), Ok(merged_data)) = (original.load(root_hash), merged.load(root_hash))
         && original_data == merged_data
     {
         tracing::debug!("'{root_bin_path}' is unmodified; base-skin check skipped");
@@ -386,10 +410,11 @@ pub fn check_base_skin(
     // before the mod can be judged against it. Its mesh refs are kept as
     // the comparison baseline: every merged slot is judged against the
     // chunk the ORIGINAL entry's same slot references.
-    let original_refs = match validate_baseline(original, &root_bin_path, entry_hash, skin_class) {
-        Ok(refs) => refs,
-        Err(baseline) => return anomaly(baseline),
-    };
+    let (original_object, original_refs) =
+        match validate_baseline(original, &root_bin_path, entry_hash, skin_class) {
+            Ok(baseline) => baseline,
+            Err(baseline) => return anomaly(baseline),
+        };
 
     let outcome = resolve_bin_entry_with(merged, &root_bin_path, entry_hash, Some(skin_class));
     let resolved = match outcome.entry {
@@ -401,6 +426,8 @@ pub fn check_base_skin(
                     bin_path: root_bin_path.clone(),
                     bin_name_hash: root_hash,
                     resolve_error: Some(err),
+                    object: None,
+                    original_object,
                     missing_required: Vec::new(),
                     refs: Vec::new(),
                     corrupt: outcome.corrupt,
@@ -471,6 +498,8 @@ pub fn check_base_skin(
             bin_path: resolved.bin_path,
             bin_name_hash: resolved.bin_name_hash,
             resolve_error: None,
+            object: Some(resolved.object),
+            original_object,
             missing_required: mesh_refs.missing_required_slots(),
             refs,
             corrupt: outcome.corrupt,
@@ -510,15 +539,15 @@ fn original_content_matches(
 }
 
 /// Resolve and extract the original WAD's base skin, mapping every failure
-/// to the [`BaselineAnomaly`] it evidences. On success, returns the
-/// original entry's mesh refs — the slot-to-slot comparison baseline for
-/// classifying the merged entry's references.
+/// to the [`BaselineAnomaly`] it evidences. On success, returns the parsed
+/// baseline entry and its mesh refs — the slot-to-slot comparison baseline
+/// for classifying the merged entry's references.
 fn validate_baseline(
     original: &mut dyn ChunkSource,
     root_bin_path: &str,
     entry_hash: BinHash,
     skin_class: BinHash,
-) -> Result<SkinMeshRefs, BaselineAnomaly> {
+) -> Result<(BinObject, SkinMeshRefs), BaselineAnomaly> {
     let outcome = resolve_bin_entry_with(original, root_bin_path, entry_hash, Some(skin_class));
     if let Some(corrupt) = outcome.corrupt.into_iter().next() {
         return Err(BaselineAnomaly::OriginalCorruptBin(corrupt));
@@ -537,7 +566,7 @@ fn validate_baseline(
             });
         }
     }
-    Ok(refs)
+    Ok((resolved.object, refs))
 }
 
 fn anomaly(baseline: BaselineAnomaly) -> SkinCheckOutcome {
@@ -549,7 +578,7 @@ fn report(integrity: SkinIntegrity, policy: SkinPolicy) -> SkinCheckOutcome {
     for line in integrity.violations(policy) {
         tracing::warn!("Base-skin violation for {}: {line}", integrity.champion);
     }
-    SkinCheckOutcome::Report(integrity)
+    SkinCheckOutcome::Report(Box::new(integrity))
 }
 
 #[cfg(test)]
@@ -558,7 +587,7 @@ mod tests {
     use crate::source::WadChunkSource;
     use indexmap::IndexMap;
     use ltk_meta::property::{NoMeta, values};
-    use ltk_meta::{Bin, BinObject};
+    use ltk_meta::{Bin, BinObject, PropertyValueEnum};
     use ltk_wad::Wad;
     use std::collections::BTreeMap;
     use std::io::{Cursor, Write};
@@ -1348,6 +1377,72 @@ mod tests {
             Some(ResolveError::EntryNotFound { .. })
         ));
         assert_eq!(report.corrupt.len(), 1);
+    }
+
+    /// `SkinMeshProperties.SkinScale`, which the fixtures vary per side —
+    /// the cheapest proof that a parsed entry came from the side it claims.
+    fn skin_scale(object: &BinObject) -> f32 {
+        let Some(PropertyValueEnum::Embedded(mesh)) =
+            object.properties.get(&h("SkinMeshProperties"))
+        else {
+            panic!("skin entry has no SkinMeshProperties embed");
+        };
+        match mesh.0.properties.get(&h("SkinScale")) {
+            Some(PropertyValueEnum::F32(scale)) => scale.value,
+            other => panic!("unexpected SkinScale property: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_carries_the_parsed_merged_and_original_skin_entries() {
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(
+            chunk_hash(ROOT),
+            skin_bin(Some(SKL), Some(SKN), Some(TEX), 2.0),
+        );
+        merged.insert(chunk_hash(TEX), b"MODDED-texture".to_vec());
+
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+
+        let object = report.object.as_ref().expect("merged skin entry");
+        assert_eq!(object.path_hash, h("Characters/Testchamp/Skins/Skin0"));
+        assert_eq!(object.class_hash, h("SkinCharacterDataProperties"));
+        // Both sides are handed out, and they are genuinely the two
+        // parses — not the same object twice.
+        assert_eq!(skin_scale(object), 2.0);
+        assert_eq!(skin_scale(&report.original_object), 1.0);
+        // The summarized fields stay derivable from the object handed out,
+        // so a consumer never has to re-resolve to go deeper.
+        assert_eq!(skin_mesh_refs(object).texture.as_deref(), Some(TEX));
+    }
+
+    #[test]
+    fn unresolvable_entry_carries_no_object_but_keeps_the_baseline() {
+        let original = original_contents();
+        let mut merged = original.clone();
+        merged.insert(chunk_hash(ROOT), b"not a property bin".to_vec());
+
+        let SkinCheckOutcome::Report(report) = check(
+            &original,
+            &merged,
+            Some(&empty_world),
+            SkinPolicy::default(),
+        ) else {
+            panic!("expected a report");
+        };
+        // `object` is None exactly when the entry could not be resolved,
+        // but the validated baseline is always there.
+        assert!(report.resolve_error.is_some());
+        assert!(report.object.is_none());
+        assert_eq!(skin_scale(&report.original_object), 1.0);
     }
 
     #[test]
