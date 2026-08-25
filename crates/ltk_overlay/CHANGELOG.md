@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.5.2...ltk_overlay-v0.6.0) - 2026-08-25
+
+### Added
+
+- [**breaking**] read RAW overrides from unpacked mod projects
+- better mod archive and overlay API surface
+- implement modignore file
+- [**breaking**] add support for license files
+
+### Fixed
+
+- [**breaking**] stop hiding error causes behind category messages
+- [**breaking**] store readme and license as bytes, not lossy UTF-8
+
+### Other
+
+- name the file in ltk_overlay IO errors
+- replace stringly ltk_overlay errors with typed variants
+- [**breaking**] delete dead ltk_overlay error API
+- [**breaking**] validate layer names through a Slug newtype
+- [**breaking**] add ChunkPath, replacing hash_chunk_name
+
 ## [0.5.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.5.1...ltk_overlay-v0.5.2) - 2026-07-06
 
 ### Fixed
