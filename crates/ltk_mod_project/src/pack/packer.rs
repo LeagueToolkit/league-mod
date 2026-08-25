@@ -9,7 +9,7 @@ use super::plan::{PackPlan, PlannedFile, PlannedLayer, PlannedLicense};
 use super::{IgnoreMode, PackFormat, PackOptions};
 use crate::{
     canonical_license_file_name, find_license_file, ContentWalkError, ModIgnore, ModIgnoreError,
-    ModProject, ModProjectError, ModProjectLayer, MODIGNORE_FILE_NAME,
+    ModProject, ModProjectError, ModProjectLayer, CONTENT_DIR_NAME, MODIGNORE_FILE_NAME,
 };
 
 /// Failure to pack a mod project.
@@ -187,7 +187,7 @@ impl ProjectPacker {
                 &loaded
             }
             IgnoreMode::Explicit(ignore) => {
-                let expected = self.project_root.join("content");
+                let expected = self.project_root.join(CONTENT_DIR_NAME);
                 if ignore.content_dir() != expected {
                     return Err(PackError::IgnoreRootMismatch {
                         filter_root: ignore.content_dir().to_owned(),
@@ -198,7 +198,7 @@ impl ProjectPacker {
             }
         };
 
-        let content_dir = self.project_root.join("content");
+        let content_dir = self.project_root.join(CONTENT_DIR_NAME);
         let mut ignored = Vec::new();
         let mut planned = Vec::with_capacity(layers.len());
         for layer in layers {
@@ -247,7 +247,7 @@ impl ProjectPacker {
             if layer.is_base() && layer.priority != 0 {
                 return Err(PackError::InvalidBaseLayerPriority(layer.priority));
             }
-            let layer_dir = self.project_root.join("content").join(&layer.name);
+            let layer_dir = ModProjectLayer::content_path(&self.project_root, &layer.name);
             if !layer_dir.exists() {
                 return Err(PackError::LayerDirMissing {
                     layer: layer.name.clone(),

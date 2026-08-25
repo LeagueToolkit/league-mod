@@ -497,11 +497,11 @@ fn import_extracts_raw_files() {
     let imported = import(buffer, &output).unwrap();
     assert_eq!(imported.display_name, "Test");
 
-    let raw_file1 = output.join("RAW/assets/characters/aatrox/skin0.bin");
+    let raw_file1 = output.join("content/base/raw/assets/characters/aatrox/skin0.bin");
     assert!(raw_file1.exists());
     assert_eq!(std::fs::read(&raw_file1).unwrap(), b"aatrox data");
 
-    let raw_file2 = output.join("RAW/assets/maps/map11/scene.bin");
+    let raw_file2 = output.join("content/base/raw/assets/maps/map11/scene.bin");
     assert!(raw_file2.exists());
     assert_eq!(std::fs::read(&raw_file2).unwrap(), b"map data");
 }

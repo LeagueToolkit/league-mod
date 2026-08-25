@@ -6,7 +6,7 @@ use std::io::{Read, Seek};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeExtractError, FantomeReader, WadHashtable};
 
-use crate::{ImportFormat, ModProject, ModProjectError};
+use crate::{ImportFormat, ModProject, ModProjectError, ModProjectLayer};
 
 /// Failure to import a Fantome archive as a mod project.
 #[derive(Debug, thiserror::Error)]
@@ -50,8 +50,9 @@ impl FantomeImportError {
 /// 1. Extract WAD contents to `content/base/` (unpacking packed WADs through
 ///    the hashtable, if [`with_hashtable`](Self::with_hashtable) provided
 ///    one; without one, their files are named by hex hash)
-/// 2. Extract `RAW/` entries, `README.md`, the license text, and the
-///    thumbnail (converted to `thumbnail.webp`), if present
+/// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
+///    license text and the thumbnail (converted to `thumbnail.webp`), if
+///    present
 /// 3. Create a `mod.config.json` from the archive's metadata
 ///
 /// # Example
@@ -112,8 +113,9 @@ impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
                 .map_err(|source| FantomeImportError::write(output_dir, source))?;
         }
 
-        reader.extract_wads(&output_dir.join("content").join("base"), self.hashtable)?;
-        reader.extract_raw(&output_dir.join("RAW"))?;
+        let base_layer_dir = ModProjectLayer::content_path(output_dir, ModProjectLayer::BASE_NAME);
+        reader.extract_wads(&base_layer_dir, self.hashtable)?;
+        reader.extract_raw(&ModProjectLayer::raw_content_path(output_dir))?;
 
         if let Some(readme) = reader.read_readme()? {
             let path = output_dir.join("README.md");
