@@ -13,7 +13,7 @@
 
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{ModIgnore, ModProject};
+use ltk_mod_project::{CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer};
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Compute a content fingerprint from an archive file's size and modification time.
@@ -160,13 +160,19 @@ pub trait ModContentProvider: Send + Sync {
 ///           characters/
 ///             aatrox/
 ///               skin0.bin        # Override file (path = chunk hash key)
+///       raw/                     # Fantome `RAW/` imports, opt-in
+///         assets/
+///           maps/
+///             map11/
+///               scene.bin        # Override file (path = game asset path)
 ///     high_res/                  # Optional additional layer
 ///       Aatrox.wad.client/
 ///         ...
 /// ```
 ///
 /// Only subdirectories under each layer whose name ends in `.wad.client`
-/// (case-insensitive) are recognized as WAD targets.
+/// (case-insensitive) are recognized as WAD targets. `raw/` is read only
+/// when [`with_raw_overrides`](Self::with_raw_overrides) asks for it.
 ///
 /// `.modignore` files (at the mod directory root and nested inside
 /// `content/`) filter the content exactly as packing does: files they
@@ -182,6 +188,7 @@ pub trait ModContentProvider: Send + Sync {
 /// serving the snapshot it loaded first and miss `.modignore` edits.
 pub struct FsModContent {
     mod_dir: Utf8PathBuf,
+    raw_overrides: bool,
     ignore: std::sync::OnceLock<ModIgnore>,
 }
 
@@ -192,8 +199,50 @@ impl FsModContent {
     pub fn new(mod_dir: Utf8PathBuf) -> Self {
         Self {
             mod_dir,
+            raw_overrides: false,
             ignore: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Read `content/base/raw/` as overrides keyed by game asset path.
+    ///
+    /// Off by default. The directory is what a Fantome archive's `RAW/`
+    /// folder imports into, so only a mod that came from one holds content
+    /// there and an authored project keeps `raw` as an ordinary directory
+    /// name.
+    #[must_use]
+    pub fn with_raw_overrides(mut self) -> Self {
+        self.raw_overrides = true;
+        self
+    }
+
+    /// The directory [`with_raw_overrides`](Self::with_raw_overrides) reads.
+    fn raw_dir(&self) -> Utf8PathBuf {
+        ModProjectLayer::raw_content_path(&self.mod_dir)
+    }
+
+    /// Every file under `dir` the ignore filter keeps, each paired with its
+    /// path relative to `dir`.
+    fn read_dir_overrides(&self, dir: &Utf8Path) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+        let ignore = self.ignore()?;
+
+        let mut results = Vec::new();
+        for file in ignore.walk(dir) {
+            let utf8_path = file.map_err(|error| {
+                let (path, source) = error.into_parts();
+                Error::Read { path, source }
+            })?;
+
+            let rel = utf8_path
+                .strip_prefix(dir)
+                .unwrap_or(&utf8_path)
+                .as_str()
+                .replace('\\', "/");
+            let bytes = std::fs::read(utf8_path.as_std_path())
+                .map_err(|source| Error::read(&utf8_path, source))?;
+            results.push((Utf8PathBuf::from(rel), bytes));
+        }
+        Ok(results)
     }
 
     /// The `.modignore` filter, loaded on first use and cached for the
@@ -218,7 +267,7 @@ impl ModContentProvider for FsModContent {
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
-        let layer_dir = self.mod_dir.join("content").join(layer);
+        let layer_dir = ModProjectLayer::content_path(&self.mod_dir, layer);
         if !layer_dir.as_std_path().exists() {
             return Ok(Vec::new());
         }
@@ -253,26 +302,17 @@ impl ModContentProvider for FsModContent {
         layer: &str,
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
-        let wad_dir = self.mod_dir.join("content").join(layer).join(wad_name);
-        let ignore = self.ignore()?;
+        let wad_dir = ModProjectLayer::content_path(&self.mod_dir, layer).join(wad_name);
+        self.read_dir_overrides(&wad_dir)
+    }
 
-        let mut results = Vec::new();
-        for file in ignore.walk(&wad_dir) {
-            let utf8_path = file.map_err(|error| {
-                let (path, source) = error.into_parts();
-                Error::Read { path, source }
-            })?;
-
-            let rel = utf8_path
-                .strip_prefix(&wad_dir)
-                .unwrap_or(&utf8_path)
-                .as_str()
-                .replace('\\', "/");
-            let bytes = std::fs::read(utf8_path.as_std_path())
-                .map_err(|source| Error::read(&utf8_path, source))?;
-            results.push((Utf8PathBuf::from(rel), bytes));
+    fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+        let raw_dir = self.raw_dir();
+        if !self.raw_overrides || !raw_dir.as_std_path().exists() {
+            return Ok(Vec::new());
         }
-        Ok(results)
+
+        self.read_dir_overrides(&raw_dir)
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
@@ -318,7 +358,7 @@ impl ModContentProvider for FsModContent {
             entries.push((rel, meta.len(), mtime_secs(&meta)));
         }
 
-        let content_dir = self.mod_dir.join("content");
+        let content_dir = self.mod_dir.join(CONTENT_DIR_NAME);
         if !content_dir.as_std_path().exists() && entries.is_empty() {
             return Ok(Some(0));
         }
@@ -361,250 +401,17 @@ impl ModContentProvider for FsModContent {
         wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
-        let file_path = self
-            .mod_dir
-            .join("content")
-            .join(layer)
+        let file_path = ModProjectLayer::content_path(&self.mod_dir, layer)
             .join(wad_name)
             .join(rel_path);
         std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
     }
 
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
-        let file_path = self.mod_dir.join("content").join(rel_path);
+        let file_path = self.raw_dir().join(rel_path);
         std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use camino::Utf8PathBuf;
-    use std::fs;
-    use tempfile::tempdir;
-
-    fn create_test_mod_dir() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        let mod_dir = dir.path();
-
-        // Create mod.config.json
-        let project = ltk_mod_project::ModProject {
-            name: "test-mod".to_string(),
-            display_name: "Test Mod".to_string(),
-            version: "1.0.0".to_string(),
-            description: "A test mod".to_string(),
-            authors: vec![],
-            license: None,
-            tags: vec![],
-            champions: vec![],
-            maps: vec![],
-            transformers: vec![],
-            layers: ltk_mod_project::default_layers(),
-            thumbnail: None,
-        };
-        fs::write(
-            mod_dir.join("mod.config.json"),
-            serde_json::to_string_pretty(&project).unwrap(),
-        )
-        .unwrap();
-
-        // Create content/base/Test.wad.client/ with some files
-        let wad_dir = mod_dir.join("content/base/Test.wad.client");
-        fs::create_dir_all(&wad_dir).unwrap();
-        fs::write(wad_dir.join("file1.bin"), b"data1").unwrap();
-
-        let sub_dir = wad_dir.join("subdir");
-        fs::create_dir_all(&sub_dir).unwrap();
-        fs::write(sub_dir.join("file2.bin"), b"data2").unwrap();
-
-        dir
-    }
-
-    #[test]
-    fn test_fs_mod_project() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let mut provider = FsModContent::new(mod_dir);
-
-        let project = provider.mod_project().unwrap();
-        assert_eq!(project.name, "test-mod");
-        assert_eq!(project.display_name, "Test Mod");
-    }
-
-    #[test]
-    fn test_fs_list_layer_wads() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let mut provider = FsModContent::new(mod_dir);
-
-        let wads = provider.list_layer_wads("base").unwrap();
-        assert_eq!(wads.len(), 1);
-        assert_eq!(wads[0], "Test.wad.client");
-    }
-
-    #[test]
-    fn test_fs_list_layer_wads_missing_layer() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let mut provider = FsModContent::new(mod_dir);
-
-        let wads = provider.list_layer_wads("nonexistent").unwrap();
-        assert!(wads.is_empty());
-    }
-
-    #[test]
-    fn test_fs_read_wad_overrides() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let mut provider = FsModContent::new(mod_dir);
-
-        let overrides = provider
-            .read_wad_overrides("base", "Test.wad.client")
-            .unwrap();
-        assert_eq!(overrides.len(), 2);
-
-        // Check that both files are present (order may vary)
-        let paths: Vec<String> = overrides
-            .iter()
-            .map(|(p, _)| p.as_str().replace('\\', "/"))
-            .collect();
-        assert!(paths.contains(&"file1.bin".to_string()));
-        assert!(paths.contains(&"subdir/file2.bin".to_string()));
-    }
-
-    #[test]
-    fn test_modignore_filters_wad_overrides() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        fs::write(
-            mod_dir.join("content/base/Test.wad.client/source.psd"),
-            b"working file",
-        )
-        .unwrap();
-        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
-
-        let mut provider = FsModContent::new(mod_dir);
-        let overrides = provider
-            .read_wad_overrides("base", "Test.wad.client")
-            .unwrap();
-
-        let paths: Vec<String> = overrides
-            .iter()
-            .map(|(p, _)| p.as_str().replace('\\', "/"))
-            .collect();
-        assert!(paths.contains(&"file1.bin".to_string()));
-        assert!(paths.contains(&"subdir/file2.bin".to_string()));
-        assert!(!paths.contains(&"source.psd".to_string()));
-    }
-
-    #[test]
-    fn test_modignore_hides_a_fully_ignored_wad() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        fs::write(mod_dir.join(".modignore"), "Test.wad.client/\n").unwrap();
-
-        let mut provider = FsModContent::new(mod_dir);
-        assert!(provider.list_layer_wads("base").unwrap().is_empty());
-        assert!(
-            provider
-                .read_wad_overrides("base", "Test.wad.client")
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    /// Editing an ignored file must not invalidate the rebuild cache: the
-    /// fingerprint uses the same filter as the read.
-    #[test]
-    fn test_fingerprint_is_stable_across_ignored_file_edits() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        let psd = mod_dir.join("content/base/Test.wad.client/source.psd");
-        fs::write(&psd, b"v1").unwrap();
-        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
-
-        let provider = FsModContent::new(mod_dir);
-        let before = provider.content_fingerprint().unwrap();
-
-        // A different size, so this does not depend on mtime granularity.
-        fs::write(&psd, b"version two, considerably larger").unwrap();
-        let after = provider.content_fingerprint().unwrap();
-
-        assert_eq!(before, after);
-    }
-
-    #[test]
-    fn test_fingerprint_changes_when_modignore_changes() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        // One provider per build: the filter is a per-provider snapshot.
-        let before = FsModContent::new(mod_dir.clone())
-            .content_fingerprint()
-            .unwrap();
-
-        fs::write(mod_dir.join(".modignore"), "*.psd\n").unwrap();
-        let after = FsModContent::new(mod_dir.clone())
-            .content_fingerprint()
-            .unwrap();
-
-        assert_ne!(before, after);
-    }
-
-    #[test]
-    fn test_nested_modignore_filters_wad_overrides() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        fs::write(
-            mod_dir.join("content/base/Test.wad.client/source.psd"),
-            b"working file",
-        )
-        .unwrap();
-        fs::write(
-            mod_dir.join("content/base/Test.wad.client/.modignore"),
-            "*.psd\n",
-        )
-        .unwrap();
-
-        let mut provider = FsModContent::new(mod_dir);
-        let overrides = provider
-            .read_wad_overrides("base", "Test.wad.client")
-            .unwrap();
-
-        let paths: Vec<String> = overrides
-            .iter()
-            .map(|(p, _)| p.as_str().replace('\\', "/"))
-            .collect();
-        assert!(paths.contains(&"file1.bin".to_string()));
-        assert!(!paths.contains(&"source.psd".to_string()));
-        // The ignore file itself is filter metadata, not an override.
-        assert!(!paths.contains(&".modignore".to_string()));
-    }
-
-    #[test]
-    fn test_fingerprint_changes_when_a_nested_modignore_appears() {
-        let dir = create_test_mod_dir();
-        let mod_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-
-        let before = FsModContent::new(mod_dir.clone())
-            .content_fingerprint()
-            .unwrap();
-
-        // The walk never yields ignore files, so without explicit statting
-        // this edit would be invisible to the cache.
-        fs::write(
-            mod_dir.join("content/base/Test.wad.client/.modignore"),
-            "*.psd\n",
-        )
-        .unwrap();
-        let after = FsModContent::new(mod_dir.clone())
-            .content_fingerprint()
-            .unwrap();
-
-        assert_ne!(before, after);
-    }
-}
+mod tests;
