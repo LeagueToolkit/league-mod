@@ -264,7 +264,7 @@ fn extract_wads_names_packed_chunks_through_any_resolver() {
     );
 }
 
-/// Without a resolver a packed chunk keeps its hex name, so a mod still
+/// A chunk no resolver and no bin names keeps its hex name, so a mod still
 /// unpacks when no hashtable is available.
 #[test]
 fn extract_wads_falls_back_to_hex_names() {
@@ -283,4 +283,71 @@ fn extract_wads_falls_back_to_hex_names() {
     let stem = unpacked[0].split('.').next().unwrap();
     assert_eq!(stem.len(), 16, "expected a hex name, got {}", unpacked[0]);
     assert!(u64::from_str_radix(stem, 16).is_ok());
+}
+
+/// A bin naming `path`, in the shape name recovery reads: the `PROP` magic,
+/// then the little-endian `u16` length the format writes in front of a string.
+fn bin_naming(path: &str) -> Vec<u8> {
+    let mut bytes = b"PROP".to_vec();
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&u16::try_from(path.len()).unwrap().to_le_bytes());
+    bytes.extend_from_slice(path.as_bytes());
+    bytes
+}
+
+fn packed_wad_of(chunks: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+
+    let mut builder = WadBuilder::default();
+    for (path, _) in chunks {
+        builder = builder.with_chunk(
+            WadChunkBuilder::default()
+                .with_path(*path)
+                .with_force_compression(WadChunkCompression::None),
+        );
+    }
+
+    let by_hash: std::collections::HashMap<WadHash, Vec<u8>> = chunks
+        .iter()
+        .map(|(path, bytes)| (WadHash::from(*path), bytes.clone()))
+        .collect();
+
+    let mut cursor = Cursor::new(Vec::new());
+    builder
+        .build_to_writer(&mut cursor, move |hash, writer| {
+            writer.write_all(&by_hash[&hash])?;
+            Ok(())
+        })
+        .unwrap();
+    cursor.into_inner()
+}
+
+/// A mod's WAD holds paths no game hashtable ever had, because its author
+/// invented them, and its bins are where those paths are written down. Without
+/// the recovery pass those chunks land under their hashes and the unpacked
+/// project is unreadable.
+#[test]
+fn extract_wads_recovers_names_from_the_bins_of_a_packed_wad() {
+    let skin = "assets/characters/invented/skin99.bin";
+    let packed = packed_wad_of(&[
+        ("assets/characters/invented/root.bin", bin_naming(skin)),
+        (skin, b"invented bytes".to_vec()),
+    ]);
+
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file("WAD/test.wad.client", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(&packed).unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    reader.extract_wads(&dest, &NoResolver).unwrap();
+
+    assert_eq!(
+        std::fs::read(dest.join("test.wad.client").join(skin)).unwrap(),
+        b"invented bytes"
+    );
 }
