@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.6.0...ltk_mod_project-v0.7.0) - 2026-08-26
+
+### Other
+
+- Merge pull request #194 from LeagueToolkit/feat/ltk-wad-0.5
+- [**breaking**] name chunks through ltk_wad 0.5's PathResolver
+- *(modpkg)* [**breaking**] rename WadHash to WadNameHash
+
 ## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.5.0...ltk_mod_project-v0.6.0) - 2026-08-25
 
 ### Added
