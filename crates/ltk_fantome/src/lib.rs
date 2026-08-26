@@ -17,7 +17,7 @@ mod writer;
 pub use error::{FantomeExtractError, FantomeWriteError};
 /// Re-exported because [`FantomeReader::extract_wads`] names them: a caller
 /// names chunks by implementing [`PathResolver`] over whatever it holds, or
-/// passes [`NoResolver`] to leave every chunk under its hash.
+/// passes [`NoResolver`] and leaves the naming to the archive's own bins.
 pub use ltk_wad::{NoResolver, PathResolver};
 pub use reader::FantomeReader;
 pub use writer::FantomeWriter;

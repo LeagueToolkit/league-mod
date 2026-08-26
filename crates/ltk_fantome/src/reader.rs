@@ -61,9 +61,10 @@ impl<R: Read + Seek> FantomeReader<R> {
     ///
     /// A packed WAD directly under `WAD/` is unpacked into a directory of its
     /// name rather than written out as a file, naming its chunks through
-    /// `resolver`. A caller with no source of names passes
-    /// [`NoResolver`](crate::NoResolver), which leaves every chunk under its
-    /// hash.
+    /// `resolver` and then through the WAD's own bins for whatever the
+    /// resolver could not name. A caller with no source of names passes
+    /// [`NoResolver`](crate::NoResolver) and gets the bins alone, which is
+    /// usually most of a mod. A chunk nothing names keeps its hash.
     ///
     /// The prefix is matched case-insensitively.
     pub fn extract_wads(
@@ -220,6 +221,12 @@ fn is_wad_file_name(name: &str) -> bool {
 }
 
 /// Extract a packed WAD file to a directory using WadExtractor
+///
+/// Name recovery is on. A mod's WAD holds paths the game's own tables never
+/// had - the author invented them - and its bins are where those paths are
+/// written down, so without the recovery pass those chunks land under their
+/// hashes and the project directory is unreadable. The scan is over one small
+/// archive, once, at import.
 fn extract_packed_wad<R: Read>(
     wad_reader: &mut R,
     output_dir: &Utf8Path,
@@ -234,7 +241,9 @@ fn extract_packed_wad<R: Read>(
     std::fs::create_dir_all(output_dir)
         .map_err(|source| FantomeExtractError::write(output_dir, source))?;
 
-    WadExtractor::new(resolver).extract_all(&mut wad, output_dir)?;
+    WadExtractor::new(resolver)
+        .with_name_recovery()
+        .extract_all(&mut wad, output_dir)?;
 
     Ok(())
 }

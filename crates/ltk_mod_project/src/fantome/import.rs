@@ -48,8 +48,8 @@ impl FantomeImportError {
 ///
 /// Importing will:
 /// 1. Extract WAD contents to `content/base/`, unpacking packed WADs through
-///    the resolver [`with_path_resolver`](Self::with_path_resolver) supplied,
-///    or to hex names without one
+///    the resolver [`with_path_resolver`](Self::with_path_resolver) supplied
+///    and through the WAD's own bins for whatever it could not name
 /// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
 ///    license text and the thumbnail (converted to `thumbnail.webp`), if
 ///    present
@@ -76,8 +76,9 @@ pub struct FantomeImporter<'a, R> {
 impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
     /// Create an importer reading the archive from `reader`.
     ///
-    /// Use [`with_path_resolver`](Self::with_path_resolver) to supply paths for WAD chunks
-    /// Chunks get their hashed names if no resolver is supplied.
+    /// Use [`with_path_resolver`](Self::with_path_resolver) to supply paths for WAD chunks.
+    /// Without one the import falls back to the names the archive's own bins
+    /// hold, and a chunk nothing names keeps its hash.
     pub fn new(reader: R) -> Self {
         Self {
             reader,
@@ -89,7 +90,9 @@ impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
     /// their real paths instead of hex hashes.
     ///
     /// A caller implements [`PathResolver`] over whatever names it already
-    /// holds, rather than copying them into a table this crate owns.
+    /// holds, rather than copying them into a table this crate owns. It covers
+    /// what the game ships. The archive's own bins cover what its author
+    /// invented, and are read whether or not a resolver is supplied.
     #[must_use]
     pub fn with_path_resolver(mut self, resolver: &'a dyn PathResolver) -> Self {
         self.resolver = Some(resolver);
