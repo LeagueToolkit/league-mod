@@ -32,7 +32,7 @@ use crate::error::{Error, Result};
 use byteorder::{LE, WriteBytesExt};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_file::LeagueFileKind;
-use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression};
+use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression, WadHash};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::File;
@@ -143,7 +143,7 @@ fn write_patched_wad<B: AsRef<[u8]>>(
     // Collect new entry hashes (in overrides but not in the original WAD)
     let mut new_hashes: Vec<u64> = override_hashes
         .iter()
-        .filter(|&&h| !chunks.contains(h))
+        .filter(|&&h| !chunks.contains(WadHash(h)))
         .copied()
         .collect();
     new_hashes.sort();
@@ -159,7 +159,7 @@ fn write_patched_wad<B: AsRef<[u8]>>(
 
     // Build a merged sorted list of ALL hashes (original + new).
     // WAD TOC must be sorted by path_hash; binary_search insertion maintains this.
-    let mut ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash).collect();
+    let mut ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash.0).collect();
     for hash in &new_hashes {
         let pos = ordered.binary_search(hash).unwrap_or_else(|i| i);
         ordered.insert(pos, *hash);
@@ -221,7 +221,7 @@ fn write_patched_wad<B: AsRef<[u8]>>(
             Some(bytes) => prepare_uncompressed(path_hash, bytes.as_ref())?,
             None => {
                 let orig = chunks
-                    .get(path_hash)
+                    .get(WadHash(path_hash))
                     .ok_or_else(|| Error::Other(format!("Missing base chunk {path_hash:016x}")))?;
                 prepare_passthrough(orig, &mmap[..])?
             }
@@ -278,7 +278,7 @@ struct PreparedChunk<'a> {
 impl PreparedChunk<'_> {
     fn to_chunk(&self, path_hash: u64, data_offset: u64) -> WadChunk {
         WadChunk {
-            path_hash,
+            path_hash: WadHash(path_hash),
             data_offset: data_offset as usize,
             compressed_size: self.data.len(),
             uncompressed_size: self.uncompressed_size,

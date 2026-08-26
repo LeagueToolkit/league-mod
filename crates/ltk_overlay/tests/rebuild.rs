@@ -10,7 +10,7 @@ use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_overlay::utils::resolve_chunk_hash;
 use ltk_overlay::wad_builder::build_patched_wad;
 use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder, Result};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Write};
@@ -84,7 +84,7 @@ fn read_overlay_chunk(overlay_root: &Utf8Path) -> Vec<u8> {
     let hash = resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap();
     let chunk = *wad
         .chunks()
-        .get(hash)
+        .get(WadHash(hash))
         .expect("patched WAD must contain the overridden chunk");
     wad.load_chunk_decompressed(&chunk).unwrap().to_vec()
 }

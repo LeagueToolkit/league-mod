@@ -1,4 +1,4 @@
-//! Errors returned when reading, writing, and loading Fantome data.
+//! Errors returned when reading and writing Fantome data.
 //!
 //! Reading and writing have separate types: neither can produce the other's
 //! failures, so a merged enum would force matches on unreachable cases.
@@ -44,28 +44,6 @@ pub enum FantomeExtractError {
 impl FantomeExtractError {
     pub(crate) fn write(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
         Self::Write {
-            path: path.into(),
-            source,
-        }
-    }
-}
-
-/// Failure to load a WAD hashtable.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum WadHashtableError {
-    /// A hashtable file could not be read.
-    #[error("Failed to read {path}")]
-    Read {
-        path: Utf8PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-}
-
-impl WadHashtableError {
-    pub(crate) fn read(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
-        Self::Read {
             path: path.into(),
             source,
         }

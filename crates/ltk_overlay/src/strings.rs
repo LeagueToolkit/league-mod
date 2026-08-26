@@ -316,12 +316,15 @@ pub(crate) fn read_game_chunk(
         .map_err(|source| Error::read(&abs_path, source))?;
     let mut wad = ltk_wad::Wad::mount(file)?;
 
-    let chunk = *wad.chunks().get(chunk_hash).ok_or_else(|| {
-        Error::Other(format!(
-            "Chunk {:016x} not found in game WAD '{}'",
-            chunk_hash, wad_rel_path
-        ))
-    })?;
+    let chunk = *wad
+        .chunks()
+        .get(ltk_wad::WadHash(chunk_hash))
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "Chunk {:016x} not found in game WAD '{}'",
+                chunk_hash, wad_rel_path
+            ))
+        })?;
 
     Ok(wad.load_chunk_decompressed(&chunk)?.to_vec())
 }

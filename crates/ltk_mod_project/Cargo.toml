@@ -43,5 +43,6 @@ modpkg = ["dep:ltk_modpkg", "dep:image", "dep:webp-animation", "dep:semver"]
 fantome = ["dep:ltk_fantome", "dep:image", "dep:slug"]
 
 [dev-dependencies]
+ltk_wad = { workspace = true }
 tempfile = "3.15"
 zip = "2.2.0"

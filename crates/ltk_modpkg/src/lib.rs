@@ -26,7 +26,7 @@ pub use chunk_path::ChunkPath;
 pub use decoder::ModpkgDecoder;
 pub use error::{InvalidSlugError, ModpkgError};
 pub use extractor::ModpkgExtractor;
-pub use hashes::{ChunkKey, LayerHash, PathHash, WadHash};
+pub use hashes::{ChunkKey, LayerHash, PathHash, WadNameHash};
 pub use indices::{LayerIndex, WadIndex};
 pub use license::*;
 pub use metadata::*;
@@ -53,8 +53,8 @@ pub struct Modpkg<TSource: Read + Seek> {
     chunk_path_indices: Vec<PathHash>,
     chunk_paths: HashMap<PathHash, String>,
 
-    wad_indices: Vec<WadHash>,
-    wads: HashMap<WadHash, String>,
+    wad_indices: Vec<WadNameHash>,
+    wads: HashMap<WadNameHash, String>,
 
     chunks: HashMap<ChunkKey, ModpkgChunk>,
 
@@ -131,7 +131,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     }
 
     /// The WAD names in the package, keyed by their hash.
-    pub fn wads(&self) -> &HashMap<WadHash, String> {
+    pub fn wads(&self) -> &HashMap<WadNameHash, String> {
         &self.wads
     }
 
@@ -246,7 +246,7 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
 
     /// Resolve a WAD name to its position in the WAD table.
     pub fn wad_index(&self, wad_name: &str) -> Option<WadIndex> {
-        let wad_hash = WadHash::from_name(wad_name);
+        let wad_hash = WadNameHash::from_name(wad_name);
         self.wad_indices
             .iter()
             .position(|&h| h == wad_hash)

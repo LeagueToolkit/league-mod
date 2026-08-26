@@ -504,7 +504,7 @@ fn mount_and_extract_hashes(
         }
     };
 
-    let chunk_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
+    let chunk_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash.0).collect();
 
     Some(WadMountResult {
         relative_path,
@@ -541,14 +541,14 @@ fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<u64>) -> Vec<(u6
     let chunks: Vec<_> = wad
         .chunks()
         .iter()
-        .filter(|c| wanted.contains(&c.path_hash))
+        .filter(|c| wanted.contains(&c.path_hash.0))
         .cloned()
         .collect();
 
     let mut hashes = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
         match wad.load_chunk_decompressed(chunk) {
-            Ok(data) => hashes.push((chunk.path_hash, xxh3_64(&data))),
+            Ok(data) => hashes.push((chunk.path_hash.0, xxh3_64(&data))),
             Err(e) => tracing::trace!(
                 "Failed to decompress chunk {:016x} in '{}': {}",
                 chunk.path_hash,

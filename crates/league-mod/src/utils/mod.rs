@@ -3,6 +3,7 @@ use miette::Result;
 use regex::Regex;
 
 pub mod config;
+pub mod hashtable;
 pub mod league_path;
 pub mod update;
 

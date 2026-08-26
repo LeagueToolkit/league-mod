@@ -11,7 +11,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_overlay::utils::resolve_chunk_hash;
 use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
 use std::fs;
 use std::io::{Cursor, Write};
 
@@ -92,7 +92,7 @@ fn read_chunk(wad_path: &Utf8Path, chunk_path: &str) -> Option<Vec<u8>> {
     let file = fs::File::open(wad_path.as_std_path()).unwrap();
     let mut wad = Wad::mount(file).unwrap();
     let hash = resolve_chunk_hash(Utf8Path::new(chunk_path), b"").unwrap();
-    let chunk = *wad.chunks().get(hash)?;
+    let chunk = *wad.chunks().get(WadHash(hash))?;
     Some(wad.load_chunk_decompressed(&chunk).unwrap().to_vec())
 }
 
@@ -102,7 +102,7 @@ fn chunk_identity(wad_path: &Utf8Path, chunk_path: &str) -> Option<(WadChunkComp
     let file = fs::File::open(wad_path.as_std_path()).unwrap();
     let wad = Wad::mount(file).unwrap();
     let hash = resolve_chunk_hash(Utf8Path::new(chunk_path), b"").unwrap();
-    let chunk = wad.chunks().get(hash)?;
+    let chunk = wad.chunks().get(WadHash(hash))?;
     Some((chunk.compression_type, chunk.checksum))
 }
 

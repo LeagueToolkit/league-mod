@@ -1,5 +1,7 @@
 use super::*;
+use crate::NoResolver;
 use camino::Utf8PathBuf;
+use ltk_wad::WadHash;
 use std::io::Write;
 use tempfile::{TempDir, tempdir};
 use zip::ZipWriter;
@@ -51,7 +53,7 @@ fn extract_wads_preserves_paths_under_dest() {
 
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp).join("wads");
-    reader.extract_wads(&dest, None).unwrap();
+    reader.extract_wads(&dest, &NoResolver).unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("test.wad.client/assets/test.bin")).unwrap(),
@@ -90,7 +92,9 @@ fn extract_matches_the_prefix_case_insensitively() {
     let mut reader = FantomeReader::new(Cursor::new(data)).unwrap();
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
-    reader.extract_wads(&dest.join("wads"), None).unwrap();
+    reader
+        .extract_wads(&dest.join("wads"), &NoResolver)
+        .unwrap();
     reader.extract_raw(&dest.join("raw")).unwrap();
 
     assert_eq!(
@@ -196,9 +200,87 @@ fn writer_reader_round_trip() {
     // Backslashes in the relative path were normalized to `/`.
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
-    reader.extract_wads(&dest, None).unwrap();
+    reader.extract_wads(&dest, &NoResolver).unwrap();
     assert_eq!(
         std::fs::read(dest.join("Test.wad.client/data/skin.bin")).unwrap(),
         b"skin"
     );
+}
+
+/// A resolver that names every chunk the same, so one chunk lands at a path
+/// only the resolver could have chosen.
+struct FixedResolver(&'static str);
+
+impl PathResolver for FixedResolver {
+    fn resolve(&self, _path_hash: WadHash) -> Option<String> {
+        Some(self.0.to_owned())
+    }
+}
+
+fn packed_wad_bytes(payload: &[u8]) -> Vec<u8> {
+    use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+
+    let payload = payload.to_vec();
+    let mut cursor = Cursor::new(Vec::new());
+    WadBuilder::default()
+        .with_chunk(
+            WadChunkBuilder::default()
+                .with_path("packed/file.bin")
+                .with_force_compression(WadChunkCompression::None),
+        )
+        .build_to_writer(&mut cursor, move |_hash, writer| {
+            writer.write_all(&payload)?;
+            Ok(())
+        })
+        .unwrap();
+    cursor.into_inner()
+}
+
+fn packed_wad_fantome() -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    zip.start_file("WAD/test.wad.client", options).unwrap();
+    zip.write_all(&packed_wad_bytes(b"packed content")).unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// Any name source drives the unpack, so a caller holding names in its own
+/// form does not have to copy them into a table this crate owns.
+#[test]
+fn extract_wads_names_packed_chunks_through_any_resolver() {
+    let mut reader = FantomeReader::new(Cursor::new(packed_wad_fantome())).unwrap();
+
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let resolver = FixedResolver("assets/characters/aatrox/skin0.bin");
+    reader.extract_wads(&dest, &resolver).unwrap();
+
+    assert_eq!(
+        std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
+        b"packed content"
+    );
+}
+
+/// Without a resolver a packed chunk keeps its hex name, so a mod still
+/// unpacks when no hashtable is available.
+#[test]
+fn extract_wads_falls_back_to_hex_names() {
+    let mut reader = FantomeReader::new(Cursor::new(packed_wad_fantome())).unwrap();
+
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    reader.extract_wads(&dest, &NoResolver).unwrap();
+
+    let unpacked: Vec<_> = std::fs::read_dir(dest.join("test.wad.client").as_std_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(unpacked.len(), 1, "one chunk, one file: {unpacked:?}");
+
+    let stem = unpacked[0].split('.').next().unwrap();
+    assert_eq!(stem.len(), 16, "expected a hex name, got {}", unpacked[0]);
+    assert!(u64::from_str_radix(stem, 16).is_ok());
 }

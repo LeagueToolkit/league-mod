@@ -23,5 +23,5 @@ mod pack;
 mod tests;
 
 pub use import::{FantomeImportError, FantomeImporter};
-pub use ltk_fantome::WadHashtable;
+pub use ltk_fantome::{NoResolver, PathResolver};
 pub use pack::{FantomeFormat, FantomePackError};

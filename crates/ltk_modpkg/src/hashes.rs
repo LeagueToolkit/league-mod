@@ -94,10 +94,10 @@ impl fmt::Display for LayerHash {
 
 /// The xxhash3 of a lowercased WAD name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct WadHash(u64);
+pub struct WadNameHash(u64);
 
-impl WadHash {
-    /// The WAD hash of chunks that belong to no WAD (meta chunks).
+impl WadNameHash {
+    /// The WAD name hash of chunks that belong to no WAD (meta chunks).
     pub const NONE: Self = Self(u64::MAX);
 
     /// Hash a WAD name.
@@ -118,7 +118,7 @@ impl WadHash {
     }
 }
 
-impl fmt::Display for WadHash {
+impl fmt::Display for WadNameHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:016x}", self.0)
     }

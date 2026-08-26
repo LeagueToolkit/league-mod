@@ -1230,6 +1230,7 @@ dependencies = [
  "ltk_mod_core",
  "ltk_mod_project",
  "ltk_modpkg",
+ "ltk_wad",
  "miette",
  "regex",
  "reqwest",
@@ -1238,8 +1239,10 @@ dependencies = [
  "serde_json",
  "slug",
  "sysinfo",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "walkdir",
  "zip",
 ]
 
@@ -1316,23 +1319,31 @@ version = "0.7.0"
 dependencies = [
  "camino",
  "indexmap",
- "itertools",
  "ltk_wad",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "walkdir",
  "zip",
 ]
 
 [[package]]
 name = "ltk_file"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbe8ae69e7ab3769d2cef508d89d7fe6d5837f083e810c755c95037babfae1b5"
+checksum = "6bcd3964b2671ccf16dfc5e4adb9bd1d724793bb303332aa86588eb5250e5604"
 dependencies = [
  "strum",
+]
+
+[[package]]
+name = "ltk_hash"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
+dependencies = [
+ "byteorder",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1368,6 +1379,7 @@ dependencies = [
  "indexmap",
  "ltk_fantome",
  "ltk_modpkg",
+ "ltk_wad",
  "semver",
  "serde",
  "serde_json",
@@ -1453,15 +1465,16 @@ dependencies = [
 
 [[package]]
 name = "ltk_wad"
-version = "0.3.1"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "407020c8b5c484165c3639a4f5cbf4d47c45ea58a34cd83f70a0c4ee1209027c"
+checksum = "ce5a6767751de9a66437c3193cc004976d956f091afe522a4818c169d5515ab3"
 dependencies = [
  "byteorder",
  "camino",
  "flate2",
  "itertools",
  "ltk_file",
+ "ltk_hash",
  "ltk_io_ext",
  "memchr",
  "num_enum",
