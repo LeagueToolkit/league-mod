@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.6.0...ltk_overlay-v0.7.0) - 2026-08-26
+
+### Other
+
+- Merge pull request #194 from LeagueToolkit/feat/ltk-wad-0.5
+- [**breaking**] name chunks through ltk_wad 0.5's PathResolver
+- *(overlay)* read hex chunk names through ltk_wad
+
 ## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.5.2...ltk_overlay-v0.6.0) - 2026-08-25
 
 ### Added

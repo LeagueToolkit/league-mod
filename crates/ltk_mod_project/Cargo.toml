@@ -1,6 +1,6 @@
 [package]
 name = "ltk_mod_project"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Types and helpers for League Toolkit mod project definitions"
@@ -22,8 +22,8 @@ toml = "0.8.19"
 serde_json = "1.0"
 
 # Optional: packing backends, one cargo feature per format
-ltk_modpkg = { version = "0.7.0", path = "../ltk_modpkg", optional = true }
-ltk_fantome = { version = "0.7.0", path = "../ltk_fantome", optional = true }
+ltk_modpkg = { version = "0.8.0", path = "../ltk_modpkg", optional = true }
+ltk_fantome = { version = "0.8.0", path = "../ltk_fantome", optional = true }
 image = { version = "0.25", default-features = false, features = [
     "webp",
     "png",
