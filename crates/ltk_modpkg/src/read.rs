@@ -9,7 +9,7 @@ use ltk_io_ext::ReaderExt;
 
 use crate::{
     chunk::ModpkgChunk, error::ModpkgError, ChunkKey, ChunkPath, LayerHash, LayerIndex, Modpkg,
-    ModpkgLayer, PathHash, WadHash, WadIndex,
+    ModpkgLayer, PathHash, WadIndex, WadNameHash,
 };
 
 impl<TSource: Read + Seek> Modpkg<TSource> {
@@ -117,13 +117,13 @@ fn read_chunk_paths<R: Read + Seek>(
 
 fn read_wads<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(Vec<WadHash>, HashMap<WadHash, String>), ModpkgError> {
+) -> Result<(Vec<WadNameHash>, HashMap<WadNameHash, String>), ModpkgError> {
     let wads_count = reader.read_u32::<LE>()?;
     let mut wads_indices = Vec::with_capacity(wads_count as usize);
     let mut wads = HashMap::with_capacity(wads_count as usize);
     for _ in 0..wads_count {
         let wad = reader.read_str_until_nul()?;
-        let wad_hash = WadHash::from_name(&wad);
+        let wad_hash = WadNameHash::from_name(&wad);
         wads.insert(wad_hash, wad);
         wads_indices.push(wad_hash);
     }

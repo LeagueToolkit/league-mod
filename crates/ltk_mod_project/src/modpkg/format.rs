@@ -11,7 +11,7 @@ use ltk_modpkg::builder::{
 };
 use ltk_modpkg::{
     ChunkKey, InvalidSlugError, ModpkgAuthor, ModpkgCompression, ModpkgLayerMetadata,
-    ModpkgLicense, ModpkgMetadata, Slug, WadHash, CURRENT_SCHEMA_VERSION,
+    ModpkgLicense, ModpkgMetadata, Slug, WadNameHash, CURRENT_SCHEMA_VERSION,
 };
 
 use super::thumbnail::{load_thumbnail, ThumbnailError};
@@ -97,7 +97,7 @@ pub struct ModpkgFormat<W> {
 
 /// Maps each chunk's storage key (identity plus WAD) to the source file on
 /// disk.
-type ChunkFileMap = HashMap<(ChunkKey, WadHash), Utf8PathBuf>;
+type ChunkFileMap = HashMap<(ChunkKey, WadNameHash), Utf8PathBuf>;
 
 impl<W: Write + Seek> ModpkgFormat<W> {
     /// Create a format writing the archive to `writer`.

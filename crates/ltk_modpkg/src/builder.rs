@@ -10,7 +10,7 @@ use crate::{
     chunk::ModpkgChunk,
     metadata::{ModpkgMetadata, METADATA_CHUNK_PATH},
     thumbnail::THUMBNAIL_CHUNK_PATH,
-    ChunkKey, LayerHash, LayerIndex, ModpkgCompression, PathHash, WadHash, WadIndex,
+    ChunkKey, LayerHash, LayerIndex, ModpkgCompression, PathHash, WadIndex, WadNameHash,
 };
 use crate::{ChunkPath, Slug, BASE_LAYER_NAME, LICENSE_CHUNK_PATH, README_CHUNK_PATH};
 
@@ -87,7 +87,7 @@ pub struct ModpkgBuilder {
     metadata: ModpkgMetadata,
     // The WAD is part of the key so one chunk identity can be registered
     // under several WADs; see `with_chunk`.
-    chunks: HashMap<(ChunkKey, WadHash), ModpkgChunkBuilder>,
+    chunks: HashMap<(ChunkKey, WadNameHash), ModpkgChunkBuilder>,
     layers: Vec<ModpkgLayerBuilder>,
 }
 
@@ -299,7 +299,7 @@ impl ModpkgBuilder {
         regular_chunks: &[&ModpkgChunkBuilder],
         chunk_path_indices: &HashMap<PathHash, u32>,
         layer_index_map: &HashMap<LayerHash, LayerIndex>,
-        wad_indices: &HashMap<WadHash, WadIndex>,
+        wad_indices: &HashMap<WadNameHash, WadIndex>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
         let mut all_chunks = Self::process_meta_chunks(writer, meta_chunks, chunk_path_indices)?;
         let mut processed_regular_chunks = Self::process_chunks(
@@ -522,7 +522,7 @@ impl ModpkgBuilder {
 
     fn collect_unique_wads(
         chunks: &[&ModpkgChunkBuilder],
-    ) -> (Vec<String>, HashMap<WadHash, WadIndex>) {
+    ) -> (Vec<String>, HashMap<WadNameHash, WadIndex>) {
         let mut wads = Vec::new();
         let mut wad_indices = HashMap::new();
         for chunk in chunks {
@@ -531,7 +531,7 @@ impl ModpkgBuilder {
                 continue;
             }
             wad_indices
-                .entry(WadHash::from_name(&chunk.wad))
+                .entry(WadNameHash::from_name(&chunk.wad))
                 .or_insert_with(|| {
                     let index = wads.len();
                     wads.push(chunk.wad.clone());
@@ -576,7 +576,7 @@ impl ModpkgBuilder {
         mut provide_chunk_data: TChunkDataProvider,
         chunk_path_indices: &HashMap<PathHash, u32>,
         layer_indices: &HashMap<LayerHash, LayerIndex>,
-        wad_indices: &HashMap<WadHash, WadIndex>,
+        wad_indices: &HashMap<WadNameHash, WadIndex>,
     ) -> Result<Vec<ModpkgChunk>, ModpkgBuilderError> {
         let mut final_chunks = Vec::new();
 
@@ -655,7 +655,7 @@ impl ModpkgBuilder {
                 WadIndex::NONE
             } else {
                 wad_indices
-                    .get(&WadHash::from_name(&chunk_builder.wad))
+                    .get(&WadNameHash::from_name(&chunk_builder.wad))
                     .copied()
                     .unwrap_or(WadIndex::NONE)
             };
@@ -787,12 +787,12 @@ impl ModpkgChunkBuilder {
         ChunkKey::new(self.path_hash, layer_hash)
     }
 
-    /// The hash of this chunk's WAD name, or [`WadHash::NONE`] without a WAD.
-    pub fn wad_hash(&self) -> WadHash {
+    /// The hash of this chunk's WAD name, or [`WadNameHash::NONE`] without a WAD.
+    pub fn wad_hash(&self) -> WadNameHash {
         if self.wad.is_empty() {
-            WadHash::NONE
+            WadNameHash::NONE
         } else {
-            WadHash::from_name(&self.wad)
+            WadNameHash::from_name(&self.wad)
         }
     }
 
@@ -800,7 +800,7 @@ impl ModpkgChunkBuilder {
     ///
     /// Unlike [`key`](Self::key), this tells apart entries that register one
     /// chunk identity under several WADs.
-    pub fn full_key(&self) -> (ChunkKey, WadHash) {
+    pub fn full_key(&self) -> (ChunkKey, WadNameHash) {
         (self.key(), self.wad_hash())
     }
 }
