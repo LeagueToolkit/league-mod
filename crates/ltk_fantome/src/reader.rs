@@ -31,7 +31,7 @@ pub struct FantomeReader<R: Read + Seek> {
 ///
 /// Every read of an entry goes through here or [`read_entry`]: an archive that
 /// only some of the reads accept is worse than one none of them do.
-fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl std::io::Write) -> io::Result<()> {
+fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> io::Result<()> {
     let size = entry.size();
     let copied = io::copy(&mut entry.take(size), sink)?;
     if copied != size {
