@@ -38,6 +38,134 @@ fn create_test_fantome() -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+/// Where every local file header and every central directory header starts.
+///
+/// The scan is blind, so callers assert the counts against the entries they
+/// wrote: a signature that happened to match inside compressed data would aim a
+/// patch at content bytes and quietly turn the test into a different one.
+fn header_offsets(archive: &[u8], entries: usize) -> (Vec<usize>, Vec<usize>) {
+    const LOCAL_HEADER: u32 = 0x0403_4b50;
+    const CENTRAL_HEADER: u32 = 0x0201_4b50;
+
+    let (mut local, mut central) = (Vec::new(), Vec::new());
+    let mut i = 0usize;
+    while i + 4 <= archive.len() {
+        match u32::from_le_bytes(archive[i..i + 4].try_into().unwrap()) {
+            LOCAL_HEADER => local.push(i),
+            CENTRAL_HEADER => central.push(i),
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
+        i += 4;
+    }
+
+    assert_eq!(local.len(), entries, "one local header per entry");
+    assert_eq!(central.len(), entries, "one central header per entry");
+    (local, central)
+}
+
+/// Write a field that appears at `local_at` in a local header and `central_at`
+/// in a central one, across every entry.
+fn patch_headers(
+    archive: &mut [u8],
+    entries: usize,
+    (local_at, central_at): (usize, usize),
+    write: impl Fn(&mut [u8]),
+) {
+    let (local, central) = header_offsets(archive, entries);
+    for (offsets, at) in [(local, local_at), (central, central_at)] {
+        for start in offsets {
+            write(&mut archive[start + at..start + at + 4]);
+        }
+    }
+}
+
+/// Overwrite every CRC32 with a value that matches nothing, which is what the
+/// Fantome tools this crate reads for actually produce.
+fn with_corrupt_crcs(mut archive: Vec<u8>, entries: usize) -> Vec<u8> {
+    patch_headers(&mut archive, entries, (14, 16), |field| {
+        field.copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+    });
+    archive
+}
+
+/// Claim more uncompressed bytes than the entry stores, which is what an
+/// archive cut short looks like from its headers.
+fn with_overstated_sizes(mut archive: Vec<u8>, entries: usize, extra: u32) -> Vec<u8> {
+    patch_headers(&mut archive, entries, (22, 24), |field| {
+        let declared = u32::from_le_bytes(field.try_into().unwrap());
+        field.copy_from_slice(&(declared + extra).to_le_bytes());
+    });
+    archive
+}
+
+/// Bad CRC32 values are the norm in archives written by other tools, so every
+/// read has to get past them rather than report the archive as broken.
+#[test]
+fn entries_read_despite_a_bad_checksum() {
+    // info.json, the WAD directory entry, one file under it, and one RAW file.
+    let archive = with_corrupt_crcs(create_test_fantome(), 4);
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+
+    assert_eq!(reader.read_info().unwrap().name, "Test Mod");
+
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    reader
+        .extract_wads(&dest.join("wads"), &NoResolver)
+        .unwrap();
+    reader.extract_raw(&dest.join("raw")).unwrap();
+
+    assert_eq!(
+        std::fs::read(dest.join("wads/test.wad.client/assets/test.bin")).unwrap(),
+        b"test content"
+    );
+    assert_eq!(
+        std::fs::read(dest.join("raw/assets/maps/map11/scene.bin")).unwrap(),
+        b"map data"
+    );
+}
+
+/// A packed WAD is read whole before it is mounted, which is the one read that
+/// does not stream to a file.
+#[test]
+fn packed_wads_unpack_despite_a_bad_checksum() {
+    let archive = with_corrupt_crcs(packed_wad_fantome(), 1);
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let resolver = FixedResolver("assets/characters/aatrox/skin0.bin");
+    reader.extract_wads(&dest, &resolver).unwrap();
+
+    assert_eq!(
+        std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
+        b"packed content"
+    );
+}
+
+/// Skipping the checksum is not skipping the length: an entry that holds less
+/// than it declares still has to fail, or half an archive would import as a
+/// whole one.
+#[test]
+fn a_short_entry_still_fails() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file(
+        "RAW/assets/data.bin",
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+    )
+    .unwrap();
+    zip.write_all(b"the whole payload").unwrap();
+    let archive = with_overstated_sizes(zip.finish().unwrap().into_inner(), 1, 8);
+
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+    let tmp = tempdir().unwrap();
+    assert!(reader.extract_raw(&utf8_dir(&tmp)).is_err());
+}
+
 #[test]
 fn read_info_parses_metadata() {
     let mut reader = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();

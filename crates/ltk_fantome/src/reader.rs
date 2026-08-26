@@ -5,11 +5,12 @@
 //! project looks like on disk: turning an archive into a project directory
 //! is the caller's job (see `ltk_mod_project`'s `fantome` module).
 
-use std::io::{Cursor, Read, Seek};
+use std::io::{self, Cursor, Read, Seek};
 
 use camino::Utf8Path;
 use ltk_wad::{PathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
+use zip::read::ZipFile;
 
 use crate::FantomeInfo;
 use crate::error::FantomeExtractError;
@@ -17,6 +18,40 @@ use crate::error::FantomeExtractError;
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
     archive: ZipArchive<R>,
+}
+
+/// Stream one entry into `sink`, without letting the zip crate check its CRC32.
+///
+/// Fantome tools in the wild write CRC32 values that do not match the bytes
+/// they describe, and the zip crate rejects such an entry with "Invalid
+/// checksum" rather than handing the bytes over. The check runs on the trailing
+/// EOF `read()`, which `Take(size)` never issues, so reading exactly the
+/// declared length gets the content out. A short read still fails, so a
+/// genuinely truncated entry is not mistaken for a good one.
+///
+/// Every read of an entry goes through here or [`read_entry`]: an archive that
+/// only some of the reads accept is worse than one none of them do.
+fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl std::io::Write) -> io::Result<()> {
+    let size = entry.size();
+    let copied = io::copy(&mut entry.take(size), sink)?;
+    if copied != size {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("Archive entry is truncated: {size} bytes declared, {copied} available"),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Read one entry whole, on the same terms as [`copy_entry`].
+///
+/// The buffer grows as the copy runs rather than being sized from the entry's
+/// header, so a declared length nothing backs cannot ask for the allocation.
+fn read_entry(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    copy_entry(entry, &mut bytes)?;
+    Ok(bytes)
 }
 
 impl<R: Read + Seek> FantomeReader<R> {
@@ -40,10 +75,9 @@ impl<R: Read + Seek> FantomeReader<R> {
             return Err(FantomeExtractError::MissingMetadata);
         };
 
-        let mut info_content = String::new();
-        self.archive
-            .by_index(index)?
-            .read_to_string(&mut info_content)?;
+        let info_content = read_entry(&mut self.archive.by_index(index)?)?;
+        let info_content = String::from_utf8(info_content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Strip UTF-8 BOM if present
         let info_content = info_content.trim_start_matches('\u{feff}').trim();
@@ -160,9 +194,7 @@ impl<R: Read + Seek> FantomeReader<R> {
                 continue;
             };
 
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            return Ok(Some((matched, bytes)));
+            return Ok(Some((matched, read_entry(&mut file)?)));
         }
 
         Ok(None)
@@ -170,8 +202,8 @@ impl<R: Read + Seek> FantomeReader<R> {
 }
 
 /// Write one archive entry to `output_path`, creating its parent directories.
-fn extract_entry<R: Read>(
-    entry: &mut R,
+fn extract_entry(
+    entry: &mut ZipFile<'_>,
     output_path: &Utf8Path,
 ) -> Result<(), FantomeExtractError> {
     let write_error = |source| FantomeExtractError::write(output_path, source);
@@ -181,7 +213,7 @@ fn extract_entry<R: Read>(
     }
 
     let mut outfile = std::fs::File::create(output_path).map_err(write_error)?;
-    std::io::copy(entry, &mut outfile).map_err(write_error)?;
+    copy_entry(entry, &mut outfile).map_err(write_error)?;
 
     Ok(())
 }
@@ -227,15 +259,12 @@ fn is_wad_file_name(name: &str) -> bool {
 /// written down, so without the recovery pass those chunks land under their
 /// hashes and the project directory is unreadable. The scan is over one small
 /// archive, once, at import.
-fn extract_packed_wad<R: Read>(
-    wad_reader: &mut R,
+fn extract_packed_wad(
+    entry: &mut ZipFile<'_>,
     output_dir: &Utf8Path,
     resolver: &dyn PathResolver,
 ) -> Result<(), FantomeExtractError> {
-    let mut wad_data = Vec::new();
-    wad_reader.read_to_end(&mut wad_data)?;
-
-    let cursor = Cursor::new(wad_data);
+    let cursor = Cursor::new(read_entry(entry)?);
     let mut wad = Wad::mount(cursor)?;
 
     std::fs::create_dir_all(output_dir)
