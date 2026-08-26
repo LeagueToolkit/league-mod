@@ -14,7 +14,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{
     ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, default_layers,
 };
-use ltk_wad::Wad;
+use ltk_wad::{Wad, WadHash, is_hex_chunk_path};
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
 use zip::ZipArchive;
@@ -280,7 +280,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
 
         // Try packed WAD - extract all chunks as hex-hash files
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
-            let path_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash).collect();
+            let path_hashes: Vec<WadHash> = wad.chunks().iter().map(|c| c.path_hash).collect();
             let mut results = Vec::with_capacity(path_hashes.len());
 
             for path_hash in path_hashes {
@@ -354,23 +354,17 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         // Try packed WAD - extract specific chunk by hex hash filename
-        if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
-            let file_stem = Utf8Path::new(rel_path.file_name().unwrap_or(""))
-                .file_stem()
-                .unwrap_or("");
-
-            if file_stem.len() == 16
-                && file_stem.chars().all(|c| c.is_ascii_hexdigit())
-                && let Ok(target_hash) = u64::from_str_radix(file_stem, 16)
-            {
-                let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
-                    Error::Other(format!(
-                        "WAD chunk {:016x} not found in packed WAD",
-                        target_hash
-                    ))
-                })?;
-                return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
-            }
+        if let Some(wad) = self.packed_wads.get_mut(&wad_key)
+            && is_hex_chunk_path(rel_path)
+            && let Ok(target_hash) = WadHash::from_str_radix(rel_path.file_stem().unwrap_or(""), 16)
+        {
+            let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
+                Error::Other(format!(
+                    "WAD chunk {:016x} not found in packed WAD",
+                    target_hash
+                ))
+            })?;
+            return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
         }
 
         Err(Error::Other(format!(
@@ -848,5 +842,16 @@ mod tests {
         assert!(is_wad_file_name("test.wad.mobile"));
         assert!(!is_wad_file_name("test.txt"));
         assert!(!is_wad_file_name(""));
+    }
+
+    #[test]
+    fn hex_chunk_names_are_zero_padded() {
+        // WadHash's Display does not zero-pad, but its LowerHex forwards the
+        // formatter, so `{:016x}` still yields the 16 digits that the file stem
+        // check in read_wad_override_file accepts.
+        let name = format!("{:016x}.bin", WadHash(0xff));
+
+        assert_eq!(name, "00000000000000ff.bin");
+        assert_eq!(Utf8Path::new(&name).file_stem().unwrap().len(), 16);
     }
 }

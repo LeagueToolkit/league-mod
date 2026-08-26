@@ -1070,7 +1070,7 @@ mod tests {
                     .with_force_compression(WadChunkCompression::None),
             )
             .build_to_writer(&mut cursor, |hash, writer| {
-                writer.write_all(if hash == import_hash {
+                writer.write_all(if hash.0 == import_hash {
                     b"IMPORT_ORIGINAL"
                 } else {
                     b"LAZY_ORIGINALX"

@@ -7,7 +7,7 @@ use ltk_overlay::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::sync::{Arc, Mutex};
@@ -69,7 +69,9 @@ fn read_overlay_table(overlay_root: &Utf8Path, locale: &str) -> ltk_rst::Stringt
     let mut wad = Wad::mount(file).unwrap();
     let chunk = *wad
         .chunks()
-        .get(stringtable_chunk_hash(&locale.to_ascii_lowercase()))
+        .get(WadHash(stringtable_chunk_hash(
+            &locale.to_ascii_lowercase(),
+        )))
         .expect("patched WAD must contain the stringtable chunk");
     let bytes = wad.load_chunk_decompressed(&chunk).unwrap().to_vec();
     ltk_rst::Stringtable::from_reader(&mut Cursor::new(&bytes[..])).unwrap()
@@ -387,7 +389,10 @@ fn corrupt_game_stringtable_is_logged_and_skipped() {
     let wad_path = overlay_stringtable_path(&env.overlay_root, "en_US");
     let file = fs::File::open(wad_path.as_std_path()).unwrap();
     let mut wad = Wad::mount(file).unwrap();
-    let chunk = *wad.chunks().get(stringtable_chunk_hash("en_us")).unwrap();
+    let chunk = *wad
+        .chunks()
+        .get(WadHash(stringtable_chunk_hash("en_us")))
+        .unwrap();
     assert_eq!(
         wad.load_chunk_decompressed(&chunk).unwrap().to_vec(),
         b"not an rst table".to_vec()

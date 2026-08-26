@@ -4,7 +4,7 @@ use std::fmt;
 use std::io::{Read, Seek};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_fantome::{FantomeExtractError, FantomeReader, WadHashtable};
+use ltk_fantome::{FantomeExtractError, FantomeReader, NoResolver, PathResolver};
 
 use crate::{ImportFormat, ModProject, ModProjectError, ModProjectLayer};
 
@@ -47,9 +47,9 @@ impl FantomeImportError {
 /// [`ImportFormat`].
 ///
 /// Importing will:
-/// 1. Extract WAD contents to `content/base/` (unpacking packed WADs through
-///    the hashtable, if [`with_hashtable`](Self::with_hashtable) provided
-///    one; without one, their files are named by hex hash)
+/// 1. Extract WAD contents to `content/base/`, unpacking packed WADs through
+///    the resolver [`with_path_resolver`](Self::with_path_resolver) supplied,
+///    or to hex names without one
 /// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
 ///    license text and the thumbnail (converted to `thumbnail.webp`), if
 ///    present
@@ -70,23 +70,29 @@ impl FantomeImportError {
 /// ```
 pub struct FantomeImporter<'a, R> {
     reader: R,
-    hashtable: Option<&'a WadHashtable>,
+    resolver: Option<&'a dyn PathResolver>,
 }
 
 impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
     /// Create an importer reading the archive from `reader`.
+    ///
+    /// Use [`with_path_resolver`](Self::with_path_resolver) to supply paths for WAD chunks
+    /// Chunks get their hashed names if no resolver is supplied.
     pub fn new(reader: R) -> Self {
         Self {
             reader,
-            hashtable: None,
+            resolver: None,
         }
     }
 
-    /// Unpack packed WADs through `hashtable` so their files come out under
+    /// Unpack packed WADs through `resolver` so their files come out under
     /// their real paths instead of hex hashes.
+    ///
+    /// A caller implements [`PathResolver`] over whatever names it already
+    /// holds, rather than copying them into a table this crate owns.
     #[must_use]
-    pub fn with_hashtable(mut self, hashtable: &'a WadHashtable) -> Self {
-        self.hashtable = Some(hashtable);
+    pub fn with_path_resolver(mut self, resolver: &'a dyn PathResolver) -> Self {
+        self.resolver = Some(resolver);
         self
     }
 
@@ -114,7 +120,7 @@ impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
         }
 
         let base_layer_dir = ModProjectLayer::content_path(output_dir, ModProjectLayer::BASE_NAME);
-        reader.extract_wads(&base_layer_dir, self.hashtable)?;
+        reader.extract_wads(&base_layer_dir, self.resolver.unwrap_or(&NoResolver))?;
         reader.extract_raw(&ModProjectLayer::raw_content_path(output_dir))?;
 
         if let Some(readme) = reader.read_readme()? {
@@ -142,7 +148,7 @@ impl<'a, R: Read + Seek> FantomeImporter<'a, R> {
 impl<R> fmt::Debug for FantomeImporter<'_, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FantomeImporter")
-            .field("has_hashtable", &self.hashtable.is_some())
+            .field("has_resolver", &self.resolver.is_some())
             .finish_non_exhaustive()
     }
 }

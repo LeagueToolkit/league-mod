@@ -3,10 +3,11 @@ use std::fs::File;
 use crate::errors::CliError;
 use crate::println_pad;
 use crate::utils::config::load_config;
+use crate::utils::hashtable::WadHashtable;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use ltk_fantome::FantomeExtractError;
-use ltk_mod_project::fantome::{FantomeImportError, FantomeImporter, WadHashtable};
+use ltk_mod_project::fantome::{FantomeImportError, FantomeImporter};
 use ltk_mod_project::PackageFormat;
 use ltk_modpkg::{Modpkg, ModpkgExtractor};
 use miette::{IntoDiagnostic, Result};
@@ -117,7 +118,7 @@ fn extract_fantome_package(args: ExtractModPackageArgs) -> Result<()> {
 
     let importer = FantomeImporter::new(file);
     match &hashtable {
-        Some(ht) => importer.with_hashtable(ht).import(&output_dir),
+        Some(ht) => importer.with_path_resolver(ht).import(&output_dir),
         None => importer.import(&output_dir),
     }
     .map_err(map_fantome_error)?;

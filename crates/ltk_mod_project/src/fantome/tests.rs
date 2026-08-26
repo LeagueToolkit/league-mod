@@ -505,3 +505,64 @@ fn import_extracts_raw_files() {
     assert!(raw_file2.exists());
     assert_eq!(std::fs::read(&raw_file2).unwrap(), b"map data");
 }
+
+/// Names every chunk the same, so one chunk lands at a path only the
+/// resolver could have chosen.
+struct FixedResolver;
+
+impl PathResolver for FixedResolver {
+    fn resolve(&self, _path_hash: ltk_wad::WadHash) -> Option<String> {
+        Some(String::from("assets/characters/aatrox/skin0.bin"))
+    }
+}
+
+fn packed_wad_bytes(payload: &[u8]) -> Vec<u8> {
+    use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+
+    let payload = payload.to_vec();
+    let mut cursor = Cursor::new(Vec::new());
+    WadBuilder::default()
+        .with_chunk(
+            WadChunkBuilder::default()
+                .with_path("packed/file.bin")
+                .with_force_compression(WadChunkCompression::None),
+        )
+        .build_to_writer(&mut cursor, move |_hash, writer| {
+            std::io::Write::write_all(writer, &payload)?;
+            Ok(())
+        })
+        .unwrap();
+    cursor.into_inner()
+}
+
+/// The importer hands its resolver to the unpack, so a caller naming chunks
+/// from its own tables gets real paths in the project tree.
+#[test]
+fn import_names_packed_wad_chunks_through_the_resolver() {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    zip.start_file("META/info.json", options).unwrap();
+    let info = r#"{"Name": "Test", "Author": "Test", "Version": "1.0.0", "Description": "Test"}"#;
+    zip.write_all(info.as_bytes()).unwrap();
+
+    zip.start_file("WAD/Aatrox.wad.client", options).unwrap();
+    zip.write_all(&packed_wad_bytes(b"skin bytes")).unwrap();
+
+    let buffer = zip.finish().unwrap().into_inner();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = utf8_dir(&temp_dir);
+    FantomeImporter::new(Cursor::new(buffer))
+        .with_path_resolver(&FixedResolver)
+        .import(&output)
+        .unwrap();
+
+    let skin = output.join("content/base/Aatrox.wad.client/assets/characters/aatrox/skin0.bin");
+    assert_eq!(std::fs::read(&skin).unwrap(), b"skin bytes");
+}

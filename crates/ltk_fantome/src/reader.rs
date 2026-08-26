@@ -8,12 +8,11 @@
 use std::io::{Cursor, Read, Seek};
 
 use camino::Utf8Path;
-use ltk_wad::{HexPathResolver, Wad, WadExtractor};
+use ltk_wad::{PathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 
 use crate::FantomeInfo;
 use crate::error::FantomeExtractError;
-use crate::hashtable::WadHashtable;
 
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
@@ -61,14 +60,16 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// the prefix.
     ///
     /// A packed WAD directly under `WAD/` is unpacked into a directory of its
-    /// name rather than written out as a file, resolving chunk paths through
-    /// `hashtable`; without one, extracted files are named by their hex hash.
+    /// name rather than written out as a file, naming its chunks through
+    /// `resolver`. A caller with no source of names passes
+    /// [`NoResolver`](crate::NoResolver), which leaves every chunk under its
+    /// hash.
     ///
     /// The prefix is matched case-insensitively.
     pub fn extract_wads(
         &mut self,
         dest: &Utf8Path,
-        hashtable: Option<&WadHashtable>,
+        resolver: &dyn PathResolver,
     ) -> Result<(), FantomeExtractError> {
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
@@ -86,7 +87,7 @@ impl<R: Read + Seek> FantomeReader<R> {
             if file.is_dir() {
                 create_dir(&output_path)?;
             } else if !relative_path.contains('/') && is_wad_file_name(relative_path) {
-                extract_packed_wad(&mut file, &output_path, hashtable)?;
+                extract_packed_wad(&mut file, &output_path, resolver)?;
             } else {
                 extract_entry(&mut file, &output_path)?;
             }
@@ -222,7 +223,7 @@ fn is_wad_file_name(name: &str) -> bool {
 fn extract_packed_wad<R: Read>(
     wad_reader: &mut R,
     output_dir: &Utf8Path,
-    hashtable: Option<&WadHashtable>,
+    resolver: &dyn PathResolver,
 ) -> Result<(), FantomeExtractError> {
     let mut wad_data = Vec::new();
     wad_reader.read_to_end(&mut wad_data)?;
@@ -233,10 +234,7 @@ fn extract_packed_wad<R: Read>(
     std::fs::create_dir_all(output_dir)
         .map_err(|source| FantomeExtractError::write(output_dir, source))?;
 
-    match hashtable {
-        Some(hashtable) => WadExtractor::new(hashtable).extract_all(&mut wad, output_dir)?,
-        None => WadExtractor::new(&HexPathResolver).extract_all(&mut wad, output_dir)?,
-    };
+    WadExtractor::new(resolver).extract_all(&mut wad, output_dir)?;
 
     Ok(())
 }
