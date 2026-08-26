@@ -160,8 +160,10 @@ impl<R: Read + Seek> FantomeReader<R> {
     }
 
     /// Read the `META/README.md` entry, if the archive has one.
+    ///
+    /// The name is matched case-insensitively, as every `META/` entry is.
     pub fn read_readme(&mut self) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        self.read_meta_entry(|name| (name == "META/README.md").then_some(()))
+        self.read_meta_entry(|name| name.eq_ignore_ascii_case("META/README.md").then_some(()))
             .map(|found| found.map(|((), bytes)| bytes))
     }
 
@@ -176,10 +178,10 @@ impl<R: Read + Seek> FantomeReader<R> {
 
     /// Read the `META/image.png` thumbnail entry, if the archive has one.
     ///
-    /// The bytes are returned as stored; the format keeps thumbnails
-    /// PNG-encoded.
+    /// The name is matched case-insensitively, as every `META/` entry is. The
+    /// bytes are returned as stored; the format keeps thumbnails PNG-encoded.
     pub fn read_image_png(&mut self) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        self.read_meta_entry(|name| (name == "META/image.png").then_some(()))
+        self.read_meta_entry(|name| name.eq_ignore_ascii_case("META/image.png").then_some(()))
             .map(|found| found.map(|((), bytes)| bytes))
     }
 

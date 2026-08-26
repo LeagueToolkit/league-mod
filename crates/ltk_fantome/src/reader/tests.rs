@@ -260,6 +260,25 @@ fn read_license_matches_case_and_extension_variants() {
     }
 }
 
+/// An archive that spells `META/` in lower case spells everything under it that
+/// way too, so the readme and the thumbnail match on the same terms the license
+/// and `info.json` already do.
+#[test]
+fn meta_entries_match_case_insensitively() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    zip.start_file("meta/readme.md", options).unwrap();
+    zip.write_all(b"How to use it.").unwrap();
+    zip.start_file("meta/Image.PNG", options).unwrap();
+    zip.write_all(b"png bytes").unwrap();
+    let data = zip.finish().unwrap().into_inner();
+
+    let mut reader = FantomeReader::new(Cursor::new(data)).unwrap();
+    assert_eq!(reader.read_readme().unwrap().unwrap(), b"How to use it.");
+    assert_eq!(reader.read_image_png().unwrap().unwrap(), b"png bytes");
+}
+
 #[test]
 fn meta_entries_absent_read_as_none() {
     let mut reader = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();
