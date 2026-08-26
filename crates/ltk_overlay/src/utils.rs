@@ -6,6 +6,7 @@
 use crate::builder::OverrideMeta;
 use crate::error::Result;
 use camino::Utf8Path;
+use ltk_wad::is_hex_chunk_path;
 use std::collections::{HashMap, HashSet};
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -62,13 +63,8 @@ pub fn normalize_rel_path_for_hash(rel_path: &Utf8Path, _bytes: &[u8]) -> String
 ///    [`normalize_rel_path_for_hash`] and hashed as a
 ///    [`ltk_modpkg::ChunkPath`] (xxHash64).
 pub fn resolve_chunk_hash(rel_path: &Utf8Path, bytes: &[u8]) -> Result<u64> {
-    let file_name = rel_path.file_name().unwrap_or("");
-    let file_stem = Utf8Path::new(file_name).file_stem().unwrap_or("");
-
-    // If this is a hex-hash filename (as emitted by HexPathResolver), use it directly
-    if file_stem.len() == 16
-        && file_stem.chars().all(|c| c.is_ascii_hexdigit())
-        && let Ok(v) = u64::from_str_radix(file_stem, 16)
+    if is_hex_chunk_path(rel_path)
+        && let Ok(v) = u64::from_str_radix(rel_path.file_stem().unwrap_or(""), 16)
     {
         return Ok(v);
     }
