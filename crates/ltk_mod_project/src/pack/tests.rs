@@ -6,8 +6,11 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use super::{IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackReport, ProjectPacker};
-use crate::{ModIgnore, ModProject, ModProjectLayer};
+use super::{
+    IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackReport, PackReporter,
+    ProjectPacker,
+};
+use crate::{ModIgnore, ModProject, ModProjectLayer, PackProgress, PackStage};
 
 /// `(wad, rel_path, source)` for one planned file.
 type CapturedFile = (Option<String>, String, Utf8PathBuf);
@@ -27,7 +30,11 @@ struct Capture<'a>(&'a mut Captured);
 impl PackFormat for Capture<'_> {
     type Error = Infallible;
 
-    fn pack(self, plan: &PackPlan<'_>) -> Result<(), Self::Error> {
+    fn pack(
+        self,
+        plan: &PackPlan<'_>,
+        _progress: &mut PackReporter<'_>,
+    ) -> Result<(), Self::Error> {
         self.0.layers = plan
             .layers()
             .iter()
@@ -364,7 +371,11 @@ fn format_errors_pass_through_transparently() {
     impl PackFormat for Failing {
         type Error = std::io::Error;
 
-        fn pack(self, _plan: &PackPlan<'_>) -> Result<(), Self::Error> {
+        fn pack(
+            self,
+            _plan: &PackPlan<'_>,
+            _progress: &mut PackReporter<'_>,
+        ) -> Result<(), Self::Error> {
             Err(std::io::Error::other("boom"))
         }
     }
@@ -656,4 +667,108 @@ fn invalid_modignore_pattern_fails_the_pack() {
         matches!(err, PackError::Ignore(_)),
         "expected Ignore, got: {err}"
     );
+}
+
+// -- progress ---------------------------------------------------------------
+
+/// A format that writes nothing and reports every file the plan holds.
+struct ReportEverything;
+
+impl PackFormat for ReportEverything {
+    type Error = Infallible;
+
+    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
+        for layer in plan.layers() {
+            for file in layer.files() {
+                progress.report_file(file.rel_path());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The scan counts layers and the write counts files, because how many files
+/// there are is not known until the scan has finished.
+#[test]
+fn pack_reports_a_layer_per_scan_then_a_file_per_write_then_completion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/a.bin", b"a");
+    create_content_file(&root, "extra", "X.wad.client/b.bin", b"b");
+
+    let project = test_mod_project(vec![
+        ModProjectLayer::base(),
+        ModProjectLayer {
+            name: "extra".to_string(),
+            priority: 1,
+            ..Default::default()
+        },
+    ]);
+
+    let mut reported = Vec::new();
+    ProjectPacker::new(project, root)
+        .pack_with_progress(ReportEverything, &mut |progress: PackProgress<'_>| {
+            reported.push((
+                progress.stage,
+                progress.current_item.map(str::to_owned),
+                progress.current,
+                progress.total,
+            ));
+        })
+        .unwrap();
+
+    assert_eq!(
+        reported,
+        [
+            (PackStage::Scanning, Some("base".to_owned()), 0, 2),
+            (PackStage::Scanning, Some("extra".to_owned()), 1, 2),
+            (PackStage::Writing, Some("a.bin".to_owned()), 0, 2),
+            (PackStage::Writing, Some("b.bin".to_owned()), 1, 2),
+            (PackStage::Complete, None, 2, 2),
+        ]
+    );
+}
+
+/// A format reporting nothing still completes, and the counters say how many
+/// files it was given.
+#[test]
+fn pack_completes_even_when_the_format_reports_nothing() {
+    struct Silent;
+
+    impl PackFormat for Silent {
+        type Error = Infallible;
+
+        fn pack(
+            self,
+            _plan: &PackPlan<'_>,
+            _progress: &mut PackReporter<'_>,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/a.bin", b"a");
+
+    let mut stages = Vec::new();
+    ProjectPacker::new(test_mod_project(vec![]), root)
+        .pack_with_progress(Silent, &mut |progress: PackProgress<'_>| {
+            stages.push(progress.stage);
+        })
+        .unwrap();
+
+    assert_eq!(stages, [PackStage::Scanning, PackStage::Complete]);
+}
+
+/// A pack with no callback is the same pack.
+#[test]
+fn packing_without_a_callback_packs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/a.bin", b"a");
+
+    ProjectPacker::new(test_mod_project(vec![]), root)
+        .pack(ReportEverything)
+        .unwrap();
 }

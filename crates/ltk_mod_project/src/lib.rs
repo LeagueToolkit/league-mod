@@ -1,12 +1,14 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+mod cancellation;
 mod config_format;
 pub mod error;
-mod import;
+pub mod import;
 mod license_file;
 mod modignore;
 pub mod pack;
@@ -17,17 +19,21 @@ pub mod fantome;
 #[cfg(feature = "modpkg")]
 pub mod modpkg;
 
+pub use cancellation::Cancellation;
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
-pub use import::ImportFormat;
+pub use import::{
+    ConfigRefusal, ImportError, ImportFormat, ImportProgress, ImportReporter, ImportStage,
+    ImportTarget, NoConfig, ProjectImporter, ProjectPath, ProjectPaths,
+};
 pub use license_file::{canonical_license_file_name, find_license_file, LICENSE_FILE_NAMES};
 pub use modignore::{
     ContentWalk, ContentWalkError, ModIgnore, ModIgnoreError, ModIgnoreMatch, ModIgnoreRule,
     MODIGNORE_FILE_NAME,
 };
 pub use pack::{
-    IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackReport, PlannedFile,
-    PlannedLayer, PlannedLicense, ProjectPacker,
+    IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackProgress, PackReport,
+    PackReporter, PackStage, PlannedFile, PlannedLayer, PlannedLicense, ProjectPacker,
 };
 pub use package_format::PackageFormat;
 
@@ -529,11 +535,126 @@ impl ModProjectLayer {
     pub fn is_base(&self) -> bool {
         self.name == Self::BASE_NAME
     }
+
+    /// The layer table a project has when it declares none: the base layer
+    /// alone.
+    pub fn default_table() -> Vec<Self> {
+        vec![Self::base()]
+    }
+
+    /// Put a layer table read out of an archive into the order a project stores
+    /// it.
+    ///
+    /// Adds the base layer when the archive names none, then sorts: base first,
+    /// then by ascending priority, then by name as a person reads it - `layer9`
+    /// before `layer10`, not after it. Both archive formats store
+    /// their layers unordered - Fantome as a JSON object, modpkg as a hashed
+    /// table - so without a sort here two imports of one mod would write two
+    /// different config files. Every conversion into a [`ModProject`] goes
+    /// through this, so no two of them can disagree about the order.
+    ///
+    /// An empty table becomes [`default_table`](Self::default_table).
+    ///
+    /// Two things an archive declares are corrected rather than carried
+    /// through, because a project holding either is one [`ProjectPacker`]
+    /// refuses and so could be imported but never packed again: a base layer
+    /// whose priority is not 0, and a name declared twice, which is one
+    /// directory claimed by two entries.
+    ///
+    /// This is deliberately something a caller asks for rather than something a
+    /// table always holds. A config an author wrote by hand gets its mistakes
+    /// reported by the packer - `PackError::InvalidBaseLayerPriority` names the
+    /// priority it found - and silently rewriting one on load would take that
+    /// message away. Only a table decoded from an archive, where no one is
+    /// around to be told, is normalized.
+    pub fn normalize_table(table: &mut Vec<Self>) {
+        for layer in table.iter_mut().filter(|layer| layer.is_base()) {
+            layer.priority = 0;
+        }
+
+        if !table.iter().any(Self::is_base) {
+            table.push(Self::base());
+        }
+
+        table.sort_by(|a, b| {
+            b.is_base()
+                .cmp(&a.is_base())
+                .then_with(|| a.priority.cmp(&b.priority))
+                .then_with(|| natural_cmp(&a.name, &b.name))
+        });
+
+        // After the sort, so which of a repeated name survives is the order
+        // above rather than however the archive's map iterated. Not `dedup_by`:
+        // two entries sharing a name but not a priority do not end up adjacent.
+        let mut seen = HashSet::new();
+        table.retain(|layer| seen.insert(layer.name.clone()));
+    }
 }
 
-/// Returns the default layers for a mod project
-pub fn default_layers() -> Vec<ModProjectLayer> {
-    vec![ModProjectLayer::base()]
+/// Compare two names the way a person reads them, so `layer9` sorts before
+/// `layer10`.
+///
+/// Runs of digits compare by the number they spell rather than character by
+/// character, which is the only difference from [`str`]'s own ordering. It
+/// matters wherever a layer table is shown: plain ordering puts `layer10`
+/// second because `1` precedes `9`, which reads as a mistake to everyone who
+/// sees it.
+///
+/// Leading zeros carry no value, so `09` and `9` spell the same number; names
+/// that tie on every run fall back to plain ordering, which keeps this a total
+/// order rather than calling two different names equal.
+fn natural_cmp(a: &str, b: &str) -> Ordering {
+    natural_cmp_bytes(a.as_bytes(), b.as_bytes()).then_with(|| a.cmp(b))
+}
+
+/// The digit-aware half of [`natural_cmp`], which returns [`Ordering::Equal`]
+/// for names differing only in how their numbers are padded.
+fn natural_cmp_bytes(mut a: &[u8], mut b: &[u8]) -> Ordering {
+    loop {
+        return match (a.first(), b.first()) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (x_digits, a_rest) = split_number(a);
+                let (y_digits, b_rest) = split_number(b);
+
+                // Longer means larger once the padding is gone, so the numbers
+                // never have to be parsed and a run of any length is safe.
+                match x_digits
+                    .len()
+                    .cmp(&y_digits.len())
+                    .then_with(|| x_digits.cmp(y_digits))
+                {
+                    Ordering::Equal => {
+                        (a, b) = (a_rest, b_rest);
+                        continue;
+                    }
+                    ordering => ordering,
+                }
+            }
+            (Some(x), Some(y)) if x == y => {
+                (a, b) = (&a[1..], &b[1..]);
+                continue;
+            }
+            (Some(x), Some(y)) => x.cmp(y),
+        };
+    }
+}
+
+/// Split a leading run of digits off `name`, dropping the zeros that pad it.
+fn split_number(name: &[u8]) -> (&[u8], &[u8]) {
+    let end = name
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(name.len());
+    let digits = &name[..end];
+    let value_start = digits
+        .iter()
+        .position(|byte| *byte != b'0')
+        .unwrap_or(digits.len());
+
+    (&digits[value_start..], &name[end..])
 }
 
 #[cfg(test)]

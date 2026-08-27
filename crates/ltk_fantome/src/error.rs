@@ -39,6 +39,26 @@ pub enum FantomeExtractError {
     /// The archive has no `META/info.json`.
     #[error("Missing info.json metadata file")]
     MissingMetadata,
+
+    /// An entry names a path that leaves the directory it would be extracted
+    /// to, so extracting the archive would write outside it.
+    ///
+    /// The archive is refused whole, by [`FantomeReader::new`], before any of
+    /// it is read: an archive carrying such an entry is not a mod that happens
+    /// to have one bad file in it, and there is nothing in it worth unpacking
+    /// the rest of.
+    ///
+    /// [`FantomeReader::new`]: crate::FantomeReader::new
+    #[error("Archive entry escapes the output directory: {name}")]
+    EscapingEntry {
+        /// The entry name, as the archive spells it.
+        name: String,
+    },
+
+    /// The caller's cancellation asked for the extraction to stop. Whatever
+    /// had been written to the output directory is still there.
+    #[error("The extraction was cancelled")]
+    Cancelled,
 }
 
 impl FantomeExtractError {

@@ -6,6 +6,7 @@ use std::io;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use super::plan::{PackPlan, PlannedFile, PlannedLayer, PlannedLicense};
+use super::progress::{PackProgress, PackReporter};
 use super::{IgnoreMode, PackFormat, PackOptions};
 use crate::{
     canonical_license_file_name, find_license_file, ContentWalkError, ModIgnore, ModIgnoreError,
@@ -165,12 +166,44 @@ impl ProjectPacker {
     /// `.modignore` filter, and hands the resulting [`PackPlan`] to the
     /// format. The report carries what the filter excluded.
     ///
+    /// Use [`pack_with_progress`](Self::pack_with_progress) to watch a long
+    /// pack as it runs.
+    ///
     /// # Errors
     ///
     /// Driver failures (scanning, `.modignore`, layer layout) surface as
     /// [`PackError`]'s own variants; a failure inside `format` surfaces as
     /// [`PackError::Format`].
     pub fn pack<F: PackFormat>(&self, format: F) -> Result<PackReport, PackError<F::Error>> {
+        self.pack_reporting(format, PackReporter::new(None))
+    }
+
+    /// Pack the project into `format`, reporting each step to `progress`.
+    ///
+    /// The scan reports a layer at a time and the write reports a file at a
+    /// time, both on the packing thread. See [`PackProgress`] for what the
+    /// counters mean.
+    ///
+    /// The callback is borrowed rather than owned because a pack is one-shot:
+    /// there is nothing to keep it alive past this call, and a caller drawing a
+    /// bar usually wants to write straight into state it already holds.
+    ///
+    /// # Errors
+    ///
+    /// As [`pack`](Self::pack).
+    pub fn pack_with_progress<F: PackFormat>(
+        &self,
+        format: F,
+        progress: &mut dyn FnMut(PackProgress<'_>),
+    ) -> Result<PackReport, PackError<F::Error>> {
+        self.pack_reporting(format, PackReporter::new(Some(progress)))
+    }
+
+    fn pack_reporting<F: PackFormat>(
+        &self,
+        format: F,
+        mut progress: PackReporter<'_>,
+    ) -> Result<PackReport, PackError<F::Error>> {
         let layers = self.layer_set();
         self.validate_layers(&layers)?;
 
@@ -199,12 +232,16 @@ impl ProjectPacker {
         };
 
         let content_dir = self.project_root.join(CONTENT_DIR_NAME);
+        let layer_count = layers.len() as u32;
         let mut ignored = Vec::new();
         let mut planned = Vec::with_capacity(layers.len());
-        for layer in layers {
+        for (index, layer) in layers.into_iter().enumerate() {
+            progress.report_layer(&layer.name, index as u32, layer_count);
             let files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
             planned.push(PlannedLayer::new(layer, files));
         }
+
+        progress.set_total(planned.iter().map(|layer| layer.files().len() as u32).sum());
 
         let plan = PackPlan::new(
             &self.project,
@@ -215,7 +252,11 @@ impl ProjectPacker {
             self.find_thumbnail(),
         );
 
-        format.pack(&plan).map_err(PackError::Format)?;
+        format
+            .pack(&plan, &mut progress)
+            .map_err(PackError::Format)?;
+
+        progress.report_complete();
 
         Ok(PackReport { ignored })
     }

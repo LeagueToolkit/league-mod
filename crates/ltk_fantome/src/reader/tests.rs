@@ -1,5 +1,4 @@
 use super::*;
-use crate::NoResolver;
 use camino::Utf8PathBuf;
 use ltk_wad::WadHash;
 use std::io::Write;
@@ -114,9 +113,9 @@ fn entries_read_despite_a_bad_checksum() {
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
     reader
-        .extract_wads(&dest.join("wads"), &NoResolver)
+        .extract_wads(&dest.join("wads"), WadExtractOptions::new())
         .unwrap();
-    reader.extract_raw(&dest.join("raw")).unwrap();
+    reader.extract_raw(&dest.join("raw"), None).unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("wads/test.wad.client/assets/test.bin")).unwrap(),
@@ -138,7 +137,12 @@ fn packed_wads_unpack_despite_a_bad_checksum() {
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
     let resolver = FixedResolver("assets/characters/aatrox/skin0.bin");
-    reader.extract_wads(&dest, &resolver).unwrap();
+    reader
+        .extract_wads(
+            &dest,
+            WadExtractOptions::new().with_path_resolver(&resolver),
+        )
+        .unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
@@ -163,7 +167,7 @@ fn a_short_entry_still_fails() {
 
     let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
     let tmp = tempdir().unwrap();
-    assert!(reader.extract_raw(&utf8_dir(&tmp)).is_err());
+    assert!(reader.extract_raw(&utf8_dir(&tmp), None).is_err());
 }
 
 #[test]
@@ -181,7 +185,9 @@ fn extract_wads_preserves_paths_under_dest() {
 
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp).join("wads");
-    reader.extract_wads(&dest, &NoResolver).unwrap();
+    reader
+        .extract_wads(&dest, WadExtractOptions::new())
+        .unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("test.wad.client/assets/test.bin")).unwrap(),
@@ -195,7 +201,7 @@ fn extract_raw_preserves_paths_under_dest() {
 
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp).join("RAW");
-    reader.extract_raw(&dest).unwrap();
+    reader.extract_raw(&dest, None).unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("assets/maps/map11/scene.bin")).unwrap(),
@@ -221,9 +227,9 @@ fn extract_matches_the_prefix_case_insensitively() {
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
     reader
-        .extract_wads(&dest.join("wads"), &NoResolver)
+        .extract_wads(&dest.join("wads"), WadExtractOptions::new())
         .unwrap();
-    reader.extract_raw(&dest.join("raw")).unwrap();
+    reader.extract_raw(&dest.join("raw"), None).unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("wads/test.wad.client/assets/test.bin")).unwrap(),
@@ -347,7 +353,9 @@ fn writer_reader_round_trip() {
     // Backslashes in the relative path were normalized to `/`.
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
-    reader.extract_wads(&dest, &NoResolver).unwrap();
+    reader
+        .extract_wads(&dest, WadExtractOptions::new())
+        .unwrap();
     assert_eq!(
         std::fs::read(dest.join("Test.wad.client/data/skin.bin")).unwrap(),
         b"skin"
@@ -403,7 +411,12 @@ fn extract_wads_names_packed_chunks_through_any_resolver() {
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
     let resolver = FixedResolver("assets/characters/aatrox/skin0.bin");
-    reader.extract_wads(&dest, &resolver).unwrap();
+    reader
+        .extract_wads(
+            &dest,
+            WadExtractOptions::new().with_path_resolver(&resolver),
+        )
+        .unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
@@ -419,7 +432,9 @@ fn extract_wads_falls_back_to_hex_names() {
 
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
-    reader.extract_wads(&dest, &NoResolver).unwrap();
+    reader
+        .extract_wads(&dest, WadExtractOptions::new())
+        .unwrap();
 
     let unpacked: Vec<_> = std::fs::read_dir(dest.join("test.wad.client").as_std_path())
         .unwrap()
@@ -491,10 +506,382 @@ fn extract_wads_recovers_names_from_the_bins_of_a_packed_wad() {
     let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
     let tmp = tempdir().unwrap();
     let dest = utf8_dir(&tmp);
-    reader.extract_wads(&dest, &NoResolver).unwrap();
+    reader
+        .extract_wads(&dest, WadExtractOptions::new())
+        .unwrap();
 
     assert_eq!(
         std::fs::read(dest.join("test.wad.client").join(skin)).unwrap(),
         b"invented bytes"
     );
+}
+
+/// An archive whose `WAD/` holds `names`, each a directory of one file.
+fn fantome_with_wads(names: &[&str]) -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    for name in names {
+        zip.start_file(format!("WAD/{name}/data/file.bin"), options)
+            .unwrap();
+        zip.write_all(b"content").unwrap();
+    }
+
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn wad_names_lists_a_directory_wad_and_a_packed_wad_alike() {
+    let directory = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();
+    assert_eq!(directory.wad_names(), ["test.wad.client"]);
+
+    let packed = FantomeReader::new(Cursor::new(packed_wad_fantome())).unwrap();
+    assert_eq!(packed.wad_names(), ["test.wad.client"]);
+}
+
+/// A directory WAD is many entries, and the WAD it names is one thing.
+#[test]
+fn wad_names_lists_each_wad_once_in_archive_order() {
+    let archive = fantome_with_wads(&["Zed.wad.client", "Aatrox.wad.client"]);
+    let reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+
+    assert_eq!(
+        reader.wad_names(),
+        ["Zed.wad.client", "Aatrox.wad.client"],
+        "archive order, not sorted"
+    );
+}
+
+#[test]
+fn wad_names_matches_the_prefix_and_the_extension_case_insensitively() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file(
+        "wad/Aatrox.WAD.CLIENT/data/file.bin",
+        SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(b"content").unwrap();
+    let reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
+
+    assert_eq!(reader.wad_names(), ["Aatrox.WAD.CLIENT"]);
+}
+
+#[test]
+fn wad_names_ignores_entries_under_wad_that_name_no_wad() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file("WAD/notes.txt", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"loose").unwrap();
+    let reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
+
+    assert!(reader.wad_names().is_empty());
+}
+
+/// The counters a progress bar is drawn from: one report per WAD, whatever
+/// number of entries the WAD arrived as.
+#[test]
+fn extract_wads_reports_each_wad_once() {
+    let archive = fantome_with_wads(&["Zed.wad.client", "Aatrox.wad.client"]);
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+    let tmp = tempdir().unwrap();
+
+    let mut reported = Vec::new();
+    let mut record = |progress: WadProgress<'_>| {
+        reported.push((progress.name.to_owned(), progress.index, progress.total));
+    };
+    reader
+        .extract_wads(
+            &utf8_dir(&tmp),
+            WadExtractOptions::new().with_progress(&mut record),
+        )
+        .unwrap();
+
+    assert_eq!(
+        reported,
+        [
+            ("Zed.wad.client".to_owned(), 0, 2),
+            ("Aatrox.wad.client".to_owned(), 1, 2),
+        ]
+    );
+}
+
+#[test]
+fn extract_wads_reports_nothing_for_an_archive_with_no_wads() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file("RAW/assets/data.bin", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"raw only").unwrap();
+    let mut reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
+    let tmp = tempdir().unwrap();
+
+    let mut reported = 0;
+    let mut count = |_: WadProgress<'_>| reported += 1;
+    reader
+        .extract_wads(
+            &utf8_dir(&tmp),
+            WadExtractOptions::new().with_progress(&mut count),
+        )
+        .unwrap();
+
+    assert_eq!(reported, 0);
+}
+
+#[test]
+fn extract_wads_stops_when_the_cancellation_answers_true() {
+    let archive = fantome_with_wads(&["Zed.wad.client", "Aatrox.wad.client"]);
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+    let tmp = tempdir().unwrap();
+
+    let result = reader.extract_wads(
+        &utf8_dir(&tmp),
+        WadExtractOptions::new().with_cancellation(&|| true),
+    );
+
+    assert!(matches!(result, Err(FantomeExtractError::Cancelled)));
+    assert!(
+        !utf8_dir(&tmp).join("Zed.wad.client").exists(),
+        "cancelled before the first entry, so nothing was written"
+    );
+}
+
+/// The default drops a chunk whose path another chunk claimed first, which
+/// loses bytes a caller unpacking a mod to edit still needs.
+#[test]
+fn extract_wads_keeps_every_chunk_under_the_lossless_policy() {
+    let claimed = "assets/characters/aatrox/skin0.bin";
+    let packed = packed_wad_of(&[
+        (claimed, b"first".to_vec()),
+        ("other.bin", b"second".to_vec()),
+    ]);
+
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file("WAD/test.wad.client", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(&packed).unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+
+    let count_chunks = |naming| {
+        let mut reader = FantomeReader::new(Cursor::new(archive.clone())).unwrap();
+        let tmp = tempdir().unwrap();
+        let dest = utf8_dir(&tmp);
+        reader
+            .extract_wads(
+                &dest,
+                WadExtractOptions::new()
+                    .with_path_resolver(&FixedResolver(claimed))
+                    .with_naming_policy(naming),
+            )
+            .unwrap();
+
+        walkdir_count(dest.join("test.wad.client").as_std_path())
+    };
+
+    assert_eq!(count_chunks(NamingPolicy::Descriptive), 1);
+    assert_eq!(count_chunks(NamingPolicy::Lossless), 2);
+}
+
+/// Files anywhere beneath `dir`.
+fn walkdir_count(dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        for entry in std::fs::read_dir(&path).unwrap() {
+            let entry = entry.unwrap().path();
+            if entry.is_dir() {
+                stack.push(entry);
+            } else {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn read_readme_prefers_the_meta_entry_over_one_at_the_root() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+    zip.start_file("README.md", options).unwrap();
+    zip.write_all(b"root").unwrap();
+    zip.start_file("META/README.md", options).unwrap();
+    zip.write_all(b"meta").unwrap();
+    let mut reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
+
+    assert_eq!(reader.read_readme().unwrap().unwrap(), b"meta");
+}
+
+/// Tools in the wild write the readme at the archive root, and dropping it
+/// loses the only prose the archive carries.
+#[test]
+fn read_readme_falls_back_to_one_at_the_root() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip.start_file("readme.md", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"root").unwrap();
+    let mut reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
+
+    assert_eq!(reader.read_readme().unwrap().unwrap(), b"root");
+}
+
+/// A mod carrying most of its content as `RAW/` entries spends most of an import
+/// there, so a cancellation that only the WAD pass read would do nothing for it.
+#[test]
+fn a_cancelled_raw_extraction_stops() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let mut reader = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();
+
+    let cancelled = || true;
+    let result = reader.extract_raw(&dest, Some(&cancelled));
+
+    assert!(matches!(result, Err(FantomeExtractError::Cancelled)));
+}
+
+/// An entry name is not required by the zip format to stay inside the directory
+/// it is extracted to, and joining one that does not writes wherever it says.
+#[test]
+fn an_archive_whose_entry_escapes_the_output_directory_is_refused() {
+    for name in [
+        "WAD/../../../../pwned.txt",
+        r"RAW/..\..\pwned.txt",
+        "../pwned.txt",
+        "/etc/pwned.txt",
+        "C:/pwned.txt",
+    ] {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        zip.start_file(name, SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"pwned").unwrap();
+        let archive = zip.finish().unwrap().into_inner();
+
+        let error = FantomeReader::new(Cursor::new(archive)).unwrap_err();
+
+        assert!(
+            matches!(&error, FantomeExtractError::EscapingEntry { name: refused } if refused == name),
+            "{name} was not refused: {error:?}"
+        );
+    }
+}
+
+/// The refusal is the whole archive's: the mod's own entries are never read,
+/// let alone written.
+#[test]
+fn an_escaping_entry_refuses_the_archive_before_anything_is_read() {
+    let cursor = Cursor::new(create_test_fantome());
+    let mut zip = ZipWriter::new_append(cursor).unwrap();
+    zip.start_file("WAD/../../pwned.txt", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"pwned").unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+
+    assert!(matches!(
+        FantomeReader::new(Cursor::new(archive)),
+        Err(FantomeExtractError::EscapingEntry { .. })
+    ));
+}
+
+/// A name that merely looks alarming still has to be accepted: `..` is a path
+/// component, not a substring, and a leading `./` is how some tools spell a
+/// relative entry.
+#[test]
+fn names_that_stay_inside_the_output_directory_are_accepted() {
+    for name in ["RAW/..bin", "RAW/a..b/c.bin", "./RAW/x.bin", "WAD/a.b/c"] {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        zip.start_file(name, SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"fine").unwrap();
+        let archive = zip.finish().unwrap().into_inner();
+
+        assert!(
+            FantomeReader::new(Cursor::new(archive)).is_ok(),
+            "{name} was refused"
+        );
+    }
+}
+
+/// A directory entry names no file, so it has no destination to give. Calling
+/// one a `WadFile` whose path merely ended in a separator handed a caller a
+/// path it then had to filter out by hand.
+#[test]
+fn a_directory_entry_classifies_as_nothing() {
+    for name in [
+        "WAD/Aatrox.wad.client/",
+        "WAD/",
+        "RAW/assets/",
+        "RAW/",
+        "META/",
+    ] {
+        assert_eq!(classify_entry(name), None, "{name} was placed");
+    }
+}
+
+/// The files under a directory entry are still placed, so refusing the
+/// directory costs nothing.
+#[test]
+fn the_files_beneath_a_directory_entry_still_classify() {
+    assert_eq!(
+        classify_entry("WAD/Aatrox.wad.client/assets/x.bin"),
+        Some(FantomeEntry::WadFile("Aatrox.wad.client/assets/x.bin"))
+    );
+    assert_eq!(
+        classify_entry("WAD/Aatrox.wad.client"),
+        Some(FantomeEntry::PackedWad("Aatrox.wad.client"))
+    );
+}
+
+/// Directories are made as the parents of the files that land in them, so an
+/// archive's directory entries need no pass of their own.
+#[test]
+fn extraction_makes_the_directories_its_files_need() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let mut reader = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();
+
+    reader
+        .extract_wads(&dest, WadExtractOptions::new())
+        .unwrap();
+
+    assert!(dest.join("test.wad.client/assets/test.bin").is_file());
+}
+
+/// What the listing promises and what the extraction reports have to be the
+/// same set: a caller sizes a progress bar from the first and fills it from the
+/// second. A WAD named only by a directory record has no files, so neither
+/// counts it.
+#[test]
+fn the_wad_listing_and_the_extraction_agree() {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    zip.add_directory("WAD/Hollow.wad.client", options).unwrap();
+    zip.add_directory("WAD/Folder.wad.client", options).unwrap();
+    zip.start_file("WAD/Folder.wad.client/data/x.bin", options)
+        .unwrap();
+    zip.write_all(b"content").unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let mut reader = FantomeReader::new(Cursor::new(archive)).unwrap();
+
+    let listed = reader.wad_names();
+
+    let mut reported = Vec::new();
+    let mut record =
+        |wad: WadProgress<'_>| reported.push((wad.name.to_owned(), wad.index, wad.total));
+    reader
+        .extract_wads(&dest, WadExtractOptions::new().with_progress(&mut record))
+        .unwrap();
+
+    assert_eq!(listed, ["Folder.wad.client"]);
+    assert_eq!(reported, [("Folder.wad.client".to_owned(), 0, 1)]);
+    assert!(dest.join("Folder.wad.client/data/x.bin").is_file());
 }

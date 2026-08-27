@@ -19,7 +19,7 @@ fn create_test_mod_dir() -> tempfile::TempDir {
         champions: vec![],
         maps: vec![],
         transformers: vec![],
-        layers: ltk_mod_project::default_layers(),
+        layers: ltk_mod_project::ModProjectLayer::default_table(),
         thumbnail: None,
     };
     fs::write(

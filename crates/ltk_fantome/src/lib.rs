@@ -15,15 +15,20 @@ mod reader;
 mod writer;
 
 pub use error::{FantomeExtractError, FantomeWriteError};
-/// Re-exported because [`FantomeReader::extract_wads`] names them: a caller
-/// names chunks by implementing [`PathResolver`] over whatever it holds, or
-/// passes [`NoResolver`] and leaves the naming to the archive's own bins.
-pub use ltk_wad::{NoResolver, PathResolver};
-pub use reader::FantomeReader;
+/// Re-exported because [`WadExtractOptions`] names them: a caller names chunks
+/// by implementing [`PathResolver`] over whatever it holds, or leaves the
+/// default [`NoResolver`] in place and leaves the naming to the archive's own
+/// bins. [`NamingPolicy`] decides what becomes of a chunk two paths claim.
+pub use ltk_wad::{NamingPolicy, NoResolver, PathResolver};
+pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
 pub use writer::FantomeWriter;
 
 /// Fantome metadata structure that goes into info.json
-#[derive(Serialize, Deserialize, Debug)]
+///
+/// `Default` is for struct update syntax and for tests building one field at a
+/// time (`FantomeInfo { name, ..Default::default() }`); a default archive's
+/// metadata is empty, not valid.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct FantomeInfo {
     #[serde(rename = "Name")]
     pub name: String,
@@ -76,7 +81,10 @@ pub enum FantomeLicense {
 }
 
 /// Per-layer metadata in a Fantome info.json.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+///
+/// As with [`FantomeInfo`], `Default` is for struct update syntax; it names no
+/// layer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct FantomeLayerInfo {
     #[serde(rename = "Name")]
     pub name: String,

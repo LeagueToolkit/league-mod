@@ -55,10 +55,24 @@ pub enum ModpkgError {
     /// Inconsistent chunk content
     #[error("Inconsistent duplicate chunk: {0}")]
     ChunksInconsistent(PathHash),
+    /// No chunk answers to this path.
+    ///
+    /// Also raised at mount, for a package whose chunk table names a path its
+    /// path table does not hold: a chunk that cannot be named cannot be
+    /// extracted, so the package is refused whole rather than part of the way
+    /// through an unpack.
     #[error("Chunk not found: {0}")]
     MissingChunk(PathHash),
     #[error("Invalid meta chunk: must not belong to any layer or wad")]
     InvalidMetaChunk,
+
+    /// A chunk path, layer name or WAD name leaves the directory the package
+    /// would be extracted to, so extracting it would write outside it.
+    ///
+    /// The package is refused whole, at mount, before any of it is read: a
+    /// package carrying such a name is not one to extract part of.
+    #[error("Package path escapes the output directory: {0}")]
+    EscapingPath(String),
 
     #[error(transparent)]
     MsgpackDecode(#[from] rmp_serde::decode::Error),

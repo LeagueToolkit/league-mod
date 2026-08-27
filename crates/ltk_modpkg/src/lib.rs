@@ -16,6 +16,7 @@ mod hashes;
 mod indices;
 mod license;
 mod metadata;
+mod plan;
 mod read;
 mod readme;
 mod slug;
@@ -30,6 +31,7 @@ pub use hashes::{ChunkKey, LayerHash, PathHash, WadNameHash};
 pub use indices::{LayerIndex, WadIndex};
 pub use license::*;
 pub use metadata::*;
+pub use plan::{ChunkDestination, ExtractionPlan, PlannedChunk};
 pub use readme::*;
 pub use slug::Slug;
 pub use thumbnail::*;
@@ -149,6 +151,18 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
         &self.chunk_paths
     }
 
+    /// The path `chunk` is stored under, or `None` for a chunk of another
+    /// package.
+    ///
+    /// Resolved through the chunk's path table position rather than through its
+    /// path hash. The two agree for an ordinary chunk, but a chunk named by a
+    /// hex hash carries the hash it was named for and the table is keyed by the
+    /// hash of the name as written, so only the position finds it.
+    fn chunk_path(&self, chunk: &ModpkgChunk) -> Option<&str> {
+        let path_hash = self.chunk_path_indices.get(chunk.path_index as usize)?;
+        self.chunk_paths.get(path_hash).map(String::as_str)
+    }
+
     /// Resolve the [`ChunkKey`] for a given path and layer, handling both
     /// literal and hex-encoded chunk names.
     ///
@@ -257,6 +271,16 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
     pub fn wad_name_for_index(&self, wad_index: WadIndex) -> Option<&str> {
         let wad_hash = self.wad_indices.get(wad_index.value() as usize)?;
         self.wads.get(wad_hash).map(|s| s.as_str())
+    }
+
+    /// Get the layer name for a given layer index, or `None` if the index is
+    /// invalid.
+    ///
+    /// [`LayerIndex::NONE`] is invalid in this sense: a meta chunk carries it
+    /// precisely because it belongs to no layer.
+    pub fn layer_name_for_index(&self, layer_index: LayerIndex) -> Option<&str> {
+        let layer_hash = self.layer_indices.get(layer_index.value() as usize)?;
+        self.layers.get(layer_hash).map(|layer| layer.name.as_str())
     }
 
     /// Get the chunk keys for a given (wad_index, layer_index) pair.

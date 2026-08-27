@@ -6,6 +6,8 @@
 //!   validates the layer layout, walks `content/` once with the project's
 //!   `.modignore` filter (per [`PackOptions`]), and resolves the metadata
 //!   files (readme, license, thumbnail) into a [`PackPlan`].
+//!   The scan and the write both report themselves through the callback
+//!   [`pack_with_progress`](ProjectPacker::pack_with_progress) takes.
 //! - A [`PackFormat`] implementation turns that plan into an archive. The
 //!   `modpkg` and `fantome` cargo features each provide one
 //!   (`modpkg::ModpkgFormat`, `fantome::FantomeFormat`), and the trait is
@@ -17,7 +19,7 @@
 //! `Format` variant carries the backend's own error.
 //!
 //! ```no_run
-//! use ltk_mod_project::{PackFormat, PackPlan, ProjectPacker};
+//! use ltk_mod_project::{PackFormat, PackPlan, PackReporter, ProjectPacker};
 //!
 //! /// A toy format: counts the files a pack would write.
 //! struct EntryCount<'a>(&'a mut usize);
@@ -25,8 +27,13 @@
 //! impl PackFormat for EntryCount<'_> {
 //!     type Error = std::convert::Infallible;
 //!
-//!     fn pack(self, plan: &PackPlan<'_>) -> Result<(), Self::Error> {
-//!         *self.0 = plan.layers().iter().map(|layer| layer.files().len()).sum();
+//!     fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
+//!         for layer in plan.layers() {
+//!             for file in layer.files() {
+//!                 progress.report_file(file.rel_path());
+//!                 *self.0 += 1;
+//!             }
+//!         }
 //!         Ok(())
 //!     }
 //! }
@@ -43,6 +50,7 @@
 mod options;
 mod packer;
 mod plan;
+mod progress;
 
 #[cfg(test)]
 mod tests;
@@ -50,6 +58,7 @@ mod tests;
 pub use options::{IgnoreMode, PackOptions};
 pub use packer::{PackError, PackReport, ProjectPacker};
 pub use plan::{PackPlan, PlannedFile, PlannedLayer, PlannedLicense};
+pub use progress::{PackProgress, PackReporter, PackStage};
 
 /// An archive format [`ProjectPacker`] can pack a project into.
 ///
@@ -72,5 +81,9 @@ pub trait PackFormat {
 
     /// Write everything in `plan` that this format stores, and finish the
     /// archive.
-    fn pack(self, plan: &PackPlan<'_>) -> Result<(), Self::Error>;
+    ///
+    /// Call [`PackReporter::report_file`] before writing each content file, so
+    /// a caller watching a long pack sees where it has got to. A format that
+    /// stores only part of the plan reports only what it writes.
+    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error>;
 }
