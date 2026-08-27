@@ -1,14 +1,19 @@
 use super::*;
 use crate::{
-    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, PackError, PackReport,
-    ProjectPacker,
+    ImportError, ImportProgress, ImportStage, ModProject, ModProjectAuthor, ModProjectLayer,
+    ModProjectLicense, PackError, PackReport, ProjectImporter, ProjectPacker, ProjectPath,
+    ProjectPaths,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
-use ltk_modpkg::builder::ModpkgBuilderError;
-use ltk_modpkg::{ChunkKey, ChunkPath, LayerHash, Modpkg, ModpkgCompression, LICENSE_CHUNK_PATH};
+use ltk_modpkg::builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgLayerBuilder};
+use ltk_modpkg::{
+    ChunkKey, ChunkPath, LayerHash, Modpkg, ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
+    LICENSE_CHUNK_PATH,
+};
 use std::fs;
 use std::io::Cursor;
+use std::sync::atomic::AtomicBool;
 
 // -- test helpers -----------------------------------------------------------
 
@@ -508,4 +513,462 @@ fn modignore_excludes_matching_files() {
             .join("src.psd")]
     );
     assert_eq!(report.ignored_count(), 1);
+}
+
+// -- reading a project back out of a package --------------------------------
+
+/// A package whose header layers and metadata layers are set independently, so
+/// a test can tell which of the two a conversion read a field from.
+fn build_modpkg(header: &[(&str, i32)], metadata: ModpkgMetadata) -> Modpkg<Cursor<Vec<u8>>> {
+    let mut builder = ModpkgBuilder::default().with_metadata(metadata);
+    for (name, priority) in header {
+        builder = builder.with_layer(
+            ModpkgLayerBuilder::new(name)
+                .unwrap()
+                .with_priority(*priority),
+        );
+    }
+
+    let mut buffer = Cursor::new(Vec::new());
+    builder
+        .build_to_writer(&mut buffer, |_| Ok(Vec::new()))
+        .unwrap();
+    buffer.set_position(0);
+    Modpkg::mount_from_reader(buffer).unwrap()
+}
+
+fn layer_metadata(name: &str, priority: i32) -> ModpkgLayerMetadata {
+    ModpkgLayerMetadata {
+        name: name.to_string(),
+        display_name: None,
+        priority,
+        description: None,
+        string_overrides: IndexMap::new(),
+    }
+}
+
+fn layer_names(project: &ModProject) -> Vec<&str> {
+    project.layers.iter().map(|l| l.name.as_str()).collect()
+}
+
+#[test]
+fn read_project_recovers_what_the_pack_stored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+
+    let project = ModProject {
+        description: "A packed mod".to_string(),
+        authors: vec![
+            ModProjectAuthor::Name("Alice".to_string()),
+            ModProjectAuthor::Role {
+                name: "Bob".to_string(),
+                role: "Artist".to_string(),
+            },
+        ],
+        license: Some(ModProjectLicense::Spdx("MIT".to_string())),
+        tags: vec!["champion-skin".into()],
+        champions: vec!["Aatrox".to_string()],
+        maps: vec!["summoners-rift".into()],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let (mut packed, _) = pack(project.clone(), &root);
+    let read = read_project(&mut packed).unwrap();
+
+    assert_eq!(read.name, project.name);
+    assert_eq!(read.display_name, project.display_name);
+    assert_eq!(read.version, project.version);
+    assert_eq!(read.description, project.description);
+    assert_eq!(read.authors, project.authors, "author roles came across");
+    assert_eq!(read.license, project.license);
+    assert_eq!(read.tags, project.tags);
+    assert_eq!(read.champions, project.champions);
+    assert_eq!(read.maps, project.maps);
+}
+
+/// The header is the source of truth for a layer's priority; the metadata copy
+/// is informational and can disagree.
+#[test]
+fn read_project_takes_layer_priority_from_the_header() {
+    let mut packed = build_modpkg(
+        &[("base", 0), ("skins", 10)],
+        ModpkgMetadata {
+            layers: vec![layer_metadata("base", 0), layer_metadata("skins", 999)],
+            ..ModpkgMetadata::default()
+        },
+    );
+
+    let read = read_project(&mut packed).unwrap();
+
+    let skins = read.layers.iter().find(|l| l.name == "skins").unwrap();
+    assert_eq!(skins.priority, 10);
+}
+
+/// The header carries a layer's name and priority and nothing else, so
+/// everything a user typed about the layer has to come off the metadata.
+#[test]
+fn read_project_keeps_the_metadata_a_header_layer_has_no_room_for() {
+    let overrides = IndexMap::from([(
+        "en_us".to_string(),
+        IndexMap::from([("key".to_string(), "value".to_string())]),
+    )]);
+
+    let mut packed = build_modpkg(
+        &[("base", 0), ("skins", 10)],
+        ModpkgMetadata {
+            layers: vec![ModpkgLayerMetadata {
+                name: "skins".to_string(),
+                display_name: Some("Skins".to_string()),
+                priority: 10,
+                description: Some("Extra skins".to_string()),
+                string_overrides: overrides.clone(),
+            }],
+            ..ModpkgMetadata::default()
+        },
+    );
+
+    let read = read_project(&mut packed).unwrap();
+
+    let skins = read.layers.iter().find(|l| l.name == "skins").unwrap();
+    assert_eq!(skins.display_name.as_deref(), Some("Skins"));
+    assert_eq!(skins.description.as_deref(), Some("Extra skins"));
+    assert_eq!(skins.string_overrides, overrides);
+}
+
+/// The header's layer table is hashed, so only a sort makes two reads of one
+/// package agree. The order matches the one a fantome import produces.
+#[test]
+fn read_project_orders_layers_base_first_then_by_priority_then_by_name() {
+    let mut packed = build_modpkg(
+        &[("zed", 5), ("aatrox", 5), ("late", 20), ("base", 0)],
+        ModpkgMetadata::default(),
+    );
+
+    let read = read_project(&mut packed).unwrap();
+
+    assert_eq!(layer_names(&read), ["base", "aatrox", "zed", "late"]);
+}
+
+/// Without a package to read the header from, the metadata's own layer table is
+/// all there is.
+#[test]
+fn a_project_converted_from_metadata_alone_reads_its_layer_table() {
+    let metadata = ModpkgMetadata {
+        name: "test-mod".to_string(),
+        display_name: "Test Mod".to_string(),
+        layers: vec![layer_metadata("skins", 10), layer_metadata("base", 0)],
+        ..ModpkgMetadata::default()
+    };
+
+    let project = ModProject::from(&metadata);
+
+    assert_eq!(project.name, "test-mod");
+    assert_eq!(layer_names(&project), ["base", "skins"]);
+}
+
+#[test]
+fn a_project_converted_from_metadata_naming_no_layer_gets_the_default_base() {
+    let project = ModProject::from(&ModpkgMetadata::default());
+
+    assert_eq!(project.layers, crate::ModProjectLayer::default_table());
+}
+
+#[test]
+fn a_project_converted_from_metadata_reads_a_custom_license() {
+    let metadata = ModpkgMetadata {
+        license: ltk_modpkg::ModpkgLicense::Custom {
+            name: "My License".to_string(),
+            url: Some("https://example.com".to_string()),
+        },
+        ..ModpkgMetadata::default()
+    };
+
+    let project = ModProject::from(&metadata);
+
+    assert_eq!(
+        project.license,
+        Some(ModProjectLicense::Custom {
+            name: "My License".to_string(),
+            url: Some("https://example.com".to_string()),
+        })
+    );
+}
+
+// -- importing a package as a project ---------------------------------------
+
+/// Pack a project with a base-layer and a second-layer file, plus a readme, and
+/// return the archive bytes.
+pub(super) fn packed_archive_with_two_layers() -> Vec<u8> {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"base content");
+    create_content_file(&root, "skins", "Test.wad.client/data.bin", b"skin content");
+    fs::write(root.join("README.md"), "# Packed\n").unwrap();
+
+    let project = test_mod_project(vec![
+        ModProjectLayer::base(),
+        ModProjectLayer {
+            name: "skins".to_string(),
+            priority: 10,
+            ..Default::default()
+        },
+    ]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(project, root.to_owned())
+        .pack(ModpkgFormat::new(&mut buffer))
+        .unwrap();
+    buffer.into_inner()
+}
+
+/// The progress reports, as owned values a test can compare.
+///
+/// The match is total on purpose: it is the branching a consumer has to do, and
+/// a stage added later fails here rather than being folded into its neighbour.
+fn describe(progress: ImportProgress<'_>) -> (String, u32, u32) {
+    let stage = match progress.stage {
+        ImportStage::Extracting { item } => format!("extracting {item}"),
+        ImportStage::WritingMetadata => "writing metadata".to_owned(),
+        ImportStage::Complete => "complete".to_owned(),
+    };
+    (stage, progress.current, progress.total)
+}
+
+fn import(archive: Vec<u8>, output_dir: &Utf8Path) -> ModProject {
+    ProjectImporter::new(output_dir)
+        .import(ModpkgImporter::new(Cursor::new(archive)))
+        .unwrap()
+}
+
+/// The WAD directories are named in lowercase on purpose: a package hashes a
+/// WAD name lowercased and stores it that way, so the cased name the project
+/// was packed from is gone by the time an import reads it back. Naming the
+/// cased form here reads fine on a case-insensitive filesystem and is a
+/// `NotFound` on Linux.
+#[test]
+fn import_writes_every_layer_under_the_content_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+
+    let imported = import(packed_archive_with_two_layers(), &output);
+
+    assert_eq!(
+        layer_names(&imported),
+        ["base", "skins"],
+        "a package extracts every layer, where a fantome has only the base"
+    );
+    assert_eq!(
+        fs::read(output.join("content/base/test.wad.client/data.bin")).unwrap(),
+        b"base content"
+    );
+    assert_eq!(
+        fs::read(output.join("content/skins/test.wad.client/data.bin")).unwrap(),
+        b"skin content"
+    );
+}
+
+/// A project keeps its readme at the root, not beside its content.
+#[test]
+fn import_writes_the_meta_files_at_the_project_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+
+    import(packed_archive_with_two_layers(), &output);
+
+    assert_eq!(
+        fs::read_to_string(output.join("README.md")).unwrap(),
+        "# Packed\n"
+    );
+    assert!(
+        !output.join("content/README.md").exists(),
+        "meta files leaked into the content directory"
+    );
+}
+
+/// An import has to produce a project the packer will take back.
+#[test]
+fn an_imported_project_packs_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+
+    import(packed_archive_with_two_layers(), &output);
+
+    ProjectPacker::from_dir(output)
+        .unwrap()
+        .pack(ModpkgFormat::new(Cursor::new(Vec::new())))
+        .unwrap();
+}
+
+/// A package's content extracts a layer at a time, so the layer is the unit the
+/// progress counts and the boundary a cancellation lands on.
+#[test]
+fn import_reports_a_stage_for_each_layer_then_one_for_each_step_past_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+
+    let mut reported = Vec::new();
+    ProjectImporter::new(&output)
+        .import_with_progress(
+            ModpkgImporter::new(Cursor::new(packed_archive_with_two_layers())),
+            &mut |progress| reported.push(describe(progress)),
+        )
+        .unwrap();
+
+    assert_eq!(
+        reported,
+        [
+            ("extracting base".to_owned(), 0, 2),
+            ("extracting skins".to_owned(), 1, 2),
+            ("writing metadata".to_owned(), 2, 2),
+            ("complete".to_owned(), 2, 2),
+        ]
+    );
+}
+
+#[test]
+fn a_cancellation_that_answers_true_fails_the_import() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+    let flag = AtomicBool::new(true);
+
+    let result = ProjectImporter::new(&output)
+        .with_cancellation(&flag)
+        .import(ModpkgImporter::new(Cursor::new(
+            packed_archive_with_two_layers(),
+        )));
+
+    assert!(matches!(result, Err(ImportError::Cancelled)));
+    assert!(
+        !output.join("mod.config.json").exists(),
+        "the config is the last thing written, so a cancelled import has none"
+    );
+}
+
+/// A package's header names every layer the project declared, including one its
+/// author had yet to put content in. The import has to give that layer a
+/// directory or the project it writes can never be packed again.
+#[test]
+fn import_of_a_package_with_an_empty_layer_gives_that_layer_a_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp).join("source");
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"base content");
+    fs::create_dir_all(root.join("content/empty")).unwrap();
+
+    let project = test_mod_project(vec![
+        ModProjectLayer::base(),
+        ModProjectLayer {
+            name: "empty".to_string(),
+            priority: 5,
+            ..Default::default()
+        },
+    ]);
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(project, root)
+        .pack(ModpkgFormat::new(&mut buffer))
+        .unwrap();
+
+    let output = utf8_tempdir(&tmp).join("imported");
+    let imported = import(buffer.into_inner(), &output);
+
+    assert_eq!(layer_names(&imported), ["base", "empty"]);
+    assert!(output.join("content/empty").is_dir());
+    ProjectPacker::from_dir(output)
+        .unwrap()
+        .pack(ModpkgFormat::new(Cursor::new(Vec::new())))
+        .unwrap();
+}
+
+// -- where an import puts things -------------------------------------------
+
+fn predicted_paths(archive: Vec<u8>) -> Vec<Utf8PathBuf> {
+    let modpkg = Modpkg::mount_from_reader(Cursor::new(archive)).unwrap();
+    let mut paths: Vec<_> = modpkg
+        .extraction_plan()
+        .iter_project_paths()
+        .map(ProjectPath::into_path)
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn every_layer_and_the_root_files_are_accounted_for() {
+    assert_eq!(
+        predicted_paths(packed_archive_with_two_layers()),
+        [
+            "README.md",
+            // Lowercase: the package stores a WAD's name folded, so that is the
+            // directory an extraction writes.
+            "content/base/test.wad.client/data.bin",
+            "content/skins/test.wad.client/data.bin",
+        ]
+        .map(Utf8PathBuf::from)
+    );
+}
+
+/// A narrowed plan gives a narrowed answer, so a caller importing one layer can
+/// size that layer alone.
+#[test]
+fn narrowing_the_plan_narrows_the_predicted_paths() {
+    let modpkg = Modpkg::mount_from_reader(Cursor::new(packed_archive_with_two_layers()))
+        .expect("the packed archive mounts");
+
+    let base: Vec<_> = modpkg
+        .extraction_plan()
+        .layer("base")
+        .iter_project_paths()
+        .map(ProjectPath::into_path)
+        .collect();
+    assert_eq!(base, ["content/base/test.wad.client/data.bin"]);
+
+    let root: Vec<_> = modpkg
+        .extraction_plan()
+        .root_files()
+        .iter_project_paths()
+        .map(ProjectPath::into_path)
+        .collect();
+    assert_eq!(root, ["README.md"]);
+}
+
+/// A preflight is only worth having if it agrees with the import, and shared
+/// code does not prove that on its own: the `content/` prefix is this crate's
+/// and the layout beneath it is the package format's, so the two are checked
+/// against each other rather than assumed to line up.
+#[test]
+fn the_predicted_paths_match_what_an_import_writes() {
+    let archive = packed_archive_with_two_layers();
+    let predicted = predicted_paths(archive.clone());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+    import(archive, &output);
+
+    for path in &predicted {
+        assert!(
+            output.join(path).is_file(),
+            "{path} was predicted but not written"
+        );
+    }
+
+    // And nothing was written that was not predicted, config aside: the config
+    // is the driver's, not the package's.
+    let mut written = Vec::new();
+    collect_files(&output, &output, &mut written);
+    written.retain(|path| path != "mod.config.json");
+    written.sort();
+
+    assert_eq!(written, predicted);
+}
+
+fn collect_files(root: &Utf8Path, dir: &Utf8Path, into: &mut Vec<Utf8PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = Utf8PathBuf::from_path_buf(entry.unwrap().path()).unwrap();
+        if path.is_dir() {
+            collect_files(root, &path, into);
+        } else {
+            into.push(path.strip_prefix(root).unwrap().to_owned());
+        }
+    }
 }

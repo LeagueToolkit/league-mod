@@ -5,10 +5,11 @@
 //! project looks like on disk: turning an archive into a project directory
 //! is the caller's job (see `ltk_mod_project`'s `fantome` module).
 
+use std::fmt;
 use std::io::{self, Cursor, Read, Seek};
 
 use camino::Utf8Path;
-use ltk_wad::{PathResolver, Wad, WadExtractor};
+use ltk_wad::{NamingPolicy, NoResolver, PathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 use zip::read::ZipFile;
 
@@ -18,6 +19,120 @@ use crate::error::FantomeExtractError;
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
     archive: ZipArchive<R>,
+}
+
+impl<R: Read + Seek> fmt::Debug for FantomeReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FantomeReader")
+            .field("entries", &self.archive.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One WAD's turn in [`FantomeReader::extract_wads`], reported before the WAD
+/// is written.
+///
+/// `index` counts the WADs [`FantomeReader::wad_names`] lists, in the order it
+/// lists them, so a caller that showed that list can point at the entry the
+/// extraction has reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WadProgress<'a> {
+    /// The WAD's name, as its `WAD/` entry spells it.
+    pub name: &'a str,
+    /// Which WAD of the archive this is, counting from 0.
+    pub index: u32,
+    /// How many WADs the archive holds.
+    pub total: u32,
+}
+
+/// How [`FantomeReader::extract_wads`] unpacks what it finds.
+///
+/// The defaults extract without naming chunks ([`NoResolver`]), under
+/// [`NamingPolicy::Descriptive`], and report nothing.
+pub struct WadExtractOptions<'a> {
+    resolver: &'a dyn PathResolver,
+    naming: NamingPolicy,
+    progress: Option<&'a mut dyn FnMut(WadProgress<'_>)>,
+    cancelled: Option<&'a dyn Fn() -> bool>,
+}
+
+impl<'a> WadExtractOptions<'a> {
+    /// Extract with every option at its default.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Unpack packed WADs through `resolver` so their chunks come out under
+    /// their real paths instead of hex hashes.
+    ///
+    /// See [`FantomeReader::extract_wads`] for what the archive's own bins
+    /// name on top of this.
+    #[must_use]
+    pub fn with_path_resolver(mut self, resolver: &'a dyn PathResolver) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
+    /// Name the chunks of a packed WAD under `naming` rather than
+    /// [`NamingPolicy::Descriptive`].
+    ///
+    /// [`NamingPolicy::Lossless`] is what a caller extracting a mod to edit
+    /// and repack wants: it writes every chunk, where the default drops one
+    /// whose path another chunk claimed first.
+    #[must_use]
+    pub fn with_naming_policy(mut self, naming: NamingPolicy) -> Self {
+        self.naming = naming;
+        self
+    }
+
+    /// Report each WAD to `progress` before it is written.
+    #[must_use]
+    pub fn with_progress(mut self, progress: &'a mut dyn FnMut(WadProgress<'_>)) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Stop the extraction as soon as `cancelled` answers `true`.
+    ///
+    /// Checked once per archive entry, so a cancellation lands between files
+    /// rather than part-way through one. The output directory then holds
+    /// however much had been written, which is the caller's to clean up.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancelled: &'a dyn Fn() -> bool) -> Self {
+        self.cancelled = Some(cancelled);
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.is_some_and(|cancelled| cancelled())
+    }
+
+    fn report(&mut self, progress: WadProgress<'_>) {
+        if let Some(report) = self.progress.as_mut() {
+            report(progress);
+        }
+    }
+}
+
+impl Default for WadExtractOptions<'_> {
+    fn default() -> Self {
+        Self {
+            resolver: &NoResolver,
+            naming: NamingPolicy::default(),
+            progress: None,
+            cancelled: None,
+        }
+    }
+}
+
+impl fmt::Debug for WadExtractOptions<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WadExtractOptions")
+            .field("naming", &self.naming)
+            .field("has_progress", &self.progress.is_some())
+            .field("has_cancellation", &self.cancelled.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Stream one entry into `sink`, without letting the zip crate check its CRC32.
@@ -56,8 +171,25 @@ fn read_entry(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
 
 impl<R: Read + Seek> FantomeReader<R> {
     /// Create a reader from anything the archive can be read out of.
+    ///
+    /// The entry table is checked here, once, so that no later call has to:
+    /// every method below joins entry names onto a caller's directory, and an
+    /// archive holding one that would land outside it is refused rather than
+    /// partly extracted.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`FantomeExtractError::EscapingEntry`] for such an archive,
+    /// and with [`FantomeExtractError::Zip`] for one that is not a zip at all.
     pub fn new(reader: R) -> Result<Self, FantomeExtractError> {
         let archive = ZipArchive::new(reader)?;
+
+        if let Some(name) = archive.file_names().find(|name| !is_contained(name)) {
+            return Err(FantomeExtractError::EscapingEntry {
+                name: name.to_owned(),
+            });
+        }
+
         Ok(Self { archive })
     }
 
@@ -90,39 +222,110 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(info)
     }
 
-    /// Extract every `WAD/` entry into `dest`, preserving the paths beneath
+    /// The archive's entry names, in archive order.
+    ///
+    /// Only the entry table is read, so this costs no decompression. Pair it
+    /// with [`classify_entry`] to see where the entries would land without
+    /// extracting them; the directory entries among them classify as `None`,
+    /// so the pairing yields the files alone.
+    pub fn entry_names(&self) -> impl Iterator<Item = &str> {
+        self.archive.file_names()
+    }
+
+    /// The WADs the archive's `WAD/` entries describe, in archive order.
+    ///
+    /// A packed WAD stored as a single entry and a WAD stored as a directory
+    /// of its files both appear once, under the same name. Only entry names
+    /// are read, so this costs no decompression: it is what a caller lists
+    /// before deciding to import, and where the counters in [`WadProgress`]
+    /// come from.
+    ///
+    /// A WAD is listed when the archive holds a file for it. One named by a
+    /// directory record alone is not listed, because there is nothing under it
+    /// to unpack.
+    pub fn wad_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+
+        for entry_name in self.archive.file_names() {
+            // Through `classify_entry`, so this and `extract_wads` cannot
+            // disagree about what the archive holds: a WAD present only as a
+            // directory record has no files to unpack, and listing it would
+            // promise a unit no extraction ever reports.
+            let relative_path = match classify_entry(entry_name) {
+                Some(FantomeEntry::PackedWad(name)) => name,
+                Some(FantomeEntry::WadFile(relative_path)) => relative_path,
+                _ => continue,
+            };
+            let Some(wad_name) = wad_name_of(relative_path) else {
+                continue;
+            };
+            if !names.iter().any(|name| name == wad_name) {
+                names.push(wad_name.to_owned());
+            }
+        }
+
+        names
+    }
+
+    /// Extract every `WAD/` file into `dest`, preserving the paths beneath
     /// the prefix.
     ///
     /// A packed WAD directly under `WAD/` is unpacked into a directory of its
-    /// name rather than written out as a file, naming its chunks through
-    /// `resolver` and then through the WAD's own bins for whatever the
-    /// resolver could not name. A caller with no source of names passes
-    /// [`NoResolver`](crate::NoResolver) and gets the bins alone, which is
-    /// usually most of a mod. A chunk nothing names keeps its hash.
+    /// name rather than written out as a file, naming its chunks through the
+    /// resolver [`options`](WadExtractOptions) carry and then through the
+    /// WAD's own bins for whatever the resolver could not name. A caller with
+    /// no source of names leaves the resolver at its default and gets the bins
+    /// alone, which is usually most of a mod. A chunk nothing names keeps its
+    /// hash.
     ///
-    /// The prefix is matched case-insensitively.
+    /// The prefix and the WAD extensions are matched case-insensitively.
+    ///
+    /// Directories are made as the parents of the files that land in them, so
+    /// an entry naming a directory and nothing else leaves nothing behind.
+    ///
+    /// # Errors
+    ///
+    /// Besides a malformed archive and a file that could not be written,
+    /// fails with [`FantomeExtractError::Cancelled`] when the options carry a
+    /// cancellation that answered `true`.
     pub fn extract_wads(
         &mut self,
         dest: &Utf8Path,
-        resolver: &dyn PathResolver,
+        mut options: WadExtractOptions<'_>,
     ) -> Result<(), FantomeExtractError> {
+        let wad_names = self.wad_names();
+        let total = wad_names.len() as u32;
+        let mut reported = vec![false; wad_names.len()];
+
         for i in 0..self.archive.len() {
+            if options.is_cancelled() {
+                return Err(FantomeExtractError::Cancelled);
+            }
+
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
 
-            let Some(relative_path) = strip_prefix_ci(&file_name, "WAD/") else {
-                continue;
+            let (relative_path, is_packed) = match classify_entry(&file_name) {
+                Some(FantomeEntry::PackedWad(relative_path)) => (relative_path, true),
+                Some(FantomeEntry::WadFile(relative_path)) => (relative_path, false),
+                _ => continue,
             };
-            if relative_path.is_empty() {
-                continue;
+
+            if let Some(index) = wad_name_of(relative_path)
+                .and_then(|wad_name| wad_names.iter().position(|name| name == wad_name))
+                && !std::mem::replace(&mut reported[index], true)
+            {
+                options.report(WadProgress {
+                    name: &wad_names[index],
+                    index: index as u32,
+                    total,
+                });
             }
 
             let output_path = dest.join(relative_path);
 
-            if file.is_dir() {
-                create_dir(&output_path)?;
-            } else if !relative_path.contains('/') && is_wad_file_name(relative_path) {
-                extract_packed_wad(&mut file, &output_path, resolver)?;
+            if is_packed {
+                extract_packed_wad(&mut file, &output_path, options.resolver, options.naming)?;
             } else {
                 extract_entry(&mut file, &output_path)?;
             }
@@ -131,29 +334,41 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(())
     }
 
-    /// Extract every `RAW/` entry into `dest`, preserving the paths beneath
+    /// Extract every `RAW/` file into `dest`, preserving the paths beneath
     /// the prefix.
     ///
-    /// The prefix is matched case-insensitively.
-    pub fn extract_raw(&mut self, dest: &Utf8Path) -> Result<(), FantomeExtractError> {
+    /// The prefix is matched case-insensitively, and directories are made as
+    /// the parents of the files that land in them.
+    ///
+    /// `cancelled` is checked once per archive entry, as
+    /// [`extract_wads`](Self::extract_wads) checks its own, so a cancellation
+    /// lands between files rather than part-way through one. Pass `None` for an
+    /// extraction nothing can stop. A mod carrying most of its content as `RAW/`
+    /// entries spends most of an import here, so this is where a caller offering
+    /// a cancel button needs it to be read.
+    ///
+    /// # Errors
+    ///
+    /// Besides a malformed archive and a file that could not be written, fails
+    /// with [`FantomeExtractError::Cancelled`] when `cancelled` answers `true`.
+    pub fn extract_raw(
+        &mut self,
+        dest: &Utf8Path,
+        cancelled: Option<&dyn Fn() -> bool>,
+    ) -> Result<(), FantomeExtractError> {
         for i in 0..self.archive.len() {
+            if cancelled.is_some_and(|cancelled| cancelled()) {
+                return Err(FantomeExtractError::Cancelled);
+            }
+
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
 
-            let Some(relative_path) = strip_prefix_ci(&file_name, "RAW/") else {
+            let Some(FantomeEntry::Raw(relative_path)) = classify_entry(&file_name) else {
                 continue;
             };
-            if relative_path.is_empty() {
-                continue;
-            }
 
-            let output_path = dest.join(relative_path);
-
-            if file.is_dir() {
-                create_dir(&output_path)?;
-            } else {
-                extract_entry(&mut file, &output_path)?;
-            }
+            extract_entry(&mut file, &dest.join(relative_path))?;
         }
 
         Ok(())
@@ -161,10 +376,21 @@ impl<R: Read + Seek> FantomeReader<R> {
 
     /// Read the `META/README.md` entry, if the archive has one.
     ///
-    /// The name is matched case-insensitively, as every `META/` entry is.
+    /// The name is matched case-insensitively, as every `META/` entry is. A
+    /// `README.md` at the archive root is read when `META/` holds none, because
+    /// tools in the wild write one there and the alternative is dropping the
+    /// only prose the archive carries.
     pub fn read_readme(&mut self) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        self.read_meta_entry(|name| name.eq_ignore_ascii_case("META/README.md").then_some(()))
-            .map(|found| found.map(|((), bytes)| bytes))
+        for entry_name in ["META/README.md", "README.md"] {
+            let found = self
+                .read_matching_entry(|name| name.eq_ignore_ascii_case(entry_name).then_some(()))?
+                .map(|((), bytes)| bytes);
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+
+        Ok(None)
     }
 
     /// Read the `META/LICENSE*` entry, if the archive has one.
@@ -173,7 +399,10 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// `LICENSE.md` and `LICENSE.txt` spellings; the returned name is the
     /// canonical file name the license should be written to.
     pub fn read_license(&mut self) -> Result<Option<(&'static str, Vec<u8>)>, FantomeExtractError> {
-        self.read_meta_entry(license_entry_target)
+        self.read_matching_entry(|name| match classify_entry(name) {
+            Some(FantomeEntry::License(target)) => Some(target),
+            _ => None,
+        })
     }
 
     /// Read the `META/image.png` thumbnail entry, if the archive has one.
@@ -181,12 +410,12 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// The name is matched case-insensitively, as every `META/` entry is. The
     /// bytes are returned as stored; the format keeps thumbnails PNG-encoded.
     pub fn read_image_png(&mut self) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        self.read_meta_entry(|name| name.eq_ignore_ascii_case("META/image.png").then_some(()))
+        self.read_matching_entry(|name| name.eq_ignore_ascii_case("META/image.png").then_some(()))
             .map(|found| found.map(|((), bytes)| bytes))
     }
 
     /// Find the first entry whose name `matcher` accepts and read it whole.
-    fn read_meta_entry<T>(
+    fn read_matching_entry<T>(
         &mut self,
         matcher: impl Fn(&str) -> Option<T>,
     ) -> Result<Option<(T, Vec<u8>)>, FantomeExtractError> {
@@ -220,9 +449,85 @@ fn extract_entry(
     Ok(())
 }
 
-/// Create a directory an archive entry names, and its parents.
-fn create_dir(path: &Utf8Path) -> Result<(), FantomeExtractError> {
-    std::fs::create_dir_all(path).map_err(|source| FantomeExtractError::write(path, source))
+/// Where an archive's file entries belong, by their names.
+///
+/// The format's placement rules in one place: [`FantomeReader`] puts every file
+/// it reads where this says, so a caller that has to know where an entry will
+/// land before extracting - to preflight a path length limit, say - asks the
+/// same question instead of restating the rules and drifting from them.
+///
+/// Every variant names a file. Directory entries have no variant, because an
+/// extraction writes no directory of its own: it makes the parents of the files
+/// it writes, and a directory holding no files is one nothing needed.
+///
+/// Every name is matched case-insensitively, since archives in the wild spell
+/// the top-level directories however the tool that wrote them did.
+///
+/// Deliberately not `#[non_exhaustive]`: mapping every kind of entry onto
+/// somewhere is the point of the type, and a caller that has done so wants a
+/// compile error if a kind is ever added, not a silent skip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FantomeEntry<'a> {
+    /// A packed WAD stored as a single entry directly under `WAD/`, which is
+    /// unpacked into a directory of this name rather than written as a file.
+    PackedWad(&'a str),
+    /// A file under `WAD/`, at this path relative to the prefix.
+    WadFile(&'a str),
+    /// A file under `RAW/`, at this path relative to the prefix.
+    Raw(&'a str),
+    /// The archive's readme: `META/README.md`, or a `README.md` at the root
+    /// when `META/` holds none.
+    Readme,
+    /// A `META/LICENSE*` entry. The name is the canonical file name its text
+    /// should be written to, which preserves the `.md` and `.txt` variants.
+    License(&'static str),
+    /// `META/image.png`, the archive's thumbnail.
+    Image,
+    /// `META/info.json`, the archive's metadata.
+    Info,
+}
+
+/// Where the file named `entry_name` belongs.
+///
+/// `None` for an entry the format does not place, which an extraction skips,
+/// and `None` for a directory entry: a name ending in a separator is a
+/// directory by the zip format's own rule, and calling one a
+/// [`WadFile`](FantomeEntry::WadFile) whose path happened to end in `/` gave a
+/// caller a destination for something that is not a file. Directories come back
+/// as the parents of the files that land in them, so nothing has to place them.
+pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
+    if entry_name.ends_with(['/', '\\']) {
+        return None;
+    }
+
+    if let Some(relative_path) = strip_prefix_ci(entry_name, "WAD/") {
+        if relative_path.is_empty() {
+            return None;
+        }
+        return Some(
+            if !relative_path.contains('/') && is_wad_file_name(relative_path) {
+                FantomeEntry::PackedWad(relative_path)
+            } else {
+                FantomeEntry::WadFile(relative_path)
+            },
+        );
+    }
+
+    if let Some(relative_path) = strip_prefix_ci(entry_name, "RAW/") {
+        return (!relative_path.is_empty()).then_some(FantomeEntry::Raw(relative_path));
+    }
+
+    if let Some(target) = license_entry_target(entry_name) {
+        return Some(FantomeEntry::License(target));
+    }
+
+    let lowered = entry_name.to_ascii_lowercase();
+    match lowered.as_str() {
+        "meta/readme.md" | "readme.md" => Some(FantomeEntry::Readme),
+        "meta/image.png" => Some(FantomeEntry::Image),
+        "meta/info.json" => Some(FantomeEntry::Info),
+        _ => None,
+    }
 }
 
 /// Match a `META/LICENSE*` archive entry case-insensitively and return the file
@@ -239,6 +544,31 @@ fn license_entry_target(file_name: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether an entry named `entry_name` stays inside the directory it is
+/// extracted to.
+///
+/// Nothing in the zip format makes an entry name relative: an archive is free
+/// to name `../../x` or `/etc/x`, and a reader that joins the name onto its
+/// output directory then writes wherever the name says rather than where the
+/// caller asked. That is the "zip slip" class of bug, and the only defence is
+/// to refuse the name.
+///
+/// Refused: a `..` component, a name rooted at `/` or `\`, and a name carrying
+/// a `:`. Windows reads `\` as a separator and a drive-qualified name like
+/// `C:x` relative to that drive rather than to the join, so both are treated as
+/// escapes on every platform - an archive one host refuses and another unpacks
+/// would be worse than either answer alone.
+///
+/// A `.` component is kept: it goes nowhere, and tools in the wild write
+/// `./WAD/...`.
+fn is_contained(entry_name: &str) -> bool {
+    !entry_name.starts_with(['/', '\\'])
+        && !entry_name.contains(':')
+        && entry_name
+            .split(['/', '\\'])
+            .all(|component| component != "..")
+}
+
 /// Strip a leading ASCII prefix case-insensitively, returning the remainder.
 ///
 /// Archives in the wild spell the top-level directories `WAD`, `wad`, `RAW`
@@ -249,9 +579,37 @@ fn strip_prefix_ci<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &name[prefix.len()..])
 }
 
+/// The WAD an entry beneath `WAD/` belongs to, if it belongs to one.
+///
+/// The first path component names it either way: it is the packed WAD itself
+/// for `Aatrox.wad.client`, and the WAD a file sits in for
+/// `Aatrox.wad.client/data/x.bin`. [`FantomeReader::wad_names`] and the
+/// per-WAD progress read the same component, so a listing and an extraction
+/// cannot disagree about what the archive holds.
+fn wad_name_of(relative_path: &str) -> Option<&str> {
+    let head = relative_path.split('/').next()?;
+    is_wad_file_name(head).then_some(head)
+}
+
 /// Check if a filename looks like a WAD file (ends with .wad.client or similar WAD extensions)
+///
+/// Matched case-insensitively, for the reason the `WAD/` prefix is: an
+/// archive spells its entries however the tool that wrote it did.
 fn is_wad_file_name(name: &str) -> bool {
-    name.ends_with(".wad.client") || name.ends_with(".wad") || name.ends_with(".wad.mobile")
+    [".wad.client", ".wad", ".wad.mobile"]
+        .iter()
+        .any(|extension| ends_with_ci(name, extension))
+}
+
+/// Whether `name` ends in `suffix`, compared case-insensitively.
+///
+/// `get` rather than a slice, so a name whose tail falls mid-character is a
+/// non-match rather than a panic.
+fn ends_with_ci(name: &str, suffix: &str) -> bool {
+    name.len()
+        .checked_sub(suffix.len())
+        .and_then(|at| name.get(at..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
 }
 
 /// Extract a packed WAD file to a directory using WadExtractor
@@ -265,6 +623,7 @@ fn extract_packed_wad(
     entry: &mut ZipFile<'_>,
     output_dir: &Utf8Path,
     resolver: &dyn PathResolver,
+    naming: NamingPolicy,
 ) -> Result<(), FantomeExtractError> {
     let cursor = Cursor::new(read_entry(entry)?);
     let mut wad = Wad::mount(cursor)?;
@@ -273,6 +632,7 @@ fn extract_packed_wad(
         .map_err(|source| FantomeExtractError::write(output_dir, source))?;
 
     WadExtractor::new(resolver)
+        .with_naming_policy(naming)
         .with_name_recovery()
         .extract_all(&mut wad, output_dir)?;
 

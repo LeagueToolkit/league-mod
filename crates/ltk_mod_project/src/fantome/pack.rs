@@ -8,7 +8,7 @@ use std::io::{self, Seek, Write};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeInfo, FantomeWriteError, FantomeWriter};
 
-use crate::{PackFormat, PackPlan};
+use crate::{PackFormat, PackPlan, PackReporter};
 
 /// Failure to encode a pack plan as a Fantome archive.
 ///
@@ -90,10 +90,10 @@ impl<W> fmt::Debug for FantomeFormat<W> {
 impl<W: Write + Seek> PackFormat for FantomeFormat<W> {
     type Error = FantomePackError;
 
-    fn pack(self, plan: &PackPlan<'_>) -> Result<(), Self::Error> {
+    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
         let mut writer = FantomeWriter::new(self.writer);
 
-        pack_base_layer(&mut writer, plan)?;
+        pack_base_layer(&mut writer, plan, progress)?;
         pack_metadata(&mut writer, plan)?;
 
         writer.finish()?;
@@ -104,12 +104,16 @@ impl<W: Write + Seek> PackFormat for FantomeFormat<W> {
 fn pack_base_layer<W: Write + Seek>(
     writer: &mut FantomeWriter<W>,
     plan: &PackPlan<'_>,
+    progress: &mut PackReporter<'_>,
 ) -> Result<(), FantomePackError> {
     for file in plan.base_layer().files() {
-        // Fantome has no place for content outside a WAD directory.
+        // Fantome has no place for content outside a WAD directory, so those
+        // files are neither written nor reported.
         let Some(wad_name) = file.wad() else {
             continue;
         };
+
+        progress.report_file(file.rel_path());
 
         let mut content = File::open(file.source())
             .map_err(|source| FantomePackError::read(file.source(), source))?;

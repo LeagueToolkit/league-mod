@@ -8,8 +8,12 @@
 //!
 //! - [`FantomeFormat`] implements [`PackFormat`](crate::PackFormat), driven
 //!   by [`ProjectPacker`](crate::ProjectPacker).
-//! - [`FantomeImporter`] implements [`ImportFormat`](crate::ImportFormat)
-//!   and turns an archive into a project directory.
+//! - [`FantomeImporter`] implements [`ImportFormat`](crate::ImportFormat),
+//!   driven by [`ProjectImporter`](crate::ProjectImporter).
+//!
+//! A [`FantomeReader`](ltk_fantome::FantomeReader) answers
+//! [`ProjectPaths`](crate::ProjectPaths), so a caller that has to size the
+//! result first can see where every entry lands without unpacking one.
 //!
 //! Fantome stores only the base layer; use
 //! [`ModProject::non_base_layers`](crate::ModProject::non_base_layers) to
@@ -17,11 +21,12 @@
 
 mod convert;
 mod import;
+mod layout;
 mod pack;
 
 #[cfg(test)]
 mod tests;
 
 pub use import::{FantomeImportError, FantomeImporter};
-pub use ltk_fantome::{NoResolver, PathResolver};
+pub use ltk_fantome::{NamingPolicy, NoResolver, PathResolver};
 pub use pack::{FantomeFormat, FantomePackError};

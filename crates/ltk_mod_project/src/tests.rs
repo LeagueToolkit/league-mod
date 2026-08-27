@@ -512,7 +512,10 @@ fn default_supports_struct_update() {
 #[test]
 fn base_layer_is_recognized() {
     assert!(ModProjectLayer::base().is_base());
-    assert_eq!(default_layers(), vec![ModProjectLayer::base()]);
+    assert_eq!(
+        ModProjectLayer::default_table(),
+        vec![ModProjectLayer::base()]
+    );
 
     let other = ModProjectLayer {
         name: "high_res".to_string(),
@@ -557,4 +560,136 @@ fn package_file_name_per_format() {
         project.package_file_name(None, PackageFormat::Fantome),
         "test-mod_1.0.0.fantome"
     );
+}
+
+// -- layer table normalization ----------------------------------------------
+
+fn named_layer(name: &str, priority: i32) -> ModProjectLayer {
+    ModProjectLayer {
+        name: name.to_string(),
+        priority,
+        ..Default::default()
+    }
+}
+
+fn normalized(layers: Vec<ModProjectLayer>) -> Vec<ModProjectLayer> {
+    let mut layers = layers;
+    ModProjectLayer::normalize_table(&mut layers);
+    layers
+}
+
+#[test]
+fn an_empty_table_becomes_the_default_base_layer() {
+    assert_eq!(normalized(vec![]), ModProjectLayer::default_table());
+}
+
+#[test]
+fn the_base_layer_leads_whatever_priority_would_give_it() {
+    let layers = normalized(vec![
+        named_layer("late", 20),
+        named_layer("aatrox", 5),
+        named_layer("zed", 5),
+        named_layer("base", 0),
+    ]);
+
+    let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["base", "aatrox", "zed", "late"]);
+}
+
+/// A base layer with any other priority is one `ProjectPacker` refuses, so an
+/// archive declaring one would import fine and never pack again.
+#[test]
+fn a_declared_base_layer_is_forced_back_to_priority_zero() {
+    let layers = normalized(vec![named_layer("base", 3), named_layer("skins", 10)]);
+
+    assert_eq!(layers[0].name, "base");
+    assert_eq!(layers[0].priority, 0);
+}
+
+/// A layer name is a directory name, so two entries claiming one name are one
+/// layer however the archive spelled it.
+#[test]
+fn a_name_declared_twice_survives_once() {
+    let layers = normalized(vec![
+        named_layer("skins", 9),
+        named_layer("skins", 1),
+        named_layer("base", 0),
+    ]);
+
+    let names: Vec<&str> = layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["base", "skins"]);
+    assert_eq!(
+        layers[1].priority, 1,
+        "the order above decides which survives"
+    );
+}
+
+/// Layers sharing a priority are ordered by name, and a person reading that
+/// list expects `layer9` before `layer10`. Plain string ordering puts `layer10`
+/// first, because `1` precedes `9`.
+#[test]
+fn layers_of_equal_priority_are_ordered_as_a_person_reads_them() {
+    let mut table: Vec<ModProjectLayer> = ["layer10", "layer9", "layer1", "layer100", "layer20"]
+        .into_iter()
+        .map(|name| ModProjectLayer {
+            name: name.to_string(),
+            priority: 1,
+            ..Default::default()
+        })
+        .collect();
+
+    ModProjectLayer::normalize_table(&mut table);
+
+    let names: Vec<&str> = table.iter().map(|layer| layer.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["base", "layer1", "layer9", "layer10", "layer20", "layer100"]
+    );
+}
+
+/// Priority still decides first; the name only breaks a tie.
+#[test]
+fn priority_outranks_the_name_ordering() {
+    let mut table = vec![
+        ModProjectLayer {
+            name: "layer9".to_string(),
+            priority: 5,
+            ..Default::default()
+        },
+        ModProjectLayer {
+            name: "layer10".to_string(),
+            priority: 1,
+            ..Default::default()
+        },
+    ];
+
+    ModProjectLayer::normalize_table(&mut table);
+
+    let names: Vec<&str> = table.iter().map(|layer| layer.name.as_str()).collect();
+    assert_eq!(names, ["base", "layer10", "layer9"]);
+}
+
+#[test]
+fn natural_ordering_handles_padding_and_runs() {
+    use std::cmp::Ordering;
+
+    // Numbers compare by value, wherever they sit in the name.
+    assert_eq!(natural_cmp("a2b", "a10b"), Ordering::Less);
+    assert_eq!(natural_cmp("2", "10"), Ordering::Less);
+    assert_eq!(natural_cmp("a1b2", "a1b10"), Ordering::Less);
+
+    // Padding carries no value, but two spellings of one number are still
+    // ordered, so this stays a total order rather than calling them equal.
+    assert_eq!(natural_cmp("a09", "a10"), Ordering::Less);
+    assert_eq!(natural_cmp("a007", "a10"), Ordering::Less);
+    assert_ne!(natural_cmp("a09", "a9"), Ordering::Equal);
+
+    // A run longer than any integer type is still compared, not parsed.
+    let huge = format!("a{}", "9".repeat(40));
+    let bigger = format!("a{}", "9".repeat(41));
+    assert_eq!(natural_cmp(&huge, &bigger), Ordering::Less);
+
+    // Names without digits are unaffected.
+    assert_eq!(natural_cmp("alpha", "beta"), Ordering::Less);
+    assert_eq!(natural_cmp("same", "same"), Ordering::Equal);
 }

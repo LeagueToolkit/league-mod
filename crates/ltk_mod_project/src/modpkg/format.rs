@@ -15,7 +15,9 @@ use ltk_modpkg::{
 };
 
 use super::thumbnail::{load_thumbnail, ThumbnailError};
-use crate::{ModProjectAuthor, ModProjectLicense, PackFormat, PackPlan, PlannedLayer};
+use crate::{
+    ModProjectAuthor, ModProjectLicense, PackFormat, PackPlan, PackReporter, PlannedLayer,
+};
 
 /// Failure to encode a pack plan as a `.modpkg` archive.
 ///
@@ -183,11 +185,17 @@ impl<W> fmt::Debug for ModpkgFormat<W> {
 impl<W: Write + Seek> PackFormat for ModpkgFormat<W> {
     type Error = ModpkgPackError;
 
-    fn pack(mut self, plan: &PackPlan<'_>) -> Result<(), Self::Error> {
+    fn pack(
+        mut self,
+        plan: &PackPlan<'_>,
+        progress: &mut PackReporter<'_>,
+    ) -> Result<(), Self::Error> {
         let (builder, file_map) = Self::configure_builder(plan)?;
 
         builder
             .build_to_writer(&mut self.writer, |chunk_builder| {
+                progress.report_file(chunk_builder.path());
+
                 let file_path = file_map.get(&chunk_builder.full_key()).ok_or_else(|| {
                     ModpkgBuilderError::from(io::Error::new(
                         io::ErrorKind::NotFound,

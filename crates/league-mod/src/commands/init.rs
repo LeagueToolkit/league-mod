@@ -103,7 +103,7 @@ fn create_default_mod_project(name: Option<String>, display_name: Option<String>
         champions: vec![],
         maps: vec![],
         transformers: vec![],
-        layers: ltk_mod_project::default_layers(),
+        layers: ltk_mod_project::ModProjectLayer::default_table(),
         thumbnail: None,
     }
 }

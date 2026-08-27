@@ -11,9 +11,7 @@
 use crate::content::{ModContentProvider, archive_fingerprint};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{
-    ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, default_layers,
-};
+use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_wad::{Wad, WadHash, is_hex_chunk_path};
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
@@ -223,7 +221,10 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             .collect();
         layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
         if !layers.iter().any(|l| l.name == "base") {
-            layers = default_layers().into_iter().chain(layers).collect();
+            layers = ModProjectLayer::default_table()
+                .into_iter()
+                .chain(layers)
+                .collect();
         }
 
         Ok(ModProject {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeLicense};
 
-use crate::{default_layers, ModMap, ModProject, ModProjectAuthor, ModProjectLicense, ModTag};
+use crate::{ModMap, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, ModTag};
 
 impl From<&ModProjectLicense> for FantomeLicense {
     fn from(license: &ModProjectLicense) -> Self {
@@ -47,8 +47,7 @@ impl From<&ModProject> for FantomeInfo {
 /// The project an imported archive's metadata describes.
 ///
 /// The project name is the display name slugified, since Fantome carries no
-/// separate machine name; layers reset to the default base layer, the only
-/// one the format stores content for.
+/// separate machine name.
 impl From<FantomeInfo> for ModProject {
     fn from(info: FantomeInfo) -> Self {
         Self {
@@ -62,10 +61,36 @@ impl From<FantomeInfo> for ModProject {
             champions: info.champions,
             maps: info.maps.into_iter().map(ModMap::from).collect(),
             transformers: vec![],
-            layers: default_layers(),
+            layers: layers_from_fantome(info.layers),
             thumbnail: None,
         }
     }
+}
+
+/// The layer table an archive's `META/info.json` declares.
+///
+/// Fantome stores content for the base layer alone, but it does carry the
+/// other layers' names, priorities and string overrides, and nothing
+/// downstream can recover an override the import dropped.
+///
+/// `info.layers` is a map, so [`ModProjectLayer::normalize_table`] orders the result rather
+/// than leaving it to however the map iterated, and adds the base layer when
+/// the archive names none.
+fn layers_from_fantome(layers: HashMap<String, FantomeLayerInfo>) -> Vec<ModProjectLayer> {
+    let mut layers: Vec<ModProjectLayer> = layers
+        .into_values()
+        .map(|layer| ModProjectLayer {
+            name: layer.name,
+            display_name: layer.display_name,
+            priority: layer.priority,
+            description: None,
+            string_overrides: layer.string_overrides,
+        })
+        .collect();
+
+    ModProjectLayer::normalize_table(&mut layers);
+
+    layers
 }
 
 fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLayerInfo> {
