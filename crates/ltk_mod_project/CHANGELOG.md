@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.7.0...ltk_mod_project-v0.8.0) - 2026-08-27
+
+### Added
+
+- [**breaking**] drive an archive import and let it say where it writes
+
+### Fixed
+
+- *(fantome)* chunk name recovery from packed WADs
+
 ## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.6.0...ltk_mod_project-v0.7.0) - 2026-08-26
 
 ### Other

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.8.0...ltk_fantome-v0.9.0) - 2026-08-27
+
+### Added
+
+- [**breaking**] drive an archive import and let it say where it writes
+
+### Fixed
+
+- *(fantome)* match META/README.md and META/image.png case-insensitively
+- *(fantome)* read archive entries past a bad CRC32
+- *(fantome)* chunk name recovery from packed WADs
+
+### Other
+
+- *(fantome)* use the imported io alias in copy_entry
+
 ## [0.8.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.7.0...ltk_fantome-v0.8.0) - 2026-08-26
 
 ### Other
