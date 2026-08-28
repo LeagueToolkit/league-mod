@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.9.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.8.0...ltk_overlay-v0.9.0) - 2026-08-28
+
+### Added
+
+- add embedded hashtable support
+
+### Fixed
+
+- [**breaking**] harden overlay layout records and type its content hashes
+- fall back to a full rebuild when a tail rewrite fails
+- rebuild WADs a killed build left mid-rewrite
+- write overlay.json atomically
+
+### Other
+
+- [**breaking**] give the overlay API matchable errors and typed path hashes
+- correct the ltk_overlay README architecture and status
+- rewrite the overlay builder design to match the crate
+- [**breaking**] rebuild an unchanged-shape WAD by rewriting only its tail
+- [**breaking**] write patched WADs as a copied source region plus an override tail
+- [**breaking**] compress each override once per build
+
 ## [0.8.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.7.0...ltk_overlay-v0.8.0) - 2026-08-27
 
 ### Added
