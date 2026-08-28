@@ -17,16 +17,17 @@
 //! original WAD - no decompression or recompression occurs. This is the fast path
 //! for the vast majority of chunks.
 //!
-//! **Override chunks** are provided as uncompressed data. The builder auto-detects
-//! each override's file type via [`LeagueFileKind::identify_from_bytes`] and applies
-//! the ideal compression:
+//! **Override chunks** arrive already compressed, as [`PreparedOverride`] values.
+//! [`PreparedOverride::compress`] auto-detects an override's file type via
+//! [`LeagueFileKind::identify_from_bytes`] and applies the ideal compression:
 //!
 //! - **Audio files** (Wwise Bank / Wwise Package): stored uncompressed (`None`).
 //! - **Everything else**: compressed with Zstd at level 3.
 //!
 //! League validates a chunk shared across WADs by its **compressed** checksum, so
-//! a chunk routed to several WADs must be given to each build as the same
-//! uncompressed input - deterministic compression then yields identical copies.
+//! every WAD holding a given chunk must receive the same bytes. Compressing once
+//! and sharing the [`PreparedOverride`] guarantees that structurally, without
+//! relying on the compressor being deterministic across versions.
 
 use crate::error::{Error, Result};
 use byteorder::{LE, WriteBytesExt};
@@ -37,6 +38,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
+use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Size of a single v3.4 WAD TOC entry.
@@ -44,6 +46,65 @@ const TOC_ENTRY_SIZE: usize = 32;
 
 /// Write buffer size for the output WAD
 const WRITE_BUFFER_SIZE: usize = 1 << 20; // 1 MiB
+
+/// An override chunk's compressed bytes plus the TOC fields describing them.
+///
+/// Built once per distinct override content and shared by every WAD the override
+/// routes to, so all copies of a chunk carry identical bytes and therefore one
+/// compressed checksum - which is what the game validates a shared chunk by.
+///
+/// Cloning is cheap: the bytes live behind an [`Arc`].
+#[derive(Debug, Clone)]
+pub struct PreparedOverride {
+    compressed: Arc<[u8]>,
+    uncompressed_size: u32,
+    compression: WadChunkCompression,
+    /// xxh3_64 of `compressed`, the chunk's TOC checksum field.
+    checksum: u64,
+}
+
+impl PreparedOverride {
+    /// Compress `data` with the ideal codec for its detected file type.
+    ///
+    /// Audio is stored uncompressed, everything else Zstd level 3 (see the
+    /// [module docs](self)). `path_hash` only names the chunk in error messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the compressed or uncompressed size overflows the
+    /// WAD v3.4 format's `u32` size fields.
+    pub fn compress(path_hash: u64, data: &[u8]) -> Result<Self> {
+        let compression = LeagueFileKind::identify_from_bytes(data).ideal_compression();
+        let compressed = compress_by_type(data, compression)?;
+        ensure_chunk_fits(path_hash, compressed.len(), data.len(), "Override")?;
+        Ok(Self {
+            checksum: xxh3_64(&compressed),
+            compressed: Arc::from(compressed),
+            uncompressed_size: data.len() as u32,
+            compression,
+        })
+    }
+
+    /// The compressed bytes, written into the WAD verbatim.
+    pub fn compressed(&self) -> &[u8] {
+        &self.compressed
+    }
+
+    /// Size of the chunk before compression.
+    pub fn uncompressed_size(&self) -> u32 {
+        self.uncompressed_size
+    }
+
+    /// Codec [`compressed`](Self::compressed) is encoded with.
+    pub fn compression(&self) -> WadChunkCompression {
+        self.compression
+    }
+
+    /// xxh3_64 of the compressed bytes - the chunk's TOC checksum.
+    pub fn checksum(&self) -> u64 {
+        self.checksum
+    }
+}
 
 /// Build statistics returned by [`build_patched_wad`].
 #[derive(Debug, Clone)]
@@ -84,18 +145,19 @@ pub struct PatchedWadStats {
 ///   Used to plan the TOC layout (new entries, merge order) without requiring
 ///   the actual data upfront.
 /// * `resolve_override` - Callback invoked once per override hash during the
-///   write pass. Returns the override's **uncompressed** bytes; the builder
-///   compresses them. This allows the caller to lazily load override data on
-///   demand instead of holding everything in memory.
+///   write pass. Returns the override's already-compressed
+///   [`PreparedOverride`]. This allows the caller to lazily hand over override
+///   data on demand instead of holding everything in memory, and to compress
+///   each distinct content once across all the WADs that hold it.
 ///
 /// # Returns
 ///
 /// [`PatchedWadStats`] with build metrics (chunk counts, timing).
-pub fn build_patched_wad<B: AsRef<[u8]>>(
+pub fn build_patched_wad(
     src_wad_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
     override_hashes: &HashSet<u64>,
-    resolve_override: impl FnMut(u64) -> Result<B>,
+    resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
 ) -> Result<PatchedWadStats> {
     if let Some(parent) = dst_wad_path.parent() {
         std::fs::create_dir_all(parent.as_std_path())
@@ -124,12 +186,12 @@ pub fn build_patched_wad<B: AsRef<[u8]>>(
 
 /// Write the patched WAD to `out_path` (the temp file). `dst_wad_path` is only
 /// used for logging so messages show the real destination.
-fn write_patched_wad<B: AsRef<[u8]>>(
+fn write_patched_wad(
     src_wad_path: &Utf8Path,
     out_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
     override_hashes: &HashSet<u64>,
-    mut resolve_override: impl FnMut(u64) -> Result<B>,
+    mut resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
@@ -218,7 +280,7 @@ fn write_patched_wad<B: AsRef<[u8]>>(
         };
 
         let prepared = match &resolved {
-            Some(bytes) => prepare_uncompressed(path_hash, bytes.as_ref())?,
+            Some(over) => PreparedChunk::from_override(over),
             None => {
                 let orig = chunks
                     .get(WadHash(path_hash))
@@ -275,7 +337,19 @@ struct PreparedChunk<'a> {
     checksum: u64,
 }
 
-impl PreparedChunk<'_> {
+impl<'a> PreparedChunk<'a> {
+    /// An override chunk: its bytes are already compressed and checksummed.
+    fn from_override(over: &'a PreparedOverride) -> Self {
+        PreparedChunk {
+            data: Cow::Borrowed(&over.compressed),
+            uncompressed_size: over.uncompressed_size as usize,
+            compression_type: over.compression,
+            frame_count: 0,
+            start_frame: 0,
+            checksum: over.checksum,
+        }
+    }
+
     fn to_chunk(&self, path_hash: u64, data_offset: u64) -> WadChunk {
         WadChunk {
             path_hash: WadHash(path_hash),
@@ -305,23 +379,6 @@ fn ensure_chunk_fits(
         )));
     }
     Ok(())
-}
-
-/// An uncompressed override: identify the file type, apply the ideal compression,
-/// and checksum our *own* compressed output.
-fn prepare_uncompressed(path_hash: u64, data: &[u8]) -> Result<PreparedChunk<'static>> {
-    let compression = LeagueFileKind::identify_from_bytes(data).ideal_compression();
-    let compressed = compress_by_type(data, compression)?;
-    ensure_chunk_fits(path_hash, compressed.len(), data.len(), "Override")?;
-    let checksum = xxh3_64(&compressed);
-    Ok(PreparedChunk {
-        data: Cow::Owned(compressed),
-        uncompressed_size: data.len(),
-        compression_type: compression,
-        frame_count: 0,
-        start_frame: 0,
-        checksum,
-    })
 }
 
 /// A non-overridden chunk: copy its raw compressed bytes straight from the source

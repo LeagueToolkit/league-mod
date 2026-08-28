@@ -5,13 +5,12 @@
 
 use super::*;
 use crate::utils::compute_wad_fingerprint_from_meta;
-use crate::wad_builder::build_patched_wad;
+use crate::wad_builder::{PreparedOverride, build_patched_wad};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Uncompressed override bytes shared across every WAD they are routed to; the
-/// WAD writer compresses them, so all copies of a shared chunk end up with the
-/// same compressed bytes and checksum.
+/// Uncompressed override bytes as read in pass 2, before [`prepare_overrides`]
+/// turns them into the compressed [`PreparedOverride`]s the writer consumes.
 pub(crate) type ResolvedChunk = SharedBytes;
 
 struct ChunkSources<'a> {
@@ -50,27 +49,82 @@ impl<'a> ChunkSources<'a> {
     }
 }
 
-/// Spread the flat `resolved` map into the per-WAD maps the patch step consumes:
-/// each WAD gets a clone of the resolved chunk for every hash routed to it.
-fn distribute_resolved_to_wads(
+/// Spread the flat `prepared` map into the per-WAD maps the patch step consumes:
+/// each WAD gets a handle on the prepared override for every hash routed to it.
+fn distribute_prepared_to_wads(
     wads_to_build: &[Utf8PathBuf],
     wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
-    resolved: &HashMap<u64, ResolvedChunk>,
-) -> BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>> {
-    let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>> = BTreeMap::new();
+    prepared: &HashMap<u64, PreparedOverride>,
+) -> BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>> {
+    let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>> = BTreeMap::new();
     for wad_path in wads_to_build {
         let Some(hashes) = wad_hash_sets.get(wad_path) else {
             continue;
         };
-        let mut per_wad: HashMap<u64, ResolvedChunk> = HashMap::with_capacity(hashes.len());
+        let mut per_wad: HashMap<u64, PreparedOverride> = HashMap::with_capacity(hashes.len());
         for &hash in hashes {
-            if let Some(chunk) = resolved.get(&hash) {
+            if let Some(chunk) = prepared.get(&hash) {
                 per_wad.insert(hash, chunk.clone());
             }
         }
         wad_overrides.insert(wad_path.clone(), per_wad);
     }
     wad_overrides
+}
+
+/// Compress every resolved override, once per distinct content, in parallel.
+///
+/// Overrides are memoized on their pass-1 `content_hash`, so a chunk routed to
+/// several WADs - and any two overrides that happen to carry identical bytes -
+/// are compressed a single time and then share one [`PreparedOverride`]. That
+/// structural sharing is what keeps every copy of a cross-WAD chunk on the same
+/// compressed checksum, which the game validates (see the [`wad_builder`] module
+/// docs).
+///
+/// Consumes `resolved`: each uncompressed buffer is dropped as soon as its
+/// compressed form exists, and nothing downstream of the writer reads
+/// uncompressed override bytes.
+///
+/// [`wad_builder`]: crate::wad_builder
+fn prepare_overrides(
+    resolved: HashMap<u64, ResolvedChunk>,
+    all_meta: &HashMap<u64, OverrideMeta>,
+) -> Result<HashMap<u64, PreparedOverride>> {
+    // One representative (path hash, bytes) per distinct content. Duplicate
+    // buffers are released here, before any compression starts.
+    let mut content_of: HashMap<u64, u64> = HashMap::with_capacity(resolved.len());
+    let mut distinct: HashMap<u64, (u64, ResolvedChunk)> = HashMap::new();
+    for (path_hash, bytes) in resolved {
+        // A chunk with no metadata entry cannot be deduplicated against
+        // anything, so it keys on its own path hash - distinct by construction.
+        let content_hash = all_meta
+            .get(&path_hash)
+            .map_or(path_hash, |meta| meta.content_hash);
+        content_of.insert(path_hash, content_hash);
+        distinct.entry(content_hash).or_insert((path_hash, bytes));
+    }
+
+    let unique = distinct.len();
+    let memo: HashMap<u64, PreparedOverride> = distinct
+        .into_par_iter()
+        .map(|(content_hash, (path_hash, bytes))| {
+            PreparedOverride::compress(path_hash, &bytes).map(|prepared| (content_hash, prepared))
+        })
+        .collect::<Result<_>>()?;
+
+    tracing::info!(
+        "Compressed {} unique override chunk(s) for {} routed override(s)",
+        unique,
+        content_of.len()
+    );
+
+    Ok(content_of
+        .into_iter()
+        .filter_map(|(path_hash, content_hash)| {
+            memo.get(&content_hash)
+                .map(|prepared| (path_hash, prepared.clone()))
+        })
+        .collect())
 }
 
 impl OverlayBuilder {
@@ -201,16 +255,15 @@ impl OverlayBuilder {
     /// - **Mod overrides** - read from each mod's content provider.
     /// - **String patches** - the game's stringtable rebuilt with merged overrides.
     ///
-    /// All bytes are uncompressed; the writer compresses them. A chunk routed to
-    /// several WADs shares one buffer, so each WAD compresses the same input and
-    /// every copy carries the same compressed checksum.
+    /// The resolved bytes are then compressed by [`prepare_overrides`], once per
+    /// distinct content, and the compressed results are spread across the WADs.
     pub(crate) fn resolve_overrides_for_wads(
         &mut self,
         wads_to_build: &[Utf8PathBuf],
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
         all_meta: &HashMap<u64, OverrideMeta>,
         string_plans: &HashMap<u64, StringPatchPlan>,
-    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>>> {
+    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>>> {
         // Every unique path hash needed across the WADs being rebuilt.
         let needed_hashes: HashSet<u64> = wads_to_build
             .iter()
@@ -228,10 +281,12 @@ impl OverlayBuilder {
         self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut resolved)?;
         self.resolve_string_patches(&sources.string_patches, string_plans, &mut resolved)?;
 
-        Ok(distribute_resolved_to_wads(
+        let prepared = prepare_overrides(resolved, all_meta)?;
+
+        Ok(distribute_prepared_to_wads(
             wads_to_build,
             wad_hash_sets,
-            &resolved,
+            &prepared,
         ))
     }
 
@@ -326,7 +381,7 @@ impl OverlayBuilder {
     pub(crate) fn patch_wads_parallel(
         &self,
         wads_to_build: Vec<Utf8PathBuf>,
-        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, ResolvedChunk>>,
+        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>>,
     ) -> Result<Vec<Utf8PathBuf>> {
         let total_wads = wads_to_build.len() as u32;
         let completed = AtomicU32::new(0);
@@ -349,7 +404,7 @@ impl OverlayBuilder {
         });
 
         // Extract per-WAD overrides so each parallel task owns its data.
-        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, ResolvedChunk>)> = wads_to_build
+        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, PreparedOverride>)> = wads_to_build
             .into_iter()
             .map(|path| {
                 let overrides = wad_overrides.remove(&path).unwrap_or_default();
@@ -395,5 +450,86 @@ impl OverlayBuilder {
                 Ok(dst_wad_path)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta_with_content_hash(content_hash: u64) -> OverrideMeta {
+        OverrideMeta {
+            content_hash,
+            uncompressed_size: 0,
+            source: OverrideSource::Raw {
+                mod_id: "m".to_string(),
+                rel_path: Utf8PathBuf::from("assets/x.bin"),
+            },
+            fallback_wad: None,
+            unlocalized_wad: None,
+            linked_bins: Vec::new(),
+        }
+    }
+
+    /// Two chunks with the same content must end up sharing one compressed
+    /// buffer: that is what makes every copy of a cross-WAD chunk carry the
+    /// same compressed checksum, which the game validates.
+    #[test]
+    fn identical_content_is_compressed_once() {
+        let bytes: ResolvedChunk = Arc::from(b"the same asset, twice".repeat(64).as_slice());
+        let resolved = HashMap::from([(0xAAAA_u64, bytes.clone()), (0xBBBB_u64, bytes)]);
+        let all_meta = HashMap::from([
+            (0xAAAA_u64, meta_with_content_hash(0xC0FFEE)),
+            (0xBBBB_u64, meta_with_content_hash(0xC0FFEE)),
+        ]);
+
+        let prepared = prepare_overrides(resolved, &all_meta).unwrap();
+
+        assert_eq!(prepared.len(), 2);
+        let a = &prepared[&0xAAAA];
+        let b = &prepared[&0xBBBB];
+        assert!(
+            std::ptr::eq(a.compressed(), b.compressed()),
+            "equal content must share one compressed buffer, not two equal copies"
+        );
+        assert_eq!(a.checksum(), b.checksum());
+    }
+
+    /// Different content still gets its own compression, and the writer's TOC
+    /// fields come straight off each prepared override.
+    #[test]
+    fn differing_content_is_compressed_separately() {
+        let resolved = HashMap::from([
+            (
+                0xAAAA_u64,
+                ResolvedChunk::from(b"first".repeat(64).as_slice()),
+            ),
+            (
+                0xBBBB_u64,
+                ResolvedChunk::from(b"second".repeat(64).as_slice()),
+            ),
+        ]);
+        let all_meta = HashMap::from([
+            (0xAAAA_u64, meta_with_content_hash(1)),
+            (0xBBBB_u64, meta_with_content_hash(2)),
+        ]);
+
+        let prepared = prepare_overrides(resolved, &all_meta).unwrap();
+
+        assert_ne!(prepared[&0xAAAA].checksum(), prepared[&0xBBBB].checksum());
+        assert_eq!(prepared[&0xAAAA].uncompressed_size(), 5 * 64);
+        assert_eq!(prepared[&0xBBBB].uncompressed_size(), 6 * 64);
+    }
+
+    /// A chunk the metadata pass never saw cannot be deduplicated against
+    /// anything, but it must still be prepared rather than dropped.
+    #[test]
+    fn content_without_metadata_still_gets_prepared() {
+        let resolved = HashMap::from([(0xAAAA_u64, ResolvedChunk::from(b"orphan".as_slice()))]);
+
+        let prepared = prepare_overrides(resolved, &HashMap::new()).unwrap();
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[&0xAAAA].uncompressed_size(), 6);
     }
 }

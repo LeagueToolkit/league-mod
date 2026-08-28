@@ -8,8 +8,8 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_overlay::utils::resolve_chunk_hash;
-use ltk_overlay::wad_builder::build_patched_wad;
-use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder, Result};
+use ltk_overlay::wad_builder::{PreparedOverride, build_patched_wad};
+use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder};
 use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
 use std::collections::HashSet;
 use std::fs;
@@ -219,7 +219,7 @@ fn failed_wad_build_leaves_no_partial_file() {
     let override_hashes =
         HashSet::from([resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap()]);
 
-    let result = build_patched_wad(&src, &dst, &override_hashes, |_hash| -> Result<Vec<u8>> {
+    let result = build_patched_wad(&src, &dst, &override_hashes, |_hash| {
         Err(ltk_overlay::Error::Other(
             "override source vanished mid-build".to_string(),
         ))
@@ -271,7 +271,7 @@ fn patched_wad_preserves_original_signature_and_checksum() {
         &src,
         &dst,
         &HashSet::from([override_hash, new_hash]),
-        |_hash| -> Result<Vec<u8>> { Ok(b"MODDED".to_vec()) },
+        |hash| PreparedOverride::compress(hash, b"MODDED"),
     )
     .unwrap();
 
