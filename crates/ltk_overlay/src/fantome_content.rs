@@ -9,10 +9,10 @@
 //! under the `RAW/` directory.
 
 use crate::content::{ModContentProvider, archive_fingerprint};
-use crate::error::{Error, Result};
+use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
-use ltk_wad::{Wad, WadHash, is_hex_chunk_path};
+use ltk_wad::{Wad, WadChunk, WadHash, is_hex_chunk_path};
 use std::collections::HashMap;
 use std::io::{self, Cursor, Read, Seek};
 use zip::ZipArchive;
@@ -183,10 +183,11 @@ impl<R: Read + Seek> FantomeContent<R> {
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
     fn mod_project(&mut self) -> Result<ModProject> {
-        let info_name =
-            self.index.info_entry.as_ref().ok_or_else(|| {
-                Error::Other("Missing META/info.json in fantome archive".to_string())
-            })?;
+        let info_name = self
+            .index
+            .info_entry
+            .as_ref()
+            .ok_or(ModContentError::FantomeInfoMissing)?;
 
         let mut info_file = self
             .archive
@@ -280,17 +281,17 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             return Ok(results);
         }
 
-        // Try packed WAD - extract all chunks as hex-hash files
+        // Try packed WAD - extract all chunks as hex-hash files.
         if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
-            let path_hashes: Vec<WadHash> = wad.chunks().iter().map(|c| c.path_hash).collect();
-            let mut results = Vec::with_capacity(path_hashes.len());
+            // The entries are copied out whole rather than re-looked-up by hash:
+            // loading a chunk needs `&mut wad`, and carrying the entry is what
+            // keeps "the TOC listed it but does not hold it" unrepresentable.
+            let chunks: Vec<WadChunk> = wad.chunks().iter().copied().collect();
+            let mut results = Vec::with_capacity(chunks.len());
 
-            for path_hash in path_hashes {
-                let chunk = *wad.chunks().get(path_hash).ok_or_else(|| {
-                    Error::Other(format!("WAD chunk {:016x} disappeared", path_hash))
-                })?;
+            for chunk in chunks {
                 let bytes = wad.load_chunk_decompressed(&chunk)?.to_vec();
-                let hex_name = format!("{:016x}.bin", path_hash);
+                let hex_name = format!("{:016x}.bin", chunk.path_hash);
                 results.push((Utf8PathBuf::from(hex_name), bytes));
             }
 
@@ -324,10 +325,10 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
         if layer != "base" {
-            return Err(Error::Other(format!(
-                "Fantome archives only support 'base' layer, got '{}'",
-                layer
-            )));
+            return Err(ModContentError::FantomeLayerUnsupported {
+                layer: layer.to_string(),
+            }
+            .into());
         }
 
         let wad_key = wad_name.to_ascii_lowercase();
@@ -360,19 +361,20 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             && is_hex_chunk_path(rel_path)
             && let Ok(target_hash) = WadHash::from_str_radix(rel_path.file_stem().unwrap_or(""), 16)
         {
-            let chunk = *wad.chunks().get(target_hash).ok_or_else(|| {
-                Error::Other(format!(
-                    "WAD chunk {:016x} not found in packed WAD",
-                    target_hash
-                ))
-            })?;
+            let chunk =
+                *wad.chunks()
+                    .get(target_hash)
+                    .ok_or(ModContentError::PackedChunkMissing {
+                        path_hash: target_hash,
+                    })?;
             return Ok(wad.load_chunk_decompressed(&chunk)?.to_vec());
         }
 
-        Err(Error::Other(format!(
-            "Override file not found in fantome archive: WAD/{}/{}",
-            wad_name, rel_path
-        )))
+        Err(ModContentError::FantomeOverrideMissing {
+            wad_name: wad_name.to_string(),
+            rel_path: rel_path.to_path_buf(),
+        }
+        .into())
     }
 
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>> {
@@ -385,11 +387,8 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             .find(|(_, rel)| rel.replace('\\', "/") == want)
             .map(|(zip_path, _)| zip_path.clone());
 
-        let zip_path = zip_path.ok_or_else(|| {
-            Error::Other(format!(
-                "RAW override file not found in fantome archive: {}",
-                rel_path
-            ))
+        let zip_path = zip_path.ok_or_else(|| ModContentError::FantomeRawOverrideMissing {
+            rel_path: rel_path.to_path_buf(),
         })?;
 
         let mut entry = self

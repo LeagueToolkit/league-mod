@@ -7,6 +7,7 @@
 use crate::builder::{OverrideMeta, OverrideSource};
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -30,7 +31,7 @@ const CACHE_VERSION: u32 = 6;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CachedOverride {
     /// xxHash3 path hash (the WAD chunk key).
-    pub path_hash: u64,
+    pub path_hash: WadHash,
     /// xxHash3 of the uncompressed override bytes.
     pub content_hash: u64,
     /// Size of the uncompressed override bytes.
@@ -76,8 +77,8 @@ impl CachedModMeta {
     ///
     /// Converts each [`CachedOverride`] back into the builder's in-memory
     /// representation, restoring source locations for pass 2 re-reading.
-    pub fn reconstruct(&self, mod_id: &str) -> HashMap<u64, OverrideMeta> {
-        let mut mod_meta: HashMap<u64, OverrideMeta> = HashMap::new();
+    pub fn reconstruct(&self, mod_id: &str) -> HashMap<WadHash, OverrideMeta> {
+        let mut mod_meta: HashMap<WadHash, OverrideMeta> = HashMap::new();
 
         for entry in &self.overrides {
             let source = if let (Some(layer), Some(wad_name)) =
@@ -116,7 +117,7 @@ impl CachedModMeta {
     ///
     /// This is the inverse of [`reconstruct`](Self::reconstruct): it converts
     /// the builder's in-memory representation into the serializable cache format.
-    pub fn from_override_meta(fingerprint: u64, mod_meta: &HashMap<u64, OverrideMeta>) -> Self {
+    pub fn from_override_meta(fingerprint: u64, mod_meta: &HashMap<WadHash, OverrideMeta>) -> Self {
         let overrides = mod_meta
             .iter()
             .map(|(&path_hash, meta)| {
@@ -287,7 +288,7 @@ mod tests {
             CachedModMeta {
                 content_fingerprint: 0xDEAD,
                 overrides: vec![CachedOverride {
-                    path_hash: 0x1234,
+                    path_hash: WadHash(0x1234),
                     content_hash: 0x5678,
                     uncompressed_size: 100,
                     target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
@@ -307,7 +308,7 @@ mod tests {
 
         let meta = loaded.get_mod_meta("test-mod", 0xDEAD).unwrap();
         assert_eq!(meta.overrides.len(), 1);
-        assert_eq!(meta.overrides[0].path_hash, 0x1234);
+        assert_eq!(meta.overrides[0].path_hash, WadHash(0x1234));
     }
 
     #[test]

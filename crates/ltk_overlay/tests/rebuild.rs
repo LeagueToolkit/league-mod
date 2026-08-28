@@ -10,7 +10,7 @@ use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_overlay::utils::resolve_chunk_hash;
 use ltk_overlay::wad_builder::{PreparedOverride, build_patched_wad};
 use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
+use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Write};
@@ -85,7 +85,7 @@ fn read_overlay_chunk(overlay_root: &Utf8Path) -> Vec<u8> {
     let hash = resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap();
     let chunk = *wad
         .chunks()
-        .get(WadHash(hash))
+        .get(hash)
         .expect("patched WAD must contain the overridden chunk");
     wad.load_chunk_decompressed(&chunk).unwrap().to_vec()
 }
@@ -220,9 +220,9 @@ fn failed_wad_build_leaves_no_partial_file() {
         HashSet::from([resolve_chunk_hash(Utf8Path::new(CHUNK_PATH), b"").unwrap()]);
 
     let result = build_patched_wad(&src, &dst, &override_hashes, |_hash| {
-        Err(ltk_overlay::Error::Other(
-            "override source vanished mid-build".to_string(),
-        ))
+        Err(ltk_overlay::Error::from(std::io::Error::other(
+            "override source vanished mid-build",
+        )))
     });
 
     assert!(result.is_err());

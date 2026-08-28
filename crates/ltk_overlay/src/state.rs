@@ -16,6 +16,7 @@ use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
 use crate::wad_builder::{SourceWadIdentity, WadTailLayout};
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,10 +42,13 @@ pub struct WadLayoutRecord {
 
     /// `path_hash -> content_hash` for every override currently in the tail.
     ///
+    /// The key is a [`WadHash`] but serializes as the same bare integer a
+    /// `u64` key did, so state files written before the change still load.
+    ///
     /// Comparing this against the next build's override set is what splits it
     /// into overrides whose compressed bytes can be lifted straight out of the
     /// old tail and overrides that have to be resolved and compressed again.
-    pub overrides: BTreeMap<u64, u64>,
+    pub overrides: BTreeMap<WadHash, u64>,
 }
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
@@ -64,9 +68,24 @@ pub struct WadLayoutRecord {
 ///   },
 ///   "gameFingerprint": 1234567890,
 ///   "blockedWads": ["scripts.wad.client"],
+///   "stringOverrideLocales": ["en_us"],
 ///   "wadFingerprints": {
 ///     "DATA/FINAL/Champions/Aatrox.wad.client": 9876543210
-///   }
+///   },
+///   "linkedBinOffenders": [],
+///   "wadLayouts": {
+///     "DATA/FINAL/Champions/Aatrox.wad.client": {
+///       "source": { "len": 41205760, "mtime": 1730000000000000000, "tocHash": 1357924680 },
+///       "layout": {
+///         "dataRegionOffset": 39184,
+///         "offsetDelta": -1024,
+///         "tailOffset": 41203712,
+///         "tocCapacity": 1222
+///       },
+///       "overrides": { "1234605616436508552": 8526495041147787000 }
+///     }
+///   },
+///   "dirtyWads": []
 /// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +322,15 @@ impl OverlayState {
     /// * `game_fingerprint` - Current game fingerprint
     pub fn supports_incremental(&self, game_fingerprint: u64) -> bool {
         self.version == CURRENT_VERSION && self.game_fingerprint == game_fingerprint
+    }
+
+    /// Whether this state was written by the current schema version.
+    ///
+    /// A state from any other version says nothing trustworthy about the WADs
+    /// on disk: the format may differ, or the build semantics may have changed
+    /// such that those files no longer match what a fresh build would produce.
+    pub fn is_current_version(&self) -> bool {
+        self.version == CURRENT_VERSION
     }
 
     /// Look up the fingerprint of a specific WAD from the previous build.
@@ -693,7 +721,7 @@ mod tests {
         assert!(json.contains("\"dirtyWads\""));
     }
 
-    fn layout_record(overrides: &[(u64, u64)]) -> WadLayoutRecord {
+    fn layout_record(overrides: &[(WadHash, u64)]) -> WadLayoutRecord {
         WadLayoutRecord {
             source: SourceWadIdentity {
                 len: 4096,
@@ -720,7 +748,7 @@ mod tests {
             .join("overlay.json");
 
         let mut state = OverlayState::default();
-        let record = layout_record(&[(0xAAAA, 0x1111), (0xBBBB, 0x2222)]);
+        let record = layout_record(&[(WadHash(0xAAAA), 0x1111), (WadHash(0xBBBB), 0x2222)]);
         state.wad_layouts.insert(
             "DATA/FINAL/Champions/Ahri.wad.client".to_string(),
             record.clone(),
@@ -741,7 +769,7 @@ mod tests {
         let mut state = OverlayState::default();
         state
             .wad_layouts
-            .insert("wad".to_string(), layout_record(&[(1, 2)]));
+            .insert("wad".to_string(), layout_record(&[(WadHash(1), 2)]));
         assert!(state.wad_layout("wad").is_some());
 
         state.dirty_wads.insert("wad".to_string());

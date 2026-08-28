@@ -22,7 +22,7 @@
 //!    unchanged mods entirely. Bytes are hashed and then dropped.
 //! 5. Distribute override hashes to WADs, partition into rebuild/reuse sets,
 //!    then work out which of the rebuilds can keep their file and rewrite only
-//!    its tail (see [`incremental`]). Those are marked dirty in one atomic state
+//!    its tail (see the `incremental` module). Those are marked dirty in one atomic state
 //!    write before any byte is touched.
 //! 6. **Pass 2**: Re-read override bytes only for WADs being rebuilt, and only
 //!    for the overrides a tail rewrite cannot lift out of the file it is about
@@ -37,14 +37,14 @@ mod metadata;
 mod resolve;
 
 use crate::content::ModContentProvider;
-use crate::error::{Error, Result};
+use crate::error::{Error, GameDirError, Invariant, Result};
 use crate::game_index::GameIndex;
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
 use crate::state::{OverlayState, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
 use crate::wad_builder::WadTailLayout;
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_wad::WadChunks;
+use ltk_wad::{WadChunks, WadHash};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -123,7 +123,7 @@ pub struct OverrideMeta {
 
 impl OverrideMeta {
     /// Whether this override is a cross-WAD import
-    pub(crate) fn is_cross_wad_import(&self, path_hash: u64, game_index: &GameIndex) -> bool {
+    pub(crate) fn is_cross_wad_import(&self, path_hash: WadHash, game_index: &GameIndex) -> bool {
         if !matches!(self.source, OverrideSource::LayerWad { .. }) {
             return false;
         }
@@ -154,7 +154,7 @@ impl OverrideMeta {
     /// [`ModWadReport::from_meta`] so build routing and mod reports agree.
     pub(crate) fn route_targets<'a>(
         &'a self,
-        path_hash: u64,
+        path_hash: WadHash,
         game_index: &'a GameIndex,
     ) -> Vec<&'a Utf8Path> {
         let matched = game_index
@@ -328,7 +328,7 @@ pub struct OverlayBuildResult {
 #[derive(Debug, Clone)]
 pub struct Conflict {
     /// xxHash3 path hash of the conflicting chunk.
-    pub path_hash: u64,
+    pub path_hash: WadHash,
     /// Human-readable path (if available from hash tables).
     pub path: String,
     /// All mods that contributed an override for this chunk.
@@ -407,7 +407,7 @@ impl ModWadReport {
     /// entries and cross-WAD imports.
     pub(crate) fn from_meta(
         mod_id: String,
-        mod_meta: &HashMap<u64, OverrideMeta>,
+        mod_meta: &HashMap<WadHash, OverrideMeta>,
         content_fingerprint: Option<u64>,
         game_index: &GameIndex,
     ) -> Self {
@@ -460,7 +460,7 @@ pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 fn collect_wad_layouts(
     built: &[resolve::PatchedWad],
     reused: &[Utf8PathBuf],
-    all_meta: &HashMap<u64, OverrideMeta>,
+    all_meta: &HashMap<WadHash, OverrideMeta>,
     prev_state: Option<&OverlayState>,
 ) -> BTreeMap<String, WadLayoutRecord> {
     let mut layouts: BTreeMap<String, WadLayoutRecord> = built
@@ -584,9 +584,10 @@ impl OverlayBuilder {
     ) -> Result<ModWadReport> {
         let data_final_dir = game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(Error::Other(format!(
-                "League path does not contain Game/DATA/FINAL. Game dir: '{game_dir}'"
-            )));
+            return Err(GameDirError::MissingDataFinal {
+                path: game_dir.to_path_buf(),
+            }
+            .into());
         }
 
         std::fs::create_dir_all(state_dir.as_std_path())
@@ -668,10 +669,10 @@ impl OverlayBuilder {
 
         let data_final_dir = self.game_dir.join("DATA").join("FINAL");
         if !data_final_dir.as_std_path().exists() {
-            return Err(Error::Other(format!(
-                "League path does not contain Game/DATA/FINAL. Game dir: '{}'",
-                self.game_dir
-            )));
+            return Err(GameDirError::MissingDataFinal {
+                path: self.game_dir.clone(),
+            }
+            .into());
         }
 
         std::fs::create_dir_all(self.overlay_root.as_std_path())
@@ -963,8 +964,8 @@ impl OverlayBuilder {
         &mut self,
         game_index: &GameIndex,
         target_locales: &[String],
-        all_meta: &mut HashMap<u64, OverrideMeta>,
-    ) -> Result<HashMap<u64, StringPatchPlan>> {
+        all_meta: &mut HashMap<WadHash, OverrideMeta>,
+    ) -> Result<HashMap<WadHash, StringPatchPlan>> {
         let mut plans = HashMap::new();
         if target_locales.is_empty() {
             return Ok(plans);
@@ -996,7 +997,10 @@ impl OverlayBuilder {
             };
             let wad_rel_path = wad_abs_path
                 .strip_prefix(&self.game_dir)
-                .map_err(|_| Error::Other(format!("WAD path is not under Game/: {wad_abs_path}")))?
+                .map_err(|_| GameDirError::WadOutsideGameDir {
+                    game_dir: self.game_dir.clone(),
+                    wad: wad_abs_path.clone(),
+                })?
                 .to_path_buf();
 
             let chunk_hash = strings::stringtable_chunk_hash(&locale);
@@ -1262,7 +1266,7 @@ mod tests {
         }
     }
 
-    fn game_index_with_hashes(hashes: HashMap<u64, Vec<Utf8PathBuf>>) -> GameIndex {
+    fn game_index_with_hashes(hashes: HashMap<WadHash, Vec<Utf8PathBuf>>) -> GameIndex {
         GameIndex {
             wad_index: HashMap::new(),
             hash_index: hashes,
@@ -1279,14 +1283,17 @@ mod tests {
 
         // 0xBA5E is a champion base chunk the game duplicates into both map WADs
         // (spillover); 0x5C1 (a skin chunk) lives only in the champion WAD.
-        let mut hash_index: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
-        hash_index.insert(0xBA5E, vec![aatrox.clone(), map11.clone(), map12.clone()]);
-        hash_index.insert(0x5C1, vec![aatrox.clone()]);
+        let mut hash_index: HashMap<WadHash, Vec<Utf8PathBuf>> = HashMap::new();
+        hash_index.insert(
+            WadHash(0xBA5E),
+            vec![aatrox.clone(), map11.clone(), map12.clone()],
+        );
+        hash_index.insert(WadHash(0x5C1), vec![aatrox.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
-        let mut mod_meta: HashMap<u64, OverrideMeta> = HashMap::new();
-        mod_meta.insert(0xBA5E, dummy_meta());
-        mod_meta.insert(0x5C1, dummy_meta());
+        let mut mod_meta: HashMap<WadHash, OverrideMeta> = HashMap::new();
+        mod_meta.insert(WadHash(0xBA5E), dummy_meta());
+        mod_meta.insert(WadHash(0x5C1), dummy_meta());
 
         let report =
             ModWadReport::from_meta("aatrox-skin".to_string(), &mod_meta, None, &game_index);
@@ -1326,7 +1333,7 @@ mod tests {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
         let mut hash_index = HashMap::new();
-        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
         // A copy of an Ahri chunk shipped under the Aatrox WAD dir (cross-WAD
@@ -1336,7 +1343,7 @@ mod tests {
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(aatrox.clone());
         assert_eq!(
-            meta.route_targets(0xA881, &game_index),
+            meta.route_targets(WadHash(0xA881), &game_index),
             vec![ahri.as_path(), aatrox.as_path()]
         );
 
@@ -1344,7 +1351,7 @@ mod tests {
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(ahri.clone());
         assert_eq!(
-            meta.route_targets(0xA881, &game_index),
+            meta.route_targets(WadHash(0xA881), &game_index),
             vec![ahri.as_path()]
         );
     }
@@ -1362,7 +1369,7 @@ mod tests {
         meta.fallback_wad = Some(graves_en.clone());
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
-            meta.route_targets(0xF00D, &game_index),
+            meta.route_targets(WadHash(0xF00D), &game_index),
             vec![graves_en.as_path(), graves.as_path()]
         );
     }
@@ -1372,7 +1379,7 @@ mod tests {
         let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
         let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
         let mut hash_index = HashMap::new();
-        hash_index.insert(0x1_0CA1_u64, vec![graves_en.clone()]);
+        hash_index.insert(WadHash(0x1_0CA1), vec![graves_en.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
         // Genuinely localized content hash-matches the localized WAD, so it never
@@ -1381,7 +1388,7 @@ mod tests {
         meta.fallback_wad = Some(graves_en.clone());
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
-            meta.route_targets(0x1_0CA1, &game_index),
+            meta.route_targets(WadHash(0x1_0CA1), &game_index),
             vec![graves_en.as_path()]
         );
     }
@@ -1391,7 +1398,7 @@ mod tests {
         let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
         let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
         let mut hash_index = HashMap::new();
-        hash_index.insert(0xBA5E_u64, vec![graves.clone()]);
+        hash_index.insert(WadHash(0xBA5E), vec![graves.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
         // An existing asset misplaced into the localized WAD: the hash match
@@ -1400,7 +1407,7 @@ mod tests {
         meta.fallback_wad = Some(graves_en.clone());
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
-            meta.route_targets(0xBA5E, &game_index),
+            meta.route_targets(WadHash(0xBA5E), &game_index),
             vec![graves.as_path(), graves_en.as_path()]
         );
     }
@@ -1410,7 +1417,7 @@ mod tests {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
         let mut hash_index = HashMap::new();
-        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
         // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
@@ -1427,12 +1434,12 @@ mod tests {
             linked_bins: Vec::new(),
         };
         assert_eq!(
-            meta.route_targets(0xA881, &game_index),
+            meta.route_targets(WadHash(0xA881), &game_index),
             vec![ahri.as_path()]
         );
         // ...but it still routes brand-new hashes.
         assert_eq!(
-            meta.route_targets(0xF00D, &game_index),
+            meta.route_targets(WadHash(0xF00D), &game_index),
             vec![aatrox.as_path()]
         );
     }
@@ -1442,13 +1449,13 @@ mod tests {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
         let mut hash_index = HashMap::new();
-        hash_index.insert(0xA881_u64, vec![ahri.clone()]);
+        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
         let game_index = game_index_with_hashes(hash_index);
 
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(aatrox.clone());
         let mut mod_meta = HashMap::new();
-        mod_meta.insert(0xA881, meta);
+        mod_meta.insert(WadHash(0xA881), meta);
 
         let report = ModWadReport::from_meta("import".to_string(), &mod_meta, None, &game_index);
         assert_eq!(
@@ -1475,7 +1482,7 @@ mod tests {
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(custom.clone());
         let mut mod_meta = HashMap::new();
-        mod_meta.insert(0xABCD, meta);
+        mod_meta.insert(WadHash(0xABCD), meta);
 
         let report = ModWadReport::from_meta("new".to_string(), &mod_meta, None, &game_index);
         assert_eq!(

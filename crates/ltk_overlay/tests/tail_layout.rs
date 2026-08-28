@@ -5,7 +5,7 @@
 //! source region must arrive intact - including the now-unreferenced bytes of
 //! chunks that were overridden, which is what lets a later build drop an
 //! override with a TOC edit alone - and every override must live past its end,
-//! so rewriting the tail never disturbs a passthrough chunk.
+//! so rewriting the tail never disturbs a transient chunk.
 
 mod common;
 
@@ -28,7 +28,7 @@ const ALSO_KEPT_BYTES: &[u8] = b"another untouched chunk, so the region spans se
 const OVERRIDE_BYTES: &[u8] = b"MODDED CONTENT, longer than what it replaced, by design";
 const ADDED_BYTES: &[u8] = b"a brand-new entry the source WAD never held";
 
-fn hash(path: &str) -> u64 {
+fn hash(path: &str) -> WadHash {
     resolve_chunk_hash(Utf8Path::new(path), b"").expect("chunk path hashes")
 }
 
@@ -51,11 +51,11 @@ fn patch_fixture(
     );
 
     let dst = root.join("overlay").join("Fixture.wad.client");
-    let by_hash: Vec<(u64, Vec<u8>)> = overrides
+    let by_hash: Vec<(WadHash, Vec<u8>)> = overrides
         .iter()
         .map(|(path, bytes)| (hash(path), bytes.to_vec()))
         .collect();
-    let override_hashes: HashSet<u64> = by_hash.iter().map(|(h, _)| *h).collect();
+    let override_hashes: HashSet<WadHash> = by_hash.iter().map(|(h, _)| *h).collect();
 
     let stats = build_patched_wad(&src, &dst, &override_hashes, |h| {
         let bytes = by_hash
@@ -82,7 +82,7 @@ fn overridden_chunks_keep_their_original_bytes_in_the_region() {
     let source = Wad::mount(fs::File::open(src.as_std_path()).unwrap()).unwrap();
     let original = *source
         .chunks()
-        .get(WadHash(hash(REPLACED)))
+        .get(hash(REPLACED))
         .expect("the source WAD holds the replaced chunk");
 
     let shifted = (original.data_offset as i64 + stats.layout.offset_delta) as usize;
@@ -96,7 +96,7 @@ fn overridden_chunks_keep_their_original_bytes_in_the_region() {
 
 /// Overrides and new entries go past the source region's end, which is what
 /// makes an incremental rebuild able to truncate at the tail and start over
-/// without touching a single passthrough chunk.
+/// without touching a single transient chunk.
 #[test]
 fn overrides_and_new_entries_live_in_the_tail() {
     let tmp = tempfile::tempdir().unwrap();
@@ -107,7 +107,7 @@ fn overrides_and_new_entries_live_in_the_tail() {
     for path in [REPLACED, ADDED] {
         let chunk = patched
             .chunks()
-            .get(WadHash(hash(path)))
+            .get(hash(path))
             .unwrap_or_else(|| panic!("the patched WAD holds {path}"));
         assert!(
             chunk.data_offset as u64 >= stats.layout.tail_offset,
@@ -120,7 +120,7 @@ fn overrides_and_new_entries_live_in_the_tail() {
     for path in [KEPT, ALSO_KEPT] {
         let chunk = patched
             .chunks()
-            .get(WadHash(hash(path)))
+            .get(hash(path))
             .unwrap_or_else(|| panic!("the patched WAD holds {path}"));
         assert!(
             (chunk.data_offset as u64) < stats.layout.tail_offset,
@@ -133,7 +133,7 @@ fn overrides_and_new_entries_live_in_the_tail() {
 /// offset: its bytes were copied verbatim, so the sizes, compression, frame
 /// fields and checksum that described them still do.
 #[test]
-fn passthrough_chunks_keep_their_bytes_and_toc_fields() {
+fn transient_chunks_keep_their_bytes_and_toc_fields() {
     let tmp = tempfile::tempdir().unwrap();
     let (src, dst, _stats) = patch_fixture(&tmp, &[(REPLACED, OVERRIDE_BYTES)]);
 
@@ -161,7 +161,7 @@ fn the_patched_wad_stays_well_formed() {
     assert_eq!(stats.chunks_written, 4);
     assert_eq!(stats.overrides_applied, 2);
     assert_eq!(stats.new_entries_added, 1);
-    assert_eq!(stats.chunks_passed_through, 2);
+    assert_eq!(stats.chunks_transient, 2);
 
     let patched = Wad::mount(fs::File::open(dst.as_std_path()).unwrap()).unwrap();
     assert_eq!(patched.chunks().len(), 4);

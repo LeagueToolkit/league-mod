@@ -50,7 +50,7 @@
 //! and sharing the [`PreparedOverride`] guarantees that structurally, without
 //! relying on the compressor being deterministic across versions.
 
-use crate::error::{Error, Result};
+use crate::error::{CorruptionError, Error, Result, WadLimitError, WadRegion};
 use byteorder::{LE, WriteBytesExt};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_file::LeagueFileKind;
@@ -116,15 +116,15 @@ impl PreparedOverride {
     ///
     /// Returns an error when the compressed or uncompressed size overflows the
     /// WAD v3.4 format's `u32` size fields.
-    pub fn compress(path_hash: u64, data: &[u8]) -> Result<Self> {
-        let compression = LeagueFileKind::identify_from_bytes(data).ideal_compression();
-        let compressed = compress_by_type(data, compression)?;
-        ensure_chunk_fits(path_hash, compressed.len(), data.len(), "Override")?;
+    pub fn compress(path_hash: WadHash, data: &[u8]) -> Result<Self> {
+        let codec = OverrideCodec::for_data(data);
+        let compressed = compress_by_type(data, codec)?;
+        ensure_chunk_fits(path_hash, compressed.len(), data.len())?;
         Ok(Self {
             checksum: xxh3_64(&compressed),
             compressed: Arc::from(compressed),
             uncompressed_size: data.len() as u32,
-            compression,
+            compression: codec.as_wad_compression(),
         })
     }
 
@@ -142,11 +142,12 @@ impl PreparedOverride {
     pub(crate) fn from_wad_bytes(chunk: &WadChunk, compressed: Box<[u8]>) -> Result<Self> {
         let checksum = xxh3_64(&compressed);
         if checksum != chunk.checksum {
-            return Err(Error::Other(format!(
-                "Chunk {:016x} does not match its recorded checksum \
-                 (found {checksum:016x}, expected {:016x})",
-                chunk.path_hash, chunk.checksum
-            )));
+            return Err(CorruptionError::ChunkChecksum {
+                path_hash: chunk.path_hash,
+                found: checksum,
+                expected: chunk.checksum,
+            }
+            .into());
         }
 
         Ok(Self {
@@ -178,6 +179,61 @@ impl PreparedOverride {
     }
 }
 
+/// A codec this crate writes an override with.
+///
+/// Narrower than [`WadChunkCompression`] on purpose: the WAD format names codecs
+/// this crate reads but never emits, and taking the wider type would leave the
+/// writer with unreachable arms to answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverrideCodec {
+    /// Stored uncompressed - audio, which is already compressed.
+    Stored,
+    /// Zstd level 3 - everything else.
+    Zstd,
+}
+
+impl OverrideCodec {
+    /// The codec to write `data` with, from its detected file type.
+    fn for_data(data: &[u8]) -> Self {
+        match LeagueFileKind::identify_from_bytes(data).ideal_compression() {
+            WadChunkCompression::None => Self::Stored,
+            // Zstd is what this crate writes for everything that is not audio,
+            // so any other codec `ltk_file` names maps to the same choice.
+            _ => Self::Zstd,
+        }
+    }
+
+    /// The TOC compression field for this codec.
+    fn as_wad_compression(self) -> WadChunkCompression {
+        match self {
+            Self::Stored => WadChunkCompression::None,
+            Self::Zstd => WadChunkCompression::Zstd,
+        }
+    }
+}
+
+/// One slot in a patched WAD's TOC, before its data offset is known.
+///
+/// A transient entry carries the source entry it will be shifted from rather than
+/// its hash alone, so "this hash should be in the source TOC but is not" is not
+/// a state the writer can reach.
+enum PlannedEntry {
+    /// A source chunk keeping the bytes copied into the region.
+    Transient(WadChunk),
+    /// A chunk whose bytes are written into the override tail.
+    Override(WadHash),
+}
+
+impl PlannedEntry {
+    /// The path hash this entry will be sorted and written under.
+    fn path_hash(&self) -> WadHash {
+        match self {
+            Self::Transient(chunk) => chunk.path_hash,
+            Self::Override(path_hash) => *path_hash,
+        }
+    }
+}
+
 /// Where a patched WAD's regions sit, and how source offsets map into it.
 ///
 /// Recorded after a build so a later rebuild of the same source WAD can verify
@@ -205,12 +261,25 @@ impl WadTailLayout {
     /// Absolute offset of the first TOC entry.
     ///
     /// Derived from the region offset rather than the header size, so the
-    /// 272-byte header stays a fact of the writer alone.
+    /// 268-byte header stays a fact of the writer alone.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds, and wraps in release ones, when the layout does
+    /// not place its region past a TOC of the recorded capacity. Every field
+    /// here is deserialized from a state file that anything could have written,
+    /// so run [`validate`](Self::validate) first unless the layout came
+    /// straight out of a fresh build.
     pub fn toc_offset(&self) -> u64 {
         self.data_region_offset - u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64
     }
 
     /// Absolute offset of the `u32` chunk count, which precedes the TOC.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same unvalidated layouts as
+    /// [`toc_offset`](Self::toc_offset), which this subtracts from.
     pub fn chunk_count_offset(&self) -> u64 {
         self.toc_offset() - size_of::<u32>() as u64
     }
@@ -225,14 +294,15 @@ impl WadTailLayout {
     ///
     /// Fails when the shifted range falls outside what the format's `u32`
     /// offset fields can address.
-    pub fn shift(&self, orig: &WadChunk) -> Result<WadChunk> {
+    pub fn shifted(&self, orig: &WadChunk) -> Result<WadChunk> {
         let shifted = orig.data_offset as i64 + self.offset_delta;
         let end = shifted + orig.compressed_size as i64;
         if shifted < 0 || end > MAX_WAD_OFFSET as i64 {
-            return Err(Error::Other(format!(
-                "Patched WAD cannot address chunk {:016x} at offset {shifted}",
-                orig.path_hash
-            )));
+            return Err(WadLimitError::ChunkUnaddressable {
+                path_hash: orig.path_hash,
+                offset: shifted,
+            }
+            .into());
         }
 
         Ok(WadChunk {
@@ -270,10 +340,12 @@ impl WadTailLayout {
         if self.data_region_offset < smallest_region_offset
             || self.tail_offset < self.data_region_offset
         {
-            return Err(Error::Other(format!(
-                "Incoherent WAD layout: {} TOC entries, region at {}, tail at {}",
-                self.toc_capacity, self.data_region_offset, self.tail_offset
-            )));
+            return Err(CorruptionError::IncoherentLayout {
+                toc_capacity: self.toc_capacity,
+                data_region_offset: self.data_region_offset,
+                tail_offset: self.tail_offset,
+            }
+            .into());
         }
         Ok(())
     }
@@ -324,7 +396,7 @@ pub struct PatchedWadStats {
     /// Number of new entries added (not present in the original WAD).
     pub new_entries_added: usize,
     /// Number of chunks passed through unchanged from the original WAD.
-    pub chunks_passed_through: usize,
+    pub chunks_transient: usize,
     /// Wall-clock time to build this WAD, in milliseconds.
     pub elapsed_ms: u128,
     /// Where this build put the source data region and the override tail.
@@ -368,11 +440,21 @@ pub struct PatchedWadStats {
 /// # Returns
 ///
 /// [`PatchedWadStats`] with build metrics (chunk counts, timing).
+///
+/// # Errors
+///
+/// Fails when the source WAD cannot be read or is truncated, when the output
+/// cannot be created or renamed into place, when an override's bytes cannot be
+/// resolved by `resolve_override`, or when the result would exceed what the WAD
+/// v3.4 format can address - more chunks than a `u32` can count, or a file past
+/// 4 GiB. A failed write deletes the temp file, so no half-written WAD survives
+/// at either path; only a failed rename can leave one behind, and that one is
+/// complete.
 pub fn build_patched_wad(
     src_wad_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
-    override_hashes: &HashSet<u64>,
-    resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
+    override_hashes: &HashSet<WadHash>,
+    resolve_override: impl FnMut(WadHash) -> Result<PreparedOverride>,
 ) -> Result<PatchedWadStats> {
     if let Some(parent) = dst_wad_path.parent() {
         std::fs::create_dir_all(parent.as_std_path())
@@ -405,8 +487,8 @@ fn write_patched_wad(
     src_wad_path: &Utf8Path,
     out_path: &Utf8Path,
     dst_wad_path: &Utf8Path,
-    override_hashes: &HashSet<u64>,
-    mut resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
+    override_hashes: &HashSet<WadHash>,
+    mut resolve_override: impl FnMut(WadHash) -> Result<PreparedOverride>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
@@ -418,9 +500,9 @@ fn write_patched_wad(
     let chunks = wad.chunks();
 
     // Collect new entry hashes (in overrides but not in the original WAD)
-    let mut new_hashes: Vec<u64> = override_hashes
+    let mut new_hashes: Vec<WadHash> = override_hashes
         .iter()
-        .filter(|&&h| !chunks.contains(WadHash(h)))
+        .filter(|&&h| !chunks.contains(h))
         .copied()
         .collect();
     new_hashes.sort();
@@ -434,12 +516,23 @@ fn write_patched_wad(
         );
     }
 
-    // Build a merged sorted list of ALL hashes (original + new).
+    // Build a merged sorted list of ALL entries (original + new).
     // WAD TOC must be sorted by path_hash; binary_search insertion maintains this.
-    let mut ordered: Vec<u64> = chunks.iter().map(|c| c.path_hash.0).collect();
+    let mut ordered: Vec<PlannedEntry> = chunks
+        .iter()
+        .map(|chunk| {
+            if override_hashes.contains(&chunk.path_hash) {
+                PlannedEntry::Override(chunk.path_hash)
+            } else {
+                PlannedEntry::Transient(*chunk)
+            }
+        })
+        .collect();
     for hash in &new_hashes {
-        let pos = ordered.binary_search(hash).unwrap_or_else(|i| i);
-        ordered.insert(pos, *hash);
+        let pos = ordered
+            .binary_search_by_key(hash, PlannedEntry::path_hash)
+            .unwrap_or_else(|i| i);
+        ordered.insert(pos, PlannedEntry::Override(*hash));
     }
     let new_entries_added = new_hashes.len();
 
@@ -485,22 +578,20 @@ fn write_patched_wad(
     let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
     let mut tail_cursor = layout.tail_offset;
 
-    for &path_hash in &ordered {
-        if override_hashes.contains(&path_hash) {
-            overrides_applied += 1;
-            let over = resolve_override(path_hash)?;
-            final_chunks.push(write_tail_chunk(
-                &mut writer,
-                path_hash,
-                &over,
-                &mut tail_cursor,
-                dst_wad_path,
-            )?);
-        } else {
-            let orig = chunks
-                .get(WadHash(path_hash))
-                .ok_or_else(|| Error::Other(format!("Missing base chunk {path_hash:016x}")))?;
-            final_chunks.push(layout.shift(orig)?);
+    for entry in &ordered {
+        match entry {
+            PlannedEntry::Override(path_hash) => {
+                overrides_applied += 1;
+                let over = resolve_override(*path_hash)?;
+                final_chunks.push(write_tail_chunk(
+                    &mut writer,
+                    *path_hash,
+                    &over,
+                    &mut tail_cursor,
+                    dst_wad_path,
+                )?);
+            }
+            PlannedEntry::Transient(orig) => final_chunks.push(layout.shifted(orig)?),
         }
     }
 
@@ -514,15 +605,15 @@ fn write_patched_wad(
     writer.flush()?;
 
     let elapsed_ms = start.elapsed().as_millis();
-    let chunks_passed_through = ordered.len() - overrides_applied;
+    let chunks_transient = ordered.len() - overrides_applied;
 
     tracing::info!(
-        "Patched WAD complete dst={} chunks={} overrides={} new={} passed_through={} elapsed_ms={}",
+        "Patched WAD complete dst={} chunks={} overrides={} new={} transient={} elapsed_ms={}",
         dst_wad_path,
         ordered.len(),
         overrides_applied,
         new_entries_added,
-        chunks_passed_through,
+        chunks_transient,
         elapsed_ms
     );
 
@@ -530,7 +621,7 @@ fn write_patched_wad(
         chunks_written: ordered.len(),
         overrides_applied,
         new_entries_added,
-        chunks_passed_through,
+        chunks_transient,
         elapsed_ms,
         layout,
         source: Some(SourceWadIdentity::new(
@@ -557,7 +648,8 @@ fn write_patched_wad(
 /// * `base_entries` - The TOC entry each chunk already in the copied region
 ///   would have with no override applied, keyed by path hash. A tail hash
 ///   overwrites its entry here, so a chunk whose override is gone reverts to the
-///   bytes the region still holds.
+///   bytes the region still holds. Consumed and written back out as the new TOC,
+///   which for a map WAD is tens of thousands of entries not worth copying.
 /// * `tail_hashes` - Path hashes whose data goes into the new tail, ascending.
 /// * `resolve_override` - Supplies each tail hash's compressed bytes, in the
 ///   order they are written.
@@ -578,39 +670,45 @@ fn write_patched_wad(
 pub fn rewrite_wad_tail(
     wad_path: &Utf8Path,
     layout: &WadTailLayout,
-    base_entries: &BTreeMap<u64, WadChunk>,
-    tail_hashes: &[u64],
-    mut resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
+    base_entries: BTreeMap<WadHash, WadChunk>,
+    tail_hashes: &[WadHash],
+    mut resolve_override: impl FnMut(WadHash) -> Result<PreparedOverride>,
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
     layout.validate()?;
 
-    let entry_count = merged_entry_count(base_entries, tail_hashes.iter().copied());
+    let base_entry_count = base_entries.len();
+    let entry_count = merged_entry_count(&base_entries, tail_hashes.iter().copied());
     if !layout.admits_entry_count(entry_count) {
-        return Err(Error::Other(format!(
-            "Overlay WAD {wad_path} has room for {} TOC entries, not the {entry_count} \
-             this rebuild needs",
-            layout.toc_capacity
-        )));
+        return Err(WadLimitError::TocCapacity {
+            wad: wad_path.to_path_buf(),
+            needed: entry_count,
+            reserved: layout.toc_capacity,
+        }
+        .into());
     }
 
     // Everything that can fail without touching the file has now been checked,
     // and the tail's own bytes are gathered before the truncation, so the only
     // failures past this point are the disk itself giving out.
-    let tail: Vec<(u64, PreparedOverride)> = tail_hashes
+    let tail: Vec<(WadHash, PreparedOverride)> = tail_hashes
         .iter()
         .map(|&path_hash| Ok((path_hash, resolve_override(path_hash)?)))
         .collect::<Result<_>>()?;
-    let tail_end = tail.iter().try_fold(layout.tail_offset, |end, (_, over)| {
-        end.checked_add(over.compressed().len() as u64)
-            .ok_or_else(|| Error::Other(format!("Overlay WAD {wad_path} tail overflows")))
-    })?;
+    // Saturating rather than checked: any sum large enough to wrap a u64 is far
+    // past the 4 GiB limit the next check rejects it by, so there is nothing a
+    // separate overflow error would tell the caller.
+    let tail_end = tail.iter().fold(layout.tail_offset, |end, (_, over)| {
+        end.saturating_add(over.compressed().len() as u64)
+    });
     if tail_end > MAX_WAD_OFFSET {
-        return Err(Error::Other(format!(
-            "Overlay WAD {wad_path} exceeds the 4 GiB limit of the WAD v3.4 format: \
-             its override tail would end at offset {tail_end}"
-        )));
+        return Err(WadLimitError::FileTooLarge {
+            wad: wad_path.to_path_buf(),
+            region: WadRegion::OverrideTail,
+            offset: tail_end,
+        }
+        .into());
     }
 
     let file = OpenOptions::new()
@@ -624,7 +722,7 @@ pub fn rewrite_wad_tail(
     let mut writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
     writer.seek(SeekFrom::Start(layout.tail_offset))?;
 
-    let mut entries = base_entries.clone();
+    let mut entries = base_entries;
     let mut tail_cursor = layout.tail_offset;
     for (path_hash, over) in &tail {
         let chunk = write_tail_chunk(&mut writer, *path_hash, over, &mut tail_cursor, wad_path)?;
@@ -653,8 +751,8 @@ pub fn rewrite_wad_tail(
     Ok(PatchedWadStats {
         chunks_written: entries.len(),
         overrides_applied: tail_hashes.len(),
-        new_entries_added: entries.len().saturating_sub(base_entries.len()),
-        chunks_passed_through: entries.len() - tail_hashes.len(),
+        new_entries_added: entries.len().saturating_sub(base_entry_count),
+        chunks_transient: entries.len() - tail_hashes.len(),
         elapsed_ms,
         layout: *layout,
         source: None,
@@ -678,10 +776,12 @@ fn plan_layout(
     let data_region_offset = toc_offset + u64::from(toc_capacity) * TOC_ENTRY_SIZE as u64;
     let tail_offset = data_region_offset + (region.end - region.start);
     if tail_offset > MAX_WAD_OFFSET {
-        return Err(Error::Other(format!(
-            "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format: \
-             the source data region alone ends at offset {tail_offset}"
-        )));
+        return Err(WadLimitError::FileTooLarge {
+            wad: dst_wad_path.to_path_buf(),
+            region: WadRegion::SourceRegion,
+            offset: tail_offset,
+        }
+        .into());
     }
 
     Ok(WadTailLayout {
@@ -745,10 +845,12 @@ fn source_data_region(
         .unwrap_or(start);
 
     if end > len {
-        return Err(Error::Other(format!(
-            "Source WAD {src_wad_path} is truncated: its chunks reach offset {end} \
-             but the file is {len} bytes"
-        )));
+        return Err(CorruptionError::TruncatedWad {
+            wad: src_wad_path.to_path_buf(),
+            reach: end,
+            len,
+        }
+        .into());
     }
 
     Ok(start as u64..end as u64)
@@ -774,7 +876,7 @@ fn copy_source_region<W: Write>(writer: &mut W, mmap: &[u8], region: &Range<u64>
 /// can address.
 fn write_tail_chunk<W: Write>(
     writer: &mut W,
-    path_hash: u64,
+    path_hash: WadHash,
     over: &PreparedOverride,
     cursor: &mut u64,
     dst_wad_path: &Utf8Path,
@@ -782,14 +884,16 @@ fn write_tail_chunk<W: Write>(
     let compressed_size = over.compressed().len();
     let end = *cursor + compressed_size as u64;
     if end > MAX_WAD_OFFSET {
-        return Err(Error::Other(format!(
-            "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format \
-             (override {path_hash:016x} would end at offset {end})"
-        )));
+        return Err(WadLimitError::FileTooLarge {
+            wad: dst_wad_path.to_path_buf(),
+            region: WadRegion::OverrideTail,
+            offset: end,
+        }
+        .into());
     }
 
     let chunk = WadChunk {
-        path_hash: WadHash(path_hash),
+        path_hash,
         data_offset: *cursor as usize,
         compressed_size,
         uncompressed_size: over.uncompressed_size() as usize,
@@ -811,9 +915,9 @@ fn write_tail_chunk<W: Write>(
 /// A tail hash that is already a base entry replaces it rather than adding one,
 /// which is what lets an override that was removed revert to the game's bytes
 /// without changing the WAD's shape.
-pub fn merged_entry_count(
-    base_entries: &BTreeMap<u64, WadChunk>,
-    tail_hashes: impl IntoIterator<Item = u64>,
+pub(crate) fn merged_entry_count(
+    base_entries: &BTreeMap<WadHash, WadChunk>,
+    tail_hashes: impl IntoIterator<Item = WadHash>,
 ) -> usize {
     base_entries.len()
         + tail_hashes
@@ -833,61 +937,143 @@ fn toc_capacity_for(entry_count: usize, dst_wad_path: &Utf8Path) -> Result<u32> 
         .ok()
         .and_then(|count| count.checked_add(TOC_SLACK_ENTRIES))
         .ok_or_else(|| {
-            Error::Other(format!(
-                "Patched WAD {dst_wad_path} has {entry_count} chunks, more than the \
-                 WAD v3.4 format can index"
-            ))
+            Error::from(WadLimitError::TooManyChunks {
+                wad: dst_wad_path.to_path_buf(),
+                count: entry_count,
+            })
         })
 }
 
 /// Reject chunk sizes that overflow the WAD v3.4 format's u32 size fields.
-fn ensure_chunk_fits(
-    path_hash: u64,
-    compressed: usize,
-    uncompressed: usize,
-    kind: &str,
-) -> Result<()> {
+fn ensure_chunk_fits(path_hash: WadHash, compressed: usize, uncompressed: usize) -> Result<()> {
     if compressed > u32::MAX as usize || uncompressed > u32::MAX as usize {
-        return Err(Error::Other(format!(
-            "{kind} chunk {path_hash:016x} is too large for the WAD v3.4 format \
-             (compressed {compressed} / uncompressed {uncompressed} bytes)"
-        )));
+        return Err(WadLimitError::ChunkTooLarge {
+            path_hash,
+            compressed,
+            uncompressed,
+        }
+        .into());
     }
     Ok(())
 }
 
-/// Compress data using the specified compression type.
-fn compress_by_type(data: &[u8], compression: WadChunkCompression) -> Result<Vec<u8>> {
-    match compression {
-        WadChunkCompression::None => Ok(data.to_vec()),
-        WadChunkCompression::Zstd => {
+/// Compress an override's bytes with `codec`.
+///
+/// Total over [`OverrideCodec`]: the two codecs this crate emits are the only
+/// ones it can be asked for, so there is no unsupported case to report.
+///
+/// # Errors
+///
+/// Fails only when the Zstd encoder does, which it does for I/O reasons alone
+/// when writing into a `Vec`.
+fn compress_by_type(data: &[u8], codec: OverrideCodec) -> Result<Vec<u8>> {
+    match codec {
+        OverrideCodec::Stored => Ok(data.to_vec()),
+        OverrideCodec::Zstd => {
             let mut out = Vec::new();
             let mut encoder = zstd::Encoder::new(BufWriter::new(&mut out), 3)?;
             encoder.write_all(data)?;
             encoder.finish()?;
             Ok(out)
         }
-        other => Err(Error::Other(format!(
-            "Unsupported compression type for writing: {other}"
-        ))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{hash, write_game_wad};
+
+    const WAD_REL: &str = "DATA/FINAL/Champions/Test.wad.client";
+    const SKIN: &str = "assets/characters/test/skins/skin0.dds";
+    const VFX: &str = "assets/characters/test/particles.bin";
+
+    /// Rewriting in place truncates the file before it writes, so a rewrite that
+    /// is going to be refused must be refused before that happens - otherwise
+    /// the caller's fallback inherits a torn file it did not need to.
+    #[test]
+    fn a_rejected_entry_count_leaves_the_file_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+        let source_path = root.join("Game").join(WAD_REL);
+        write_game_wad(
+            &source_path,
+            &[(SKIN, b"the original skin"), (VFX, b"the original vfx")],
+        );
+
+        let overlay_path = root.join("overlay").join(WAD_REL);
+        let prepared =
+            PreparedOverride::compress(hash(SKIN), b"a modded skin").expect("override compresses");
+        let stats = build_patched_wad(
+            &source_path,
+            &overlay_path,
+            &[hash(SKIN)].into_iter().collect(),
+            |_| Ok(prepared.clone()),
+        )
+        .expect("the overlay WAD builds");
+
+        let base_entries: BTreeMap<WadHash, WadChunk> = {
+            let file = File::open(source_path.as_std_path()).unwrap();
+            let source = Wad::mount(std::io::BufReader::new(file)).unwrap();
+            source
+                .chunks()
+                .iter()
+                .map(|chunk| (chunk.path_hash, stats.layout.shifted(chunk).unwrap()))
+                .collect()
+        };
+
+        let before = std::fs::read(overlay_path.as_std_path()).unwrap();
+
+        // One chunk the file reserved no TOC entry for, which is exactly what
+        // the capacity check exists to refuse.
+        let new_entry = hash("assets/characters/test/brand_new.bin");
+        let refused = rewrite_wad_tail(
+            &overlay_path,
+            &stats.layout,
+            base_entries,
+            &[new_entry],
+            |_| Ok(prepared.clone()),
+        );
+
+        assert!(
+            refused.is_err(),
+            "an over-capacity entry set must be refused"
+        );
+        assert_eq!(
+            std::fs::read(overlay_path.as_std_path()).unwrap(),
+            before,
+            "a refused rewrite must not have touched the file"
+        );
+    }
 
     #[test]
     fn test_compress_by_type_none() {
         let data = b"Hello, world!";
-        let result = compress_by_type(data, WadChunkCompression::None).unwrap();
+        let result = compress_by_type(data, OverrideCodec::Stored).unwrap();
         assert_eq!(result, data);
     }
 
     #[test]
     fn test_compress_by_type_zstd() {
         let data = b"Hello, world!".repeat(100);
-        let compressed = compress_by_type(&data, WadChunkCompression::Zstd).unwrap();
+        let compressed = compress_by_type(&data, OverrideCodec::Zstd).unwrap();
         assert!(compressed.len() < data.len());
+    }
+
+    /// Audio is already compressed, so it is stored; everything else is Zstd.
+    /// Codecs the format names but this crate never emits collapse onto Zstd
+    /// rather than reaching the writer, which is what keeps it total.
+    #[test]
+    fn the_codec_for_data_is_one_of_the_two_this_crate_writes() {
+        // A Wwise bank header - the audio case.
+        let mut audio = b"BKHD".to_vec();
+        audio.extend_from_slice(&[0u8; 64]);
+
+        assert_eq!(OverrideCodec::for_data(&audio), OverrideCodec::Stored);
+        assert_eq!(
+            OverrideCodec::for_data(b"an ordinary asset"),
+            OverrideCodec::Zstd
+        );
     }
 }

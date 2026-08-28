@@ -10,7 +10,7 @@
 //!    locations, an [`AmbiguousWad`](crate::Error::AmbiguousWad) error is returned.
 //!
 //! 2. **Hash lookup** ([`find_wads_with_hash`](GameIndex::find_wads_with_hash)) -
-//!    Given a chunk path hash (`u64`), return *all* WAD files that contain a chunk
+//!    Given a chunk path hash, return *all* WAD files that contain a chunk
 //!    with that hash. This powers cross-WAD matching: a single mod override can be
 //!    distributed to every game WAD that shares the same asset.
 //!
@@ -22,8 +22,9 @@
 //! [`load_or_build`](GameIndex::load_or_build) to avoid re-mounting every WAD on
 //! subsequent builds when the game hasn't been patched.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, GameDirError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -45,8 +46,8 @@ struct GameIndexCache {
     /// WAD filename (lowercased) -> full filesystem paths.
     wad_index: HashMap<String, Vec<Utf8PathBuf>>,
     /// Chunk path hash -> WAD relative paths.
-    hash_index: HashMap<u64, Vec<Utf8PathBuf>>,
-    subchunktoc_blocked: Vec<u64>,
+    hash_index: HashMap<WadHash, Vec<Utf8PathBuf>>,
+    subchunktoc_blocked: Vec<WadHash>,
 }
 
 /// Index of all WAD files in a League of Legends game directory.
@@ -66,7 +67,7 @@ pub struct GameIndex {
     ///
     /// This is the core data structure for cross-WAD matching. A typical League
     /// installation has ~500k unique chunk hashes across ~200 WAD files.
-    pub hash_index: HashMap<u64, Vec<Utf8PathBuf>>,
+    pub hash_index: HashMap<WadHash, Vec<Utf8PathBuf>>,
 
     /// Fingerprint derived from WAD file sizes and modification times.
     ///
@@ -79,7 +80,7 @@ pub struct GameIndex {
     /// For each `.wad.client` file, the corresponding `.wad.SubChunkTOC` path is
     /// computed and hashed. Mod overrides matching these hashes are stripped during
     /// the build to prevent mods from corrupting the game's sub-chunk loading.
-    pub subchunktoc_blocked: HashSet<u64>,
+    pub subchunktoc_blocked: HashSet<WadHash>,
 }
 
 impl GameIndex {
@@ -104,10 +105,10 @@ impl GameIndex {
         let data_final_dir = game_dir.join("DATA").join("FINAL");
 
         if !data_final_dir.as_std_path().exists() {
-            return Err(Error::InvalidGameDir(format!(
-                "DATA/FINAL not found in {}",
-                game_dir
-            )));
+            return Err(GameDirError::MissingDataFinal {
+                path: game_dir.to_path_buf(),
+            }
+            .into());
         }
 
         tracing::info!("Building game index from {}", data_final_dir);
@@ -243,7 +244,7 @@ impl GameIndex {
     /// # Arguments
     ///
     /// * `path_hash` - The hash of the file path
-    pub fn find_wads_with_hash(&self, path_hash: u64) -> Option<&[Utf8PathBuf]> {
+    pub fn find_wads_with_hash(&self, path_hash: WadHash) -> Option<&[Utf8PathBuf]> {
         self.hash_index.get(&path_hash).map(|v| v.as_slice())
     }
 
@@ -275,7 +276,7 @@ impl GameIndex {
     }
 
     /// Get the set of SubChunkTOC path hashes that mods must not override.
-    pub fn subchunktoc_blocked(&self) -> &HashSet<u64> {
+    pub fn subchunktoc_blocked(&self) -> &HashSet<WadHash> {
         &self.subchunktoc_blocked
     }
 
@@ -285,7 +286,7 @@ impl GameIndex {
     /// in the game (e.g. "Spirit-Blossom-Rift.wad.client"). Counts how many of
     /// the given chunk hashes exist in each game WAD, and returns the relative
     /// path of the WAD with the highest overlap count.
-    pub fn find_best_matching_wad(&self, chunk_hashes: &[u64]) -> Option<Utf8PathBuf> {
+    pub fn find_best_matching_wad(&self, chunk_hashes: &[WadHash]) -> Option<Utf8PathBuf> {
         let mut wad_overlap_counts: HashMap<&Utf8Path, usize> = HashMap::new();
 
         for &hash in chunk_hashes {
@@ -325,15 +326,15 @@ impl GameIndex {
     pub fn compute_content_hashes_batch(
         &self,
         game_dir: &Utf8Path,
-        path_hashes: &HashSet<u64>,
-    ) -> HashMap<u64, u64> {
+        path_hashes: &HashSet<WadHash>,
+    ) -> HashMap<WadHash, u64> {
         // Group requested hashes by WAD file (pick the first WAD for each hash).
         //
         // Picking any single WAD is correct even when a hash lives in several WADs: the game
         // requires a chunk shared across multiple WADs to be byte-identical in every one of
         // them (mismatched copies of a shared chunk crash the client), so all WADs containing
         // a given path hash hold the same content. The first WAD is representative of the rest.
-        let mut wad_to_hashes: HashMap<&Utf8PathBuf, Vec<u64>> = HashMap::new();
+        let mut wad_to_hashes: HashMap<&Utf8PathBuf, Vec<WadHash>> = HashMap::new();
         for &ph in path_hashes {
             if let Some(wad_paths) = self.hash_index.get(&ph)
                 && let Some(first_wad) = wad_paths.first()
@@ -345,11 +346,11 @@ impl GameIndex {
         use rayon::prelude::*;
 
         let num_wads = wad_to_hashes.len();
-        let result: HashMap<u64, u64> = wad_to_hashes
+        let result: HashMap<WadHash, u64> = wad_to_hashes
             .into_par_iter()
             .flat_map_iter(|(wad_rel_path, hashes)| {
                 let abs_path = game_dir.join(wad_rel_path);
-                let needed: HashSet<u64> = hashes.into_iter().collect();
+                let needed: HashSet<WadHash> = hashes.into_iter().collect();
                 content_hashes_for_wad(&abs_path, &needed)
             })
             .collect();
@@ -473,12 +474,12 @@ fn build_wad_filename_index(wad_paths: &[Utf8PathBuf]) -> HashMap<String, Vec<Ut
 }
 
 /// Hash index result: chunk path hashes -> WAD paths, plus the list of WAD relative paths.
-type HashIndexResult = (HashMap<u64, Vec<Utf8PathBuf>>, Vec<Utf8PathBuf>);
+type HashIndexResult = (HashMap<WadHash, Vec<Utf8PathBuf>>, Vec<Utf8PathBuf>);
 
 /// Per-WAD result from mounting: the chunk path hashes found inside.
 struct WadMountResult {
     relative_path: Utf8PathBuf,
-    chunk_hashes: Vec<u64>,
+    chunk_hashes: Vec<WadHash>,
 }
 
 /// Mount a single WAD and extract chunk path hashes (TOC only - no data I/O).
@@ -504,7 +505,7 @@ fn mount_and_extract_hashes(
         }
     };
 
-    let chunk_hashes: Vec<u64> = wad.chunks().iter().map(|c| c.path_hash.0).collect();
+    let chunk_hashes: Vec<WadHash> = wad.chunks().iter().map(|c| c.path_hash).collect();
 
     Some(WadMountResult {
         relative_path,
@@ -518,7 +519,7 @@ fn mount_and_extract_hashes(
 /// Errors opening or mounting the WAD, or decompressing an individual chunk, are logged and
 /// skipped - the WAD contributes whatever it could read (an empty vec if it can't be opened or
 /// mounted). Used by [`GameIndex::compute_content_hashes_batch`].
-fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<u64>) -> Vec<(u64, u64)> {
+fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<WadHash>) -> Vec<(WadHash, u64)> {
     use ltk_wad::Wad;
     use xxhash_rust::xxh3::xxh3_64;
 
@@ -541,14 +542,14 @@ fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<u64>) -> Vec<(u6
     let chunks: Vec<_> = wad
         .chunks()
         .iter()
-        .filter(|c| wanted.contains(&c.path_hash.0))
+        .filter(|c| wanted.contains(&c.path_hash))
         .cloned()
         .collect();
 
     let mut hashes = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
         match wad.load_chunk_decompressed(chunk) {
-            Ok(data) => hashes.push((chunk.path_hash.0, xxh3_64(&data))),
+            Ok(data) => hashes.push((chunk.path_hash, xxh3_64(&data))),
             Err(e) => tracing::trace!(
                 "Failed to decompress chunk {:016x} in '{}': {}",
                 chunk.path_hash,
@@ -584,7 +585,7 @@ fn build_game_hash_index(game_dir: &Utf8Path, wad_paths: &[Utf8PathBuf]) -> Hash
         .collect();
 
     // Merge results into the hash index
-    let mut hash_to_wads: HashMap<u64, Vec<Utf8PathBuf>> = HashMap::new();
+    let mut hash_to_wads: HashMap<WadHash, Vec<Utf8PathBuf>> = HashMap::new();
     let mut wad_relative_paths: Vec<Utf8PathBuf> = Vec::with_capacity(mount_results.len());
     let mut chunk_count = 0usize;
 
@@ -614,7 +615,7 @@ fn build_game_hash_index(game_dir: &Utf8Path, wad_paths: &[Utf8PathBuf]) -> Hash
 /// For each WAD relative path like `DATA/FINAL/Champions/Aatrox.wad.client`, replaces
 /// the final `.client` extension with `.SubChunkTOC`, normalizes to forward slashes and
 /// lowercase, and hashes with XXH64 (seed 0).
-fn build_subchunktoc_blocked(wad_relative_paths: &[Utf8PathBuf]) -> HashSet<u64> {
+fn build_subchunktoc_blocked(wad_relative_paths: &[Utf8PathBuf]) -> HashSet<WadHash> {
     use xxhash_rust::xxh64::xxh64;
 
     let mut blocked = HashSet::new();
@@ -634,7 +635,7 @@ fn build_subchunktoc_blocked(wad_relative_paths: &[Utf8PathBuf]) -> HashSet<u64>
         // Normalize: forward slashes, lowercase
         let normalized = toc_path.replace('\\', "/").to_lowercase();
         let hash = xxh64(normalized.as_bytes(), 0);
-        blocked.insert(hash);
+        blocked.insert(WadHash(hash));
 
         tracing::trace!("SubChunkTOC blocked: {} -> {:016x}", normalized, hash);
     }
@@ -698,7 +699,7 @@ mod tests {
         use xxhash_rust::xxh64::xxh64;
         let expected_hash = xxh64(b"data/final/champions/aatrox.wad.subchunktoc", 0);
         assert!(
-            blocked.contains(&expected_hash),
+            blocked.contains(&WadHash(expected_hash)),
             "Expected hash {:016x} for aatrox SubChunkTOC",
             expected_hash
         );
@@ -716,7 +717,7 @@ mod tests {
         use xxhash_rust::xxh64::xxh64;
         let expected_hash = xxh64(b"data/final/champions/aatrox.wad.subchunktoc", 0);
         assert!(
-            blocked.contains(&expected_hash),
+            blocked.contains(&WadHash(expected_hash)),
             "Backslash paths should normalize to same hash"
         );
     }
@@ -734,12 +735,12 @@ mod tests {
 
         let mut hash_index = HashMap::new();
         hash_index.insert(
-            0xDEADBEEF_u64,
+            WadHash(0xDEADBEEF),
             vec![Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client")],
         );
 
         let mut subchunktoc_blocked = HashSet::new();
-        subchunktoc_blocked.insert(0xCAFEBABE_u64);
+        subchunktoc_blocked.insert(WadHash(0xCAFEBABE));
 
         let index = GameIndex {
             wad_index,
@@ -756,24 +757,26 @@ mod tests {
         let restored = GameIndex::from_cache(cache);
         assert_eq!(restored.game_fingerprint, 0x123456);
         assert_eq!(
-            restored.find_wads_with_hash(0xDEADBEEF).map(|v| v.len()),
+            restored
+                .find_wads_with_hash(WadHash(0xDEADBEEF))
+                .map(|v| v.len()),
             Some(1)
         );
-        assert!(restored.subchunktoc_blocked.contains(&0xCAFEBABE));
+        assert!(restored.subchunktoc_blocked.contains(&WadHash(0xCAFEBABE)));
         assert!(restored.find_wad("aatrox.wad.client").is_ok());
     }
 
     #[test]
     fn test_find_best_matching_wad_returns_highest_overlap() {
         let mut hash_index = HashMap::new();
-        for h in [1u64, 2, 3] {
+        for h in [1, 2, 3].map(WadHash) {
             hash_index
                 .entry(h)
                 .or_insert_with(Vec::new)
                 .push(Utf8PathBuf::from("DATA/FINAL/Champions/WadA.wad.client"));
         }
 
-        for h in [2u64, 3, 4, 5] {
+        for h in [2, 3, 4, 5].map(WadHash) {
             hash_index
                 .entry(h)
                 .or_insert_with(Vec::new)
@@ -787,13 +790,13 @@ mod tests {
             subchunktoc_blocked: HashSet::new(),
         };
 
-        let result = index.find_best_matching_wad(&[2, 3, 4, 5]);
+        let result = index.find_best_matching_wad(&[2, 3, 4, 5].map(WadHash));
         assert_eq!(
             result.as_deref(),
             Some(Utf8Path::new("DATA/FINAL/Champions/WadB.wad.client"))
         );
 
-        let result = index.find_best_matching_wad(&[1, 2, 3]);
+        let result = index.find_best_matching_wad(&[1, 2, 3].map(WadHash));
         assert_eq!(
             result.as_deref(),
             Some(Utf8Path::new("DATA/FINAL/Champions/WadA.wad.client"))
@@ -809,14 +812,18 @@ mod tests {
             subchunktoc_blocked: HashSet::new(),
         };
 
-        assert!(index.find_best_matching_wad(&[1, 2, 3]).is_none());
+        assert!(
+            index
+                .find_best_matching_wad(&[1, 2, 3].map(WadHash))
+                .is_none()
+        );
     }
 
     #[test]
     fn test_find_best_matching_wad_empty_input() {
         let mut hash_index = HashMap::new();
         hash_index.insert(
-            1u64,
+            WadHash(1),
             vec![Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client")],
         );
 

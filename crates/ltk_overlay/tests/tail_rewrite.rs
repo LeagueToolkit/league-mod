@@ -46,7 +46,7 @@ const STAMP: u8 = 0xAB;
 const EDIT_V1: &[u8] = b"SKIN_V1";
 const EDIT_V2: &[u8] = b"SKIN_V2_WHICH_IS_LONGER";
 
-fn hash(path: &str) -> u64 {
+fn hash(path: &str) -> WadHash {
     resolve_chunk_hash(Utf8Path::new(path), b"").expect("chunk path hashes")
 }
 
@@ -173,7 +173,7 @@ impl Profile {
             .expect("game WAD mounts");
         let chunk = *source
             .chunks()
-            .get(WadHash(hash(chunk_path)))
+            .get(hash(chunk_path))
             .expect("the game WAD holds the chunk");
 
         let start = (chunk.data_offset as i64 + record.layout.offset_delta) as usize;
@@ -203,7 +203,7 @@ impl Profile {
     fn overlay_chunk(&self, chunk_path: &str) -> Option<Vec<u8>> {
         let mut wad =
             Wad::mount(fs::File::open(self.overlay_wad().as_std_path()).unwrap()).unwrap();
-        let chunk = *wad.chunks().get(WadHash(hash(chunk_path)))?;
+        let chunk = *wad.chunks().get(hash(chunk_path))?;
         Some(wad.load_chunk_decompressed(&chunk).unwrap().to_vec())
     }
 }
@@ -247,11 +247,15 @@ impl ltk_overlay::ModContentProvider for FailsInPassTwo {
         _wad_name: &str,
         _rel_path: &Utf8Path,
     ) -> ltk_overlay::Result<Vec<u8>> {
-        Err(ltk_overlay::Error::Other("the mod vanished".to_string()))
+        Err(ltk_overlay::Error::from(std::io::Error::other(
+            "the mod vanished",
+        )))
     }
 
     fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> ltk_overlay::Result<Vec<u8>> {
-        Err(ltk_overlay::Error::Other("the mod vanished".to_string()))
+        Err(ltk_overlay::Error::from(std::io::Error::other(
+            "the mod vanished",
+        )))
     }
 }
 
@@ -422,7 +426,7 @@ fn a_reused_chunk_and_a_freshly_built_one_stay_byte_identical() {
         let mut wad = Wad::mount(fs::File::open(wad.as_std_path()).unwrap()).unwrap();
         let chunk = *wad
             .chunks()
-            .get(WadHash(hash(SHARED)))
+            .get(hash(SHARED))
             .expect("both overlay WADs hold the shared chunk");
         (
             wad.load_chunk_raw(&chunk).unwrap().to_vec(),
@@ -436,6 +440,50 @@ fn a_reused_chunk_and_a_freshly_built_one_stay_byte_identical() {
         facts_of(&overlay_root.join(AHRI_REL)),
         "a chunk carried over from an old tail and the same chunk compressed \
          fresh must be byte-identical, or the game rejects the pair"
+    );
+}
+
+/// The builder writes only under the overlay root, and never opens a game WAD
+/// for writing - the invariant that keeps a broken build from damaging the
+/// install itself, on both the full-rebuild and the tail-rewrite path.
+#[test]
+fn a_build_never_writes_to_the_game_wad() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+    let profile = Profile::new(&root, &[(SKIN, EDIT_V1)]);
+    let source = profile.game_dir.join(WAD_REL);
+
+    // The full rebuild reads the whole file; the tail rewrite must not touch it
+    // at all. Both are checked against the same untouched original.
+    let original = fs::read(source.as_std_path()).unwrap();
+    profile.build();
+    assert_eq!(
+        fs::read(source.as_std_path()).unwrap(),
+        original,
+        "a full rebuild must leave the game WAD byte-for-byte intact"
+    );
+
+    let after_first = fs::metadata(source.as_std_path())
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    profile.write_override(SKIN, EDIT_V2);
+    profile.build();
+
+    assert_eq!(
+        fs::read(source.as_std_path()).unwrap(),
+        original,
+        "a tail rewrite must leave the game WAD byte-for-byte intact"
+    );
+    assert_eq!(
+        fs::metadata(source.as_std_path())
+            .unwrap()
+            .modified()
+            .unwrap(),
+        after_first,
+        "a tail rewrite must not even open the game WAD for writing"
     );
 }
 
@@ -512,7 +560,7 @@ mod fallbacks {
     }
 
     #[test]
-    fn a_mutated_passthrough_toc_entry_forces_a_full_rebuild() {
+    fn a_mutated_transient_toc_entry_forces_a_full_rebuild() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
 

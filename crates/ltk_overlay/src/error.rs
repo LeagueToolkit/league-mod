@@ -5,17 +5,20 @@
 //! WAD errors) are automatically converted via `From` impls.
 
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use thiserror::Error;
 
 /// Convenience alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
 
-// TODO: `Other(String)` still carries this crate's own domain failures, 22 call
-// sites spread over `fantome_content`, `wad_builder`, `resolve`, `strings` and
-// `builder`, and nothing can be matched on it. Each needs a named variant. The
-// enum is `#[non_exhaustive]`, so those can land without a breaking release;
-// only removing `Other` itself breaks.
 /// Errors that can occur during overlay building.
+///
+/// This crate's own domain failures are grouped into four detail enums -
+/// [`GameDirError`], [`ModContentError`], [`WadLimitError`] and
+/// [`CorruptionError`] - so a caller can branch on the four categories it will
+/// actually act on differently, and drill into the detail only where it wants a
+/// specific message. Nothing here carries a pre-formatted string: rendering is
+/// the caller's decision.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -81,10 +84,6 @@ pub enum Error {
         source: CacheError,
     },
 
-    /// The game directory does not contain the expected `DATA/FINAL` structure.
-    #[error("Invalid game directory: {0}")]
-    InvalidGameDir(String),
-
     /// A mod references a WAD file that doesn't exist in the game directory.
     #[error("WAD file not found: {0}")]
     WadNotFound(Utf8PathBuf),
@@ -104,9 +103,230 @@ pub enum Error {
     #[error(transparent)]
     Ignore(#[from] ltk_mod_project::ModIgnoreError),
 
-    /// Catch-all for errors from content providers and other sources.
-    #[error("{0}")]
-    Other(String),
+    /// The game installation cannot be used for a build.
+    #[error(transparent)]
+    GameDir(#[from] GameDirError),
+
+    /// A mod's content could not be used.
+    #[error(transparent)]
+    ModContent(#[from] ModContentError),
+
+    /// The output would exceed what the WAD v3.4 format can represent.
+    #[error(transparent)]
+    WadLimit(#[from] WadLimitError),
+
+    /// A file is not what its own metadata says it is.
+    #[error(transparent)]
+    Corrupt(#[from] CorruptionError),
+
+    /// An invariant this crate is supposed to maintain was broken.
+    ///
+    /// Not reachable from any input a caller controls: getting one means a bug
+    /// in `ltk_overlay`. It is an error rather than a panic because builds run
+    /// inside a parallel patch loop driven by a GUI, where taking the process
+    /// down costs the user more than a failed build does.
+    #[error("{0} - this is a bug in ltk_overlay, please report it")]
+    Bug(Invariant),
+}
+
+/// An internal guarantee of this crate that did not hold.
+///
+/// Each of these sits where one build step consumes what an earlier one
+/// produced, and names the guarantee between them. A caller cannot provoke any
+/// of them; they are enumerated rather than described in prose so a bug report
+/// can name the exact one without quoting a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+#[non_exhaustive]
+pub enum Invariant {
+    /// Pass 1 recorded an override whose mod is not in the enabled list.
+    #[error("an override's metadata names a mod that is not enabled")]
+    OverrideNamesUnenabledMod,
+
+    /// A chunk was classified as a string patch but no plan was built for it.
+    #[error("a chunk classified as a string patch has no plan")]
+    StringPatchWithoutPlan,
+
+    /// A writer asked for override bytes pass 2 never prepared.
+    #[error("a writer asked for an override this build never prepared")]
+    OverrideNeverPrepared,
+}
+
+/// Why a game directory cannot be used for a build.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum GameDirError {
+    /// The directory has no `DATA/FINAL`, so it is not a League installation.
+    #[error("{path} is not a League installation: it has no DATA/FINAL directory")]
+    MissingDataFinal { path: Utf8PathBuf },
+
+    /// A WAD the build resolved lies outside the game directory.
+    #[error("WAD {wad} is not under the game directory {game_dir}")]
+    WadOutsideGameDir {
+        game_dir: Utf8PathBuf,
+        wad: Utf8PathBuf,
+    },
+
+    /// A stringtable chunk the build expected is not in the game WAD, which is
+    /// what a game update that moved or renamed it looks like.
+    #[error("game WAD {wad} does not hold stringtable chunk {chunk_hash:016x}")]
+    StringtableChunkMissing {
+        wad: Utf8PathBuf,
+        chunk_hash: WadHash,
+    },
+}
+
+/// Why a mod's content could not be used.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ModContentError {
+    /// A `.fantome` archive has no `META/info.json`.
+    #[error("the fantome archive has no META/info.json")]
+    FantomeInfoMissing,
+
+    /// A `.fantome` archive was asked for a layer it cannot carry.
+    #[error("fantome archives carry only a 'base' layer, not '{layer}'")]
+    FantomeLayerUnsupported { layer: String },
+
+    /// An override is in neither the archive's WAD folder nor its packed WAD.
+    #[error("override WAD/{wad_name}/{rel_path} is not in the fantome archive")]
+    FantomeOverrideMissing {
+        wad_name: String,
+        rel_path: Utf8PathBuf,
+    },
+
+    /// A raw override is not in the archive's `RAW` folder.
+    #[error("raw override {rel_path} is not in the fantome archive")]
+    FantomeRawOverrideMissing { rel_path: Utf8PathBuf },
+
+    /// A hex-named override does not name a chunk the packed WAD holds.
+    #[error("chunk {path_hash:016x} is not in the archive's packed WAD")]
+    PackedChunkMissing { path_hash: WadHash },
+
+    /// `.modpkg` content has no raw-override concept.
+    #[error("the modpkg format has no raw overrides")]
+    ModpkgRawUnsupported,
+
+    /// A mod's string overrides produced a table that will not serialize.
+    #[error("the '{locale}' string overrides produced a stringtable that cannot be written")]
+    StringOverrideUnencodable {
+        locale: String,
+        #[source]
+        source: ltk_rst::RstError,
+    },
+}
+
+/// A limit of the WAD v3.4 format the output would have exceeded.
+///
+/// All of these are content problems the user can act on by splitting a mod,
+/// not failures of the build itself.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum WadLimitError {
+    /// A region would end past the format's 4 GiB addressable limit.
+    #[error(
+        "{wad} exceeds the 4 GiB limit of the WAD v3.4 format: {region} ends at offset {offset}"
+    )]
+    FileTooLarge {
+        wad: Utf8PathBuf,
+        region: WadRegion,
+        offset: u64,
+    },
+
+    /// More chunks than the format's `u32` chunk count can index.
+    #[error("{wad} has {count} chunks, more than the WAD v3.4 format can index")]
+    TooManyChunks { wad: Utf8PathBuf, count: usize },
+
+    /// A chunk's size overflows the format's `u32` size fields.
+    #[error(
+        "chunk {path_hash:016x} is too large for the WAD v3.4 format \
+         (compressed {compressed} / uncompressed {uncompressed} bytes)"
+    )]
+    ChunkTooLarge {
+        path_hash: WadHash,
+        compressed: usize,
+        uncompressed: usize,
+    },
+
+    /// A chunk shifted into the copied region falls outside the format's `u32`
+    /// offset fields.
+    #[error("chunk {path_hash:016x} cannot be addressed at offset {offset}")]
+    ChunkUnaddressable { path_hash: WadHash, offset: i64 },
+
+    /// The rebuild needs more TOC entries than the file reserved.
+    ///
+    /// While `TOC_SLACK_ENTRIES` is zero this also fires when the set *shrinks*,
+    /// because capacity is then exactly the entry count.
+    #[error("{wad} reserved {reserved} TOC entries, not the {needed} this rebuild needs")]
+    TocCapacity {
+        wad: Utf8PathBuf,
+        needed: usize,
+        reserved: u32,
+    },
+}
+
+/// Which part of a patched WAD ran past a format limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WadRegion {
+    /// The game WAD's data region, copied intact.
+    SourceRegion,
+    /// The override tail appended after it.
+    OverrideTail,
+}
+
+impl std::fmt::Display for WadRegion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceRegion => f.write_str("the copied source data region"),
+            Self::OverrideTail => f.write_str("the override tail"),
+        }
+    }
+}
+
+/// A file whose contents disagree with its own metadata.
+///
+/// Inside a build these are absorbed: the WAD in question is rebuilt in full.
+/// One reaching a caller means the *game's* own files are the ones at fault.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CorruptionError {
+    /// A chunk's bytes do not hash to the checksum its TOC entry records.
+    #[error(
+        "chunk {path_hash:016x} does not match its recorded checksum \
+         (found {found:016x}, expected {expected:016x})"
+    )]
+    ChunkChecksum {
+        path_hash: WadHash,
+        found: u64,
+        expected: u64,
+    },
+
+    /// A recorded layout's own numbers do not hang together.
+    #[error(
+        "incoherent WAD layout: {toc_capacity} TOC entries, \
+         region at {data_region_offset}, tail at {tail_offset}"
+    )]
+    IncoherentLayout {
+        toc_capacity: u32,
+        data_region_offset: u64,
+        tail_offset: u64,
+    },
+
+    /// A WAD's chunks reach past the end of the file.
+    #[error("{wad} is truncated: its chunks reach offset {reach} but the file is {len} bytes")]
+    TruncatedWad {
+        wad: Utf8PathBuf,
+        reach: usize,
+        len: usize,
+    },
+
+    /// The game's stringtable for a locale could not be parsed.
+    #[error("the game's '{locale}' stringtable could not be parsed")]
+    StringtableParse {
+        locale: String,
+        #[source]
+        source: ltk_rst::RstError,
+    },
 }
 
 impl Error {
@@ -262,12 +482,72 @@ mod tests {
         );
     }
 
-    /// A caller can now tell a corrupt archive from a missing game file, which
-    /// a stringly `Other` never allowed.
+    /// A caller can tell a corrupt archive from a missing game file.
     #[test]
     fn wrapped_sources_stay_matchable() {
         let error = Error::from(zip::result::ZipError::FileNotFound);
 
         assert!(matches!(error, Error::Zip(_)), "{error}");
+    }
+
+    /// The four detail enums exist so a caller can branch on the category it
+    /// will act on - prompt a reinstall, blame a mod, report a size limit -
+    /// without reading a message. Each must survive the conversion into
+    /// [`Error`] as its own variant.
+    #[test]
+    fn domain_failures_are_matchable_by_category() {
+        let game_dir = Error::from(GameDirError::MissingDataFinal {
+            path: "C:/Riot Games/League of Legends/Game".into(),
+        });
+        let mod_content = Error::from(ModContentError::ModpkgRawUnsupported);
+        let limit = Error::from(WadLimitError::TooManyChunks {
+            wad: "Map11.wad.client".into(),
+            count: u32::MAX as usize + 1,
+        });
+        let corrupt = Error::from(CorruptionError::ChunkChecksum {
+            path_hash: WadHash(0x1234),
+            found: 1,
+            expected: 2,
+        });
+
+        assert!(matches!(game_dir, Error::GameDir(_)), "{game_dir}");
+        assert!(matches!(mod_content, Error::ModContent(_)), "{mod_content}");
+        assert!(matches!(limit, Error::WadLimit(_)), "{limit}");
+        assert!(matches!(corrupt, Error::Corrupt(_)), "{corrupt}");
+    }
+
+    /// The values a caller would want to render - a path, a count, a limit -
+    /// are fields, not text parsed back out of a message.
+    #[test]
+    fn detail_variants_carry_data_not_prose() {
+        let error = Error::from(WadLimitError::FileTooLarge {
+            wad: "DATA/FINAL/Maps/Map11.wad.client".into(),
+            region: WadRegion::OverrideTail,
+            offset: 5_000_000_000,
+        });
+
+        let Error::WadLimit(WadLimitError::FileTooLarge {
+            wad,
+            region,
+            offset,
+        }) = &error
+        else {
+            panic!("expected a FileTooLarge limit, got {error}");
+        };
+        assert_eq!(wad, "DATA/FINAL/Maps/Map11.wad.client");
+        assert_eq!(*region, WadRegion::OverrideTail);
+        assert_eq!(*offset, 5_000_000_000);
+    }
+
+    /// A detail enum is wrapped transparently, so consumers that only log get
+    /// the specific message rather than a category name.
+    #[test]
+    fn category_display_carries_the_detail() {
+        let error = Error::from(GameDirError::MissingDataFinal {
+            path: "D:/Games/League".into(),
+        });
+
+        assert!(error.to_string().contains("D:/Games/League"), "{error}");
+        assert!(error.to_string().contains("DATA/FINAL"), "{error}");
     }
 }

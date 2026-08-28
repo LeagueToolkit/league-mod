@@ -13,7 +13,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression, WadHash};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Write};
@@ -35,7 +35,7 @@ pub struct ChunkFacts {
 ///
 /// Panics when the WAD cannot be opened, mounted, or read - a test fixture that
 /// does not parse is a broken test, not a failed assertion.
-pub fn chunk_facts(wad_path: &Utf8Path) -> BTreeMap<u64, ChunkFacts> {
+pub fn chunk_facts(wad_path: &Utf8Path) -> BTreeMap<WadHash, ChunkFacts> {
     let file = fs::File::open(wad_path.as_std_path()).expect("overlay WAD opens");
     let mut wad = Wad::mount(file).expect("overlay WAD mounts");
     let chunks: Vec<_> = wad.chunks().iter().copied().collect();
@@ -48,7 +48,7 @@ pub fn chunk_facts(wad_path: &Utf8Path) -> BTreeMap<u64, ChunkFacts> {
                 .expect("chunk data is inside the file")
                 .to_vec();
             (
-                chunk.path_hash.0,
+                chunk.path_hash,
                 ChunkFacts {
                     compressed,
                     uncompressed_size: chunk.uncompressed_size,
@@ -73,8 +73,8 @@ pub fn assert_chunks_equivalent(left: &Utf8Path, right: &Utf8Path) {
     let left_facts = chunk_facts(left);
     let right_facts = chunk_facts(right);
 
-    let left_hashes: Vec<u64> = left_facts.keys().copied().collect();
-    let right_hashes: Vec<u64> = right_facts.keys().copied().collect();
+    let left_hashes: Vec<WadHash> = left_facts.keys().copied().collect();
+    let right_hashes: Vec<WadHash> = right_facts.keys().copied().collect();
     assert_eq!(
         left_hashes, right_hashes,
         "chunk sets differ between {left} and {right}"
@@ -103,23 +103,23 @@ pub fn assert_wad_is_well_formed(wad_path: &Utf8Path) {
     let file = fs::File::open(wad_path.as_std_path()).expect("overlay WAD opens");
     let wad = Wad::mount(file).expect("overlay WAD mounts");
 
-    let mut previous: Option<u64> = None;
+    let mut previous: Option<WadHash> = None;
     for chunk in wad.chunks() {
         if let Some(previous) = previous {
             assert!(
-                chunk.path_hash.0 > previous,
+                chunk.path_hash > previous,
                 "{wad_path}: TOC must be strictly ascending by path hash, \
                  saw {previous:016x} then {:016x}",
-                chunk.path_hash.0
+                chunk.path_hash
             );
         }
-        previous = Some(chunk.path_hash.0);
+        previous = Some(chunk.path_hash);
 
         let end = (chunk.data_offset + chunk.compressed_size) as u64;
         assert!(
             end <= len,
             "{wad_path}: chunk {:016x} ends at {end}, past the {len}-byte file",
-            chunk.path_hash.0
+            chunk.path_hash
         );
     }
 }
@@ -147,7 +147,7 @@ pub fn write_game_wad(wad_path: &Utf8Path, chunks: &[(&str, &[u8])]) {
         );
     }
 
-    let by_hash: BTreeMap<u64, Vec<u8>> = chunks
+    let by_hash: BTreeMap<WadHash, Vec<u8>> = chunks
         .iter()
         .map(|(path, bytes)| {
             (
@@ -161,7 +161,7 @@ pub fn write_game_wad(wad_path: &Utf8Path, chunks: &[(&str, &[u8])]) {
     let mut cursor = Cursor::new(Vec::new());
     builder
         .build_to_writer(&mut cursor, move |hash, writer| {
-            writer.write_all(&by_hash[&hash.0])?;
+            writer.write_all(&by_hash[&hash])?;
             Ok(())
         })
         .expect("fixture WAD builds");

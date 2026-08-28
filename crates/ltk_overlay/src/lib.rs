@@ -111,13 +111,19 @@ pub mod strings;
 pub mod utils;
 pub mod wad_builder;
 
+#[cfg(test)]
+mod test_support;
+
 // Re-export main public API.
 pub use builder::{
     AffectedWad, BASE_LAYER_NAME, EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder,
     OverlayProgress, OverlayStage,
 };
 pub use content::{FsModContent, ModContentProvider};
-pub use error::{CacheError, Error, Result};
+pub use error::{
+    CacheError, CorruptionError, Error, GameDirError, ModContentError, Result, WadLimitError,
+    WadRegion,
+};
 pub use fantome_content::FantomeContent;
 pub use game_index::GameIndex;
 pub use linked_bins::LinkedBinOffender;
