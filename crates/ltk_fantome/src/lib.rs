@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 pub mod error;
 mod reader;
+mod rewrite;
 mod writer;
 
 pub use error::{FantomeExtractError, FantomeWriteError};
@@ -21,6 +22,7 @@ pub use error::{FantomeExtractError, FantomeWriteError};
 /// bins. [`NamingPolicy`] decides what becomes of a chunk two paths claim.
 pub use ltk_wad::{NamingPolicy, NoResolver, PathResolver};
 pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
+pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables};
 pub use writer::FantomeWriter;
 
 /// Fantome metadata structure that goes into info.json
@@ -56,6 +58,68 @@ pub struct FantomeInfo {
     /// Per-layer metadata including string overrides.
     #[serde(rename = "Layers", default, skip_serializing_if = "HashMap::is_empty")]
     pub layers: HashMap<String, FantomeLayerInfo>,
+    /// The embedded hashtables the archive declares.
+    ///
+    /// The manifest is authoritative: a `META/hashes/` entry no manifest
+    /// entry declares does not exist for lookup. Absent from archives written
+    /// before the standard, and omitted when empty so an archive without
+    /// tables serializes byte-identically to one written before this field.
+    #[serde(rename = "Hashtables", default, skip_serializing_if = "Vec::is_empty")]
+    pub hashtables: Vec<FantomeHashtable>,
+    /// Fields this crate does not know, carried verbatim.
+    ///
+    /// `info.json` is shared ground: other tools extend it, and the archive
+    /// rewrite reserializes it. Dropping what we cannot name would make this
+    /// crate the older tool that silently strips a newer one's data.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One `Hashtables` manifest entry in a Fantome info.json.
+///
+/// The fantome spelling of `ltk_hashtable`'s `HashtableEntry`: PascalCase
+/// keys, `Path` relative to the archive root. Convert with
+/// [`FantomeHashtable::to_entry`] and [`FantomeHashtable::from_entry`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FantomeHashtable {
+    /// Where the table file lives, relative to the archive root.
+    #[serde(rename = "Path")]
+    pub path: String,
+    /// The lookup domain of the table's names.
+    #[serde(rename = "Category")]
+    pub category: ltk_hashtable::Category,
+    /// The hash function keying the table's names.
+    #[serde(rename = "Algorithm")]
+    pub algorithm: ltk_hashtable::Algorithm,
+    /// The declared key width in bits.
+    #[serde(rename = "Bits")]
+    pub bits: u8,
+}
+
+impl FantomeHashtable {
+    /// The entry as `ltk_hashtable`'s domain type.
+    ///
+    /// `None` when `Bits` declares a width no key can have; the standard
+    /// requires `1..=64`.
+    pub fn to_entry(&self) -> Option<ltk_hashtable::HashtableEntry> {
+        let width = ltk_hashtable::KeyWidth::new(self.bits)?;
+        Some(ltk_hashtable::HashtableEntry::new(
+            self.path.as_str(),
+            self.category.clone(),
+            self.algorithm.clone(),
+            width,
+        ))
+    }
+
+    /// Spell a domain entry the fantome way.
+    pub fn from_entry(entry: &ltk_hashtable::HashtableEntry) -> Self {
+        Self {
+            path: entry.path().to_string(),
+            category: entry.category().clone(),
+            algorithm: entry.algorithm().clone(),
+            bits: entry.width().bits(),
+        }
+    }
 }
 
 /// The license declaration in a Fantome info.json.

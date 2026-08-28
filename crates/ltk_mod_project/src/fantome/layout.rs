@@ -5,7 +5,7 @@ use std::io::{Read, Seek};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{classify_entry, FantomeEntry, FantomeReader};
 
-use crate::{ModProjectLayer, ProjectPath, ProjectPaths};
+use crate::{ModProjectLayer, ProjectPath, ProjectPaths, HASHES_DIR_NAME};
 
 /// A Fantome archive answers where an import would put every entry it holds.
 ///
@@ -64,6 +64,7 @@ pub(crate) fn project_path(entry_name: &str) -> Option<ProjectPath> {
         FantomeEntry::Readme => Utf8PathBuf::from("README.md"),
         FantomeEntry::License(file_name) => Utf8PathBuf::from(file_name),
         FantomeEntry::Image => Utf8PathBuf::from("thumbnail.webp"),
+        FantomeEntry::Hashtable(relative_path) => hashes_dir().join(relative_path),
         FantomeEntry::Info => return None,
     };
 
@@ -78,6 +79,12 @@ fn base_layer_dir() -> Utf8PathBuf {
 /// `content/base/raw`, as a project-relative path.
 fn raw_dir() -> Utf8PathBuf {
     ModProjectLayer::raw_content_path(Utf8Path::new(""))
+}
+
+/// `hashes`, as a project-relative path: where a project keeps its declared
+/// hashtable files, outside `content/`.
+fn hashes_dir() -> Utf8PathBuf {
+    Utf8PathBuf::from(HASHES_DIR_NAME)
 }
 
 #[cfg(test)]

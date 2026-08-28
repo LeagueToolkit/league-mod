@@ -81,6 +81,7 @@ fn write_mod_dir(
             string_overrides: Default::default(),
         }],
         thumbnail: None,
+        hashtables: vec![],
     };
     fs::write(
         mod_dir.join("mod.config.json").as_std_path(),

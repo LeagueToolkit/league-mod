@@ -325,6 +325,8 @@ fn writer_reader_round_trip() {
         champions: vec![],
         maps: vec![],
         layers: Default::default(),
+        hashtables: vec![],
+        extra: Default::default(),
     };
 
     let mut writer = FantomeWriter::new(Cursor::new(Vec::new()));

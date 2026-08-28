@@ -240,6 +240,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             transformers: Vec::new(),
             layers,
             thumbnail: None,
+            hashtables: vec![],
         })
     }
 
@@ -530,6 +531,8 @@ mod tests {
             champions: Vec::new(),
             maps: Vec::new(),
             layers: std::collections::HashMap::new(),
+            hashtables: Vec::new(),
+            extra: Default::default(),
         })
         .unwrap()
     }
@@ -593,6 +596,8 @@ mod tests {
                 champions: Vec::new(),
                 maps: Vec::new(),
                 layers: std::collections::HashMap::new(),
+                hashtables: Vec::new(),
+                extra: Default::default(),
             })
             .unwrap()
         );

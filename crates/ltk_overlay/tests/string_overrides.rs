@@ -114,6 +114,7 @@ fn write_mod_dir(root: &Utf8Path, name: &str, layers: Vec<ModProjectLayer>) -> U
         transformers: vec![],
         layers,
         thumbnail: None,
+        hashtables: vec![],
     };
     fs::write(
         mod_dir.join("mod.config.json").as_std_path(),

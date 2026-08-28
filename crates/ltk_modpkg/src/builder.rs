@@ -45,6 +45,22 @@ pub enum ModpkgBuilderError {
     #[error("invalid layer name")]
     InvalidLayerName(#[from] crate::error::InvalidSlugError),
 
+    /// A hashtable manifest named a chunk path outside `_meta_/hashes/`.
+    ///
+    /// The manifest is what pairs a declared table with its stored chunk, so
+    /// a path that leaves the hashes directory - or smuggles separators past
+    /// it - would unpair the two.
+    #[error("hashtable chunk path is not directly under _meta_/hashes/: {0}")]
+    HashtablePathOutsideHashesDir(String),
+
+    /// One hashtable chunk path was declared twice with different content.
+    ///
+    /// Two manifest entries may declare one chunk (one table, two shapes),
+    /// but only over identical bytes - otherwise the declarations describe
+    /// two different tables under one path.
+    #[error("inconsistent content for hashtable chunk {0}")]
+    InconsistentHashtable(String),
+
     /// One chunk received different content for different WADs.
     ///
     /// Entries that share a `(path, layer)` identity are one chunk registered
@@ -85,6 +101,11 @@ pub struct ModpkgBuilder {
     license_text: Option<Vec<u8>>,
     thumbnail: Option<Vec<u8>>,
     metadata: ModpkgMetadata,
+    /// Declared tables, in declaration order: `(manifest entry, table bytes)`.
+    ///
+    /// The builder owns the manifest: `meta_chunks` writes these entries into
+    /// the metadata it serializes, so declaration and storage cannot disagree.
+    hashtables: Vec<(crate::ModpkgHashtable, Vec<u8>)>,
     // The WAD is part of the key so one chunk identity can be registered
     // under several WADs; see `with_chunk`.
     chunks: HashMap<(ChunkKey, WadNameHash), ModpkgChunkBuilder>,
@@ -97,14 +118,16 @@ type ContentKey = (u64, u64);
 /// A meta chunk to be written, resolved from the builder's content fields.
 #[derive(Debug)]
 struct MetaChunk<'builder> {
-    path: &'static str,
+    /// Borrowed for the four fixed chunks; hashtable chunk paths come from
+    /// the manifest, so the `Cow` is what lets both in.
+    path: Cow<'builder, str>,
     data: Cow<'builder, [u8]>,
     compression: ModpkgCompression,
 }
 
 impl MetaChunk<'_> {
     fn path_hash(&self) -> PathHash {
-        ChunkPath::new(self.path).hash()
+        ChunkPath::new(self.path.as_ref()).hash()
     }
 }
 
@@ -147,6 +170,59 @@ impl ModpkgBuilder {
         let key = chunk.full_key();
         self.chunks.insert(key, chunk);
         self
+    }
+
+    /// Declare an embedded hashtable and the chunk that stores it.
+    ///
+    /// `data` is the table file's bytes, copied verbatim like the readme and
+    /// license text - validation belongs to the caller that read the file.
+    /// The manifest entry is written into the metadata this builder
+    /// serializes, and the bytes into the chunk at `manifest.path`, so the
+    /// declaration and the stored chunk cannot disagree.
+    ///
+    /// One file, two shapes is legal: a second declaration of an
+    /// already-declared chunk path re-declares the stored chunk (the metadata
+    /// carries both entries, the chunk is stored once), so its bytes must be
+    /// identical to the first declaration's.
+    ///
+    /// # Errors
+    ///
+    /// [`ModpkgBuilderError::HashtablePathOutsideHashesDir`] when
+    /// `manifest.path` is not one the extraction placement rule
+    /// ([`hashtable_file_name`](crate::hashtable_file_name)) carries whole:
+    /// `_meta_/hashes/{plain file name}`.
+    /// [`ModpkgBuilderError::InconsistentHashtable`] when the chunk path was
+    /// already declared with different bytes.
+    pub fn with_hashtable(
+        mut self,
+        manifest: crate::ModpkgHashtable,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<Self, ModpkgBuilderError> {
+        // Valid exactly when the placement rule carries the whole tail: the
+        // declared chunk and its extracted file then cannot part ways.
+        let tail = manifest
+            .path
+            .strip_prefix(crate::HASHTABLES_CHUNK_DIR)
+            .and_then(|rest| rest.strip_prefix('/'));
+        if tail.is_none() || crate::hashtable_file_name(&manifest.path) != tail {
+            return Err(ModpkgBuilderError::HashtablePathOutsideHashesDir(
+                manifest.path,
+            ));
+        }
+
+        let data = data.into();
+        let declared = self
+            .hashtables
+            .iter()
+            .find(|(existing, _)| existing.path.eq_ignore_ascii_case(&manifest.path));
+        if let Some((_, existing_data)) = declared {
+            if *existing_data != data {
+                return Err(ModpkgBuilderError::InconsistentHashtable(manifest.path));
+            }
+        }
+
+        self.hashtables.push((manifest, data));
+        Ok(self)
     }
 
     /// Build the Modpkg file and write it to the given writer.
@@ -352,18 +428,27 @@ impl ModpkgBuilder {
     /// is stored; the metadata chunk is always present, the rest follow their
     /// content field.
     fn meta_chunks(&self) -> Result<Vec<MetaChunk<'_>>, ModpkgBuilderError> {
+        // The builder owns the hashtable manifest: the entries declared with
+        // `with_hashtable` are what the serialized metadata carries, so the
+        // manifest and the stored chunks cannot disagree.
+        let mut metadata = self.metadata.clone();
+        metadata.hashtables = self
+            .hashtables
+            .iter()
+            .map(|(manifest, _)| manifest.clone())
+            .collect();
         let mut metadata_bytes = Vec::new();
-        self.metadata.write(&mut metadata_bytes)?;
+        metadata.write(&mut metadata_bytes)?;
 
         let mut meta_chunks = vec![MetaChunk {
-            path: METADATA_CHUNK_PATH,
+            path: Cow::Borrowed(METADATA_CHUNK_PATH),
             data: Cow::Owned(metadata_bytes),
             compression: ModpkgCompression::None,
         }];
 
         if let Some(thumbnail) = self.thumbnail.as_deref() {
             meta_chunks.push(MetaChunk {
-                path: THUMBNAIL_CHUNK_PATH,
+                path: Cow::Borrowed(THUMBNAIL_CHUNK_PATH),
                 data: Cow::Borrowed(thumbnail),
                 compression: ModpkgCompression::None,
             });
@@ -371,7 +456,7 @@ impl ModpkgBuilder {
 
         if let Some(readme) = self.readme.as_deref() {
             meta_chunks.push(MetaChunk {
-                path: README_CHUNK_PATH,
+                path: Cow::Borrowed(README_CHUNK_PATH),
                 data: Cow::Borrowed(readme),
                 compression: ModpkgCompression::None,
             });
@@ -382,10 +467,26 @@ impl ModpkgBuilder {
         // that don't pay for it fall back to raw storage in `write_meta_chunk`.
         if let Some(license_text) = self.license_text.as_deref() {
             meta_chunks.push(MetaChunk {
-                path: LICENSE_CHUNK_PATH,
+                path: Cow::Borrowed(LICENSE_CHUNK_PATH),
                 data: Cow::Borrowed(license_text),
                 compression: ModpkgCompression::Zstd,
             });
+        }
+
+        // Hashtables are line-per-name text, boilerplate-heavy like a
+        // license, so their chunks request Zstd too. A chunk two manifest
+        // entries declare (one table, two shapes; `with_hashtable` verified
+        // the bytes match) is stored once - the manifest above still carries
+        // every entry.
+        let mut stored_paths = HashSet::new();
+        for (manifest, data) in &self.hashtables {
+            if stored_paths.insert(manifest.path.to_ascii_lowercase()) {
+                meta_chunks.push(MetaChunk {
+                    path: Cow::Borrowed(manifest.path.as_str()),
+                    data: Cow::Borrowed(data),
+                    compression: ModpkgCompression::Zstd,
+                });
+            }
         }
 
         Ok(meta_chunks)
@@ -709,19 +810,19 @@ impl ModpkgChunkBuilder {
     /// The input must have a base filename of exactly 16 hexadecimal characters. Any number of
     /// extensions after the base is allowed (only the base is parsed). The `0x` prefix is NOT
     /// allowed.
-    /// The builder stores the provided (lowercased) string as the display path and parses the
-    /// base as hexadecimal for the `path_hash`.
+    /// The builder stores the (ASCII-lowercased) string as the chunk's stored path and parses
+    /// the base as hexadecimal for the `path_hash`.
     pub fn with_hashed_chunk_name(mut self, hashed_name: &str) -> Result<Self, ModpkgBuilderError> {
-        let display_path = hashed_name.to_lowercase();
+        let stored_path = hashed_name.to_ascii_lowercase();
 
-        let filename = Path::new(&display_path)
+        let filename = Path::new(&stored_path)
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or(&display_path);
+            .unwrap_or(&stored_path);
 
         self.path_hash = PathHash::from_hex_name(filename)
-            .ok_or_else(|| ModpkgBuilderError::InvalidChunkName(display_path.clone()))?;
-        self.path = display_path;
+            .ok_or_else(|| ModpkgBuilderError::InvalidChunkName(stored_path.clone()))?;
+        self.path = stored_path;
 
         Ok(self)
     }
@@ -746,7 +847,7 @@ impl ModpkgChunkBuilder {
     ///
     /// This enables efficient WAD-based lookups via the secondary index.
     pub fn with_wad(mut self, wad: &str) -> Self {
-        self.wad = wad.to_lowercase();
+        self.wad = wad.to_ascii_lowercase();
         self
     }
 
@@ -1255,14 +1356,177 @@ mod tests {
         assert!(ModpkgLayerBuilder::new("high-res").is_ok());
     }
 
+    fn game_manifest() -> crate::ModpkgHashtable {
+        crate::ModpkgHashtable {
+            path: "_meta_/hashes/game.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        }
+    }
+
+    /// User story 34: a packed table comes back as a chunk the metadata
+    /// declares, so declaration and storage cannot disagree.
+    #[test]
+    fn a_hashtable_is_stored_as_a_meta_chunk_the_metadata_declares() {
+        let mut cursor = Cursor::new(Vec::new());
+        let names = "ASSETS/Custom/New.tex\nASSETS/Custom/Other.tex\n";
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_hashtable(game_manifest(), names)
+            .unwrap()
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
+            .unwrap();
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        assert_eq!(
+            modpkg.load_metadata().unwrap().hashtables(),
+            [game_manifest()]
+        );
+
+        let chunk = *modpkg.chunk("_meta_/hashes/game.hashes.txt", None).unwrap();
+        assert_eq!(chunk.layer(), None, "a meta chunk belongs to no layer");
+        assert_eq!(chunk.wad(), None, "a meta chunk belongs to no WAD");
+        assert_eq!(
+            modpkg.decoder().load_chunk_decompressed(&chunk).unwrap(),
+            names.as_bytes().into()
+        );
+    }
+
+    /// Table text is boilerplate-heavy like a license, so the chunk requests
+    /// Zstd; short tables that don't pay for it still fall back to raw.
+    #[test]
+    fn a_large_hashtable_is_stored_compressed() {
+        let mut cursor = Cursor::new(Vec::new());
+        let names: String = (0..2000)
+            .map(|i| format!("ASSETS/Characters/Aatrox/Skins/Skin{i}/Aatrox.dds\n"))
+            .collect();
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_hashtable(game_manifest(), names.clone())
+            .unwrap()
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
+            .unwrap();
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        let chunk = *modpkg.chunk("_meta_/hashes/game.hashes.txt", None).unwrap();
+        assert_eq!(chunk.compression, ModpkgCompression::Zstd);
+        assert_eq!(
+            modpkg.decoder().load_chunk_decompressed(&chunk).unwrap(),
+            names.as_bytes().into()
+        );
+    }
+
+    /// One file, two shapes: a repeated chunk path re-declares the stored
+    /// chunk, so the metadata carries both entries and the chunk is stored
+    /// once.
+    #[test]
+    fn a_chunk_declared_twice_keeps_both_entries_and_one_chunk() {
+        let names = "ASSETS/Custom/One.tex\n";
+        let narrow = crate::ModpkgHashtable {
+            bits: 32,
+            ..game_manifest()
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_hashtable(game_manifest(), names)
+            .unwrap()
+            .with_hashtable(narrow.clone(), names)
+            .unwrap()
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
+            .unwrap();
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        assert_eq!(
+            modpkg.load_metadata().unwrap().hashtables(),
+            [game_manifest(), narrow]
+        );
+        let tables = modpkg.load_hashtables().unwrap();
+        assert_eq!(tables.len(), 2, "both declarations answer a load");
+    }
+
+    /// A repeated chunk path over different bytes is two tables under one
+    /// path, which no reader could tell apart - refused.
+    #[test]
+    fn a_chunk_declared_twice_with_different_bytes_is_refused() {
+        let result = ModpkgBuilder::default()
+            .with_hashtable(game_manifest(), "ASSETS/Custom/One.tex\n")
+            .unwrap()
+            .with_hashtable(game_manifest(), "ASSETS/Custom/Two.tex\n");
+
+        assert!(matches!(
+            result,
+            Err(ModpkgBuilderError::InconsistentHashtable(path)) if path.ends_with("game.hashes.txt")
+        ));
+    }
+
+    /// Chunk paths are case-insensitive, so declarations that differ only in
+    /// case are one chunk - and one chunk over different bytes is refused
+    /// just like an exact repeat.
+    #[test]
+    fn a_chunk_declared_under_case_variant_paths_with_different_bytes_is_refused() {
+        let cased = crate::ModpkgHashtable {
+            path: "_meta_/hashes/Game.hashes.txt".to_string(),
+            ..game_manifest()
+        };
+
+        let result = ModpkgBuilder::default()
+            .with_hashtable(cased, "ASSETS/Custom/One.tex\n")
+            .unwrap()
+            .with_hashtable(game_manifest(), "ASSETS/Custom/Two.tex\n");
+
+        assert!(matches!(
+            result,
+            Err(ModpkgBuilderError::InconsistentHashtable(path))
+                if path.eq_ignore_ascii_case("_meta_/hashes/game.hashes.txt")
+        ));
+    }
+
+    /// The manifest names where the chunk goes; a path outside `_meta_/hashes/`
+    /// (or one smuggling separators past it) would unpair declaration from
+    /// storage, so it is refused at the seam.
+    #[test]
+    fn a_hashtable_declared_outside_the_hashes_dir_is_refused() {
+        for path in [
+            "hashes/game.hashes.txt",
+            "_meta_/hashes/../license",
+            "_meta_/hashes/sub/dir.txt",
+            "_meta_/hashes/",
+            "_meta_/hashes/.",
+        ] {
+            let manifest = crate::ModpkgHashtable {
+                path: path.to_string(),
+                ..game_manifest()
+            };
+            assert!(
+                ModpkgBuilder::default()
+                    .with_hashtable(manifest, "a/b.txt\n")
+                    .is_err(),
+                "{path} should be refused"
+            );
+        }
+    }
+
     #[test]
     fn with_path_normalizes_backslashes() {
         let chunk = ModpkgChunkBuilder::new()
             .with_path("ASSETS\\Characters\\Aatrox\\Skins\\Base\\Aatrox.dds");
 
-        assert_eq!(chunk.path, "assets/characters/aatrox/skins/base/aatrox.dds");
+        // The stored path keeps the authored casing (ADR 0003); only the
+        // separators normalize.
+        assert_eq!(chunk.path, "ASSETS/Characters/Aatrox/Skins/Base/Aatrox.dds");
 
-        // Hash should match the normalized forward-slash version
+        // Identity is the canonical name, so any spelling hashes alike.
         let forward =
             ModpkgChunkBuilder::new().with_path("assets/characters/aatrox/skins/base/aatrox.dds");
 
@@ -1291,22 +1555,23 @@ mod tests {
         cursor.set_position(0);
         let modpkg = Modpkg::mount_from_reader(&mut cursor).unwrap();
 
-        // Stored path must be normalized
-        let normalized = "assets/characters/aatrox/aatrox.dds";
-        let path_hash = ChunkPath::new(normalized).hash();
+        // The stored path keeps the authored casing with separators
+        // normalized (ADR 0003), and is keyed by its canonical name's hash.
+        let stored = "ASSETS/Characters/Aatrox/Aatrox.dds";
+        let path_hash = ChunkPath::new("assets/characters/aatrox/aatrox.dds").hash();
 
         assert_eq!(
             modpkg.chunk_paths().get(&path_hash),
-            Some(&normalized.to_string()),
-            "chunk_paths should contain the normalized path"
+            Some(&stored.to_string()),
+            "chunk_paths should hold the stored path under the canonical hash"
         );
 
-        // Chunk should be findable by the normalized hash
+        // Chunk should be findable by the canonical hash
         assert!(
             modpkg
                 .chunks()
                 .contains_key(&ChunkKey::new(path_hash, LayerHash::from_name("base"))),
-            "chunk should be retrievable with normalized path hash"
+            "chunk should be retrievable with the canonical path hash"
         );
     }
 }

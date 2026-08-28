@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/league-mod",
     "crates/ltk_fantome",
+    "crates/ltk_hashtable",
     "crates/ltk_mod_core",
     "crates/ltk_modpkg",
     "crates/ltk_mod_project",
@@ -13,5 +14,6 @@ members = [
 [workspace.dependencies]
 camino = "1.1"
 indexmap = { version = "2", features = ["serde"] }
+ltk_hash = "0.4"
 ltk_wad = "0.5.3"
 sysinfo = "0.32"

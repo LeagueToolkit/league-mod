@@ -21,6 +21,7 @@ fn create_test_mod_dir() -> tempfile::TempDir {
         transformers: vec![],
         layers: ltk_mod_project::ModProjectLayer::default_table(),
         thumbnail: None,
+        hashtables: vec![],
     };
     fs::write(
         mod_dir.join("mod.config.json"),

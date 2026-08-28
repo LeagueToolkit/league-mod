@@ -2,9 +2,17 @@
 
 use std::collections::HashMap;
 
-use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeLicense};
+use camino::Utf8Path;
 
-use crate::{ModMap, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, ModTag};
+use crate::hashtable_routes::{
+    file_name_of, is_plain_tail, HashtableRoute, NameClaims, PlannedRoute,
+};
+use ltk_fantome::{FantomeHashtable, FantomeInfo, FantomeLayerInfo, FantomeLicense};
+
+use crate::{
+    ModMap, ModProject, ModProjectAuthor, ModProjectHashtable, ModProjectLayer, ModProjectLicense,
+    ModTag, HASHES_DIR_NAME,
+};
 
 impl From<&ModProjectLicense> for FantomeLicense {
     fn from(license: &ModProjectLicense) -> Self {
@@ -40,6 +48,12 @@ impl From<&ModProject> for FantomeInfo {
             champions: mod_project.champions.clone(),
             maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
             layers: build_fantome_layers(mod_project),
+            // The pack owns the hashtable manifest: it computes the routes
+            // once (fallibly - colliding file names are refused) and writes
+            // what they declare, so the entries and the manifest cannot
+            // disagree.
+            hashtables: vec![],
+            extra: Default::default(),
         }
     }
 }
@@ -63,8 +77,116 @@ impl From<FantomeInfo> for ModProject {
             transformers: vec![],
             layers: layers_from_fantome(info.layers),
             thumbnail: None,
+            // The import owns the hashtable manifest: it computes the routes
+            // once (fallibly - colliding file names are refused) and writes
+            // the files where they declare, so the files and the manifest
+            // cannot disagree.
+            hashtables: vec![],
         }
     }
+}
+
+/// Where each of an archive's `Hashtables` declarations lands in the
+/// project.
+///
+/// Each path is rewritten to where the importer writes the file: an archive
+/// path under `META/hashes/` keeps its tail beneath `hashes/`, and a table
+/// declared anywhere else lands under `hashes/` by its file name. Two
+/// entries declaring one archive file keep declaring one project file.
+///
+/// An entry whose declared width no key can have is dropped rather than
+/// carried: its table cannot be read out of the archive (see
+/// `FantomeReader::read_hashtables`), so keeping the declaration would
+/// declare a file the import never writes.
+///
+/// # Errors
+///
+/// [`DuplicateHashtableName`](crate::DuplicateHashtableName) when two
+/// different declared files land on one project file name - writing both
+/// would clobber one with the other, and an ambiguous archive must not be
+/// guessed at.
+pub(crate) fn project_routes(
+    declared: &[FantomeHashtable],
+) -> Result<Vec<HashtableRoute<ModProjectHashtable>>, crate::DuplicateHashtableName> {
+    let mut claims = NameClaims::default();
+    declared
+        .iter()
+        .filter(|manifest| manifest.to_entry().is_some())
+        .map(|manifest| {
+            let mapped = ModProjectHashtable {
+                path: claims.claim(
+                    HASHES_DIR_NAME,
+                    meta_hashes_tail(&manifest.path)
+                        .filter(|tail| is_plain_tail(tail))
+                        .unwrap_or_else(|| file_name_of(&manifest.path)),
+                    &manifest.path,
+                )?,
+                category: manifest.category.clone(),
+                algorithm: manifest.algorithm.clone(),
+                bits: manifest.bits,
+            };
+            Ok(HashtableRoute {
+                source: manifest.path.clone(),
+                manifest: mapped,
+            })
+        })
+        .collect()
+}
+
+/// Where each planned table lands in the archive, paired with its table.
+///
+/// The mirror of [`project_routes`]: every planned table maps, verbatim
+/// except for the path. A path under `hashes/` keeps its tail beneath
+/// `META/hashes/`, so pack, import, pack again keeps every table where it
+/// was; a table declared elsewhere in the project lands under `META/hashes/`
+/// by its file name.
+///
+/// # Errors
+///
+/// [`DuplicateHashtableName`](crate::DuplicateHashtableName) when two
+/// different declared files land on one archive name - refused rather than
+/// renamed, since the author can rename a file and a silently renamed table
+/// would ship under a name nobody chose.
+pub(crate) fn fantome_routes(
+    planned: &[crate::pack::PlannedHashtable],
+) -> Result<Vec<PlannedRoute<'_, FantomeHashtable>>, crate::DuplicateHashtableName> {
+    let mut claims = NameClaims::default();
+    planned
+        .iter()
+        .map(|planned| {
+            let source = planned.entry().path();
+            let mapped = FantomeHashtable {
+                path: claims.claim(
+                    "META/hashes",
+                    source
+                        .strip_prefix(HASHES_DIR_NAME)
+                        .ok()
+                        .map(Utf8Path::as_str)
+                        .filter(|tail| is_plain_tail(tail))
+                        .unwrap_or_else(|| file_name_of(source.as_str())),
+                    source.as_str(),
+                )?,
+                category: planned.entry().category().clone(),
+                algorithm: planned.entry().algorithm().clone(),
+                bits: planned.entry().width().bits(),
+            };
+            Ok(PlannedRoute {
+                manifest: mapped,
+                planned,
+            })
+        })
+        .collect()
+}
+
+/// The tail of an archive path under `META/hashes/`, in any casing, or `None`
+/// for a path declared elsewhere in the archive.
+fn meta_hashes_tail(archive_path: &str) -> Option<&str> {
+    const PREFIX: &str = "META/hashes/";
+    archive_path
+        .get(..PREFIX.len())
+        .filter(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &archive_path[PREFIX.len()..])
+        .filter(|tail| !tail.is_empty())
 }
 
 /// The layer table an archive's `META/info.json` declares.

@@ -42,7 +42,10 @@ pub enum ModpkgImportError {
 ///
 /// A package stores its chunks under the paths they were packed from, so there
 /// is nothing to name and no counterpart here to the Fantome importer's
-/// resolver and naming policy.
+/// resolver and naming policy. The declared hashtables come back too: the
+/// extractor writes them under `hashes/` by the package format's own
+/// placement rule, and the recovered project manifest maps each declared
+/// entry through that same rule, so the files and the manifest agree.
 ///
 /// The progress unit is the layer: a package's content extracts to `content/`
 /// whole rather than a WAD at a time, and the layer is the largest step an
@@ -184,5 +187,8 @@ fn project_path(planned: &PlannedChunk<'_>) -> ProjectPath {
         // The meta chunks are the project's root files, beside `content/`
         // rather than inside it.
         ChunkDestination::Root(file_name) => ProjectPath::file(file_name),
+        // A hashtable lands under `hashes/` beside `content/`, which is
+        // exactly where the destination composes it.
+        ChunkDestination::Hashtable { .. } => ProjectPath::file(planned.destination.compose()),
     }
 }

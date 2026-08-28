@@ -1151,3 +1151,575 @@ fn collect_files(root: &Utf8Path, dir: &Utf8Path, into: &mut Vec<Utf8PathBuf>) {
         }
     }
 }
+
+// -- hashtables --------------------------------------------------------------
+
+mod hashtables {
+    use ltk_hashtable::{Algorithm, Category};
+
+    use super::*;
+    use crate::{ModProjectHashtable, HASHES_DIR_NAME};
+
+    fn game_manifest() -> ModProjectHashtable {
+        ModProjectHashtable {
+            path: format!("{HASHES_DIR_NAME}/game.hashes.txt"),
+            category: Category::Game,
+            algorithm: Algorithm::Xxh64,
+            bits: 64,
+        }
+    }
+
+    /// A project tree declaring one `game` table holding `names`.
+    fn project_with_table(root: &Utf8Path, names: &str) -> ModProject {
+        write_project_tree(root);
+        std::fs::create_dir_all(root.join(HASHES_DIR_NAME)).unwrap();
+        std::fs::write(root.join(&game_manifest().path), names).unwrap();
+
+        ModProject {
+            hashtables: vec![game_manifest()],
+            ..test_project(None)
+        }
+    }
+
+    #[test]
+    fn pack_writes_the_declared_table_under_meta_hashes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        let project = project_with_table(&root, "ASSETS/Custom/One.tex\nassets/custom/two.tex\n");
+
+        let buffer = pack(&project, &root);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+
+        let mut table = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("META/hashes/game.hashes.txt").unwrap(),
+            &mut table,
+        )
+        .unwrap();
+        assert_eq!(table, "ASSETS/Custom/One.tex\nassets/custom/two.tex\n");
+
+        let mut info_content = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("META/info.json").unwrap(),
+            &mut info_content,
+        )
+        .unwrap();
+        let info: FantomeInfo = serde_json::from_str(&info_content).unwrap();
+        assert_eq!(info.hashtables.len(), 1);
+        assert_eq!(info.hashtables[0].path, "META/hashes/game.hashes.txt");
+        assert_eq!(info.hashtables[0].category, Category::Game);
+        assert_eq!(info.hashtables[0].bits, 64);
+    }
+
+    /// `hashes/` is outside `content/`, so the table file must never appear
+    /// as content - and `.modignore` must never touch it, even a rule that
+    /// ignores everything.
+    #[test]
+    fn the_table_is_not_content_and_never_meets_modignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        let project = project_with_table(&root, "assets/custom/one.tex\n");
+        std::fs::write(root.join("content/.modignore"), "*\n").unwrap();
+
+        let buffer = pack(&project, &root);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+
+        assert!(archive.by_name("META/hashes/game.hashes.txt").is_ok());
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_owned())
+            .collect();
+        assert!(
+            !names.iter().any(|name| name.starts_with("WAD/")),
+            "the ignore-everything rule should have dropped all content: {names:?}"
+        );
+    }
+
+    /// A file under `hashes/` no manifest entry declares does not exist as
+    /// far as a pack is concerned.
+    #[test]
+    fn an_undeclared_table_file_is_not_packed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+        std::fs::create_dir_all(root.join(HASHES_DIR_NAME)).unwrap();
+        std::fs::write(
+            root.join(HASHES_DIR_NAME).join("game.hashes.txt"),
+            "assets/custom/one.tex\n",
+        )
+        .unwrap();
+
+        let buffer = pack(&test_project(None), &root);
+        let mut archive = zip::ZipArchive::new(buffer).unwrap();
+        assert!(archive.by_name("META/hashes/game.hashes.txt").is_err());
+    }
+
+    #[test]
+    fn pack_fails_on_a_missing_table_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+
+        let project = ModProject {
+            hashtables: vec![game_manifest()],
+            ..test_project(None)
+        };
+
+        match try_pack(&project, &root) {
+            Err(PackError::Hashtable { path, .. }) => {
+                assert_eq!(path, root.join(&game_manifest().path));
+            }
+            other => panic!("expected Hashtable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pack_fails_on_an_impossible_key_width() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        let mut project = project_with_table(&root, "assets/custom/one.tex\n");
+        project.hashtables[0].bits = 0;
+
+        match try_pack(&project, &root) {
+            Err(PackError::HashtableWidth { path, bits }) => {
+                assert_eq!(path, game_manifest().path);
+                assert_eq!(bits, 0);
+            }
+            other => panic!("expected HashtableWidth, got {other:?}"),
+        }
+    }
+
+    /// fnv1a_32("data/strings/name_1") and fnv1a_32("data/strings/name_50")
+    /// share their low 8 bits, so an 8-bit table holding both names makes one
+    /// of them unresolvable forever - which only the author can fix.
+    #[test]
+    fn pack_fails_on_a_key_collision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        let mut project = project_with_table(&root, "data/strings/name_1\ndata/strings/name_50\n");
+        project.hashtables[0].algorithm = Algorithm::Fnv1a32;
+        project.hashtables[0].bits = 8;
+
+        match try_pack(&project, &root) {
+            Err(PackError::HashtableCollision(collision)) => {
+                assert_eq!(collision.first, "data/strings/name_1");
+                assert_eq!(collision.second, "data/strings/name_50");
+            }
+            other => panic!("expected HashtableCollision, got {other:?}"),
+        }
+    }
+
+    /// User story 15: a round trip through an archive loses nothing - not
+    /// the names, not their casing, not the manifest.
+    #[test]
+    fn the_table_survives_project_archive_project_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp).join("project");
+        let project = project_with_table(&root, "ASSETS/Custom/One.tex\nassets/custom/two.tex\n");
+
+        let buffer = pack(&project, &root);
+
+        let extracted = utf8_dir(&tmp).join("extracted");
+        let imported = ProjectImporter::new(&extracted)
+            .import(FantomeImporter::new(buffer))
+            .unwrap();
+
+        assert_eq!(imported.hashtables, vec![game_manifest()]);
+        assert_eq!(
+            std::fs::read_to_string(extracted.join(&game_manifest().path)).unwrap(),
+            "ASSETS/Custom/One.tex\nassets/custom/two.tex\n"
+        );
+    }
+
+    /// An archive declaring a table, as the preserve writes one.
+    fn fantome_with_table(names: &str, packed_wad: Option<&[u8]>) -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("META/info.json", options).unwrap();
+        let info = r#"{
+            "Name": "Test Mod",
+            "Author": "Test Author",
+            "Version": "1.0.0",
+            "Description": "A test mod",
+            "Hashtables": [
+                {
+                    "Path": "META/hashes/game.hashes.txt",
+                    "Category": "game",
+                    "Algorithm": "xxh64",
+                    "Bits": 64
+                }
+            ]
+        }"#;
+        zip.write_all(info.as_bytes()).unwrap();
+
+        zip.start_file("META/hashes/game.hashes.txt", options)
+            .unwrap();
+        zip.write_all(names.as_bytes()).unwrap();
+
+        if let Some(wad) = packed_wad {
+            zip.start_file("WAD/Aatrox.wad.client", options).unwrap();
+            zip.write_all(wad).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// A config path that climbs out of `hashes/` must not poison the
+    /// archive: the entry lands by its file name under `META/hashes/`, so
+    /// the result is one `FantomeReader::new` (which refuses any archive
+    /// holding an escaping entry name) will accept.
+    #[test]
+    fn a_climbing_config_path_packs_to_a_contained_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp).join("project");
+        write_project_tree(&root);
+        std::fs::create_dir_all(root.join(HASHES_DIR_NAME)).unwrap();
+        // Resolves to a real file beside the project, as the config says.
+        std::fs::write(utf8_dir(&tmp).join("evil.hashes.txt"), "assets/one.tex\n").unwrap();
+
+        let project = ModProject {
+            hashtables: vec![ModProjectHashtable {
+                path: format!("{HASHES_DIR_NAME}/../../evil.hashes.txt"),
+                ..game_manifest()
+            }],
+            ..test_project(None)
+        };
+
+        let buffer = pack(&project, &root);
+        let mut reader = ltk_fantome::FantomeReader::new(buffer).unwrap();
+        let info = reader.read_info().unwrap();
+        assert_eq!(info.hashtables[0].path, "META/hashes/evil.hashes.txt");
+
+        let tables = reader.read_hashtables().unwrap();
+        assert_eq!(tables[0].1.names().collect::<Vec<_>>(), ["assets/one.tex"]);
+    }
+
+    /// The whole-archive escape refusal covers table entries too: a hostile
+    /// manifest cannot steer an import, because the entry it has to point at
+    /// is refused at mount.
+    #[test]
+    fn an_archive_whose_table_entry_escapes_is_refused() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("META/info.json", options).unwrap();
+        zip.write_all(
+            br#"{
+            "Name": "Test Mod",
+            "Author": "Test Author",
+            "Version": "1.0.0",
+            "Description": "A test mod",
+            "Hashtables": [
+                {
+                    "Path": "META/hashes/../../evil.hashes.txt",
+                    "Category": "game",
+                    "Algorithm": "xxh64",
+                    "Bits": 64
+                }
+            ]
+        }"#,
+        )
+        .unwrap();
+        zip.start_file("META/hashes/../../evil.hashes.txt", options)
+            .unwrap();
+        zip.write_all(b"assets/custom/one.tex\n").unwrap();
+        let archive = zip.finish().unwrap().into_inner();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let output = utf8_dir(&tmp).join("project");
+        let error = import(archive, &output).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                ImportError::Format(FantomeImportError::Extract(
+                    ltk_fantome::FantomeExtractError::EscapingEntry { .. }
+                ))
+            ),
+            "expected the mount-time refusal, got {error:?}"
+        );
+        assert!(!utf8_dir(&tmp).join("evil.hashes.txt").exists());
+    }
+
+    #[test]
+    fn import_writes_the_declared_table_into_hashes() {
+        let archive = fantome_with_table("assets/custom/one.tex\n", None);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let output = utf8_dir(&tmp);
+        let imported = import(archive, &output).unwrap();
+
+        assert_eq!(imported.hashtables, vec![game_manifest()]);
+        assert_eq!(
+            std::fs::read_to_string(output.join(&game_manifest().path)).unwrap(),
+            "assets/custom/one.tex\n"
+        );
+    }
+
+    /// User story 26: the mod's own table names its chunks, ahead of the
+    /// caller's resolver - here one that would claim every chunk.
+    #[test]
+    fn the_mods_own_table_names_its_packed_wad_chunks() {
+        let archive =
+            fantome_with_table("packed/file.bin\n", Some(&packed_wad_bytes(b"chunk bytes")));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let output = utf8_dir(&tmp);
+        ProjectImporter::new(&output)
+            .import(FantomeImporter::new(Cursor::new(archive)).with_path_resolver(&FixedResolver))
+            .unwrap();
+
+        let named = output.join("content/base/Aatrox.wad.client/packed/file.bin");
+        assert_eq!(std::fs::read(&named).unwrap(), b"chunk bytes");
+        assert!(
+            !output
+                .join("content/base/Aatrox.wad.client/assets/characters/aatrox/skin0.bin")
+                .exists(),
+            "the caller's resolver must not outrank the mod's own table"
+        );
+    }
+
+    /// Tables land flat under `META/hashes/` by file name, so two different
+    /// table files can collide on one archive name. Refused rather than
+    /// renamed: a silently renamed table would ship under a name nobody
+    /// chose.
+    #[test]
+    fn colliding_table_file_names_fail_the_pack() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = utf8_dir(&tmp);
+        write_project_tree(&root);
+        std::fs::create_dir_all(root.join("hashes")).unwrap();
+        std::fs::create_dir_all(root.join("backup")).unwrap();
+        std::fs::write(root.join("hashes/game.hashes.txt"), "a/one.tex\n").unwrap();
+        std::fs::write(root.join("backup/game.hashes.txt"), "a/two.tex\n").unwrap();
+
+        let entry = |path: &str| ModProjectHashtable {
+            path: path.to_string(),
+            ..game_manifest()
+        };
+        let project = ModProject {
+            hashtables: vec![
+                entry("hashes/game.hashes.txt"),
+                entry("backup/game.hashes.txt"),
+            ],
+            ..test_project(None)
+        };
+
+        let err = try_pack(&project, &root).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PackError::Format(FantomePackError::DuplicateHashtableName(ref e))
+                    if e.destination() == "META/hashes/game.hashes.txt"
+                        && e.first() == "hashes/game.hashes.txt"
+                        && e.second() == "backup/game.hashes.txt"
+            ),
+            "Expected DuplicateHashtableName, got: {err}"
+        );
+    }
+
+    /// Two declared tables landing on one `hashes/` file name would clobber
+    /// each other on disk. An archive shaped like this is ambiguous, and an
+    /// import must refuse it rather than invent names.
+    #[test]
+    fn an_archive_with_colliding_table_names_fails_the_import() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        zip.start_file("META/info.json", options).unwrap();
+        let info = r#"{
+            "Name": "Test Mod",
+            "Author": "Test Author",
+            "Version": "1.0.0",
+            "Description": "A test mod",
+            "Hashtables": [
+                {
+                    "Path": "META/hashes/game.hashes.txt",
+                    "Category": "game",
+                    "Algorithm": "xxh64",
+                    "Bits": 64
+                },
+                {
+                    "Path": "OTHER/game.hashes.txt",
+                    "Category": "game",
+                    "Algorithm": "xxh64",
+                    "Bits": 64
+                }
+            ]
+        }"#;
+        zip.write_all(info.as_bytes()).unwrap();
+        zip.start_file("META/hashes/game.hashes.txt", options)
+            .unwrap();
+        zip.write_all(b"a/one.tex\n").unwrap();
+        zip.start_file("OTHER/game.hashes.txt", options).unwrap();
+        zip.write_all(b"a/two.tex\n").unwrap();
+        let archive = zip.finish().unwrap().into_inner();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let output = utf8_dir(&tmp);
+        let err = import(archive, &output).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ImportError::Format(FantomeImportError::DuplicateHashtableName(ref e))
+                    if e.destination() == "hashes/game.hashes.txt"
+                        && e.first() == "META/hashes/game.hashes.txt"
+                        && e.second() == "OTHER/game.hashes.txt"
+            ),
+            "Expected DuplicateHashtableName, got: {err}"
+        );
+    }
+
+    /// A planned table declared at `path`, for driving the mapping directly.
+    fn planned_table(path: &str) -> crate::pack::PlannedHashtable {
+        crate::pack::PlannedHashtable::new(
+            Utf8PathBuf::from(path),
+            ltk_hashtable::HashtableEntry::new(
+                path,
+                Category::Game,
+                Algorithm::Xxh64,
+                ltk_hashtable::KeyWidth::new(64).unwrap(),
+            ),
+            ltk_hashtable::Hashtable::from_names(["a/one.tex"]).unwrap(),
+        )
+    }
+
+    /// A table already under `hashes/` keeps its tail; one declared
+    /// elsewhere lands by its file name; one file declared twice stays one
+    /// archive entry - and each route carries the table it was mapped from.
+    #[test]
+    fn tables_declared_outside_hashes_land_by_file_name() {
+        use super::super::convert::fantome_routes;
+
+        let planned = [
+            planned_table("tables/binhashes.hashes.txt"),
+            planned_table("hashes/game.hashes.txt"),
+            planned_table("hashes/game.hashes.txt"),
+        ];
+
+        let routes = fantome_routes(&planned).unwrap();
+        let paths: Vec<&str> = routes
+            .iter()
+            .map(|route| route.manifest.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "META/hashes/binhashes.hashes.txt",
+                "META/hashes/game.hashes.txt",
+                "META/hashes/game.hashes.txt",
+            ]
+        );
+        for (route, planned) in routes.iter().zip(&planned) {
+            assert_eq!(route.planned, planned, "a route carries its own table");
+        }
+    }
+
+    /// Two different files landing on one archive name are refused, not
+    /// renamed - a renamed table would ship under a name nobody chose.
+    #[test]
+    fn two_files_landing_on_one_archive_name_are_refused() {
+        use super::super::convert::fantome_routes;
+
+        let planned = [
+            planned_table("tables/game.hashes.txt"),
+            planned_table("hashes/game.hashes.txt"),
+        ];
+
+        let err = fantome_routes(&planned).unwrap_err();
+        assert_eq!(err.destination(), "META/hashes/game.hashes.txt");
+        assert_eq!(err.first(), "tables/game.hashes.txt");
+        assert_eq!(err.second(), "hashes/game.hashes.txt");
+    }
+
+    /// The import-direction mapping: a `META/hashes/` tail keeps its subpath,
+    /// a table elsewhere lands by file name, one file declared twice stays
+    /// one file, and an entry no key width fits is dropped (its table cannot
+    /// be read out of the archive).
+    #[test]
+    fn archive_manifests_map_to_project_paths() {
+        use ltk_fantome::FantomeHashtable;
+
+        use super::super::convert::project_routes;
+
+        let entry = |path: &str, bits| FantomeHashtable {
+            path: path.to_owned(),
+            category: Category::Game,
+            algorithm: Algorithm::Xxh64,
+            bits,
+        };
+
+        let routes = project_routes(&[
+            entry("META/hashes/sub/game.hashes.txt", 64),
+            entry("ELSEWHERE/game.hashes.txt", 64),
+            entry("META/hashes/sub/game.hashes.txt", 64),
+            entry("META/hashes/broken.hashes.txt", 0),
+        ])
+        .unwrap();
+
+        let paths: Vec<&str> = routes
+            .iter()
+            .map(|route| route.manifest.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "hashes/sub/game.hashes.txt",
+                "hashes/game.hashes.txt",
+                "hashes/sub/game.hashes.txt",
+            ]
+        );
+    }
+
+    /// The mapping is where escape-proofing lives, whoever calls it: a tail
+    /// that climbs, re-roots, or smuggles a platform separator lands by its
+    /// file name, never as declared.
+    #[test]
+    fn a_traversing_manifest_path_maps_to_a_plain_project_path() {
+        use ltk_fantome::FantomeHashtable;
+
+        use super::super::convert::project_routes;
+
+        let entry = |path: &str| FantomeHashtable {
+            path: path.to_owned(),
+            category: Category::Game,
+            algorithm: Algorithm::Xxh64,
+            bits: 64,
+        };
+
+        let routes = project_routes(&[
+            entry("META/hashes/../../evil.hashes.txt"),
+            entry("META/hashes/sub/../evil2.hashes.txt"),
+            entry(r"META/hashes/sub\evil3.hashes.txt"),
+        ])
+        .unwrap();
+
+        let paths: Vec<&str> = routes
+            .iter()
+            .map(|route| route.manifest.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "hashes/evil.hashes.txt",
+                "hashes/evil2.hashes.txt",
+                // The whole final component: `\` is not a separator here.
+                "hashes/unnamed.hashes.txt",
+            ]
+        );
+    }
+}

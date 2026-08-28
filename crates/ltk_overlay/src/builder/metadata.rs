@@ -641,6 +641,7 @@ mod tests {
                 transformers: vec![],
                 layers: self.layers.clone(),
                 thumbnail: None,
+                hashtables: vec![],
             })
         }
 
@@ -747,6 +748,7 @@ mod tests {
                 transformers: vec![],
                 layers: self.layers.clone(),
                 thumbnail: None,
+                hashtables: vec![],
             })
         }
 

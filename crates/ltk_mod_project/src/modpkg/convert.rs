@@ -15,7 +15,13 @@ use ltk_modpkg::{
     ModpkgMetadata,
 };
 
-use crate::{ModMap, ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense, ModTag};
+use camino::Utf8Path;
+
+use crate::hashtable_routes::{file_name_of, is_plain_tail, NameClaims, PlannedRoute};
+use crate::{
+    ModMap, ModProject, ModProjectAuthor, ModProjectHashtable, ModProjectLayer, ModProjectLicense,
+    ModTag, HASHES_DIR_NAME,
+};
 
 /// Read the project a mounted `.modpkg` describes.
 ///
@@ -73,8 +79,81 @@ impl From<&ModpkgMetadata> for ModProject {
             transformers: vec![],
             layers,
             thumbnail: None,
+            hashtables: project_hashtables(metadata.hashtables()),
         }
     }
+}
+
+/// The project manifest a package's `hashtables` declarations become.
+///
+/// Each path is rewritten to where the extractor writes the file, by the
+/// package format's own placement rule ([`ltk_modpkg::hashtable_file_name`]),
+/// so the written files and the written manifest cannot drift. An entry
+/// whose chunk the extractor plans nothing for - one declared outside
+/// `_meta_/hashes/` - is dropped with it: keeping the declaration would
+/// declare a file the import never writes.
+///
+/// An entry whose declared width no key can have is dropped too, mirroring
+/// the fantome side: `PackPlan::hashtables()` refuses an impossible width,
+/// so carrying it would import a project that cannot pack.
+pub(crate) fn project_hashtables(
+    declared: &[ltk_modpkg::ModpkgHashtable],
+) -> Vec<ModProjectHashtable> {
+    declared
+        .iter()
+        .filter(|manifest| manifest.to_entry().is_some())
+        .filter_map(|manifest| {
+            let file_name = ltk_modpkg::hashtable_file_name(&manifest.path)?;
+            Some(ModProjectHashtable {
+                path: format!("{HASHES_DIR_NAME}/{file_name}"),
+                category: manifest.category.clone(),
+                algorithm: manifest.algorithm.clone(),
+                bits: manifest.bits,
+            })
+        })
+        .collect()
+}
+
+/// Where each planned table lands in the package, paired with its table.
+///
+/// Every planned table maps, verbatim except for the path. A path directly
+/// under `hashes/` keeps its file name beneath `_meta_/hashes/`, so pack,
+/// import, pack again keeps every table where it was; a table declared
+/// elsewhere (or nested) lands under `_meta_/hashes/` by its file name -
+/// `ModpkgBuilder::with_hashtable` takes nothing deeper.
+///
+/// # Errors
+///
+/// [`DuplicateHashtableName`](crate::DuplicateHashtableName) when two
+/// different declared files land on one chunk name - refused rather than
+/// renamed, since the author can rename a file and a silently renamed table
+/// would ship under a name nobody chose.
+pub(crate) fn modpkg_routes(
+    planned: &[crate::pack::PlannedHashtable],
+) -> Result<Vec<PlannedRoute<'_, ltk_modpkg::ModpkgHashtable>>, crate::DuplicateHashtableName> {
+    let mut claims = NameClaims::default();
+    planned
+        .iter()
+        .map(|planned| {
+            let source = planned.entry().path();
+            let file_name = source
+                .strip_prefix(HASHES_DIR_NAME)
+                .ok()
+                .map(Utf8Path::as_str)
+                .filter(|tail| is_plain_tail(tail) && !tail.contains('/'))
+                .unwrap_or_else(|| file_name_of(source.as_str()));
+            let mapped = ltk_modpkg::ModpkgHashtable {
+                path: claims.claim(ltk_modpkg::HASHTABLES_CHUNK_DIR, file_name, source.as_str())?,
+                category: planned.entry().category().clone(),
+                algorithm: planned.entry().algorithm().clone(),
+                bits: planned.entry().width().bits(),
+            };
+            Ok(PlannedRoute {
+                manifest: mapped,
+                planned,
+            })
+        })
+        .collect()
 }
 
 /// The layer table a package declares, joining its header against its metadata.

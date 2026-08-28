@@ -19,7 +19,7 @@
 //! `Format` variant carries the backend's own error.
 //!
 //! ```no_run
-//! use ltk_mod_project::{PackFormat, PackPlan, PackReporter, ProjectPacker};
+//! use ltk_mod_project::{PackFormat, PackFormatReport, PackPlan, PackReporter, ProjectPacker};
 //!
 //! /// A toy format: counts the files a pack would write.
 //! struct EntryCount<'a>(&'a mut usize);
@@ -27,14 +27,18 @@
 //! impl PackFormat for EntryCount<'_> {
 //!     type Error = std::convert::Infallible;
 //!
-//!     fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
+//!     fn pack(
+//!         self,
+//!         plan: &PackPlan<'_>,
+//!         progress: &mut PackReporter<'_>,
+//!     ) -> Result<PackFormatReport, Self::Error> {
 //!         for layer in plan.layers() {
 //!             for file in layer.files() {
 //!                 progress.report_file(file.rel_path());
 //!                 *self.0 += 1;
 //!             }
 //!         }
-//!         Ok(())
+//!         Ok(PackFormatReport::default())
 //!     }
 //! }
 //!
@@ -57,7 +61,7 @@ mod tests;
 
 pub use options::{IgnoreMode, PackOptions};
 pub use packer::{PackError, PackReport, ProjectPacker};
-pub use plan::{PackPlan, PlannedFile, PlannedLayer, PlannedLicense};
+pub use plan::{PackPlan, PlannedFile, PlannedHashtable, PlannedLayer, PlannedLicense};
 pub use progress::{PackProgress, PackReporter, PackStage};
 
 /// An archive format [`ProjectPacker`] can pack a project into.
@@ -85,5 +89,29 @@ pub trait PackFormat {
     /// Call [`PackReporter::report_file`] before writing each content file, so
     /// a caller watching a long pack sees where it has got to. A format that
     /// stores only part of the plan reports only what it writes.
-    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error>;
+    ///
+    /// The returned [`PackFormatReport`] carries the facts only the format
+    /// knows; the driver folds them into the [`PackReport`] it returns. A
+    /// format with nothing to say returns `PackFormatReport::default()`.
+    ///
+    /// [`PackReport`]: crate::PackReport
+    fn pack(
+        self,
+        plan: &PackPlan<'_>,
+        progress: &mut PackReporter<'_>,
+    ) -> Result<PackFormatReport, Self::Error>;
+}
+
+/// What a format did beyond writing the plan - facts the driver folds into
+/// the [`PackReport`](crate::PackReport) it returns.
+///
+/// Distinct from [`PackReporter`], which streams progress while the pack
+/// runs: this is the result, read when it is done.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PackFormatReport {
+    /// `game` hashtable names the format omitted because the package's own
+    /// chunk table already recovers them. Only the modpkg format trims;
+    /// every other format reports 0.
+    pub trimmed_game_names: usize,
 }

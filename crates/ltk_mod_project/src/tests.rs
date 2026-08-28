@@ -41,6 +41,7 @@ fn create_example_project() -> ModProject {
             },
         ],
         thumbnail: None,
+        hashtables: vec![],
     }
 }
 
@@ -389,6 +390,68 @@ fn promoted_tags_keep_their_serialized_form() {
         assert_eq!(serde_json::to_value(&tag).unwrap(), serde_json::json!(name));
         assert_eq!(tag.to_string(), name);
     }
+}
+
+// -- hashtables --------------------------------------------------------------
+
+fn example_hashtables() -> Vec<ModProjectHashtable> {
+    vec![
+        ModProjectHashtable {
+            path: "hashes/game.hashes.txt".to_owned(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        },
+        // An entry from a future tool: nothing here recognizes it, and it
+        // must round trip verbatim anyway.
+        ModProjectHashtable {
+            path: "hashes/mystery.hashes.txt".to_owned(),
+            category: ltk_hashtable::Category::Unknown("mystery".to_owned()),
+            algorithm: ltk_hashtable::Algorithm::Unknown("crc-1024".to_owned()),
+            bits: 24,
+        },
+    ]
+}
+
+#[test]
+fn hashtables_round_trip_through_both_config_formats() {
+    let project = ModProject {
+        hashtables: example_hashtables(),
+        ..create_example_project()
+    };
+
+    for format in ConfigFormat::ALL {
+        let text = project.to_config_string(format).unwrap();
+        let parsed = match format {
+            ConfigFormat::Json => serde_json::from_str::<ModProject>(&text).unwrap(),
+            ConfigFormat::Toml => toml::from_str::<ModProject>(&text).unwrap(),
+        };
+        assert_eq!(parsed.hashtables, project.hashtables, "{format}");
+    }
+}
+
+/// A project without tables must serialize as it did before the field
+/// existed, so this change rewrites no one's config.
+#[test]
+fn a_project_without_hashtables_serializes_without_the_field() {
+    let value = serde_json::to_value(create_example_project()).unwrap();
+    assert!(value.get("hashtables").is_none());
+}
+
+/// The wire form is the standard's: lowercase keys, bare lowercase strings
+/// for the category and the algorithm.
+#[test]
+fn hashtable_wire_form_is_lowercase() {
+    let value = serde_json::to_value(&example_hashtables()[0]).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "path": "hashes/game.hashes.txt",
+            "category": "game",
+            "algorithm": "xxh64",
+            "bits": 64,
+        })
+    );
 }
 
 fn temp_root(tmp: &tempfile::TempDir) -> camino::Utf8PathBuf {

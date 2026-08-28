@@ -77,6 +77,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             transformers: Vec::new(),
             layers,
             thumbnail: None,
+            hashtables: vec![],
         })
     }
 

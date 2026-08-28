@@ -34,7 +34,7 @@ impl PackFormat for Capture<'_> {
         self,
         plan: &PackPlan<'_>,
         _progress: &mut PackReporter<'_>,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<crate::PackFormatReport, Self::Error> {
         self.0.layers = plan
             .layers()
             .iter()
@@ -60,7 +60,7 @@ impl PackFormat for Capture<'_> {
             .license()
             .map(|license| (license.source().to_owned(), license.canonical_name()));
         self.0.thumbnail = plan.thumbnail().map(Utf8Path::to_owned);
-        Ok(())
+        Ok(crate::PackFormatReport::default())
     }
 }
 
@@ -375,7 +375,7 @@ fn format_errors_pass_through_transparently() {
             self,
             _plan: &PackPlan<'_>,
             _progress: &mut PackReporter<'_>,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<crate::PackFormatReport, Self::Error> {
             Err(std::io::Error::other("boom"))
         }
     }
@@ -677,13 +677,17 @@ struct ReportEverything;
 impl PackFormat for ReportEverything {
     type Error = Infallible;
 
-    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
+    fn pack(
+        self,
+        plan: &PackPlan<'_>,
+        progress: &mut PackReporter<'_>,
+    ) -> Result<crate::PackFormatReport, Self::Error> {
         for layer in plan.layers() {
             for file in layer.files() {
                 progress.report_file(file.rel_path());
             }
         }
-        Ok(())
+        Ok(crate::PackFormatReport::default())
     }
 }
 
@@ -742,8 +746,8 @@ fn pack_completes_even_when_the_format_reports_nothing() {
             self,
             _plan: &PackPlan<'_>,
             _progress: &mut PackReporter<'_>,
-        ) -> Result<(), Self::Error> {
-            Ok(())
+        ) -> Result<crate::PackFormatReport, Self::Error> {
+            Ok(crate::PackFormatReport::default())
         }
     }
 

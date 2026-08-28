@@ -66,6 +66,17 @@ pub enum ModpkgError {
     #[error("Invalid meta chunk: must not belong to any layer or wad")]
     InvalidMetaChunk,
 
+    /// The metadata declares a hashtable whose chunk the package does not hold.
+    #[error("Missing hashtable chunk: {path}")]
+    MissingHashtable { path: String },
+
+    /// A declared hashtable chunk does not fit the table grammar.
+    #[error("Invalid hashtable: {path}")]
+    InvalidHashtable {
+        path: String,
+        source: ltk_hashtable::HashtableReadError,
+    },
+
     /// A chunk path, layer name or WAD name leaves the directory the package
     /// would be extracted to, so extracting it would write outside it.
     ///

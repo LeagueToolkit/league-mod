@@ -14,14 +14,20 @@ mod modignore;
 pub mod pack;
 mod package_format;
 
+#[cfg(any(feature = "fantome", feature = "modpkg"))]
+mod hashtable_routes;
+
 #[cfg(feature = "fantome")]
 pub mod fantome;
 #[cfg(feature = "modpkg")]
 pub mod modpkg;
+#[cfg(feature = "fantome")]
+pub mod preserve;
 
 pub use cancellation::Cancellation;
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
+pub use hashtable_routes::DuplicateHashtableName;
 pub use import::{
     ConfigRefusal, ImportError, ImportFormat, ImportProgress, ImportReporter, ImportStage,
     ImportTarget, NoConfig, ProjectImporter, ProjectPath, ProjectPaths,
@@ -32,13 +38,23 @@ pub use modignore::{
     MODIGNORE_FILE_NAME,
 };
 pub use pack::{
-    IgnoreMode, PackError, PackFormat, PackOptions, PackPlan, PackProgress, PackReport,
-    PackReporter, PackStage, PlannedFile, PlannedLayer, PlannedLicense, ProjectPacker,
+    IgnoreMode, PackError, PackFormat, PackFormatReport, PackOptions, PackPlan, PackProgress,
+    PackReport, PackReporter, PackStage, PlannedFile, PlannedHashtable, PlannedLayer,
+    PlannedLicense, ProjectPacker,
 };
 pub use package_format::PackageFormat;
+#[cfg(feature = "fantome")]
+pub use preserve::{preserve_archive_names, HarvestReport, PreserveError, PreserveOutcome};
 
 /// The directory every layer's content sits under, in the project root.
 pub const CONTENT_DIR_NAME: &str = "content";
+
+/// The directory a project's declared hashtable files sit under, in the
+/// project root.
+///
+/// Deliberately outside [`CONTENT_DIR_NAME`]: a table is never a packing
+/// candidate and never meets `.modignore`.
+pub const HASHES_DIR_NAME: &str = "hashes";
 
 /// Well-known mod tags for common mod categories.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -303,6 +319,16 @@ pub struct ModProject {
     /// Example: `thumbnail.webp`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<String>,
+
+    /// The embedded hashtables the project declares.
+    ///
+    /// The manifest is authoritative: a file under `hashes/` no entry here
+    /// declares does not exist for lookup. By convention the files live at
+    /// `hashes/{category}.hashes.txt` (see [`HASHES_DIR_NAME`]), but each
+    /// entry's `path` is what says where its table is. Omitted when empty so
+    /// a project without tables serializes as before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hashtables: Vec<ModProjectHashtable>,
 }
 
 impl ModProject {
@@ -410,6 +436,52 @@ impl ModProject {
         };
 
         result.map_err(|source| ModProjectError::Serialize { format, source })
+    }
+}
+
+/// One `hashtables` manifest entry in a mod project config.
+///
+/// The project spelling of `ltk_hashtable`'s
+/// [`HashtableEntry`](ltk_hashtable::HashtableEntry): lowercase
+/// keys, `path` relative to the project root. Convert with
+/// [`ModProjectHashtable::to_entry`] and [`ModProjectHashtable::from_entry`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ModProjectHashtable {
+    /// Where the table file lives, relative to the project root.
+    ///
+    /// Example: `hashes/game.hashes.txt`
+    pub path: String,
+    /// The lookup domain of the table's names.
+    pub category: ltk_hashtable::Category,
+    /// The hash function keying the table's names.
+    pub algorithm: ltk_hashtable::Algorithm,
+    /// The declared key width in bits.
+    pub bits: u8,
+}
+
+impl ModProjectHashtable {
+    /// The entry as `ltk_hashtable`'s domain type.
+    ///
+    /// `None` when `bits` declares a width no key can have; the standard
+    /// requires `1..=64`.
+    pub fn to_entry(&self) -> Option<ltk_hashtable::HashtableEntry> {
+        let width = ltk_hashtable::KeyWidth::new(self.bits)?;
+        Some(ltk_hashtable::HashtableEntry::new(
+            self.path.as_str(),
+            self.category.clone(),
+            self.algorithm.clone(),
+            width,
+        ))
+    }
+
+    /// Spell a domain entry the project way.
+    pub fn from_entry(entry: &ltk_hashtable::HashtableEntry) -> Self {
+        Self {
+            path: entry.path().to_string(),
+            category: entry.category().clone(),
+            algorithm: entry.algorithm().clone(),
+            bits: entry.width().bits(),
+        }
     }
 }
 

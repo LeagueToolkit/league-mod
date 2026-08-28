@@ -4,8 +4,9 @@ use std::fs;
 use std::io;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_hashtable::{Collision, Hashtable, HashtableReadError, HashtableSet};
 
-use super::plan::{PackPlan, PlannedFile, PlannedLayer, PlannedLicense};
+use super::plan::{PackPlan, PlannedFile, PlannedHashtable, PlannedLayer, PlannedLicense};
 use super::progress::{PackProgress, PackReporter};
 use super::{IgnoreMode, PackFormat, PackOptions};
 use crate::{
@@ -52,6 +53,36 @@ pub enum PackError<E> {
     #[error(transparent)]
     Walk(#[from] ContentWalkError),
 
+    /// A declared hashtable's key width is not one a key can have; the
+    /// standard requires 1 to 64 bits.
+    #[error("Hashtable {path} declares a key width of {bits} bits; a key holds 1 to 64")]
+    HashtableWidth {
+        /// The table's declared path, relative to the project root.
+        path: Utf8PathBuf,
+        /// The width the manifest declares.
+        bits: u8,
+    },
+
+    /// A declared hashtable file is missing, or does not fit the table
+    /// grammar.
+    #[error("Failed to read the hashtable at {path}")]
+    Hashtable {
+        /// The table's path on disk.
+        path: Utf8PathBuf,
+        #[source]
+        source: HashtableReadError,
+    },
+
+    /// Two different names in one category truncate to one key, so one of
+    /// them could never be resolved again. Only the author can fix it - by
+    /// renaming a file - so the pack fails rather than shipping a broken
+    /// table.
+    #[error(
+        "The {} tables collide: {:?} and {:?} share the key {}",
+        .0.category, .0.first, .0.second, .0.key
+    )]
+    HashtableCollision(Box<Collision>),
+
     /// An [`IgnoreMode::Explicit`] filter was built for a different project
     /// root than the packer was given, so it would relate every scanned path
     /// to the wrong content dir and quietly filter wrong.
@@ -80,6 +111,7 @@ impl<E> PackError<E> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackReport {
     ignored: Vec<Utf8PathBuf>,
+    trimmed_game_names: usize,
 }
 
 impl PackReport {
@@ -93,6 +125,16 @@ impl PackReport {
     /// `ignored_files().len()`, for reporting.
     pub fn ignored_count(&self) -> usize {
         self.ignored.len()
+    }
+
+    /// `game` hashtable names the format omitted because the package's own
+    /// chunk table already recovers them.
+    ///
+    /// A silent trim and an empty table look identical from outside, and
+    /// only one of them is correct - report this to the user when it is not
+    /// zero. Only the modpkg format trims; every other format reports 0.
+    pub fn trimmed_game_names(&self) -> usize {
+        self.trimmed_game_names
     }
 }
 
@@ -250,15 +292,19 @@ impl ProjectPacker {
             self.find_readme(),
             self.find_license(),
             self.find_thumbnail(),
+            self.resolve_hashtables()?,
         );
 
-        format
+        let format_report = format
             .pack(&plan, &mut progress)
             .map_err(PackError::Format)?;
 
         progress.report_complete();
 
-        Ok(PackReport { ignored })
+        Ok(PackReport {
+            ignored,
+            trimmed_game_names: format_report.trimmed_game_names,
+        })
     }
 
     /// The layers a pack covers: the base layer first (synthesized when the
@@ -311,6 +357,45 @@ impl ProjectPacker {
             .and_then(canonical_license_file_name)
             .unwrap_or("LICENSE");
         Some(PlannedLicense::new(path, canonical))
+    }
+
+    /// Read and validate the hashtables the config declares, in manifest
+    /// order.
+    ///
+    /// Every declared table is read here, whatever format the pack targets:
+    /// collisions are judged over the merged category, which is what a reader
+    /// of the packed archive will see, and a table the driver cannot read is
+    /// a table no archive should ship.
+    fn resolve_hashtables<E>(&self) -> Result<Vec<PlannedHashtable>, PackError<E>> {
+        let mut planned = Vec::with_capacity(self.project.hashtables.len());
+        for manifest in &self.project.hashtables {
+            let Some(entry) = manifest.to_entry() else {
+                return Err(PackError::HashtableWidth {
+                    path: manifest.path.clone().into(),
+                    bits: manifest.bits,
+                });
+            };
+            let source = self.project_root.join(&manifest.path);
+            let table = fs::File::open(source.as_std_path())
+                .map_err(HashtableReadError::from)
+                .and_then(|file| Hashtable::from_reader(io::BufReader::new(file)))
+                .map_err(|error| PackError::Hashtable {
+                    path: source.clone(),
+                    source: error,
+                })?;
+            planned.push(PlannedHashtable::new(source, entry, table));
+        }
+
+        let merged = HashtableSet::build(
+            planned
+                .iter()
+                .map(|table| (table.entry().clone(), table.table().clone())),
+        );
+        if let Some(collision) = merged.collisions().first() {
+            return Err(PackError::HashtableCollision(Box::new(collision.clone())));
+        }
+
+        Ok(planned)
     }
 
     fn find_thumbnail(&self) -> Option<Utf8PathBuf> {

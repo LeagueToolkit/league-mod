@@ -13,6 +13,7 @@ mod decoder;
 pub mod error;
 mod extractor;
 mod hashes;
+mod hashtable;
 mod indices;
 mod license;
 mod metadata;
@@ -28,10 +29,13 @@ pub use decoder::ModpkgDecoder;
 pub use error::{InvalidSlugError, ModpkgError};
 pub use extractor::ModpkgExtractor;
 pub use hashes::{ChunkKey, LayerHash, PathHash, WadNameHash};
+pub use hashtable::{ModpkgHashtable, HASHTABLES_CHUNK_DIR};
 pub use indices::{LayerIndex, WadIndex};
 pub use license::*;
 pub use metadata::*;
-pub use plan::{ChunkDestination, ExtractionPlan, PlannedChunk};
+pub use plan::{
+    hashtable_file_name, ChunkDestination, ExtractionPlan, PlannedChunk, HASHES_DIR_NAME,
+};
 pub use readme::*;
 pub use slug::Slug;
 pub use thumbnail::*;
