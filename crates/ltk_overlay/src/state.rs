@@ -249,7 +249,8 @@ impl OverlayState {
     /// Check if this state is an exact match for the current configuration.
     ///
     /// Returns `true` if:
-    /// - Version matches the current version (5)
+    /// - Version matches the current version (6)
+    /// - No WAD is marked dirty by an interrupted rewrite
     /// - Enabled mods list matches exactly (same IDs, same order)
     /// - Per-mod content fingerprints match exactly
     /// - Game fingerprint matches
@@ -278,6 +279,9 @@ impl OverlayState {
         string_override_locales: &[String],
     ) -> bool {
         self.version == CURRENT_VERSION
+            // A WAD an interrupted build was rewriting may be torn, so no state
+            // carrying dirty flags can prove the overlay on disk is up to date.
+            && self.dirty_wads.is_empty()
             && self.enabled_mods == enabled_mod_ids
             && mod_fingerprints.is_some_and(|fps| &self.mod_fingerprints == fps)
             && self.game_fingerprint == game_fingerprint

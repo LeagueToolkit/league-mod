@@ -251,8 +251,12 @@ impl OverlayBuilder {
             let wad_path = Utf8PathBuf::from(wad_path_str);
             let overlay_wad = self.overlay_root.join(&wad_path);
 
+            // A WAD left dirty by an interrupted rewrite may be torn, so it is
+            // rebuilt even when its overrides did not change - which happens
+            // when the edit that triggered the killed build is reverted.
             if can_incremental
                 && let Some(state) = prev_state
+                && !state.dirty_wads.contains(wad_path_str)
                 && let Some(old_fp) = state.wad_fingerprint(wad_path_str)
                 && old_fp == new_fp
                 && overlay_wad.as_std_path().exists()
@@ -487,16 +491,27 @@ impl OverlayBuilder {
 
         let stats = match rewrite {
             Some(rewrite) => {
+                // An override whose bytes never resolved - a stringtable patch
+                // that failed to apply, say - is dropped rather than fatal, and
+                // its chunk falls back to the entry the source region holds.
+                // That is what the full-rebuild path does with it too.
+                let tail_hashes: Vec<u64> = rewrite
+                    .tail_hashes
+                    .iter()
+                    .copied()
+                    .filter(|hash| override_hashes.contains(hash))
+                    .collect();
+
                 tracing::info!(
                     "Rewriting WAD tail dst={} overrides={}",
                     dst_wad_path,
-                    rewrite.tail_hashes.len()
+                    tail_hashes.len()
                 );
                 let mut stats = rewrite_wad_tail(
                     &dst_wad_path,
                     &rewrite.record.layout,
                     &rewrite.base_entries,
-                    &rewrite.tail_hashes,
+                    &tail_hashes,
                     |hash| take_override(&mut overrides, hash),
                 )?;
                 // The planner proved this source identity before choosing the

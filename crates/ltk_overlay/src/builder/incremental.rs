@@ -22,11 +22,13 @@ pub(crate) struct TailRewrite {
     /// *previous* set; the caller replaces it when recording the result.
     pub(crate) record: WadLayoutRecord,
 
-    /// TOC entries whose data already sits in the copied region, keyed by path
-    /// hash: every chunk of the result that is not an override.
+    /// The TOC every source chunk would have with no override applied, keyed by
+    /// path hash. The rewrite overwrites the entries it puts in the tail.
     pub(crate) base_entries: BTreeMap<u64, WadChunk>,
 
-    /// Path hashes whose bytes go into the rewritten tail, ascending.
+    /// Path hashes this build intends to put in the tail, ascending. A hash
+    /// whose data turns out to be unresolvable is dropped at write time and
+    /// keeps its [`base_entries`](Self::base_entries) entry.
     pub(crate) tail_hashes: Vec<u64>,
 
     /// Overrides whose compressed bytes were lifted out of the old tail because
@@ -134,8 +136,12 @@ impl OverlayBuilder {
         verify_passthrough_toc(&record.layout, source.chunks(), overlay.chunks(), record)?;
 
         // The new override set must fit the TOC the file already reserved.
-        let base_entries = base_entries(&record.layout, source.chunks(), new_overrides)?;
-        let entry_count = base_entries.len() + new_overrides.len();
+        let base_entries = base_entries(&record.layout, source.chunks())?;
+        let entry_count = base_entries.len()
+            + new_overrides
+                .iter()
+                .filter(|hash| !base_entries.contains_key(hash))
+                .count();
         if !record.layout.admits_entry_count(entry_count) {
             return Err(Error::Other(format!(
                 "the new override set needs {entry_count} TOC entries, not the \
@@ -210,19 +216,18 @@ fn verify_passthrough_toc(
     Ok(())
 }
 
-/// The TOC entries of every source chunk the new build does not override.
+/// The TOC entry every source chunk would have with no override at all.
 ///
-/// Their bytes are already in the copied region, so their entries are the
-/// source entries shifted - including entries for overrides being *removed*,
-/// whose original bytes the region still holds.
-fn base_entries(
-    layout: &WadTailLayout,
-    source: &WadChunks,
-    new_overrides: &HashSet<u64>,
-) -> Result<BTreeMap<u64, WadChunk>> {
+/// The copied region holds all of them, overridden ones included, so each is
+/// just the source entry shifted. The rewrite then overwrites the entries of the
+/// chunks it actually puts in the tail, which means two things fall out for
+/// free: an override that was *removed* reverts to the game's bytes, and one
+/// whose data could not be resolved this build (a stringtable patch that failed
+/// to apply, say) stays a passthrough instead of failing the rebuild - the same
+/// outcome the full-rebuild path gives it.
+fn base_entries(layout: &WadTailLayout, source: &WadChunks) -> Result<BTreeMap<u64, WadChunk>> {
     source
         .iter()
-        .filter(|chunk| !new_overrides.contains(&chunk.path_hash.0))
         .map(|chunk| Ok((chunk.path_hash.0, layout.shift(chunk)?)))
         .collect()
 }

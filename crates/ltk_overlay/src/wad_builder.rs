@@ -537,8 +537,10 @@ fn write_patched_wad(
 ///
 /// * `wad_path` - The overlay WAD to rewrite in place.
 /// * `layout` - The layout recorded when this file was built.
-/// * `base_entries` - TOC entries whose data already sits in the region, keyed
-///   by path hash. Every chunk of the result that is not an override.
+/// * `base_entries` - The TOC entry each chunk already in the copied region
+///   would have with no override applied, keyed by path hash. A tail hash
+///   overwrites its entry here, so a chunk whose override is gone reverts to the
+///   bytes the region still holds.
 /// * `tail_hashes` - Path hashes whose data goes into the new tail, ascending.
 /// * `resolve_override` - Supplies each tail hash's compressed bytes, in the
 ///   order they are written.
@@ -558,7 +560,11 @@ pub fn rewrite_wad_tail(
 ) -> Result<PatchedWadStats> {
     let start = std::time::Instant::now();
 
-    let entry_count = base_entries.len() + tail_hashes.len();
+    let entry_count = base_entries.len()
+        + tail_hashes
+            .iter()
+            .filter(|hash| !base_entries.contains_key(hash))
+            .count();
     if !layout.admits_entry_count(entry_count) {
         return Err(Error::Other(format!(
             "Overlay WAD {wad_path} has room for {} TOC entries, not the {entry_count} \
@@ -612,8 +618,8 @@ pub fn rewrite_wad_tail(
     Ok(PatchedWadStats {
         chunks_written: entries.len(),
         overrides_applied: tail_hashes.len(),
-        new_entries_added: 0,
-        chunks_passed_through: base_entries.len(),
+        new_entries_added: entries.len().saturating_sub(base_entries.len()),
+        chunks_passed_through: entries.len() - tail_hashes.len(),
         elapsed_ms,
         layout: *layout,
         source: None,

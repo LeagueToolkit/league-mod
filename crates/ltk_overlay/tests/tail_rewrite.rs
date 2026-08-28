@@ -546,6 +546,40 @@ mod fallbacks {
         assert_full_rebuild(&profile);
     }
 
+    /// A WAD left dirty by a killed build may be torn, so it must be rebuilt
+    /// even when nothing about the mod changed - the case where the user
+    /// reverts the edit that triggered the interrupted build, which would
+    /// otherwise reach the exact-match skip or the per-WAD reuse path and serve
+    /// the torn file to the game.
+    #[test]
+    fn a_dirty_wad_is_rebuilt_even_when_nothing_changed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+        let profile = Profile::new(&root, &[(SKIN, EDIT_V1)]);
+        profile.build();
+        profile.stamp_shadow(SKIN);
+
+        let mut state = profile.state();
+        state.dirty_wads.insert(profile.layout_key());
+        profile.save_state(&state);
+
+        let rebuild = profile.build();
+
+        assert_eq!(
+            rebuild.wads_built.len(),
+            1,
+            "a dirty WAD must be rebuilt, not skipped or reused"
+        );
+        assert!(
+            !profile.shadow_is_stamped(SKIN),
+            "the rebuild must be a full one, recopying the source region"
+        );
+        assert_eq!(profile.overlay_chunk(SKIN).as_deref(), Some(EDIT_V1));
+        assert!(profile.state().dirty_wads.is_empty());
+        assert_wad_is_well_formed(&profile.overlay_wad());
+    }
+
     /// Adding a chunk changes the WAD's entry count, which no longer fits the
     /// TOC the file reserved - the accepted limit while TOC slack is zero.
     #[test]
