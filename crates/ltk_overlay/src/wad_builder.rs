@@ -11,6 +11,27 @@
 //! TOC - it is preserved as provenance: verifiers (e.g. `ltk_sig`'s `WadMod` records)
 //! use it to prove which Riot-signed WAD the overlay was derived from.
 //!
+//! # File Layout
+//!
+//! A patched WAD is written in three regions:
+//!
+//! ```text
+//! [header][chunk count][TOC: 32 bytes x toc_capacity]
+//! [source data region - the game WAD's data, copied intact]
+//! [override tail    - one entry per overridden or new chunk]
+//! ```
+//!
+//! The format fixes the TOC directly after the header, but every TOC entry
+//! carries an absolute `data_offset`, so where the *data* sits is free. Copying
+//! the source data as one block, rather than interleaving overrides into it,
+//! buys three things:
+//!
+//! - the copy is sequential, with no per-chunk bookkeeping;
+//! - an override that is later *removed* is a TOC edit alone, because the
+//!   original bytes are still in the file even while unreferenced;
+//! - the only bytes an incremental rebuild must rewrite are the tail and the
+//!   TOC, which is what makes rebuilding a WAD cost O(override bytes).
+//!
 //! # Compression Strategy
 //!
 //! **Non-overridden chunks** are passed through as raw compressed bytes from the
@@ -33,11 +54,11 @@ use crate::error::{Error, Result};
 use byteorder::{LE, WriteBytesExt};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_file::LeagueFileKind;
-use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression, WadHash};
-use std::borrow::Cow;
+use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression, WadChunks, WadHash};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -46,6 +67,27 @@ const TOC_ENTRY_SIZE: usize = 32;
 
 /// Write buffer size for the output WAD
 const WRITE_BUFFER_SIZE: usize = 1 << 20; // 1 MiB
+
+/// Bytes moved per write when copying the source data region.
+///
+/// One `write_all` of the whole region would hand the OS a multi-gigabyte
+/// buffer; stepping keeps each write in a size the page cache handles well.
+const REGION_COPY_STEP: usize = 8 << 20; // 8 MiB
+
+/// TOC entries reserved beyond a patched WAD's current entry count.
+///
+/// Zero, deliberately. Reserving slack would let a WAD gain or lose a chunk
+/// without moving any data, but it leaves a gap between the last TOC entry and
+/// the first data byte, and the game has not been observed tolerating that gap
+/// in a real session. The capacity is still recorded and honoured throughout, so
+/// enabling slack once that is proven is this constant alone.
+///
+/// While it is zero, capacity equals the entry count, so any change to a WAD's
+/// entry set fails the capacity precondition and takes the full-rebuild path.
+const TOC_SLACK_ENTRIES: u32 = 0;
+
+/// Highest byte offset the WAD v3.4 format's `u32` offset fields can address.
+const MAX_WAD_OFFSET: u64 = u32::MAX as u64;
 
 /// An override chunk's compressed bytes plus the TOC fields describing them.
 ///
@@ -106,7 +148,30 @@ impl PreparedOverride {
     }
 }
 
-/// Build statistics returned by [`build_patched_wad`].
+/// Where a patched WAD's regions sit, and how source offsets map into it.
+///
+/// Recorded after a build so a later rebuild of the same source WAD can verify
+/// the file it finds on disk and rewrite only its tail. See the
+/// [module docs](self) on the file layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WadTailLayout {
+    /// Absolute offset where the copied source data region starts.
+    pub data_region_offset: u64,
+    /// Added to a source chunk's `data_offset` to get its offset in this file.
+    ///
+    /// Signed: the patched TOC can be shorter than the source's own when the
+    /// source WAD pads between its TOC and its first chunk.
+    pub offset_delta: i64,
+    /// Absolute offset where the override tail starts (the region's end).
+    pub tail_offset: u64,
+    /// TOC entries the file has room for without moving any data.
+    ///
+    /// Equal to the entry count while [`TOC_SLACK_ENTRIES`] is zero.
+    pub toc_capacity: u32,
+}
+
+/// The outcome of [`build_patched_wad`]: build metrics, plus the
+/// [layout](WadTailLayout) of the file that was written.
 #[derive(Debug, Clone)]
 pub struct PatchedWadStats {
     /// Total number of chunks in the output WAD (original + overrides).
@@ -119,6 +184,8 @@ pub struct PatchedWadStats {
     pub chunks_passed_through: usize,
     /// Wall-clock time to build this WAD, in milliseconds.
     pub elapsed_ms: u128,
+    /// Where this build put the source data region and the override tail.
+    pub layout: WadTailLayout,
 }
 
 /// Build a patched WAD by overlaying mod chunks on top of an original game WAD.
@@ -253,48 +320,40 @@ fn write_patched_wad(
     // Write chunk count
     writer.write_u32::<LE>(ordered.len() as u32)?;
 
-    // Write dummy TOC (TOC_ENTRY_SIZE bytes per chunk) - overwritten with real offsets later.
+    // Reserve the TOC - written for real once every data offset is known.
     let toc_offset = writer.stream_position()?;
-    for _ in &ordered {
+    let toc_capacity = toc_capacity_for(ordered.len(), dst_wad_path)?;
+    for _ in 0..toc_capacity {
         writer.write_all(&[0u8; TOC_ENTRY_SIZE])?;
     }
 
-    let mut data_offset: u64 = toc_offset + (ordered.len() as u64) * TOC_ENTRY_SIZE as u64;
+    let region = source_data_region(chunks, mmap.len(), src_wad_path)?;
+    let layout = TailLayout::plan(toc_offset, toc_capacity, &region, dst_wad_path)?;
 
-    // Write chunk data and build final TOC entries.
+    copy_source_region(&mut writer, &mmap[..], &region)?;
+
+    // Overridden and new chunks all live in the tail; everything else keeps the
+    // bytes just copied and only shifts its offset.
     let mut final_chunks: Vec<WadChunk> = Vec::with_capacity(ordered.len());
+    let mut tail_cursor = layout.tail_offset;
 
     for &path_hash in &ordered {
-        if data_offset > u32::MAX as u64 {
-            return Err(Error::Other(format!(
-                "Patched WAD exceeds the 4 GiB limit of the WAD v3.4 format \
-                 (chunk {path_hash:016x} would start at offset {data_offset})"
-            )));
-        }
-
-        let resolved = if override_hashes.contains(&path_hash) {
+        if override_hashes.contains(&path_hash) {
             overrides_applied += 1;
-            Some(resolve_override(path_hash)?)
+            let over = resolve_override(path_hash)?;
+            final_chunks.push(tail_chunk(path_hash, &over, tail_cursor, dst_wad_path)?);
+            writer.write_all(over.compressed())?;
+            tail_cursor += over.compressed().len() as u64;
         } else {
-            None
-        };
-
-        let prepared = match &resolved {
-            Some(over) => PreparedChunk::from_override(over),
-            None => {
-                let orig = chunks
-                    .get(WadHash(path_hash))
-                    .ok_or_else(|| Error::Other(format!("Missing base chunk {path_hash:016x}")))?;
-                prepare_passthrough(orig, &mmap[..])?
-            }
-        };
-
-        writer.write_all(&prepared.data)?;
-        final_chunks.push(prepared.to_chunk(path_hash, data_offset));
-        data_offset += prepared.data.len() as u64;
+            let orig = chunks
+                .get(WadHash(path_hash))
+                .ok_or_else(|| Error::Other(format!("Missing base chunk {path_hash:016x}")))?;
+            final_chunks.push(layout.shift(orig, dst_wad_path)?);
+        }
     }
 
-    // Seek back and write final TOC
+    // Seek back and write final TOC. Any reserved-but-unused capacity keeps the
+    // zeroes written above.
     writer.seek(SeekFrom::Start(toc_offset))?;
     for chunk in &final_chunks {
         chunk.write_v3_4(&mut writer)?;
@@ -321,48 +380,174 @@ fn write_patched_wad(
         new_entries_added,
         chunks_passed_through,
         elapsed_ms,
+        layout: layout.into(),
     })
 }
 
-/// A chunk's compressed bytes plus the TOC metadata to record for it, ready to be
-/// written at the current data offset. Produced by the `prepare_*` helpers; the
-/// only field the caller fills in is `data_offset`, via [`Self::to_chunk`].
-struct PreparedChunk<'a> {
-    /// Compressed bytes to write verbatim into the output WAD.
-    data: Cow<'a, [u8]>,
-    uncompressed_size: usize,
-    compression_type: WadChunkCompression,
-    frame_count: u8,
-    start_frame: u32,
-    checksum: u64,
+/// A patched WAD's region boundaries while it is being written.
+///
+/// The public [`WadTailLayout`] is this without the source-side bookkeeping.
+#[derive(Debug, Clone, Copy)]
+struct TailLayout {
+    data_region_offset: u64,
+    offset_delta: i64,
+    tail_offset: u64,
+    toc_capacity: u32,
 }
 
-impl<'a> PreparedChunk<'a> {
-    /// An override chunk: its bytes are already compressed and checksummed.
-    fn from_override(over: &'a PreparedOverride) -> Self {
-        PreparedChunk {
-            data: Cow::Borrowed(&over.compressed),
-            uncompressed_size: over.uncompressed_size as usize,
-            compression_type: over.compression,
-            frame_count: 0,
-            start_frame: 0,
-            checksum: over.checksum,
+impl From<TailLayout> for WadTailLayout {
+    fn from(layout: TailLayout) -> Self {
+        Self {
+            data_region_offset: layout.data_region_offset,
+            offset_delta: layout.offset_delta,
+            tail_offset: layout.tail_offset,
+            toc_capacity: layout.toc_capacity,
         }
+    }
+}
+
+impl TailLayout {
+    /// Place the copied source region and the tail behind a TOC of
+    /// `toc_capacity` entries starting at `toc_offset`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the region alone would push the file past the format's 4 GiB
+    /// addressable limit.
+    fn plan(
+        toc_offset: u64,
+        toc_capacity: u32,
+        region: &Range<u64>,
+        dst_wad_path: &Utf8Path,
+    ) -> Result<Self> {
+        let data_region_offset = toc_offset + u64::from(toc_capacity) * TOC_ENTRY_SIZE as u64;
+        let tail_offset = data_region_offset + (region.end - region.start);
+        if tail_offset > MAX_WAD_OFFSET {
+            return Err(Error::Other(format!(
+                "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format: \
+                 the source data region alone ends at offset {tail_offset}"
+            )));
+        }
+
+        Ok(Self {
+            data_region_offset,
+            offset_delta: data_region_offset as i64 - region.start as i64,
+            tail_offset,
+            toc_capacity,
+        })
     }
 
-    fn to_chunk(&self, path_hash: u64, data_offset: u64) -> WadChunk {
-        WadChunk {
-            path_hash: WadHash(path_hash),
-            data_offset: data_offset as usize,
-            compressed_size: self.data.len(),
-            uncompressed_size: self.uncompressed_size,
-            compression_type: self.compression_type,
-            is_duplicated: false,
-            frame_count: self.frame_count,
-            start_frame: self.start_frame,
-            checksum: self.checksum,
+    /// A source chunk's TOC entry with its offset moved into the copied region.
+    ///
+    /// Every other field carries over untouched: the bytes came out of a valid
+    /// v3.4 WAD and were copied verbatim, so their sizes, compression, frame
+    /// fields and checksum still describe them exactly.
+    fn shift(&self, orig: &WadChunk, dst_wad_path: &Utf8Path) -> Result<WadChunk> {
+        let shifted = orig.data_offset as i64 + self.offset_delta;
+        let end = shifted + orig.compressed_size as i64;
+        if shifted < 0 || end > MAX_WAD_OFFSET as i64 {
+            return Err(Error::Other(format!(
+                "Patched WAD {dst_wad_path} cannot address chunk {:016x} at offset {shifted}",
+                orig.path_hash
+            )));
         }
+
+        Ok(WadChunk {
+            data_offset: shifted as usize,
+            ..*orig
+        })
     }
+}
+
+/// The byte range of a source WAD's data region: from its first chunk's offset
+/// to the end of its last.
+///
+/// Derived from the chunk table rather than assumed to begin right after the
+/// TOC, so a WAD that pads between the two still copies exactly the bytes its
+/// entries point into. An empty WAD has an empty region.
+///
+/// # Errors
+///
+/// Fails when a chunk points outside the file, which means the source WAD is
+/// truncated or corrupt.
+fn source_data_region(
+    chunks: &WadChunks,
+    len: usize,
+    src_wad_path: &Utf8Path,
+) -> Result<Range<u64>> {
+    let Some(start) = chunks.iter().map(|c| c.data_offset).min() else {
+        return Ok(0..0);
+    };
+    let end = chunks
+        .iter()
+        .map(|c| c.data_offset + c.compressed_size)
+        .max()
+        .unwrap_or(start);
+
+    if end > len {
+        return Err(Error::Other(format!(
+            "Source WAD {src_wad_path} is truncated: its chunks reach offset {end} \
+             but the file is {len} bytes"
+        )));
+    }
+
+    Ok(start as u64..end as u64)
+}
+
+/// Copy the source WAD's data region into the output in sequential steps.
+fn copy_source_region<W: Write>(writer: &mut W, mmap: &[u8], region: &Range<u64>) -> Result<()> {
+    let region = region.start as usize..region.end as usize;
+    for step in mmap[region].chunks(REGION_COPY_STEP) {
+        writer.write_all(step)?;
+    }
+    Ok(())
+}
+
+/// The TOC entry for an override written at `offset` in the tail.
+fn tail_chunk(
+    path_hash: u64,
+    over: &PreparedOverride,
+    offset: u64,
+    dst_wad_path: &Utf8Path,
+) -> Result<WadChunk> {
+    let compressed_size = over.compressed().len();
+    if offset + compressed_size as u64 > MAX_WAD_OFFSET {
+        return Err(Error::Other(format!(
+            "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format \
+             (override {path_hash:016x} would end at offset {})",
+            offset + compressed_size as u64
+        )));
+    }
+
+    Ok(WadChunk {
+        path_hash: WadHash(path_hash),
+        data_offset: offset as usize,
+        compressed_size,
+        uncompressed_size: over.uncompressed_size() as usize,
+        compression_type: over.compression(),
+        is_duplicated: false,
+        frame_count: 0,
+        start_frame: 0,
+        checksum: over.checksum(),
+    })
+}
+
+/// The number of TOC entries to reserve for `entry_count` chunks.
+///
+/// # Errors
+///
+/// Fails when the entry count (plus [`TOC_SLACK_ENTRIES`]) overflows the
+/// format's `u32` chunk count.
+fn toc_capacity_for(entry_count: usize, dst_wad_path: &Utf8Path) -> Result<u32> {
+    u32::try_from(entry_count)
+        .ok()
+        .and_then(|count| count.checked_add(TOC_SLACK_ENTRIES))
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "Patched WAD {dst_wad_path} has {entry_count} chunks, more than the \
+                 WAD v3.4 format can index"
+            ))
+        })
 }
 
 /// Reject chunk sizes that overflow the WAD v3.4 format's u32 size fields.
@@ -379,26 +564,6 @@ fn ensure_chunk_fits(
         )));
     }
     Ok(())
-}
-
-/// A non-overridden chunk: copy its raw compressed bytes straight from the source
-/// WAD's mmap, no decompression or recompression.
-fn prepare_passthrough<'a>(orig: &WadChunk, mmap: &'a [u8]) -> Result<PreparedChunk<'a>> {
-    let end = orig.data_offset + orig.compressed_size;
-    let data = mmap.get(orig.data_offset..end).ok_or_else(|| {
-        Error::Other(format!(
-            "Base chunk {:016x} data out of bounds",
-            orig.path_hash
-        ))
-    })?;
-    Ok(PreparedChunk {
-        data: Cow::Borrowed(data),
-        uncompressed_size: orig.uncompressed_size,
-        compression_type: orig.compression_type,
-        frame_count: orig.frame_count,
-        start_frame: orig.start_frame,
-        checksum: orig.checksum,
-    })
 }
 
 /// Compress data using the specified compression type.
