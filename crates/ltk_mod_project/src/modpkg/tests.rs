@@ -695,6 +695,454 @@ fn a_project_converted_from_metadata_reads_a_custom_license() {
     );
 }
 
+// -- embedded hashtables ----------------------------------------------------
+
+fn game_table_project(root: &Utf8Path, names: &str) -> ModProject {
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::write(root.join("hashes/game.hashes.txt"), names).unwrap();
+
+    ModProject {
+        hashtables: vec![crate::ModProjectHashtable {
+            path: "hashes/game.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        }],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    }
+}
+
+/// The declared table becomes a chunk the package's metadata declares, at
+/// `_meta_/hashes/` under the file name the project kept it at.
+#[test]
+fn pack_embeds_the_declared_hashtables() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    let names = "ASSETS/Custom/One.tex\nASSETS/Custom/Two.tex\n";
+
+    let (mut modpkg, _) = pack(game_table_project(&root, names), &root);
+
+    let tables = modpkg.load_hashtables().unwrap();
+    assert_eq!(tables.len(), 1);
+    let (entry, table) = &tables[0];
+    assert_eq!(entry.path(), "_meta_/hashes/game.hashes.txt");
+    assert_eq!(
+        table.names().collect::<Vec<_>>(),
+        ["ASSETS/Custom/One.tex", "ASSETS/Custom/Two.tex"]
+    );
+}
+
+/// User story 34: project -> modpkg -> project loses no table names and no
+/// casing. The file comes back under `hashes/` and the imported
+/// `mod.config.json` declares it where it landed.
+#[test]
+fn hashtables_survive_a_pack_import_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    let names = "ASSETS/Custom/CasedName.tex\n";
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(game_table_project(&root, names), root.to_owned())
+        .pack(ModpkgFormat::new(&mut buffer))
+        .unwrap();
+
+    let output = utf8_tempdir(&tmp).join("imported");
+    let imported = import(buffer.into_inner(), &output);
+
+    assert_eq!(
+        fs::read_to_string(output.join("hashes/game.hashes.txt")).unwrap(),
+        names
+    );
+    assert_eq!(
+        imported.hashtables,
+        [crate::ModProjectHashtable {
+            path: "hashes/game.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        }]
+    );
+}
+
+/// User story 35: a modpkg converted to a fantome archive carries its tables
+/// as `META/hashes/` entries the info.json declares. There is no direct
+/// converter - the path is modpkg -> project -> fantome - so this holds the
+/// whole chain together.
+#[cfg(feature = "fantome")]
+#[test]
+fn a_modpkg_converted_through_a_project_carries_its_tables_to_fantome() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    let names = "ASSETS/Custom/CasedName.tex\n";
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(game_table_project(&root, names), root.to_owned())
+        .pack(ModpkgFormat::new(&mut buffer))
+        .unwrap();
+
+    let output = utf8_tempdir(&tmp).join("imported");
+    let imported = import(buffer.into_inner(), &output);
+
+    let mut fantome_buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(imported, output)
+        .pack(crate::fantome::FantomeFormat::new(&mut fantome_buffer))
+        .unwrap();
+
+    fantome_buffer.set_position(0);
+    let mut reader = ltk_fantome::FantomeReader::new(fantome_buffer).unwrap();
+    let tables = reader.read_hashtables().unwrap();
+    assert_eq!(tables.len(), 1);
+    let (entry, table) = &tables[0];
+    assert_eq!(entry.path(), "META/hashes/game.hashes.txt");
+    assert_eq!(
+        table.names().collect::<Vec<_>>(),
+        ["ASSETS/Custom/CasedName.tex"]
+    );
+}
+
+/// The trim: a `game` name whose key the package's own chunk table already
+/// recovers is not stored twice. Judged on keys, so a name that differs from
+/// the stored path only in case is still redundant - the stored path (which
+/// keeps its authored casing since ADR 0003) is the surviving copy.
+#[test]
+fn pack_trims_game_names_the_chunk_table_already_recovers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(
+        &root,
+        "base",
+        "Test.wad.client/ASSETS/Custom/One.tex",
+        b"tex",
+    );
+    // `one` differs from the stored path only in case; `two` is stored by no
+    // chunk and must survive.
+    let project = game_table_project(&root, "assets/custom/one.tex\nASSETS/Custom/Two.tex\n");
+
+    let (mut modpkg, report) = pack(project, &root);
+
+    let tables = modpkg.load_hashtables().unwrap();
+    assert_eq!(
+        tables[0].1.names().collect::<Vec<_>>(),
+        ["ASSETS/Custom/Two.tex"]
+    );
+    // A silent trim and an empty table look identical from outside, and only
+    // one of them is correct - the count is part of the pack's report.
+    assert_eq!(report.trimmed_game_names(), 1);
+}
+
+/// `game` only: nothing in a package deduces a `binentries` or `binhashes`
+/// name, so trimming any other category would simply delete it.
+#[test]
+fn the_trim_leaves_every_other_category_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(
+        &root,
+        "base",
+        "Test.wad.client/ASSETS/Custom/One.tex",
+        b"tex",
+    );
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::write(
+        root.join("hashes/binhashes.hashes.txt"),
+        "ASSETS/Custom/One.tex\n",
+    )
+    .unwrap();
+
+    let project = ModProject {
+        hashtables: vec![crate::ModProjectHashtable {
+            path: "hashes/binhashes.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::BinHashes,
+            algorithm: ltk_hashtable::Algorithm::Fnv1a32,
+            bits: 32,
+        }],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let (mut modpkg, report) = pack(project, &root);
+
+    let tables = modpkg.load_hashtables().unwrap();
+    assert_eq!(
+        tables[0].1.names().collect::<Vec<_>>(),
+        ["ASSETS/Custom/One.tex"]
+    );
+    assert_eq!(report.trimmed_game_names(), 0);
+}
+
+/// One file, two shapes: two manifest entries over one table file survive the
+/// modpkg hop as two declarations of one chunk - and the shared chunk is not
+/// trimmed, because a name only one shape finds redundant must survive for
+/// the others.
+#[test]
+fn two_declarations_over_one_file_both_survive_the_modpkg_hop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(
+        &root,
+        "base",
+        "Test.wad.client/ASSETS/Custom/One.tex",
+        b"tex",
+    );
+    // `One.tex` is recoverable from the stored chunk path, so a lone `game`
+    // declaration would trim it - the second shape must prevent that.
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::write(
+        root.join("hashes/game.hashes.txt"),
+        "ASSETS/Custom/One.tex\n",
+    )
+    .unwrap();
+
+    let entry = |bits| crate::ModProjectHashtable {
+        path: "hashes/game.hashes.txt".to_string(),
+        category: ltk_hashtable::Category::Game,
+        algorithm: ltk_hashtable::Algorithm::Xxh64,
+        bits,
+    };
+    let project = ModProject {
+        hashtables: vec![entry(64), entry(32)],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let (mut modpkg, report) = pack(project, &root);
+
+    let tables = modpkg.load_hashtables().unwrap();
+    assert_eq!(tables.len(), 2, "both declarations survive the hop");
+    for (_, table) in &tables {
+        assert_eq!(table.names().collect::<Vec<_>>(), ["ASSETS/Custom/One.tex"]);
+    }
+    assert_eq!(
+        report.trimmed_game_names(),
+        0,
+        "a chunk two shapes declare is never trimmed"
+    );
+}
+
+/// Tables land flat under `_meta_/hashes/` by file name, so two different
+/// table files can collide on one archive name. Refused rather than
+/// renamed: a silently renamed table would ship under a name nobody chose.
+#[test]
+fn colliding_table_file_names_fail_the_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::create_dir_all(root.join("backup")).unwrap();
+    fs::write(
+        root.join("hashes/game.hashes.txt"),
+        "ASSETS/Custom/One.tex\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("backup/game.hashes.txt"),
+        "ASSETS/Custom/Two.tex\n",
+    )
+    .unwrap();
+
+    let entry = |path: &str| crate::ModProjectHashtable {
+        path: path.to_string(),
+        category: ltk_hashtable::Category::Game,
+        algorithm: ltk_hashtable::Algorithm::Xxh64,
+        bits: 64,
+    };
+    let project = ModProject {
+        hashtables: vec![
+            entry("hashes/game.hashes.txt"),
+            entry("backup/game.hashes.txt"),
+        ],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let err = try_pack(project, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PackError::Format(ModpkgPackError::DuplicateHashtableName(ref e))
+                if e.destination() == "_meta_/hashes/game.hashes.txt"
+                    && e.first() == "hashes/game.hashes.txt"
+                    && e.second() == "backup/game.hashes.txt"
+        ),
+        "Expected DuplicateHashtableName, got: {err}"
+    );
+}
+
+/// Two case-variant declared paths land on one chunk (chunk paths are
+/// case-insensitive), but whether they are one file is the filesystem's
+/// secret - on a case-sensitive one they can be two files with different
+/// bytes. The pack refuses the ambiguous pair on every platform rather
+/// than pack differently on different filesystems.
+#[test]
+fn case_variant_table_declarations_fail_the_pack() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::write(
+        root.join("hashes/Game.hashes.txt"),
+        "ASSETS/Custom/One.tex\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("hashes/game.hashes.txt"),
+        "ASSETS/Custom/Two.tex\n",
+    )
+    .unwrap();
+
+    let entry = |path: &str| crate::ModProjectHashtable {
+        path: path.to_string(),
+        category: ltk_hashtable::Category::Game,
+        algorithm: ltk_hashtable::Algorithm::Xxh64,
+        bits: 64,
+    };
+    let project = ModProject {
+        hashtables: vec![
+            entry("hashes/Game.hashes.txt"),
+            entry("hashes/game.hashes.txt"),
+        ],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let err = try_pack(project, &root).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PackError::Format(ModpkgPackError::DuplicateHashtableName(ref e))
+                if e.destination().eq_ignore_ascii_case("_meta_/hashes/game.hashes.txt")
+                    && e.first() == "hashes/Game.hashes.txt"
+                    && e.second() == "hashes/game.hashes.txt"
+        ),
+        "Expected DuplicateHashtableName, got: {err}"
+    );
+}
+
+/// The escape hatch, packing side: an extraction that cannot name a chunk
+/// writes it at the WAD root under the hex of its path hash, so a WAD-root
+/// file whose stem is exactly that width is the raw hash, not a path - the
+/// chunk must come back under the hash the game knows it by.
+#[test]
+fn a_wad_root_hex_named_file_packs_as_a_raw_path_hash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(
+        &root,
+        "base",
+        "Test.wad.client/abcdef1234567890.dds",
+        b"tex",
+    );
+
+    let (modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
+
+    let key = ChunkKey::new(
+        ltk_modpkg::PathHash::new(0xabcdef1234567890),
+        LayerHash::from_name("base"),
+    );
+    assert!(
+        modpkg.chunks().contains_key(&key),
+        "the chunk must be keyed by the raw hash the hex name encodes"
+    );
+}
+
+/// Only the WAD root means raw hash: a hex-looking name inside a directory is
+/// a real path, and so is a WAD-root name of any other shape.
+#[test]
+fn a_nested_hex_named_file_stays_a_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(
+        &root,
+        "base",
+        "Test.wad.client/data/abcdef1234567890.dds",
+        b"tex",
+    );
+
+    let (modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
+
+    let key = ChunkKey::new(
+        ChunkPath::new("data/abcdef1234567890.dds").hash(),
+        LayerHash::from_name("base"),
+    );
+    assert!(modpkg.chunks().contains_key(&key));
+}
+
+/// A table with an unknown category survives all three hops: unknown means
+/// "round-trip verbatim", never "disposable", so project -> modpkg ->
+/// project -> fantome keeps its spelling and its names.
+#[cfg(feature = "fantome")]
+#[test]
+fn an_unknown_category_survives_all_three_hops() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+    fs::create_dir_all(root.join("hashes")).unwrap();
+    fs::write(
+        root.join("hashes/wadnames.hashes.txt"),
+        "some/opaque.name\n",
+    )
+    .unwrap();
+
+    let project = ModProject {
+        hashtables: vec![crate::ModProjectHashtable {
+            path: "hashes/wadnames.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Unknown("wadnames".to_string()),
+            algorithm: ltk_hashtable::Algorithm::Unknown("crc32".to_string()),
+            bits: 32,
+        }],
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let mut buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(project, root.to_owned())
+        .pack(ModpkgFormat::new(&mut buffer))
+        .unwrap();
+
+    let output = utf8_tempdir(&tmp).join("imported");
+    let imported = import(buffer.into_inner(), &output);
+    assert_eq!(
+        imported.hashtables[0].category,
+        ltk_hashtable::Category::Unknown("wadnames".to_string())
+    );
+
+    let mut fantome_buffer = Cursor::new(Vec::new());
+    ProjectPacker::new(imported, output)
+        .pack(crate::fantome::FantomeFormat::new(&mut fantome_buffer))
+        .unwrap();
+
+    fantome_buffer.set_position(0);
+    let mut reader = ltk_fantome::FantomeReader::new(fantome_buffer).unwrap();
+    let tables = reader.read_hashtables().unwrap();
+    assert_eq!(tables.len(), 1);
+    let (entry, table) = &tables[0];
+    assert_eq!(
+        *entry.category(),
+        ltk_hashtable::Category::Unknown("wadnames".to_string())
+    );
+    assert_eq!(
+        *entry.algorithm(),
+        ltk_hashtable::Algorithm::Unknown("crc32".to_string())
+    );
+    assert_eq!(table.names().collect::<Vec<_>>(), ["some/opaque.name"]);
+}
+
+/// An entry whose declared width no key can have is dropped from the imported
+/// manifest rather than carried: `PackPlan::hashtables()` refuses an
+/// impossible width, so carrying it would import a project that cannot pack.
+#[test]
+fn an_impossible_width_is_dropped_from_the_imported_manifest() {
+    let metadata = ModpkgMetadata {
+        hashtables: vec![ltk_modpkg::ModpkgHashtable {
+            path: "_meta_/hashes/game.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 0,
+        }],
+        ..ModpkgMetadata::default()
+    };
+
+    assert!(ModProject::from(&metadata).hashtables.is_empty());
+}
+
 // -- importing a package as a project ---------------------------------------
 
 /// Pack a project with a base-layer and a second-layer file, plus a readme, and

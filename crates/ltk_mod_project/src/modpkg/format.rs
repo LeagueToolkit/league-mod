@@ -16,7 +16,8 @@ use ltk_modpkg::{
 
 use super::thumbnail::{load_thumbnail, ThumbnailError};
 use crate::{
-    ModProjectAuthor, ModProjectLicense, PackFormat, PackPlan, PackReporter, PlannedLayer,
+    ModProjectAuthor, ModProjectLicense, PackFormat, PackFormatReport, PackPlan, PackReporter,
+    PlannedLayer,
 };
 
 /// Failure to encode a pack plan as a `.modpkg` archive.
@@ -52,6 +53,15 @@ pub enum ModpkgPackError {
     #[error(transparent)]
     Thumbnail(#[from] ThumbnailError),
 
+    /// Two different declared hashtable files land on one archive name.
+    ///
+    /// Tables land flat under `_meta_/hashes/` by file name, so tables
+    /// declared in different places can collide. Refused rather than
+    /// renamed: the author can rename a file; a silently renamed table
+    /// would ship under a name nobody chose.
+    #[error(transparent)]
+    DuplicateHashtableName(#[from] crate::DuplicateHashtableName),
+
     /// Two planned files resolve to the same chunk: same WAD-relative path,
     /// layer, and WAD. Chunk paths are case-insensitive, so paths that differ
     /// only by case collide.
@@ -76,8 +86,11 @@ impl ModpkgPackError {
 /// Packs a mod project into a `.modpkg` archive; the modpkg backend for
 /// [`ProjectPacker`](crate::ProjectPacker).
 ///
-/// All layers are stored. See the
-/// [`pack` module docs](crate::pack) for how formats plug into the driver.
+/// All layers are stored. The plan's hashtables are stored as `_meta_/hashes/`
+/// chunks the metadata declares (schema version 3), each keeping the file
+/// name the project kept it at.
+/// See the [`pack` module docs](crate::pack) for how formats plug into the
+/// driver.
 ///
 /// # Example
 ///
@@ -108,10 +121,10 @@ impl<W: Write + Seek> ModpkgFormat<W> {
     }
 
     /// Turn the plan into a configured `ModpkgBuilder` plus a map from chunk
-    /// keys to source file paths.
+    /// keys to source file paths, and how many `game` names the trim dropped.
     fn configure_builder(
         plan: &PackPlan<'_>,
-    ) -> Result<(ModpkgBuilder, ChunkFileMap), ModpkgPackError> {
+    ) -> Result<(ModpkgBuilder, ChunkFileMap, usize), ModpkgPackError> {
         let mut builder = ModpkgBuilder::default();
 
         // Layers
@@ -131,13 +144,69 @@ impl<W: Write + Seek> ModpkgFormat<W> {
         // Metadata
         builder = builder.with_metadata(ModpkgMetadata::try_from(plan)?);
 
+        // Hashtables. Each planned table maps to where it lands in the
+        // package, each route carrying its table. Every declaration is
+        // kept: two manifest entries may declare one file (one table, two
+        // shapes), which stays one chunk carrying both entries in the
+        // metadata - `with_hashtable` holds that pairing.
+        let routes = super::convert::modpkg_routes(plan.hashtables())?;
+        let stored_paths: Vec<&str> = plan
+            .layers()
+            .iter()
+            .flat_map(|layer| layer.files().iter().map(|file| file.rel_path()))
+            .collect();
+        let mut declarations_per_chunk: HashMap<String, usize> = HashMap::new();
+        for route in &routes {
+            *declarations_per_chunk
+                .entry(route.manifest.path.to_ascii_lowercase())
+                .or_insert(0) += 1;
+        }
+        let mut trimmed_game_names = 0;
+        for route in &routes {
+            // Trim only a chunk with a single declaration: a shared chunk's
+            // bytes serve every shape declaring it, and a name only one
+            // shape finds redundant must survive for the others.
+            let chunk_key = route.manifest.path.to_ascii_lowercase();
+            let (table, dropped) = if declarations_per_chunk[&chunk_key] == 1 {
+                trim_game_table(route.planned.table(), route.planned.entry(), &stored_paths)
+            } else {
+                (route.planned.table().clone(), 0)
+            };
+            trimmed_game_names += dropped;
+            // Every declaration serializes its own planned table, so the
+            // builder sees what each one declares and can refuse a chunk
+            // declared over two different tables.
+            let mut bytes = Vec::new();
+            table
+                .write_to(&mut bytes)
+                .map_err(|error| ModpkgPackError::Builder(error.into()))?;
+            builder = builder
+                .with_hashtable(route.manifest.clone(), bytes)
+                .map_err(ModpkgPackError::Builder)?;
+        }
+
         // Content chunks
         let mut file_map = ChunkFileMap::new();
         for planned in plan.layers() {
             let layer_name = planned.layer().name.as_str();
             for entry in planned.files() {
-                let mut cb = ModpkgChunkBuilder::new()
-                    .with_path(entry.rel_path())
+                let rel_path = entry.rel_path();
+                // The escape hatch, packing side: an extraction that cannot
+                // name a chunk writes it at the WAD root under the hex of its
+                // path hash, so a WAD-root file whose stem is exactly that
+                // width is the raw hash, not a path. Only the WAD root - a
+                // hex-looking name inside a directory is a real path.
+                let mut cb = ModpkgChunkBuilder::new();
+                cb = if entry.wad().is_some()
+                    && !rel_path.contains('/')
+                    && ltk_modpkg::PathHash::from_hex_name(rel_path).is_some()
+                {
+                    cb.with_hashed_chunk_name(rel_path)
+                        .expect("a name from_hex_name accepts is one with_hashed_chunk_name takes")
+                } else {
+                    cb.with_path(rel_path)
+                };
+                cb = cb
                     .with_compression(ModpkgCompression::for_extension(entry.source().extension()))
                     .with_layer(layer_name);
 
@@ -172,8 +241,48 @@ impl<W: Write + Seek> ModpkgFormat<W> {
             builder = builder.with_thumbnail(load_thumbnail(thumbnail)?);
         }
 
-        Ok((builder, file_map))
+        Ok((builder, file_map, trimmed_game_names))
     }
+}
+
+/// `table` with the names the package's own chunk table already recovers
+/// removed, and how many were removed.
+///
+/// The predicate is `key(name) == key(stored chunk path)`, well defined
+/// because both sides are the same shape: a `game` name is a path relative to
+/// the WAD root, which is what a chunk's stored path holds. The stored path
+/// keeps its authored casing (ADR 0003) and is the trimmed name's surviving
+/// copy, which is what makes the trim safe.
+///
+/// `game` only: nothing in a package deduces a `binentries` or `binhashes`
+/// name, so trimming any other category would simply delete it. Any other
+/// category's table comes back whole.
+fn trim_game_table(
+    table: &ltk_hashtable::Hashtable,
+    entry: &ltk_hashtable::HashtableEntry,
+    stored_paths: &[&str],
+) -> (ltk_hashtable::Hashtable, usize) {
+    if *entry.category() != ltk_hashtable::Category::Game {
+        return (table.clone(), 0);
+    }
+
+    let stored: std::collections::HashSet<ltk_hashtable::Key> = stored_paths
+        .iter()
+        .filter_map(|path| ltk_hashtable::Key::of(path, entry.algorithm(), entry.width()))
+        .collect();
+
+    let kept: Vec<&str> = table
+        .names()
+        .filter(|name| {
+            !ltk_hashtable::Key::of(name, entry.algorithm(), entry.width())
+                .is_some_and(|key| stored.contains(&key))
+        })
+        .collect();
+    let dropped = table.names().count() - kept.len();
+
+    let trimmed = ltk_hashtable::Hashtable::from_names(kept)
+        .expect("names kept from a validated table are still valid");
+    (trimmed, dropped)
 }
 
 impl<W> fmt::Debug for ModpkgFormat<W> {
@@ -189,8 +298,8 @@ impl<W: Write + Seek> PackFormat for ModpkgFormat<W> {
         mut self,
         plan: &PackPlan<'_>,
         progress: &mut PackReporter<'_>,
-    ) -> Result<(), Self::Error> {
-        let (builder, file_map) = Self::configure_builder(plan)?;
+    ) -> Result<PackFormatReport, Self::Error> {
+        let (builder, file_map, trimmed_game_names) = Self::configure_builder(plan)?;
 
         builder
             .build_to_writer(&mut self.writer, |chunk_builder| {
@@ -214,7 +323,10 @@ impl<W: Write + Seek> PackFormat for ModpkgFormat<W> {
             })
             .map_err(ModpkgPackError::Builder)?;
 
-        Ok(())
+        Ok(PackFormatReport {
+            trimmed_game_names,
+            ..PackFormatReport::default()
+        })
     }
 }
 
@@ -252,6 +364,10 @@ impl TryFrom<&PackPlan<'_>> for ModpkgMetadata {
                 .iter()
                 .map(ModpkgLayerMetadata::from)
                 .collect(),
+            // The builder owns the hashtable manifest: `with_hashtable`
+            // declares each table, so declaration and stored chunk cannot
+            // disagree.
+            hashtables: vec![],
         })
     }
 }

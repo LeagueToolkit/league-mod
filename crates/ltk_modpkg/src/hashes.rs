@@ -70,9 +70,9 @@ impl LayerHash {
 
     /// Hash a layer name.
     ///
-    /// The name is lowercased first, so the hash is case-insensitive.
+    /// The name is ASCII-lowercased first, so the hash is case-insensitive.
     pub fn from_name(name: &str) -> Self {
-        Self(xxh3_64(name.to_lowercase().as_bytes()))
+        Self(xxh3_64(name.to_ascii_lowercase().as_bytes()))
     }
 
     /// Wrap a raw hash value.
@@ -102,9 +102,9 @@ impl WadNameHash {
 
     /// Hash a WAD name.
     ///
-    /// The name is lowercased first, so the hash is case-insensitive.
+    /// The name is ASCII-lowercased first, so the hash is case-insensitive.
     pub fn from_name(name: &str) -> Self {
-        Self(xxh3_64(name.to_lowercase().as_bytes()))
+        Self(xxh3_64(name.to_ascii_lowercase().as_bytes()))
     }
 
     /// Wrap a raw hash value.

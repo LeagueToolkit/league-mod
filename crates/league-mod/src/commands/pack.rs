@@ -78,9 +78,19 @@ fn pack_to_modpkg(
     let file = File::create(&output_path).into_diagnostic()?;
     let writer = BufWriter::new(file);
 
-    ProjectPacker::new(mod_project, project_root.to_owned())
+    let report = ProjectPacker::new(mod_project, project_root.to_owned())
         .pack(ModpkgFormat::new(writer))
         .map_err(convert_pack_error)?;
+
+    // A silent trim and an empty table look identical from outside, and only
+    // one of them is correct.
+    if report.trimmed_game_names() > 0 {
+        println_pad!(
+            "{} {} game hashtable name(s) already recovered by the package's own chunk paths",
+            "✂️  Trimmed:".bright_yellow(),
+            report.trimmed_game_names().to_string().bright_cyan().bold()
+        );
+    }
 
     println_pad!(
         "{}\n{} {}",

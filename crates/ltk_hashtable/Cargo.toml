@@ -1,9 +1,9 @@
 [package]
-name = "ltk_fantome"
-version = "0.9.0"
+name = "ltk_hashtable"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Helper library for working with League of Legends mods in the legacy Fantome format"
+description = "Embedded hashtable primitives for League of Legends mod containers"
 repository = "https://github.com/LeagueToolkit/league-mod"
 homepage = "https://github.com/LeagueToolkit/league-mod"
 documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
@@ -13,14 +13,15 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
-indexmap = { workspace = true }
-zip = "2.4"
+camino = { workspace = true }
+ltk_hash = { workspace = true }
+ltk_wad = { workspace = true, optional = true }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 thiserror = "2.0"
-camino = "1.1"
-ltk_wad = { workspace = true }
-ltk_hashtable = { version = "0.1.0", path = "../ltk_hashtable" }
+
+[features]
+# The bridge from a merged `game` category to `ltk_wad`'s `PathResolver`.
+wad = ["dep:ltk_wad"]
 
 [dev-dependencies]
-tempfile = "3.15"
+serde_json = "1.0"

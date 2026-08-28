@@ -1319,6 +1319,7 @@ version = "0.9.0"
 dependencies = [
  "camino",
  "indexmap",
+ "ltk_hashtable",
  "ltk_wad",
  "serde",
  "serde_json",
@@ -1344,6 +1345,18 @@ checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
 dependencies = [
  "byteorder",
  "xxhash-rust",
+]
+
+[[package]]
+name = "ltk_hashtable"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "ltk_hash",
+ "ltk_wad",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1378,6 +1391,7 @@ dependencies = [
  "image",
  "indexmap",
  "ltk_fantome",
+ "ltk_hashtable",
  "ltk_modpkg",
  "ltk_wad",
  "semver",
@@ -1399,6 +1413,7 @@ dependencies = [
  "byteorder",
  "indexmap",
  "itertools",
+ "ltk_hashtable",
  "ltk_io_ext",
  "proptest",
  "proptest-derive",

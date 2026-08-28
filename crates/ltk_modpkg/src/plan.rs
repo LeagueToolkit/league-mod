@@ -17,9 +17,16 @@ use std::{
 };
 
 use crate::{
-    chunk::ModpkgChunk, LayerIndex, Modpkg, WadIndex, LICENSE_CHUNK_PATH, README_CHUNK_PATH,
-    THUMBNAIL_CHUNK_PATH,
+    chunk::ModpkgChunk, LayerIndex, Modpkg, WadIndex, HASHTABLES_CHUNK_DIR, LICENSE_CHUNK_PATH,
+    README_CHUNK_PATH, THUMBNAIL_CHUNK_PATH,
 };
+
+/// The directory hashtables land under, beside the content.
+///
+/// A mod project keeps its tables under `hashes/` at its root; this constant
+/// and that layout agree the way [`ChunkDestination::Root`]'s names agree
+/// with the files a project keeps.
+pub const HASHES_DIR_NAME: &str = "hashes";
 
 /// Every chunk an unpack of a package writes, and where each one lands.
 ///
@@ -55,12 +62,23 @@ impl<'pkg> ExtractionPlan<'pkg> {
     /// The part of the plan that lands at the root: the readme, the license
     /// text and the thumbnail.
     ///
-    /// The package's meta chunks, which it stores under `_meta_/` but which do
-    /// not land there: they come out under the names a mod project keeps them
-    /// at, beside its content rather than inside it. This is what
+    /// Meta chunks the package stores under `_meta_/` but which do not land
+    /// there: they come out under the names a mod project keeps them at,
+    /// beside its content rather than inside it. Hashtables are not root
+    /// files - they land under `hashes/` - so they are not here; the private
+    /// `meta_files` narrowing is everything
     /// [`extract_meta`](crate::ModpkgExtractor::extract_meta) writes.
     pub fn root_files(&self) -> Self {
         self.retaining(|destination| matches!(destination, ChunkDestination::Root(_)))
+    }
+
+    /// The part of the plan that is not layer content: the root files and the
+    /// hashtables.
+    ///
+    /// This is what [`extract_meta`](crate::ModpkgExtractor::extract_meta)
+    /// writes.
+    pub(crate) fn meta_files(&self) -> Self {
+        self.retaining(|destination| !matches!(destination, ChunkDestination::Content { .. }))
     }
 
     /// The plan narrowed to the chunks whose destination `keep` accepts.
@@ -141,6 +159,22 @@ pub enum ChunkDestination<'pkg> {
     /// form is `mod.config.json`, and that is not a byte-for-byte transform of
     /// it. Read it with [`Modpkg::load_metadata`] instead.
     Root(&'static str),
+
+    /// A hashtable chunk, written at `hashes/{file_name}`.
+    ///
+    /// The package stores it under `_meta_/hashes/`, and `hashes/` beside
+    /// the content is where a mod project keeps its tables - the same
+    /// agreement by which [`Root`](Self::Root)'s names are the ones a
+    /// project uses. `file_name` borrows from the package's own path table.
+    ///
+    /// Planned by where the chunk is stored, not by what the metadata
+    /// declares: like the plan itself, this answers "where would this chunk
+    /// land on disk" and never produces a table for lookup. The
+    /// manifest-gated read is [`Modpkg::load_hashtables`].
+    Hashtable {
+        /// The table's file name, e.g. `game.hashes.txt`.
+        file_name: &'pkg str,
+    },
 }
 
 impl ChunkDestination<'_> {
@@ -176,6 +210,7 @@ impl fmt::Display for ChunkDestination<'_> {
                 path,
             } => write!(f, "{layer}/{path}"),
             Self::Root(file_name) => f.write_str(file_name),
+            Self::Hashtable { file_name } => write!(f, "{HASHES_DIR_NAME}/{file_name}"),
         }
     }
 }
@@ -256,7 +291,10 @@ impl<TSource: Read + Seek> Modpkg<TSource> {
                     // of the plan rather than dumped under `_meta_/`.
                     None => match root_file_name(path) {
                         Some(file_name) => ChunkDestination::Root(file_name),
-                        None => continue,
+                        None => match hashtable_file_name(path) {
+                            Some(file_name) => ChunkDestination::Hashtable { file_name },
+                            None => continue,
+                        },
                     },
                 };
 
@@ -276,6 +314,30 @@ fn root_file_name(chunk_path: &str) -> Option<&'static str> {
         THUMBNAIL_CHUNK_PATH => Some("thumbnail.webp"),
         _ => None,
     }
+}
+
+/// The file name a `_meta_/hashes/` chunk lands under, if it is one.
+///
+/// The placement rule behind [`ChunkDestination::Hashtable`], public so a
+/// caller mapping a package's hashtable manifest to extracted files - as
+/// `ltk_mod_project`'s importer does - applies the same rule the plan does
+/// and the two cannot drift. `None` for a chunk path outside `_meta_/hashes/`
+/// or one with no usable file name; nothing is planned for those.
+///
+/// The escape-proofing for hashtable destinations lives here, at the seam,
+/// so every consumer of the plan inherits it: a tail that climbs, nests or
+/// re-roots lands by its file name rather than steering the write, and a tail
+/// with no file name plans nothing. The result is a subslice of `chunk_path`,
+/// so a plan's borrows survive.
+pub fn hashtable_file_name(chunk_path: &str) -> Option<&str> {
+    let tail = chunk_path
+        .strip_prefix(HASHTABLES_CHUNK_DIR)?
+        .strip_prefix('/')?;
+    let file_name = tail
+        .rsplit(['/', '\\'])
+        .next()
+        .expect("rsplit yields at least one part");
+    (!file_name.is_empty() && file_name != ".." && file_name != ".").then_some(file_name)
 }
 
 #[cfg(test)]
@@ -360,6 +422,59 @@ mod tests {
             paths(&three_layers_and_a_readme().extraction_plan()),
             ["aatrox/x.bin", "base/x.bin", "zed/x.bin", "README.md"]
         );
+    }
+
+    /// A hashtable chunk is stored under `_meta_/hashes/` but lands under
+    /// `hashes/` beside the content - its own destination, not `Root`.
+    #[test]
+    fn a_hashtable_chunk_lands_under_the_hashes_directory() {
+        let modpkg = package(|builder| {
+            builder
+                .with_chunk(chunk("x.bin"))
+                .with_hashtable(
+                    crate::ModpkgHashtable {
+                        path: "_meta_/hashes/game.hashes.txt".to_string(),
+                        category: ltk_hashtable::Category::Game,
+                        algorithm: ltk_hashtable::Algorithm::Xxh64,
+                        bits: 64,
+                    },
+                    "ASSETS/Custom/One.tex\n",
+                )
+                .unwrap()
+        });
+
+        let plan = modpkg.extraction_plan();
+
+        assert!(paths(&plan).contains(&"hashes/game.hashes.txt".to_string()));
+        // `Root` keeps its exact meaning: the readme, the license and the
+        // thumbnail. A table is not a root file.
+        assert!(paths(&plan.root_files()).is_empty());
+    }
+
+    /// The placement rule for `_meta_/hashes/` tails: a plain file name lands
+    /// under `hashes/`, and a tail that climbs, nests or re-roots lands by
+    /// its file name - so a hostile package cannot steer a write outside it.
+    #[test]
+    fn a_hashtable_tail_that_escapes_lands_by_its_file_name() {
+        assert_eq!(
+            hashtable_file_name("_meta_/hashes/game.hashes.txt"),
+            Some("game.hashes.txt")
+        );
+        assert_eq!(
+            hashtable_file_name("_meta_/hashes/../license"),
+            Some("license")
+        );
+        assert_eq!(
+            hashtable_file_name("_meta_/hashes/sub/dir.txt"),
+            Some("dir.txt")
+        );
+        assert_eq!(
+            hashtable_file_name("_meta_/hashes/evil\\name.txt"),
+            Some("name.txt")
+        );
+        assert_eq!(hashtable_file_name("_meta_/hashes/"), None);
+        assert_eq!(hashtable_file_name("_meta_/hashes/x/.."), None);
+        assert_eq!(hashtable_file_name("_meta_/license"), None);
     }
 
     /// The two halves the extractor writes, so that narrowing and extracting

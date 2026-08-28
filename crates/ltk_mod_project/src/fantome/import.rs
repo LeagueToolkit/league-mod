@@ -1,5 +1,6 @@
 //! [`FantomeImporter`]: decodes a Fantome archive into a mod project directory.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Seek};
 
@@ -8,6 +9,8 @@ use ltk_fantome::{
     classify_entry, FantomeEntry, FantomeExtractError, FantomeReader, NamingPolicy, NoResolver,
     PathResolver, WadExtractOptions, WadProgress,
 };
+use ltk_hashtable::{GameResolver, Hashtable, HashtableEntry, HashtableSet};
+use ltk_wad::WadHash;
 
 use crate::{ImportFormat, ImportReporter, ImportTarget, ModProject, ModProjectLayer};
 
@@ -36,6 +39,16 @@ pub enum FantomeImportError {
     #[error("Failed to convert the thumbnail")]
     Thumbnail(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    /// Two declared hashtable files land on one project file name.
+    ///
+    /// Declared tables land flat under `hashes/` by file name (a
+    /// `META/hashes/` tail is carried whole), so declarations from
+    /// different places can collide - and writing both would clobber one
+    /// with the other. An archive shaped like this is ambiguous, and an
+    /// import must not invent names to resolve it.
+    #[error(transparent)]
+    DuplicateHashtableName(#[from] crate::DuplicateHashtableName),
+
     /// The import's cancellation answered `true`. The driver folds this into
     /// [`ImportError::Cancelled`](crate::ImportError::Cancelled).
     #[error("The import was cancelled")]
@@ -61,6 +74,10 @@ impl FantomeImportError {
 /// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
 ///    license text and the thumbnail (converted to `thumbnail.webp`), if
 ///    present
+/// 3. Recover the hashtables the archive declares into `hashes/`, with the
+///    project manifest rewritten to the new paths - and name packed WAD
+///    chunks from those tables first, ahead of the supplied resolver, since
+///    the mod's own table is the authority on the names its author invented
 ///
 /// The project the archive's metadata describes is returned for the driver to
 /// write out as `mod.config.json`.
@@ -157,7 +174,24 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         } = self;
 
         let mut reader = FantomeReader::new(reader)?;
-        let mod_project = ModProject::from(reader.read_info()?);
+        let info = reader.read_info()?;
+        // Where each declared table lands. Computed once, before anything is
+        // written: what the routes declare is what the config carries and
+        // where the files land, so the files and the manifest cannot
+        // disagree - and an archive whose tables collide on one file name is
+        // refused before the import touches the output directory.
+        let routes = super::convert::project_routes(&info.hashtables)?;
+        let table_routes: HashMap<&str, &str> = routes
+            .iter()
+            .map(|route| (route.source.as_str(), route.manifest.path.as_str()))
+            .collect();
+        let mut mod_project = ModProject::from(info);
+        mod_project.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
+
+        // Read before the WADs are unpacked: the mod's own tables name its
+        // chunks, ahead of whatever resolver the caller supplied.
+        let declared_tables = reader.read_hashtables()?;
+        let own_names = HashtableSet::build(declared_tables.iter().cloned());
 
         let output_dir = target.output_dir();
         let cancellation = target.cancellation();
@@ -175,8 +209,12 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         {
             let mut on_wad = |wad: WadProgress<'_>| progress.report_item(wad.name);
 
+            let chained = ChainedResolver {
+                own: GameResolver::new(&own_names),
+                fallback: resolver.unwrap_or(&NoResolver),
+            };
             let options = WadExtractOptions::new()
-                .with_path_resolver(resolver.unwrap_or(&NoResolver))
+                .with_path_resolver(&chained)
                 .with_naming_policy(naming)
                 .with_progress(&mut on_wad)
                 .with_cancellation(&is_cancelled);
@@ -217,6 +255,8 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
             write_thumbnail(&png, &output_dir.join("thumbnail.webp"))?;
         }
 
+        write_hashtables(output_dir, &table_routes, &declared_tables)?;
+
         Ok(mod_project)
     }
 
@@ -240,6 +280,57 @@ fn import_error(source: FantomeExtractError) -> FantomeImportError {
         FantomeExtractError::Cancelled => FantomeImportError::Cancelled,
         other => FantomeImportError::Extract(other),
     }
+}
+
+/// Names chunks from the mod's own declared tables first, the caller's
+/// resolver second.
+struct ChainedResolver<'a, 'b> {
+    own: GameResolver<'a>,
+    fallback: &'b dyn PathResolver,
+}
+
+impl PathResolver for ChainedResolver<'_, '_> {
+    fn resolve(&self, path_hash: WadHash) -> Option<String> {
+        self.own
+            .resolve(path_hash)
+            .or_else(|| self.fallback.resolve(path_hash))
+    }
+
+    fn is_known(&self, path_hash: WadHash) -> bool {
+        self.own.is_known(path_hash) || self.fallback.is_known(path_hash)
+    }
+}
+
+/// Write the archive's declared tables into `hashes/`, each at the project
+/// path its route names.
+///
+/// The routes and the config manifest come from one mapping over one input,
+/// and the pairing here is by the declared archive path rather than by list
+/// position, so neither side's filtering can mispair them.
+fn write_hashtables(
+    output_dir: &Utf8Path,
+    routes: &HashMap<&str, &str>,
+    tables: &[(HashtableEntry, Hashtable)],
+) -> Result<(), FantomeImportError> {
+    for (entry, table) in tables {
+        let project_path = routes
+            .get(entry.path().as_str())
+            .expect("every table read out of the manifest has a route from the same manifest");
+        let path = output_dir.join(project_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent.as_std_path())
+                .map_err(|source| FantomeImportError::write(parent, source))?;
+        }
+        let mut file = std::io::BufWriter::new(
+            std::fs::File::create(path.as_std_path())
+                .map_err(|source| FantomeImportError::write(&path, source))?,
+        );
+        table
+            .write_to(&mut file)
+            .and_then(|()| std::io::Write::flush(&mut file))
+            .map_err(|source| FantomeImportError::write(&path, source))?;
+    }
+    Ok(())
 }
 
 fn write_file(path: &Utf8Path, bytes: &[u8]) -> Result<(), FantomeImportError> {

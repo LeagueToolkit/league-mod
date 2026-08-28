@@ -222,6 +222,95 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(info)
     }
 
+    /// Read the hashtables the manifest declares - and only those.
+    ///
+    /// An entry in `META/hashes/` that no manifest entry declares is not a
+    /// table and is not read; the manifest is authoritative. An entry whose
+    /// declared width is not one a key can have is skipped rather than
+    /// refused - it still travels with the archive, it just cannot answer a
+    /// lookup here.
+    ///
+    /// The pairs feed `ltk_hashtable::HashtableSet::build` as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive cannot be read, a declared table file
+    /// is missing, or one does not fit the table grammar.
+    pub fn read_hashtables(
+        &mut self,
+    ) -> Result<Vec<(ltk_hashtable::HashtableEntry, ltk_hashtable::Hashtable)>, FantomeExtractError>
+    {
+        let info = self.read_info()?;
+        let mut tables = Vec::new();
+        for manifest in &info.hashtables {
+            let Some(entry) = manifest.to_entry() else {
+                continue;
+            };
+            // Case-insensitive like every other entry lookup here: archives
+            // in the wild spell `META/` in any casing.
+            let index = (0..self.archive.len()).find(|i| {
+                self.archive
+                    .by_index(*i)
+                    .is_ok_and(|file| file.name().eq_ignore_ascii_case(&manifest.path))
+            });
+            let Some(index) = index else {
+                return Err(FantomeExtractError::MissingHashtable {
+                    path: manifest.path.clone(),
+                });
+            };
+            let content = read_entry(&mut self.archive.by_index(index)?)?;
+            let table =
+                ltk_hashtable::Hashtable::from_reader(content.as_slice()).map_err(|source| {
+                    FantomeExtractError::Hashtable {
+                        path: manifest.path.clone(),
+                        source,
+                    }
+                })?;
+            tables.push((entry, table));
+        }
+        Ok(tables)
+    }
+
+    /// Read the bytes of the packed WAD stored as the single entry
+    /// `WAD/{wad_name}`, or `None` when the archive holds no such entry.
+    ///
+    /// The name is matched case-insensitively, like every entry lookup here.
+    /// A WAD stored as a directory of files has no packed bytes and answers
+    /// `None`; its files are what [`classify_entry`] calls
+    /// [`WadFile`](FantomeEntry::WadFile). Like every entry read, the stored
+    /// CRC32 is deliberately not checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be read.
+    pub fn read_packed_wad(
+        &mut self,
+        wad_name: &str,
+    ) -> Result<Option<Vec<u8>>, FantomeExtractError> {
+        let index = (0..self.archive.len()).find(|i| {
+            self.archive.by_index(*i).is_ok_and(|file| {
+                matches!(
+                    classify_entry(file.name()),
+                    Some(FantomeEntry::PackedWad(name)) if name.eq_ignore_ascii_case(wad_name)
+                )
+            })
+        });
+        let Some(index) = index else {
+            return Ok(None);
+        };
+        Ok(Some(read_entry(&mut self.archive.by_index(index)?)?))
+    }
+
+    /// How many entries the archive holds, directory records included.
+    pub(crate) fn entry_count(&self) -> usize {
+        self.archive.len()
+    }
+
+    /// The inner zip archive, for the rewrite's raw entry copies.
+    pub(crate) fn zip_archive_mut(&mut self) -> &mut ZipArchive<R> {
+        &mut self.archive
+    }
+
     /// The archive's entry names, in archive order.
     ///
     /// Only the entry table is read, so this costs no decompression. Pair it
@@ -485,6 +574,14 @@ pub enum FantomeEntry<'a> {
     Image,
     /// `META/info.json`, the archive's metadata.
     Info,
+    /// A file under `META/hashes/`, at this path relative to the prefix.
+    ///
+    /// This is placement, not lookup: it says where the file would land on
+    /// disk, which is what a caller preflighting paths needs. Whether the
+    /// file is a hashtable is the manifest's to say - only
+    /// [`FantomeReader::read_hashtables`], which reads the manifest, ever
+    /// produces a table for lookup.
+    Hashtable(&'a str),
 }
 
 /// Where the file named `entry_name` belongs.
@@ -515,6 +612,10 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
 
     if let Some(relative_path) = strip_prefix_ci(entry_name, "RAW/") {
         return (!relative_path.is_empty()).then_some(FantomeEntry::Raw(relative_path));
+    }
+
+    if let Some(relative_path) = strip_prefix_ci(entry_name, "META/hashes/") {
+        return (!relative_path.is_empty()).then_some(FantomeEntry::Hashtable(relative_path));
     }
 
     if let Some(target) = license_entry_target(entry_name) {

@@ -8,7 +8,7 @@ use std::io::{self, Seek, Write};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeInfo, FantomeWriteError, FantomeWriter};
 
-use crate::{PackFormat, PackPlan, PackReporter};
+use crate::{PackFormat, PackFormatReport, PackPlan, PackReporter};
 
 /// Failure to encode a pack plan as a Fantome archive.
 ///
@@ -29,6 +29,15 @@ pub enum FantomePackError {
     /// The archive could not be written.
     #[error(transparent)]
     Write(#[from] FantomeWriteError),
+
+    /// Two different declared hashtable files land on one archive name.
+    ///
+    /// Tables land flat under `META/hashes/` by file name (a `hashes/` tail
+    /// is carried whole), so tables declared in different places can
+    /// collide. Refused rather than renamed: the author can rename a file;
+    /// a silently renamed table would ship under a name nobody chose.
+    #[error(transparent)]
+    DuplicateHashtableName(#[from] crate::DuplicateHashtableName),
 
     /// The thumbnail could not be read, or re-encoded as the PNG Fantome stores.
     #[error("Failed to convert the thumbnail {path}")]
@@ -90,14 +99,20 @@ impl<W> fmt::Debug for FantomeFormat<W> {
 impl<W: Write + Seek> PackFormat for FantomeFormat<W> {
     type Error = FantomePackError;
 
-    fn pack(self, plan: &PackPlan<'_>, progress: &mut PackReporter<'_>) -> Result<(), Self::Error> {
+    fn pack(
+        self,
+        plan: &PackPlan<'_>,
+        progress: &mut PackReporter<'_>,
+    ) -> Result<PackFormatReport, Self::Error> {
         let mut writer = FantomeWriter::new(self.writer);
 
         pack_base_layer(&mut writer, plan, progress)?;
         pack_metadata(&mut writer, plan)?;
 
         writer.finish()?;
-        Ok(())
+        // Nothing to trim: a fantome WAD stores hashes, not paths, so no
+        // stored name makes a table entry redundant.
+        Ok(PackFormatReport::default())
     }
 }
 
@@ -130,7 +145,25 @@ fn pack_metadata<W: Write + Seek>(
     writer: &mut FantomeWriter<W>,
     plan: &PackPlan<'_>,
 ) -> Result<(), FantomePackError> {
-    writer.write_info(&FantomeInfo::from(plan.project()))?;
+    // Where each planned table lands in the archive. Computed once, each
+    // route carrying its table: what the routes declare is what
+    // `info.hashtables` carries and what the entries below write, so the
+    // entries and the manifest cannot disagree. Two manifest entries may
+    // declare one file (one table, two shapes), which must stay one archive
+    // entry.
+    let routes = super::convert::fantome_routes(plan.hashtables())?;
+
+    let mut info = FantomeInfo::from(plan.project());
+    info.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
+
+    let mut written = std::collections::HashSet::new();
+    for route in &routes {
+        if written.insert(route.manifest.path.to_ascii_lowercase()) {
+            writer.write_hashtable(&route.manifest, route.planned.table())?;
+        }
+    }
+
+    writer.write_info(&info)?;
 
     if let Some(readme) = plan.readme() {
         let mut file =

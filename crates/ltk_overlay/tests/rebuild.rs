@@ -64,6 +64,7 @@ fn write_mod_dir(root: &Utf8Path, name: &str, override_bytes: &[u8]) -> Utf8Path
             string_overrides: Default::default(),
         }],
         thumbnail: None,
+        hashtables: vec![],
     };
     fs::write(
         mod_dir.join("mod.config.json").as_std_path(),

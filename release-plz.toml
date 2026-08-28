@@ -13,6 +13,11 @@ publish = false
 changelog_update = true
 
 [[package]]
+name = "ltk_hashtable"
+publish = true
+changelog_update = true
+
+[[package]]
 name = "ltk_fantome"
 publish = true
 changelog_update = true

@@ -105,6 +105,7 @@ fn create_default_mod_project(name: Option<String>, display_name: Option<String>
         transformers: vec![],
         layers: ltk_mod_project::ModProjectLayer::default_table(),
         thumbnail: None,
+        hashtables: vec![],
     }
 }
 

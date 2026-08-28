@@ -85,14 +85,14 @@ impl<'modpkg, TSource: Read + Seek> ModpkgExtractor<'modpkg, TSource> {
     /// Write the meta chunks that have a project-level file form to `output_dir`.
     ///
     /// That is the readme, the license text and the thumbnail, under the names
-    /// a mod project keeps them at its root. Chunks without such a form (the
-    /// metadata chunk, which is msgpack rather than a project file) are skipped
-    /// rather than dumped under `_meta_/`; read it with
-    /// [`Modpkg::load_metadata`] instead.
+    /// a mod project keeps them at its root, and the hashtables, under
+    /// `hashes/`. Chunks without such a form (the metadata chunk, which is
+    /// msgpack rather than a project file) are skipped rather than dumped
+    /// under `_meta_/`; read it with [`Modpkg::load_metadata`] instead.
     pub fn extract_meta(&mut self, output_dir: impl AsRef<Path>) -> Result<(), ModpkgError> {
         let output_dir = output_dir.as_ref();
 
-        let steps = steps(&self.modpkg.extraction_plan().root_files(), output_dir);
+        let steps = steps(&self.modpkg.extraction_plan().meta_files(), output_dir);
         self.write_all(steps)
     }
 
@@ -321,6 +321,55 @@ mod tests {
         assert!(
             !content.join("README.md").exists(),
             "meta files must not leak into the content directory"
+        );
+    }
+
+    /// A hashtable is a meta chunk with a project-level file form: it lands
+    /// under `hashes/` beside the content, from the same call that writes the
+    /// root files, for both the look-at unpack and the project import.
+    #[test]
+    fn extract_meta_writes_hashtables_under_the_hashes_directory() {
+        let mut cursor = Cursor::new(Vec::new());
+        let names = "ASSETS/Custom/One.tex\n";
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_readme("# My Mod\n")
+            .with_hashtable(
+                crate::ModpkgHashtable {
+                    path: "_meta_/hashes/game.hashes.txt".to_string(),
+                    category: ltk_hashtable::Category::Game,
+                    algorithm: ltk_hashtable::Algorithm::Xxh64,
+                    bits: 64,
+                },
+                names,
+            )
+            .unwrap()
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("test.bin")
+                    .with_compression(ModpkgCompression::None),
+            )
+            .build_to_writer(&mut cursor, |_| Ok(vec![0xAA; 10]))
+            .unwrap();
+
+        cursor.set_position(0);
+        let mut modpkg = Modpkg::mount_from_reader(cursor).unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        ModpkgExtractor::new(&mut modpkg)
+            .extract_meta(root)
+            .unwrap();
+
+        assert_eq!(
+            fs::read(root.join("hashes").join("game.hashes.txt")).unwrap(),
+            names.as_bytes()
+        );
+        assert_eq!(fs::read(root.join("README.md")).unwrap(), b"# My Mod\n");
+        assert!(
+            !root.join("base").exists(),
+            "extract_meta must not write layer content"
         );
     }
 

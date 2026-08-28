@@ -1,4 +1,4 @@
-use crate::{error::ModpkgError, license::ModpkgLicense, Modpkg};
+use crate::{error::ModpkgError, hashtable::ModpkgHashtable, license::ModpkgLicense, Modpkg};
 use indexmap::IndexMap;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -193,6 +193,32 @@ pub struct ModpkgMetadata {
         )
     )]
     pub layers: Vec<ModpkgLayerMetadata>,
+
+    /// The embedded hashtables the package declares (added in schema v3).
+    ///
+    /// The manifest is authoritative: a chunk under `_meta_/hashes/` that no
+    /// entry here declares does not exist for lookup. Absent from packages
+    /// written before schema v3, and omitted when empty so a package without
+    /// tables serializes byte-identically to one written before this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(test, proptest(strategy = "hashtables_strategy()"))]
+    pub hashtables: Vec<ModpkgHashtable>,
+}
+
+/// Proptest strategy for [`ModpkgMetadata::hashtables`].
+#[cfg(test)]
+fn hashtables_strategy() -> impl proptest::strategy::Strategy<Value = Vec<ModpkgHashtable>> {
+    use proptest::strategy::Strategy;
+
+    proptest::collection::vec(
+        ("[a-z0-9.-]{1,20}", 1u8..=64).prop_map(|(name, bits)| ModpkgHashtable {
+            path: format!("_meta_/hashes/{name}"),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits,
+        }),
+        0..3,
+    )
 }
 
 impl Default for ModpkgMetadata {
@@ -210,15 +236,16 @@ impl Default for ModpkgMetadata {
             champions: Vec::new(),
             maps: Vec::new(),
             layers: Vec::new(),
+            hashtables: Vec::new(),
         }
     }
 }
 
 /// Current metadata schema version.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 fn default_schema_version() -> u32 {
-    2
+    CURRENT_SCHEMA_VERSION
 }
 
 impl ModpkgMetadata {
@@ -294,6 +321,11 @@ impl ModpkgMetadata {
     /// Get the per-layer metadata entries, if any.
     pub fn layers(&self) -> &[ModpkgLayerMetadata] {
         &self.layers
+    }
+
+    /// Get the embedded hashtables the package declares.
+    pub fn hashtables(&self) -> &[ModpkgHashtable] {
+        &self.hashtables
     }
 }
 
@@ -372,6 +404,7 @@ mod tests {
             champions: vec![],
             maps: vec![],
             layers: vec![],
+            hashtables: vec![],
         };
         let mut cursor = Cursor::new(Vec::new());
         metadata.write(&mut cursor).unwrap();
@@ -407,6 +440,7 @@ mod tests {
             champions: vec![],
             maps: vec![],
             layers: vec![],
+            hashtables: vec![],
         };
 
         let encoded = rmp_serde::to_vec_named(&metadata).unwrap();
@@ -478,6 +512,116 @@ mod tests {
         assert_eq!(layer, decoded);
     }
 
+    /// A metadata map with no `schema_version` key reads as CURRENT. Every
+    /// writer, v1 onward, writes the key explicitly, so this only decides
+    /// hand-built msgpack - and the default deliberately tracks
+    /// [`CURRENT_SCHEMA_VERSION`], the crate's standing pattern. This test
+    /// exists so the next version bump makes the same move consciously.
+    #[test]
+    fn a_missing_schema_version_key_reads_as_current() {
+        #[derive(Serialize)]
+        #[serde(rename_all = "snake_case")]
+        struct VersionlessWriter {
+            name: String,
+            display_name: String,
+            description: Option<String>,
+            version: Version,
+            distributor: Option<DistributorInfo>,
+            authors: Vec<ModpkgAuthor>,
+            license: ModpkgLicense,
+        }
+
+        let encoded = rmp_serde::to_vec_named(&VersionlessWriter {
+            name: "keyless".to_string(),
+            display_name: "Keyless".to_string(),
+            description: None,
+            version: Version::new(1, 0, 0),
+            distributor: None,
+            authors: vec![],
+            license: ModpkgLicense::None,
+        })
+        .unwrap();
+
+        let decoded = ModpkgMetadata::read(&mut Cursor::new(encoded)).unwrap();
+        assert_eq!(decoded.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// Schema v3 is additive: a v3 package must read on a v2 reader, with the
+    /// hashtables ignored - the correct outcome for a reader that could not
+    /// have used them.
+    #[test]
+    fn v3_metadata_decodes_with_a_v2_reader() {
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        struct V2Metadata {
+            name: String,
+        }
+
+        let metadata = ModpkgMetadata {
+            name: "v3-mod".to_string(),
+            hashtables: vec![ModpkgHashtable {
+                path: "_meta_/hashes/game.hashes.txt".to_string(),
+                category: ltk_hashtable::Category::Game,
+                algorithm: ltk_hashtable::Algorithm::Xxh64,
+                bits: 64,
+            }],
+            ..ModpkgMetadata::default()
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        metadata.write(&mut cursor).unwrap();
+
+        let decoded: V2Metadata = rmp_serde::from_slice(cursor.get_ref()).unwrap();
+        assert_eq!(decoded.name, "v3-mod");
+    }
+
+    /// A v2 package carries no `hashtables` key; the v3 reader must decode it
+    /// with the field empty rather than failing the whole metadata chunk.
+    #[test]
+    fn v2_metadata_decodes_with_no_hashtables() {
+        let v2 = ModpkgMetadata {
+            schema_version: 2,
+            name: "old-mod".to_string(),
+            ..ModpkgMetadata::default()
+        };
+        let encoded = rmp_serde::to_vec_named(&v2).unwrap();
+        assert!(!String::from_utf8_lossy(&encoded).contains("hashtables"));
+
+        let decoded = ModpkgMetadata::read(&mut Cursor::new(encoded)).unwrap();
+        assert!(decoded.hashtables.is_empty());
+    }
+
+    /// A package without tables serializes byte-identically to one written
+    /// before the field existed.
+    #[test]
+    fn empty_hashtables_are_omitted_from_the_wire() {
+        let encoded = rmp_serde::to_vec_named(&ModpkgMetadata::default()).unwrap();
+        assert!(!String::from_utf8_lossy(&encoded).contains("hashtables"));
+    }
+
+    #[test]
+    fn hashtables_roundtrip_through_the_metadata_chunk() {
+        let manifest = ModpkgHashtable {
+            path: "_meta_/hashes/game.imported.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Unknown("wadnames".to_string()),
+            algorithm: ltk_hashtable::Algorithm::Unknown("crc32".to_string()),
+            bits: 32,
+        };
+        let metadata = ModpkgMetadata {
+            hashtables: vec![manifest.clone()],
+            ..ModpkgMetadata::default()
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        metadata.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+
+        let read = ModpkgMetadata::read(&mut cursor).unwrap();
+        // Unknown categories and algorithms round-trip verbatim: the open
+        // registries keep their spelling.
+        assert_eq!(read.hashtables, [manifest]);
+    }
+
     #[test]
     fn test_v1_metadata_backward_compat() {
         // Simulate a v1 metadata without string_overrides on layers
@@ -500,6 +644,7 @@ mod tests {
                 description: None,
                 string_overrides: IndexMap::new(),
             }],
+            hashtables: vec![],
         };
 
         let mut cursor = Cursor::new(Vec::new());
@@ -553,6 +698,7 @@ mod tests {
                     )]),
                 },
             ],
+            hashtables: vec![],
         };
 
         let mut cursor = Cursor::new(Vec::new());

@@ -40,6 +40,22 @@ pub enum FantomeExtractError {
     #[error("Missing info.json metadata file")]
     MissingMetadata,
 
+    /// The manifest declares a hashtable file the archive does not hold.
+    #[error("The manifest declares {path}, but the archive holds no such entry")]
+    MissingHashtable {
+        /// The declared path, relative to the archive root.
+        path: String,
+    },
+
+    /// A declared hashtable file does not fit the table grammar.
+    #[error("Failed to read the hashtable at {path}")]
+    Hashtable {
+        /// The declared path, relative to the archive root.
+        path: String,
+        #[source]
+        source: ltk_hashtable::HashtableReadError,
+    },
+
     /// An entry names a path that leaves the directory it would be extracted
     /// to, so extracting the archive would write outside it.
     ///

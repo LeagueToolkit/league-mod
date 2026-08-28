@@ -10,7 +10,7 @@ use std::io::{Read, Seek, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::FantomeInfo;
+use crate::{FantomeHashtable, FantomeInfo};
 
 /// Failure to write a Fantome archive entry.
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +88,31 @@ impl<W: Write + Seek> FantomeWriter<W> {
         content: &mut impl Read,
     ) -> Result<(), FantomeWriteError> {
         self.write_entry(&format!("META/{file_name}"), content)
+    }
+
+    /// The inner zip writer, for the rewrite's raw entry copies.
+    pub(crate) fn zip_mut(&mut self) -> &mut ZipWriter<W> {
+        &mut self.zip
+    }
+
+    /// Write one hashtable file at the path its manifest entry names.
+    ///
+    /// The manifest entry itself travels in `META/info.json`, via
+    /// [`write_info`](Self::write_info); this writes only the table file. A
+    /// table a manifest does not declare does not exist, so pass the same
+    /// entry to both.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be written.
+    pub fn write_hashtable(
+        &mut self,
+        manifest: &FantomeHashtable,
+        table: &ltk_hashtable::Hashtable,
+    ) -> Result<(), FantomeWriteError> {
+        self.zip.start_file(&manifest.path, self.options)?;
+        table.write_to(&mut self.zip)?;
+        Ok(())
     }
 
     /// Write the mod's thumbnail as `META/image.png`.
