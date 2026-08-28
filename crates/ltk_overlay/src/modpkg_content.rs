@@ -5,7 +5,7 @@
 //! extracting to disk.
 
 use crate::content::{ModContentProvider, archive_fingerprint};
-use crate::error::{Error, Result};
+use crate::error::{ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_modpkg::{ChunkKey, Modpkg, ModpkgLicense, PathHash, WadIndex};
@@ -176,9 +176,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
     }
 
     fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> Result<Vec<u8>> {
-        Err(Error::Other(
-            "Modpkg format does not support raw overrides".to_string(),
-        ))
+        Err(ModContentError::ModpkgRawUnsupported.into())
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {

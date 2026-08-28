@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use crate::builder::OverrideMeta;
@@ -51,8 +52,8 @@ pub struct LinkedBinOffender {
 /// `wad_hash_sets` must already have blocked WADs removed, so blocked WADs are
 /// neither validated nor counted as present.
 pub(crate) fn collect_linked_bin_offenders(
-    all_meta: &HashMap<u64, OverrideMeta>,
-    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
+    all_meta: &HashMap<WadHash, OverrideMeta>,
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
     game_index: &GameIndex,
 ) -> Vec<LinkedBinOffender> {
     // mod_id -> (offending wad filenames, missing linked paths)
@@ -245,13 +246,13 @@ mod tests {
         assert_eq!(parse_linked_bins(&bin), None);
     }
 
-    fn hash(path: &str) -> u64 {
+    fn hash(path: &str) -> WadHash {
         resolve_chunk_hash(Utf8Path::new(path), b"").unwrap()
     }
 
     fn layer_wad_meta(mod_id: &str, linked: &[&str]) -> OverrideMeta {
         OverrideMeta {
-            content_hash: 0,
+            content_hash: crate::utils::ContentHash(0),
             uncompressed_size: 0,
             source: OverrideSource::LayerWad {
                 mod_id: mod_id.to_string(),

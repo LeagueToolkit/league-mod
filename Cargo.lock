@@ -1344,6 +1344,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
 dependencies = [
  "byteorder",
+ "serde",
  "xxhash-rust",
 ]
 
@@ -1494,6 +1495,7 @@ dependencies = [
  "memchr",
  "num_enum",
  "rsa",
+ "serde",
  "sha2",
  "thiserror 1.0.69",
  "xxhash-rust",

@@ -9,7 +9,7 @@
 //!
 //! The game's own stringtable is always the patch base: mod-shipped
 //! `lol.stringtable` chunk overrides are rejected during metadata collection
-//! (see [`blocked_stringtable_hashes`]) - `string_overrides` are the only
+//! (see `blocked_stringtable_hashes`) - `string_overrides` are the only
 //! supported way to modify game strings.
 //!
 //! # Merge semantics
@@ -36,14 +36,15 @@
 //! for entries whose plaintext name is unknown.
 
 use crate::builder::{EnabledMod, OverrideMeta, OverrideSource};
-use crate::error::{Error, Result};
+use crate::error::{CorruptionError, Error, GameDirError, ModContentError, Result};
 use crate::game_index::GameIndex;
+use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use ltk_mod_project::ModProjectLayer;
+use ltk_wad::WadHash;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
-use xxhash_rust::xxh3::xxh3_64;
 
 /// Locale bucket name whose overrides apply to every target locale.
 pub const DEFAULT_LOCALE: &str = "default";
@@ -93,10 +94,12 @@ pub(crate) fn stringtable_chunk_path(locale: &str) -> String {
 }
 
 /// The WAD chunk path hash of [`stringtable_chunk_path`] for `locale`.
-pub(crate) fn stringtable_chunk_hash(locale: &str) -> u64 {
-    ltk_modpkg::ChunkPath::new(stringtable_chunk_path(locale))
-        .hash()
-        .value()
+pub(crate) fn stringtable_chunk_hash(locale: &str) -> WadHash {
+    WadHash(
+        ltk_modpkg::ChunkPath::new(stringtable_chunk_path(locale))
+            .hash()
+            .value(),
+    )
 }
 
 /// Path hashes of the `lol.stringtable` chunks for every locale installed in
@@ -107,7 +110,7 @@ pub(crate) fn stringtable_chunk_hash(locale: &str) -> u64 {
 /// hashes is rejected during metadata filtering. Hash-based matching catches
 /// stringtables regardless of whether the mod ships them under a plaintext
 /// path or a raw hash filename.
-pub(crate) fn blocked_stringtable_hashes(game_index: &GameIndex) -> HashSet<u64> {
+pub(crate) fn blocked_stringtable_hashes(game_index: &GameIndex) -> HashSet<WadHash> {
     game_index
         .localized_global_wads()
         .into_iter()
@@ -133,7 +136,7 @@ pub(crate) struct StringPatchPlan {
     /// Lowercase locale, e.g. `"en_us"`.
     pub(crate) locale: String,
     /// Path hash of the `lol.stringtable` chunk for this locale.
-    pub(crate) chunk_hash: u64,
+    pub(crate) chunk_hash: WadHash,
     /// Game-relative path of `Global.{locale}.wad.client`.
     pub(crate) wad_rel_path: Utf8PathBuf,
     /// Merged `field key -> replacement` map (sorted for determinism).
@@ -144,7 +147,7 @@ impl StringPatchPlan {
     /// Deterministic fingerprint of this patch's inputs, used as the synthetic
     /// meta entry's `content_hash` so per-WAD fingerprints (and therefore
     /// incremental rebuilds) react to any change in the effective overrides.
-    pub(crate) fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"ltk-string-patch-v2\0");
         buf.extend_from_slice(self.locale.as_bytes());
@@ -155,18 +158,18 @@ impl StringPatchPlan {
             buf.extend_from_slice(value.as_bytes());
             buf.push(0);
         }
-        xxh3_64(&buf)
+        ContentHash::of(&buf)
     }
 
     /// Parse `base_bytes` as an RST stringtable, apply this plan's overrides,
     /// and serialize the patched table.
     pub(crate) fn apply(&self, base_bytes: &[u8]) -> Result<Vec<u8>> {
         let mut table =
-            ltk_rst::Stringtable::from_reader(&mut Cursor::new(base_bytes)).map_err(|e| {
-                Error::Other(format!(
-                    "Failed to parse stringtable for locale '{}': {}",
-                    self.locale, e
-                ))
+            ltk_rst::Stringtable::from_reader(&mut Cursor::new(base_bytes)).map_err(|source| {
+                CorruptionError::StringtableParse {
+                    locale: self.locale.clone(),
+                    source,
+                }
             })?;
 
         tracing::debug!(
@@ -185,12 +188,12 @@ impl StringPatchPlan {
         }
 
         let mut out = Vec::with_capacity(base_bytes.len() + 1024);
-        table.to_writer(&mut out).map_err(|e| {
-            Error::Other(format!(
-                "Failed to write patched stringtable for locale '{}': {}",
-                self.locale, e
-            ))
-        })?;
+        table
+            .to_writer(&mut out)
+            .map_err(|source| ModContentError::StringOverrideUnencodable {
+                locale: self.locale.clone(),
+                source,
+            })?;
         Ok(out)
     }
 
@@ -309,22 +312,20 @@ fn canonicalize_key(key: &str, mod_id: &str, layer_name: &str) -> Option<String>
 pub(crate) fn read_game_chunk(
     game_dir: &Utf8Path,
     wad_rel_path: &Utf8Path,
-    chunk_hash: u64,
+    chunk_hash: WadHash,
 ) -> Result<Vec<u8>> {
     let abs_path = game_dir.join(wad_rel_path);
     let file = std::fs::File::open(abs_path.as_std_path())
         .map_err(|source| Error::read(&abs_path, source))?;
     let mut wad = ltk_wad::Wad::mount(file)?;
 
-    let chunk = *wad
-        .chunks()
-        .get(ltk_wad::WadHash(chunk_hash))
-        .ok_or_else(|| {
-            Error::Other(format!(
-                "Chunk {:016x} not found in game WAD '{}'",
-                chunk_hash, wad_rel_path
-            ))
-        })?;
+    let chunk =
+        *wad.chunks()
+            .get(chunk_hash)
+            .ok_or_else(|| GameDirError::StringtableChunkMissing {
+                wad: wad_rel_path.to_path_buf(),
+                chunk_hash,
+            })?;
 
     Ok(wad.load_chunk_decompressed(&chunk)?.to_vec())
 }
