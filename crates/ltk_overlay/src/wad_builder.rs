@@ -55,9 +55,10 @@ use byteorder::{LE, WriteBytesExt};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression, WadChunks, WadHash};
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
 use xxhash_rust::xxh3::xxh3_64;
@@ -127,6 +128,35 @@ impl PreparedOverride {
         })
     }
 
+    /// Recover a prepared override from bytes already compressed inside a WAD.
+    ///
+    /// Lets an unchanged override be lifted straight out of an overlay's
+    /// existing tail instead of being re-read from its mod and compressed
+    /// again. The bytes are re-emitted verbatim, so a WAD that builds the same
+    /// content fresh in the same build still matches them byte for byte.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the bytes do not hash to `chunk.checksum`, which means the
+    /// WAD they came from is not what its own TOC says it is.
+    pub(crate) fn from_wad_bytes(chunk: &WadChunk, compressed: Box<[u8]>) -> Result<Self> {
+        let checksum = xxh3_64(&compressed);
+        if checksum != chunk.checksum {
+            return Err(Error::Other(format!(
+                "Chunk {:016x} does not match its recorded checksum \
+                 (found {checksum:016x}, expected {:016x})",
+                chunk.path_hash, chunk.checksum
+            )));
+        }
+
+        Ok(Self {
+            compressed: Arc::from(compressed),
+            uncompressed_size: chunk.uncompressed_size as u32,
+            compression: chunk.compression_type,
+            checksum,
+        })
+    }
+
     /// The compressed bytes, written into the WAD verbatim.
     pub fn compressed(&self) -> &[u8] {
         &self.compressed
@@ -153,7 +183,8 @@ impl PreparedOverride {
 /// Recorded after a build so a later rebuild of the same source WAD can verify
 /// the file it finds on disk and rewrite only its tail. See the
 /// [module docs](self) on the file layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WadTailLayout {
     /// Absolute offset where the copied source data region starts.
     pub data_region_offset: u64,
@@ -166,12 +197,111 @@ pub struct WadTailLayout {
     pub tail_offset: u64,
     /// TOC entries the file has room for without moving any data.
     ///
-    /// Equal to the entry count while [`TOC_SLACK_ENTRIES`] is zero.
+    /// Equal to the entry count while `TOC_SLACK_ENTRIES` is zero.
     pub toc_capacity: u32,
 }
 
-/// The outcome of [`build_patched_wad`]: build metrics, plus the
-/// [layout](WadTailLayout) of the file that was written.
+impl WadTailLayout {
+    /// Absolute offset of the first TOC entry.
+    ///
+    /// Derived from the region offset rather than the header size, so the
+    /// 272-byte header stays a fact of the writer alone.
+    pub fn toc_offset(&self) -> u64 {
+        self.data_region_offset - u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64
+    }
+
+    /// Absolute offset of the `u32` chunk count, which precedes the TOC.
+    pub fn chunk_count_offset(&self) -> u64 {
+        self.toc_offset() - size_of::<u32>() as u64
+    }
+
+    /// A source chunk's TOC entry with its offset moved into the copied region.
+    ///
+    /// Every other field carries over untouched: the bytes came out of a valid
+    /// v3.4 WAD and were copied verbatim, so their sizes, compression, frame
+    /// fields and checksum still describe them exactly.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the shifted range falls outside what the format's `u32`
+    /// offset fields can address.
+    pub fn shift(&self, orig: &WadChunk) -> Result<WadChunk> {
+        let shifted = orig.data_offset as i64 + self.offset_delta;
+        let end = shifted + orig.compressed_size as i64;
+        if shifted < 0 || end > MAX_WAD_OFFSET as i64 {
+            return Err(Error::Other(format!(
+                "Patched WAD cannot address chunk {:016x} at offset {shifted}",
+                orig.path_hash
+            )));
+        }
+
+        Ok(WadChunk {
+            data_offset: shifted as usize,
+            ..*orig
+        })
+    }
+
+    /// Whether `entry_count` entries fit the TOC without opening a gap wider
+    /// than the slack this layout deliberately reserved.
+    ///
+    /// A gap between the last TOC entry and the first data byte is exactly what
+    /// `TOC_SLACK_ENTRIES` is gated on, so at slack zero this is equality.
+    pub fn admits_entry_count(&self, entry_count: usize) -> bool {
+        let fewest = self.toc_capacity.saturating_sub(TOC_SLACK_ENTRIES);
+        u32::try_from(entry_count).is_ok_and(|count| (fewest..=self.toc_capacity).contains(&count))
+    }
+}
+
+/// What identifies the game WAD an overlay was built from.
+///
+/// Compared against the file on disk before an overlay built from it is
+/// trusted: length and mtime are the cheap filter, the TOC hash the check that
+/// actually proves the archive is the same one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceWadIdentity {
+    /// Length of the source WAD in bytes.
+    pub len: u64,
+    /// Modification time in nanoseconds since the Unix epoch, or `0` when the
+    /// platform does not report one.
+    pub mtime: i64,
+    /// xxh3_64 over the source WAD's TOC entries, in file order.
+    pub toc_hash: u64,
+}
+
+impl SourceWadIdentity {
+    /// Identify a WAD already open and mounted.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the TOC cannot be re-encoded for hashing.
+    pub fn new(metadata: &std::fs::Metadata, chunks: &WadChunks) -> Result<Self> {
+        Ok(Self {
+            len: metadata.len(),
+            mtime: mtime_nanos(metadata),
+            toc_hash: toc_hash(chunks)?,
+        })
+    }
+
+    /// Read the identity of the WAD at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be opened or is not a mountable WAD.
+    pub fn of(path: &Utf8Path) -> Result<Self> {
+        let file = File::open(path.as_std_path()).map_err(|source| Error::read(path, source))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| Error::read(path, source))?;
+        let wad = Wad::mount(BufReader::new(&file))?;
+
+        Self::new(&metadata, wad.chunks())
+    }
+}
+
+/// The outcome of [`build_patched_wad`]: build metrics, the
+/// [layout](WadTailLayout) of the file that was written, and the identity of
+/// the source it was built from.
 #[derive(Debug, Clone)]
 pub struct PatchedWadStats {
     /// Total number of chunks in the output WAD (original + overrides).
@@ -186,6 +316,11 @@ pub struct PatchedWadStats {
     pub elapsed_ms: u128,
     /// Where this build put the source data region and the override tail.
     pub layout: WadTailLayout,
+    /// The game WAD this output was built from.
+    ///
+    /// `None` for a [tail rewrite](rewrite_wad_tail), which never opens the
+    /// source: its caller already verified the identity to get there.
+    pub source: Option<SourceWadIdentity>,
 }
 
 /// Build a patched WAD by overlaying mod chunks on top of an original game WAD.
@@ -328,7 +463,7 @@ fn write_patched_wad(
     }
 
     let region = source_data_region(chunks, mmap.len(), src_wad_path)?;
-    let layout = TailLayout::plan(toc_offset, toc_capacity, &region, dst_wad_path)?;
+    let layout = plan_layout(toc_offset, toc_capacity, &region, dst_wad_path)?;
 
     copy_source_region(&mut writer, &mmap[..], &region)?;
 
@@ -348,7 +483,7 @@ fn write_patched_wad(
             let orig = chunks
                 .get(WadHash(path_hash))
                 .ok_or_else(|| Error::Other(format!("Missing base chunk {path_hash:016x}")))?;
-            final_chunks.push(layout.shift(orig, dst_wad_path)?);
+            final_chunks.push(layout.shift(orig)?);
         }
     }
 
@@ -380,83 +515,166 @@ fn write_patched_wad(
         new_entries_added,
         chunks_passed_through,
         elapsed_ms,
-        layout: layout.into(),
+        layout,
+        source: Some(SourceWadIdentity::new(
+            &file
+                .metadata()
+                .map_err(|source| Error::read(src_wad_path, source))?,
+            chunks,
+        )?),
     })
 }
 
-/// A patched WAD's region boundaries while it is being written.
+/// Rebuild a patched WAD by rewriting only its override tail and its TOC.
 ///
-/// The public [`WadTailLayout`] is this without the source-side bookkeeping.
-#[derive(Debug, Clone, Copy)]
-struct TailLayout {
-    data_region_offset: u64,
-    offset_delta: i64,
-    tail_offset: u64,
+/// The file keeps its header and its copied source data region - the bytes that
+/// dominate a game WAD - so the work is bounded by the override bytes, not by
+/// the WAD's size. Everything this needs to be safe has been decided by the
+/// caller: `layout` and `base_entries` describe a file whose identity and TOC
+/// it already verified against the game WAD and the recorded layout.
+///
+/// # Arguments
+///
+/// * `wad_path` - The overlay WAD to rewrite in place.
+/// * `layout` - The layout recorded when this file was built.
+/// * `base_entries` - TOC entries whose data already sits in the region, keyed
+///   by path hash. Every chunk of the result that is not an override.
+/// * `tail_hashes` - Path hashes whose data goes into the new tail, ascending.
+/// * `resolve_override` - Supplies each tail hash's compressed bytes, in the
+///   order they are written.
+///
+/// # Errors
+///
+/// Fails when the file cannot be opened or written, when the resulting entry
+/// count no longer fits the reserved TOC capacity, or when the tail would push
+/// the file past the format's 4 GiB limit. The caller's fallback for all of
+/// these is a full rebuild.
+pub fn rewrite_wad_tail(
+    wad_path: &Utf8Path,
+    layout: &WadTailLayout,
+    base_entries: &BTreeMap<u64, WadChunk>,
+    tail_hashes: &[u64],
+    mut resolve_override: impl FnMut(u64) -> Result<PreparedOverride>,
+) -> Result<PatchedWadStats> {
+    let start = std::time::Instant::now();
+
+    let entry_count = base_entries.len() + tail_hashes.len();
+    if !layout.admits_entry_count(entry_count) {
+        return Err(Error::Other(format!(
+            "Overlay WAD {wad_path} has room for {} TOC entries, not the {entry_count} \
+             this rebuild needs",
+            layout.toc_capacity
+        )));
+    }
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(wad_path.as_std_path())
+        .map_err(|source| Error::write(wad_path, source))?;
+    file.set_len(layout.tail_offset)
+        .map_err(|source| Error::write(wad_path, source))?;
+
+    let mut writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
+    writer.seek(SeekFrom::Start(layout.tail_offset))?;
+
+    let mut entries = base_entries.clone();
+    let mut tail_cursor = layout.tail_offset;
+    for &path_hash in tail_hashes {
+        let over = resolve_override(path_hash)?;
+        entries.insert(
+            path_hash,
+            tail_chunk(path_hash, &over, tail_cursor, wad_path)?,
+        );
+        writer.write_all(over.compressed())?;
+        tail_cursor += over.compressed().len() as u64;
+    }
+
+    // `entries` is a BTreeMap, so this walks the TOC in ascending hash order.
+    writer.seek(SeekFrom::Start(layout.chunk_count_offset()))?;
+    writer.write_u32::<LE>(entries.len() as u32)?;
+    for chunk in entries.values() {
+        chunk.write_v3_4(&mut writer)?;
+    }
+
+    writer.flush()?;
+
+    let elapsed_ms = start.elapsed().as_millis();
+    tracing::info!(
+        "Rewrote WAD tail dst={} chunks={} overrides={} tail_bytes={} elapsed_ms={}",
+        wad_path,
+        entries.len(),
+        tail_hashes.len(),
+        tail_cursor - layout.tail_offset,
+        elapsed_ms
+    );
+
+    Ok(PatchedWadStats {
+        chunks_written: entries.len(),
+        overrides_applied: tail_hashes.len(),
+        new_entries_added: 0,
+        chunks_passed_through: base_entries.len(),
+        elapsed_ms,
+        layout: *layout,
+        source: None,
+    })
+}
+
+/// Place the copied source region and the tail behind a TOC of `toc_capacity`
+/// entries starting at `toc_offset`.
+///
+/// # Errors
+///
+/// Fails when the region alone would push the file past the format's 4 GiB
+/// addressable limit.
+fn plan_layout(
+    toc_offset: u64,
     toc_capacity: u32,
+    region: &Range<u64>,
+    dst_wad_path: &Utf8Path,
+) -> Result<WadTailLayout> {
+    let data_region_offset = toc_offset + u64::from(toc_capacity) * TOC_ENTRY_SIZE as u64;
+    let tail_offset = data_region_offset + (region.end - region.start);
+    if tail_offset > MAX_WAD_OFFSET {
+        return Err(Error::Other(format!(
+            "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format: \
+             the source data region alone ends at offset {tail_offset}"
+        )));
+    }
+
+    Ok(WadTailLayout {
+        data_region_offset,
+        offset_delta: data_region_offset as i64 - region.start as i64,
+        tail_offset,
+        toc_capacity,
+    })
 }
 
-impl From<TailLayout> for WadTailLayout {
-    fn from(layout: TailLayout) -> Self {
-        Self {
-            data_region_offset: layout.data_region_offset,
-            offset_delta: layout.offset_delta,
-            tail_offset: layout.tail_offset,
-            toc_capacity: layout.toc_capacity,
-        }
+/// xxh3_64 over a WAD's TOC entries in file order.
+///
+/// Hashes the entries as they would be written rather than the raw bytes at
+/// some offset, so the identity of an archive is independent of where its TOC
+/// happens to start.
+fn toc_hash(chunks: &WadChunks) -> Result<u64> {
+    let mut buf = Vec::with_capacity(chunks.len() * TOC_ENTRY_SIZE);
+    for chunk in chunks {
+        chunk.write_v3_4(&mut buf)?;
     }
+    Ok(xxh3_64(&buf))
 }
 
-impl TailLayout {
-    /// Place the copied source region and the tail behind a TOC of
-    /// `toc_capacity` entries starting at `toc_offset`.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the region alone would push the file past the format's 4 GiB
-    /// addressable limit.
-    fn plan(
-        toc_offset: u64,
-        toc_capacity: u32,
-        region: &Range<u64>,
-        dst_wad_path: &Utf8Path,
-    ) -> Result<Self> {
-        let data_region_offset = toc_offset + u64::from(toc_capacity) * TOC_ENTRY_SIZE as u64;
-        let tail_offset = data_region_offset + (region.end - region.start);
-        if tail_offset > MAX_WAD_OFFSET {
-            return Err(Error::Other(format!(
-                "Patched WAD {dst_wad_path} exceeds the 4 GiB limit of the WAD v3.4 format: \
-                 the source data region alone ends at offset {tail_offset}"
-            )));
-        }
-
-        Ok(Self {
-            data_region_offset,
-            offset_delta: data_region_offset as i64 - region.start as i64,
-            tail_offset,
-            toc_capacity,
-        })
-    }
-
-    /// A source chunk's TOC entry with its offset moved into the copied region.
-    ///
-    /// Every other field carries over untouched: the bytes came out of a valid
-    /// v3.4 WAD and were copied verbatim, so their sizes, compression, frame
-    /// fields and checksum still describe them exactly.
-    fn shift(&self, orig: &WadChunk, dst_wad_path: &Utf8Path) -> Result<WadChunk> {
-        let shifted = orig.data_offset as i64 + self.offset_delta;
-        let end = shifted + orig.compressed_size as i64;
-        if shifted < 0 || end > MAX_WAD_OFFSET as i64 {
-            return Err(Error::Other(format!(
-                "Patched WAD {dst_wad_path} cannot address chunk {:016x} at offset {shifted}",
-                orig.path_hash
-            )));
-        }
-
-        Ok(WadChunk {
-            data_offset: shifted as usize,
-            ..*orig
-        })
-    }
+/// A file's modification time in nanoseconds since the Unix epoch.
+///
+/// `0` when the platform does not report one, or the timestamp predates the
+/// epoch: both sides of every comparison read it the same way, and the TOC hash
+/// is what actually proves identity.
+fn mtime_nanos(metadata: &std::fs::Metadata) -> i64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|since| i64::try_from(since.as_nanos()).ok())
+        .unwrap_or(0)
 }
 
 /// The byte range of a source WAD's data region: from its first chunk's offset

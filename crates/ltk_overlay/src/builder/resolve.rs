@@ -4,8 +4,9 @@
 //! re-reads bytes for WADs that need rebuilding, and patches WADs in parallel.
 
 use super::*;
+use crate::builder::incremental::TailRewrite;
 use crate::utils::compute_wad_fingerprint_from_meta;
-use crate::wad_builder::{PreparedOverride, build_patched_wad};
+use crate::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad, rewrite_wad_tail};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -85,46 +86,68 @@ fn distribute_prepared_to_wads(
 /// compressed form exists, and nothing downstream of the writer reads
 /// uncompressed override bytes.
 ///
+/// `reused` seeds the memo with bytes already compressed in a previous build,
+/// recovered from an overlay's tail. Anything whose content they already cover
+/// is never compressed again, and every WAD needing that content emits those
+/// exact bytes.
+///
 /// [`wad_builder`]: crate::wad_builder
 fn prepare_overrides(
     resolved: HashMap<u64, ResolvedChunk>,
     all_meta: &HashMap<u64, OverrideMeta>,
+    reused: HashMap<u64, PreparedOverride>,
 ) -> Result<HashMap<u64, PreparedOverride>> {
-    // One representative (path hash, bytes) per distinct content. Duplicate
-    // buffers are released here, before any compression starts.
+    // A chunk with no metadata entry cannot be deduplicated against anything,
+    // so it keys on its own path hash - distinct by construction.
+    let content_hash_of = |path_hash: u64| {
+        all_meta
+            .get(&path_hash)
+            .map_or(path_hash, |meta| meta.content_hash)
+    };
+
+    let mut memo: HashMap<u64, PreparedOverride> = reused
+        .iter()
+        .map(|(&path_hash, prepared)| (content_hash_of(path_hash), prepared.clone()))
+        .collect();
+
+    // One representative (path hash, bytes) per distinct content still needing
+    // compression. Duplicate buffers are released here, before any starts.
     let mut content_of: HashMap<u64, u64> = HashMap::with_capacity(resolved.len());
     let mut distinct: HashMap<u64, (u64, ResolvedChunk)> = HashMap::new();
     for (path_hash, bytes) in resolved {
-        // A chunk with no metadata entry cannot be deduplicated against
-        // anything, so it keys on its own path hash - distinct by construction.
-        let content_hash = all_meta
-            .get(&path_hash)
-            .map_or(path_hash, |meta| meta.content_hash);
+        let content_hash = content_hash_of(path_hash);
         content_of.insert(path_hash, content_hash);
-        distinct.entry(content_hash).or_insert((path_hash, bytes));
+        if !memo.contains_key(&content_hash) {
+            distinct.entry(content_hash).or_insert((path_hash, bytes));
+        }
     }
 
-    let unique = distinct.len();
-    let memo: HashMap<u64, PreparedOverride> = distinct
-        .into_par_iter()
-        .map(|(content_hash, (path_hash, bytes))| {
-            PreparedOverride::compress(path_hash, &bytes).map(|prepared| (content_hash, prepared))
-        })
-        .collect::<Result<_>>()?;
-
-    tracing::info!(
-        "Compressed {} unique override chunk(s) for {} routed override(s)",
-        unique,
-        content_of.len()
+    let compressed = distinct.len();
+    memo.par_extend(
+        distinct
+            .into_par_iter()
+            .map(|(content_hash, (path_hash, bytes))| {
+                PreparedOverride::compress(path_hash, &bytes)
+                    .map(|prepared| (content_hash, prepared))
+            })
+            .collect::<Result<Vec<_>>>()?,
     );
 
-    Ok(content_of
-        .into_iter()
-        .filter_map(|(path_hash, content_hash)| {
-            memo.get(&content_hash)
-                .map(|prepared| (path_hash, prepared.clone()))
-        })
-        .collect())
+    tracing::info!(
+        "Compressed {} unique override chunk(s); reused {} from the previous build",
+        compressed,
+        reused.len()
+    );
+
+    let mut prepared = reused;
+    prepared.reserve(content_of.len());
+    for (path_hash, content_hash) in content_of {
+        if let Some(chunk) = memo.get(&content_hash) {
+            prepared.insert(path_hash, chunk.clone());
+        }
+    }
+
+    Ok(prepared)
 }
 
 impl OverlayBuilder {
@@ -255,23 +278,32 @@ impl OverlayBuilder {
     /// - **Mod overrides** - read from each mod's content provider.
     /// - **String patches** - the game's stringtable rebuilt with merged overrides.
     ///
-    /// The resolved bytes are then compressed by [`prepare_overrides`], once per
-    /// distinct content, and the compressed results are spread across the WADs.
+    /// `reused` holds overrides whose compressed bytes a
+    /// [tail rewrite](super::incremental) already recovered from an overlay's
+    /// existing tail. Those are neither re-read nor recompressed: they seed the
+    /// memo, so a WAD building the same content fresh in this build emits the
+    /// bytes the reusing WAD is keeping.
+    ///
+    /// The rest is compressed by [`prepare_overrides`], once per distinct
+    /// content, and the results are spread across the WADs.
     pub(crate) fn resolve_overrides_for_wads(
         &mut self,
         wads_to_build: &[Utf8PathBuf],
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
         all_meta: &HashMap<u64, OverrideMeta>,
         string_plans: &HashMap<u64, StringPatchPlan>,
+        reused: HashMap<u64, PreparedOverride>,
     ) -> Result<BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>>> {
-        // Every unique path hash needed across the WADs being rebuilt.
+        // Every unique path hash needed across the WADs being rebuilt, minus
+        // the ones a tail rewrite supplies out of the file it is rewriting.
         let needed_hashes: HashSet<u64> = wads_to_build
             .iter()
             .filter_map(|wad_path| wad_hash_sets.get(wad_path))
             .flat_map(|hashes| hashes.iter().copied())
+            .filter(|hash| !reused.contains_key(hash))
             .collect();
 
-        if needed_hashes.is_empty() {
+        if needed_hashes.is_empty() && reused.is_empty() {
             return Ok(BTreeMap::new());
         }
 
@@ -281,7 +313,7 @@ impl OverlayBuilder {
         self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut resolved)?;
         self.resolve_string_patches(&sources.string_patches, string_plans, &mut resolved)?;
 
-        let prepared = prepare_overrides(resolved, all_meta)?;
+        let prepared = prepare_overrides(resolved, all_meta, reused)?;
 
         Ok(distribute_prepared_to_wads(
             wads_to_build,
@@ -376,18 +408,20 @@ impl OverlayBuilder {
 
     /// Patch WADs in parallel, emitting progress after each one completes.
     ///
-    /// Consumes `wad_overrides` so each parallel task owns its data, enabling
-    /// progressive deallocation as each WAD finishes patching.
+    /// A WAD with a [`TailRewrite`] plan keeps its file and rewrites only the
+    /// tail and the TOC; every other WAD is rebuilt in full through
+    /// [`build_patched_wad`]. Consumes `wad_overrides` and `rewrites` so each
+    /// parallel task owns its data, enabling progressive deallocation as each
+    /// WAD finishes patching.
     pub(crate) fn patch_wads_parallel(
         &self,
         wads_to_build: Vec<Utf8PathBuf>,
         mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<u64, PreparedOverride>>,
-    ) -> Result<Vec<Utf8PathBuf>> {
+        mut rewrites: BTreeMap<Utf8PathBuf, TailRewrite>,
+    ) -> Result<Vec<PatchedWad>> {
         let total_wads = wads_to_build.len() as u32;
         let completed = AtomicU32::new(0);
         let reported = AtomicU32::new(0);
-        let game_dir = &self.game_dir;
-        let overlay_root = &self.overlay_root;
         let progress_callback = &self.progress_callback;
 
         let emit = |progress: OverlayProgress| {
@@ -403,42 +437,30 @@ impl OverlayBuilder {
             total: total_wads,
         });
 
-        // Extract per-WAD overrides so each parallel task owns its data.
-        let per_wad_work: Vec<(Utf8PathBuf, HashMap<u64, PreparedOverride>)> = wads_to_build
+        // Extract per-WAD work so each parallel task owns its data.
+        let per_wad_work: Vec<WadWork> = wads_to_build
             .into_iter()
-            .map(|path| {
-                let overrides = wad_overrides.remove(&path).unwrap_or_default();
-                (path, overrides)
+            .map(|relative_path| WadWork {
+                overrides: wad_overrides.remove(&relative_path).unwrap_or_default(),
+                rewrite: rewrites.remove(&relative_path),
+                relative_path,
             })
             .collect();
         drop(wad_overrides);
+        drop(rewrites);
 
         per_wad_work
             .into_par_iter()
-            .map(|(relative_game_path, mut overrides)| {
-                let src_wad_path = game_dir.join(&relative_game_path);
-                let dst_wad_path = overlay_root.join(&relative_game_path);
-
-                tracing::info!(
-                    "Patching WAD src={} dst={} overrides={}",
-                    src_wad_path,
-                    dst_wad_path,
-                    overrides.len()
-                );
-
-                let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
-                build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
-                    overrides.remove(&hash).ok_or_else(|| {
-                        Error::Other(format!("Missing override data for hash {:016x}", hash))
-                    })
-                })?;
+            .map(|work| {
+                let patched = self.patch_one_wad(work)?;
 
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 let current = reported.fetch_max(done, Ordering::Relaxed).max(done);
                 emit(OverlayProgress {
                     stage: OverlayStage::PatchingWad,
                     current_file: Some(
-                        relative_game_path
+                        patched
+                            .relative_path
                             .file_name()
                             .unwrap_or("unknown")
                             .to_string(),
@@ -447,10 +469,92 @@ impl OverlayBuilder {
                     total: total_wads,
                 });
 
-                Ok(dst_wad_path)
+                Ok(patched)
             })
             .collect()
     }
+
+    /// Write one overlay WAD, by tail rewrite when it was planned and by full
+    /// rebuild otherwise.
+    fn patch_one_wad(&self, work: WadWork) -> Result<PatchedWad> {
+        let WadWork {
+            relative_path,
+            mut overrides,
+            rewrite,
+        } = work;
+        let dst_wad_path = self.overlay_root.join(&relative_path);
+        let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
+
+        let stats = match rewrite {
+            Some(rewrite) => {
+                tracing::info!(
+                    "Rewriting WAD tail dst={} overrides={}",
+                    dst_wad_path,
+                    rewrite.tail_hashes.len()
+                );
+                let mut stats = rewrite_wad_tail(
+                    &dst_wad_path,
+                    &rewrite.record.layout,
+                    &rewrite.base_entries,
+                    &rewrite.tail_hashes,
+                    |hash| take_override(&mut overrides, hash),
+                )?;
+                // The planner proved this source identity before choosing the
+                // in-place path; the rewrite itself never opens the game WAD.
+                stats.source = Some(rewrite.record.source);
+                stats
+            }
+            None => {
+                let src_wad_path = self.game_dir.join(&relative_path);
+                tracing::info!(
+                    "Patching WAD src={} dst={} overrides={}",
+                    src_wad_path,
+                    dst_wad_path,
+                    override_hashes.len()
+                );
+                build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
+                    take_override(&mut overrides, hash)
+                })?
+            }
+        };
+
+        Ok(PatchedWad {
+            relative_path,
+            path: dst_wad_path,
+            stats,
+        })
+    }
+}
+
+/// Hand one prepared override to a writer, releasing it from the WAD's map so
+/// its bytes are freed as soon as the last WAD holding them has written it.
+fn take_override(
+    overrides: &mut HashMap<u64, PreparedOverride>,
+    path_hash: u64,
+) -> Result<PreparedOverride> {
+    overrides
+        .remove(&path_hash)
+        .ok_or_else(|| Error::Other(format!("Missing override data for hash {path_hash:016x}")))
+}
+
+/// One WAD's share of a parallel patch pass.
+struct WadWork {
+    relative_path: Utf8PathBuf,
+    overrides: HashMap<u64, PreparedOverride>,
+    /// `Some` when this WAD passed the [tail-rewrite](super::incremental)
+    /// preconditions, in which case its file is kept and only its tail rewritten.
+    rewrite: Option<TailRewrite>,
+}
+
+/// One overlay WAD this build wrote.
+pub(crate) struct PatchedWad {
+    /// Game-relative path, the key both `wad_fingerprints` and `wad_layouts`
+    /// are stored under.
+    pub(crate) relative_path: Utf8PathBuf,
+    /// Absolute path of the file that was written.
+    pub(crate) path: Utf8PathBuf,
+    /// Metrics, layout and source identity of the write.
+    pub(crate) stats: PatchedWadStats,
 }
 
 #[cfg(test)]
@@ -483,7 +587,7 @@ mod tests {
             (0xBBBB_u64, meta_with_content_hash(0xC0FFEE)),
         ]);
 
-        let prepared = prepare_overrides(resolved, &all_meta).unwrap();
+        let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();
 
         assert_eq!(prepared.len(), 2);
         let a = &prepared[&0xAAAA];
@@ -514,7 +618,7 @@ mod tests {
             (0xBBBB_u64, meta_with_content_hash(2)),
         ]);
 
-        let prepared = prepare_overrides(resolved, &all_meta).unwrap();
+        let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();
 
         assert_ne!(prepared[&0xAAAA].checksum(), prepared[&0xBBBB].checksum());
         assert_eq!(prepared[&0xAAAA].uncompressed_size(), 5 * 64);
@@ -527,7 +631,7 @@ mod tests {
     fn content_without_metadata_still_gets_prepared() {
         let resolved = HashMap::from([(0xAAAA_u64, ResolvedChunk::from(b"orphan".as_slice()))]);
 
-        let prepared = prepare_overrides(resolved, &HashMap::new()).unwrap();
+        let prepared = prepare_overrides(resolved, &HashMap::new(), HashMap::new()).unwrap();
 
         assert_eq!(prepared.len(), 1);
         assert_eq!(prepared[&0xAAAA].uncompressed_size(), 6);

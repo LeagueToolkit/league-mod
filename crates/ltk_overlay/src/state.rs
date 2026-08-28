@@ -14,26 +14,49 @@
 
 use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
+use crate::wad_builder::{SourceWadIdentity, WadTailLayout};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Current schema version. Bump this when the state format changes
 /// incompatibly, or when build semantics change such that WADs on disk may no
 /// longer match what a fresh build would produce - any state file with a
 /// different version triggers a full rebuild.
-const CURRENT_VERSION: u32 = 5;
+const CURRENT_VERSION: u32 = 6;
+
+/// What one overlay WAD on disk is, so a later build can rebuild it in place.
+///
+/// A record is a *hint*, never a fact. Every field is re-verified against the
+/// game WAD and the overlay file before the in-place path is taken, and any
+/// mismatch costs a full rebuild of that WAD rather than a wrong file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WadLayoutRecord {
+    /// The game WAD this overlay was built from.
+    pub source: SourceWadIdentity,
+
+    /// Where the copied source region and the override tail sit in the file.
+    pub layout: WadTailLayout,
+
+    /// `path_hash -> content_hash` for every override currently in the tail.
+    ///
+    /// Comparing this against the next build's override set is what splits it
+    /// into overrides whose compressed bytes can be lifted straight out of the
+    /// old tail and overrides that have to be resolved and compressed again.
+    pub overrides: BTreeMap<u64, u64>,
+}
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
 ///
 /// Used to determine whether the existing overlay can be reused, incrementally
 /// updated, or needs a full rebuild.
 ///
-/// # JSON format (v5)
+/// # JSON format (v6)
 ///
 /// ```json
 /// {
-///   "version": 5,
+///   "version": 6,
 ///   "enabledMods": ["mod-a", "mod-b"],
 ///   "modFingerprints": {
 ///     "mod-a": 1122334455,
@@ -49,7 +72,7 @@ const CURRENT_VERSION: u32 = 5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
-    /// Schema version (current: `5`). Used for forward compatibility - if a
+    /// Schema version (current: `6`). Used for forward compatibility - if a
     /// future version changes the format, old overlays won't match.
     pub version: u32,
 
@@ -101,6 +124,25 @@ pub struct OverlayState {
     /// re-surface the same advisory without recomputing.
     #[serde(default)]
     pub linked_bin_offenders: Vec<LinkedBinOffender>,
+
+    /// Per-WAD [layout records](WadLayoutRecord) from the last build, keyed by
+    /// relative WAD path like [`wad_fingerprints`](Self::wad_fingerprints).
+    ///
+    /// A WAD with a record here can be rebuilt by rewriting its tail alone; one
+    /// without takes the full-rebuild path.
+    #[serde(default)]
+    pub wad_layouts: BTreeMap<String, WadLayoutRecord>,
+
+    /// WADs a build was part-way through rewriting in place.
+    ///
+    /// Written before the first byte is touched and cleared once the rewrites
+    /// succeed, so a build killed mid-rewrite leaves its WADs marked and the
+    /// next build rebuilds them in full. The marking is batched across the whole
+    /// build rather than per WAD: over-invalidating costs a few extra full
+    /// rebuilds, which is the designed fallback anyway, and keeps serialized
+    /// state writes out of the parallel patch loop.
+    #[serde(default)]
+    pub dirty_wads: BTreeSet<String>,
 }
 
 impl Default for OverlayState {
@@ -114,6 +156,8 @@ impl Default for OverlayState {
             string_override_locales: Vec::new(),
             wad_fingerprints: BTreeMap::new(),
             linked_bin_offenders: Vec::new(),
+            wad_layouts: BTreeMap::new(),
+            dirty_wads: BTreeSet::new(),
         }
     }
 }
@@ -146,6 +190,8 @@ impl OverlayState {
             string_override_locales,
             wad_fingerprints,
             linked_bin_offenders: Vec::new(),
+            wad_layouts: BTreeMap::new(),
+            dirty_wads: BTreeSet::new(),
         }
     }
 
@@ -262,6 +308,21 @@ impl OverlayState {
     /// * `wad_relative_path` - Relative WAD path (e.g. `"DATA/FINAL/Champions/Aatrox.wad.client"`)
     pub fn wad_fingerprint(&self, wad_relative_path: &str) -> Option<u64> {
         self.wad_fingerprints.get(wad_relative_path).copied()
+    }
+
+    /// The layout of a WAD this state can vouch for, if it can vouch for one.
+    ///
+    /// `None` for a WAD with no record, and for one the previous build was
+    /// interrupted while rewriting - both take the full-rebuild path.
+    ///
+    /// # Arguments
+    ///
+    /// * `wad_relative_path` - Relative WAD path (e.g. `"DATA/FINAL/Champions/Aatrox.wad.client"`)
+    pub fn wad_layout(&self, wad_relative_path: &str) -> Option<&WadLayoutRecord> {
+        if self.dirty_wads.contains(wad_relative_path) {
+            return None;
+        }
+        self.wad_layouts.get(wad_relative_path)
     }
 }
 
@@ -617,13 +678,85 @@ mod tests {
         );
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("\"version\":5"));
+        assert!(json.contains("\"version\":6"));
         assert!(json.contains("\"enabledMods\""));
         assert!(json.contains("\"modFingerprints\""));
         assert!(json.contains("\"gameFingerprint\""));
         assert!(json.contains("\"blockedWads\""));
         assert!(json.contains("\"stringOverrideLocales\""));
         assert!(json.contains("\"wadFingerprints\""));
+        assert!(json.contains("\"wadLayouts\""));
+        assert!(json.contains("\"dirtyWads\""));
+    }
+
+    fn layout_record(overrides: &[(u64, u64)]) -> WadLayoutRecord {
+        WadLayoutRecord {
+            source: SourceWadIdentity {
+                len: 4096,
+                mtime: 1_700_000_000_000_000_000,
+                toc_hash: 0x70C_0F17,
+            },
+            layout: WadTailLayout {
+                data_region_offset: 500,
+                offset_delta: 0,
+                tail_offset: 4000,
+                toc_capacity: 7,
+            },
+            overrides: overrides.iter().copied().collect(),
+        }
+    }
+
+    /// A layout record survives a save/load round trip, integer map keys and
+    /// all - the in-place rebuild reads every one of these fields back.
+    #[test]
+    fn layout_records_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("overlay.json");
+
+        let mut state = OverlayState::default();
+        let record = layout_record(&[(0xAAAA, 0x1111), (0xBBBB, 0x2222)]);
+        state.wad_layouts.insert(
+            "DATA/FINAL/Champions/Ahri.wad.client".to_string(),
+            record.clone(),
+        );
+        state.save(&path).unwrap();
+
+        let loaded = OverlayState::load(&path).unwrap().unwrap();
+        assert_eq!(
+            loaded.wad_layout("DATA/FINAL/Champions/Ahri.wad.client"),
+            Some(&record)
+        );
+    }
+
+    /// A WAD a previous build was interrupted while rewriting must not be
+    /// trusted, even though its record is still there.
+    #[test]
+    fn a_dirty_wad_has_no_usable_layout() {
+        let mut state = OverlayState::default();
+        state
+            .wad_layouts
+            .insert("wad".to_string(), layout_record(&[(1, 2)]));
+        assert!(state.wad_layout("wad").is_some());
+
+        state.dirty_wads.insert("wad".to_string());
+        assert!(
+            state.wad_layout("wad").is_none(),
+            "a WAD left dirty by a killed build must fall back to a full rebuild"
+        );
+    }
+
+    /// A v5 state file deserializes, but its version alone forces one clean
+    /// rebuild - which is also what migrates every WAD to the tail layout.
+    #[test]
+    fn test_v5_state_triggers_full_rebuild() {
+        let v5_json = r#"{"version":5,"enabledMods":["mod1"],"gameFingerprint":1234}"#;
+        let old: OverlayState = serde_json::from_str(v5_json).unwrap();
+
+        assert!(old.wad_layouts.is_empty());
+        assert!(old.dirty_wads.is_empty());
+        assert!(!old.supports_incremental(1234));
     }
 
     #[test]

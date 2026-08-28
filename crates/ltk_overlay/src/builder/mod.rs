@@ -24,6 +24,7 @@
 //!    Call [`build_patched_wad`](crate::wad_builder::build_patched_wad).
 //! 7. Persist the new [`OverlayState`] with per-WAD fingerprints.
 
+mod incremental;
 mod metadata;
 mod resolve;
 
@@ -31,11 +32,15 @@ use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game_index::GameIndex;
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
-use crate::state::OverlayState;
+use crate::state::{OverlayState, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
+use crate::wad_builder::WadTailLayout;
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadChunks;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -438,6 +443,52 @@ pub struct ModContribution {
 
 pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
+/// The layout records to persist for every WAD the overlay now holds.
+///
+/// Freshly written WADs get a record built from what the writer reported;
+/// reused ones carry their previous record forward unchanged, since their file
+/// did not move. A WAD with no usable record is simply absent, which is what
+/// puts it on the full-rebuild path next time.
+fn collect_wad_layouts(
+    built: &[resolve::PatchedWad],
+    reused: &[Utf8PathBuf],
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
+    all_meta: &HashMap<u64, OverrideMeta>,
+    prev_state: Option<&OverlayState>,
+) -> BTreeMap<String, WadLayoutRecord> {
+    let overrides_of = |relative_path: &Utf8PathBuf| -> BTreeMap<u64, u64> {
+        wad_hash_sets
+            .get(relative_path)
+            .into_iter()
+            .flatten()
+            .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
+            .collect()
+    };
+
+    let mut layouts: BTreeMap<String, WadLayoutRecord> = built
+        .iter()
+        .filter_map(|wad| {
+            Some((
+                wad.relative_path.as_str().to_string(),
+                WadLayoutRecord {
+                    source: wad.stats.source?,
+                    layout: wad.stats.layout,
+                    overrides: overrides_of(&wad.relative_path),
+                },
+            ))
+        })
+        .collect();
+
+    for relative_path in reused {
+        let key = relative_path.as_str();
+        if let Some(record) = prev_state.and_then(|state| state.wad_layout(key)) {
+            layouts.insert(key.to_string(), record.clone());
+        }
+    }
+
+    layouts
+}
+
 /// Orchestrates the overlay build pipeline.
 ///
 /// Create a builder with [`new`](Self::new), configure it with
@@ -633,7 +684,19 @@ impl OverlayBuilder {
         // Load previous state
         let state_path = self.state_dir.join("overlay.json");
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
-        let prev_state = OverlayState::load(&state_path)?;
+
+        // A state file that will not parse is treated as no state at all, which
+        // costs one full rebuild. Everything it holds describes files this
+        // builder wrote and can write again; refusing to build because a cache
+        // is unreadable would strand the user with no overlay.
+        let prev_state = OverlayState::load(&state_path).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Overlay state at {} could not be read ({}); rebuilding from scratch",
+                state_path,
+                e
+            );
+            None
+        });
 
         // --- Handle empty mod list ---
         if self.enabled_mods.is_empty() {
@@ -722,14 +785,31 @@ impl OverlayBuilder {
         let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
             self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
+        // Which of them can keep their file and rewrite only their tail. Decided
+        // before anything is written, from metadata and two in-memory TOCs.
+        let rewrites = self.plan_tail_rewrites(
+            &wads_to_build,
+            &wad_hash_sets,
+            &all_meta,
+            prev_state.as_ref(),
+        );
+        self.mark_dirty(&state_path, prev_state.as_ref(), rewrites.keys())?;
+
+        let reused = rewrites
+            .values()
+            .flat_map(|rewrite| rewrite.reused.iter())
+            .map(|(&hash, prepared)| (hash, prepared.clone()))
+            .collect();
+
         let wad_overrides = self.resolve_overrides_for_wads(
             &wads_to_build,
             &wad_hash_sets,
             &all_meta,
             &string_plans,
+            reused,
         )?;
 
-        let built_paths = self.patch_wads_parallel(wads_to_build, wad_overrides)?;
+        let built = self.patch_wads_parallel(wads_to_build, wad_overrides, rewrites)?;
 
         self.sweep_unexpected_overlay_files(&new_wad_fingerprints);
 
@@ -747,8 +827,16 @@ impl OverlayBuilder {
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
+        state.wad_layouts = collect_wad_layouts(
+            &built,
+            &wads_to_reuse,
+            &wad_hash_sets,
+            &all_meta,
+            prev_state.as_ref(),
+        );
         state.save(&state_path)?;
 
+        let built_paths: Vec<Utf8PathBuf> = built.into_iter().map(|wad| wad.path).collect();
         let total_wads = built_paths.len() as u32;
         self.emit_progress(OverlayProgress {
             stage: OverlayStage::Complete,
@@ -932,6 +1020,39 @@ impl OverlayBuilder {
         }
 
         Ok(plans)
+    }
+
+    /// Record, in one atomic state write, that `wads` are about to be rewritten
+    /// in place.
+    ///
+    /// A tail rewrite edits a file the injector will serve, so a build killed
+    /// half way through one leaves a torn WAD behind. The marker is what the
+    /// next build reads to know it must rebuild those WADs in full instead of
+    /// trusting them. It is written once for the whole build rather than per
+    /// WAD: over-invalidating costs a few extra full rebuilds - the designed
+    /// fallback - and keeps serialized state writes out of the parallel loop.
+    ///
+    /// Does nothing when no WAD takes the in-place path.
+    fn mark_dirty<'a>(
+        &self,
+        state_path: &Utf8Path,
+        prev_state: Option<&OverlayState>,
+        wads: impl Iterator<Item = &'a Utf8PathBuf>,
+    ) -> Result<()> {
+        let mut wads = wads.peekable();
+        if wads.peek().is_none() {
+            return Ok(());
+        }
+
+        let Some(state) = prev_state else {
+            return Ok(());
+        };
+
+        let mut marker = state.clone();
+        marker
+            .dirty_wads
+            .extend(wads.map(|path| path.as_str().to_string()));
+        marker.save(state_path)
     }
 
     /// Check that all WADs listed in the state actually exist on disk.
