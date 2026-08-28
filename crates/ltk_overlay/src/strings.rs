@@ -9,7 +9,7 @@
 //!
 //! The game's own stringtable is always the patch base: mod-shipped
 //! `lol.stringtable` chunk overrides are rejected during metadata collection
-//! (see [`blocked_stringtable_hashes`]) - `string_overrides` are the only
+//! (see `blocked_stringtable_hashes`) - `string_overrides` are the only
 //! supported way to modify game strings.
 //!
 //! # Merge semantics
@@ -38,13 +38,13 @@
 use crate::builder::{EnabledMod, OverrideMeta, OverrideSource};
 use crate::error::{CorruptionError, Error, GameDirError, ModContentError, Result};
 use crate::game_index::GameIndex;
+use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
-use xxhash_rust::xxh3::xxh3_64;
 
 /// Locale bucket name whose overrides apply to every target locale.
 pub const DEFAULT_LOCALE: &str = "default";
@@ -147,7 +147,7 @@ impl StringPatchPlan {
     /// Deterministic fingerprint of this patch's inputs, used as the synthetic
     /// meta entry's `content_hash` so per-WAD fingerprints (and therefore
     /// incremental rebuilds) react to any change in the effective overrides.
-    pub(crate) fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"ltk-string-patch-v2\0");
         buf.extend_from_slice(self.locale.as_bytes());
@@ -158,7 +158,7 @@ impl StringPatchPlan {
             buf.extend_from_slice(value.as_bytes());
             buf.push(0);
         }
-        xxh3_64(&buf)
+        ContentHash::of(&buf)
     }
 
     /// Parse `base_bytes` as an RST stringtable, apply this plan's overrides,

@@ -252,7 +252,7 @@ mod tests {
 
     fn layer_wad_meta(mod_id: &str, linked: &[&str]) -> OverrideMeta {
         OverrideMeta {
-            content_hash: 0,
+            content_hash: crate::utils::ContentHash(0),
             uncompressed_size: 0,
             source: OverrideSource::LayerWad {
                 mod_id: mod_id.to_string(),

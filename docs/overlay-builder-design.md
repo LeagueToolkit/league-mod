@@ -66,7 +66,9 @@ Three levels, decided per build and then per WAD.
 | Full rebuild    | State version or game fingerprint differs                  | The overlay is wiped and rebuilt  |
 
 Within an incremental build, each WAD that needs rebuilding is then either
-rewritten in place (tail only) or rebuilt in full.
+rewritten in place (tail only) or rebuilt in full. A full rebuild empties the
+overlay directory first, so no file survives for a rewrite to keep and the
+in-place path is not considered at all.
 
 Per-mod content fingerprints participate in the skip because a mod ID is not
 enough: a workshop project directory keeps its ID while its files change.
@@ -91,8 +93,11 @@ the mod overrides, which end up unreferenced by the TOC. Keeping them is
 deliberate: dropping an override later becomes a TOC edit, with no need to
 reopen the game WAD.
 
-Transient TOC entries are the source entries with `data_offset` shifted by one
-constant delta; every other field carries over, because the bytes did.
+A chunk is **transient** when it merely transits the build: no mod overrides it,
+so its bytes reach the output inside the copied region and only its recorded
+offset changes. Transient TOC entries are therefore the source entries with
+`data_offset` shifted by one constant delta; every other field carries over,
+because the bytes did.
 
 The header's signature and checksum are copied from the source verbatim. Riot's
 RSA signature covers the *original* TOC, so it does not validate the patched
@@ -103,8 +108,10 @@ came from.
 entries. Reserving some would let a WAD gain or lose a chunk without moving
 data, but it leaves a gap between the last TOC entry and the first data byte,
 and the game has not been observed tolerating that gap in a real session. The
-capacity is recorded and honoured throughout, so enabling slack later is that
-constant plus an in-game test.
+capacity is recorded and honoured throughout, and both writers zero the slots
+they leave unfilled, so enabling slack later is that constant plus an in-game
+test. Nothing exercises that zero-fill while the constant is zero, because
+capacity then equals the entry count exactly.
 
 ## Rebuilding a WAD in place
 
@@ -121,13 +128,18 @@ re-verified:
 
 1. The state version is current, a record exists, and the WAD is not marked
    dirty.
-2. The game WAD's length, mtime and TOC hash match the record.
-3. The overlay file exists, parses, carries the source's signature, and is at
+2. The recorded layout's own numbers hang together: the region starts past a
+   268-byte header, a chunk count and a TOC of the recorded capacity, and the
+   tail starts no earlier than the region. The rewrite derives its seek targets
+   by subtracting from the region offset, so a record that fails this would aim
+   them at the magic and the signature.
+3. The game WAD's length, mtime and TOC hash match the record.
+4. The overlay file exists, parses, carries the source's signature, and is at
    least as long as the recorded tail offset.
-4. Every transient entry in the overlay's TOC equals the source entry shifted
+5. Every transient entry in the overlay's TOC equals the source entry shifted
    by the recorded delta. Two TOCs compared in memory, milliseconds even for the
    largest map WAD.
-5. The new override set's entry count fits the reserved capacity - with slack at
+6. The new override set's entry count fits the reserved capacity - with slack at
    zero, that means the entry set is unchanged.
 
 Any failure drops the WAD onto the full-rebuild path, which is the same code
@@ -151,8 +163,9 @@ extra full rebuilds - the designed fallback anyway - and keeps serialized state
 writes out of the parallel patch loop.
 
 This rests on builds running before the game launches, which is how the
-consuming apps drive it. Nothing in this crate reads an overlay WAD during a
-build.
+consuming apps drive it. Nothing reads an overlay WAD once it has been marked
+dirty: the planner is the only step that reads one at all, and it has finished
+before the marker is written.
 
 ## Invariants
 
@@ -165,8 +178,8 @@ build.
 2. The TOC is strictly ascending by path hash, the chunk count matches the
    entries, and every entry's data range is inside the file.
 3. The source WAD's signature and checksum reach every rebuild of its overlay.
-4. The builder writes only under `overlay_root`, and never opens a game WAD for
-   writing.
+4. The builder writes only under `overlay_root` and the state directory, and
+   never opens a game WAD for writing.
 5. Every trust decision has a full-rebuild fallback.
 
 ## Deliberately absent

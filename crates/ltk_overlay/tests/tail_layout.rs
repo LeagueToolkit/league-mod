@@ -9,9 +9,8 @@
 
 mod common;
 
-use camino::{Utf8Path, Utf8PathBuf};
-use common::{assert_wad_is_well_formed, chunk_facts, write_game_wad};
-use ltk_overlay::utils::resolve_chunk_hash;
+use camino::Utf8PathBuf;
+use common::{assert_wad_is_well_formed, chunk_facts, hash, write_game_wad};
 use ltk_overlay::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad};
 use ltk_wad::{Wad, WadHash};
 use std::collections::HashSet;
@@ -27,10 +26,6 @@ const REPLACED_BYTES: &[u8] = b"the original bytes of the chunk the mod replaces
 const ALSO_KEPT_BYTES: &[u8] = b"another untouched chunk, so the region spans several";
 const OVERRIDE_BYTES: &[u8] = b"MODDED CONTENT, longer than what it replaced, by design";
 const ADDED_BYTES: &[u8] = b"a brand-new entry the source WAD never held";
-
-fn hash(path: &str) -> WadHash {
-    resolve_chunk_hash(Utf8Path::new(path), b"").expect("chunk path hashes")
-}
 
 /// Build a three-chunk source WAD and patch it with `overrides`.
 ///

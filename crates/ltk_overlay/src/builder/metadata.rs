@@ -7,7 +7,6 @@ use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
 use rayon::prelude::*;
-use xxhash_rust::xxh3::xxh3_64;
 
 /// Collect override metadata from a single mod (pass 1).
 ///
@@ -65,7 +64,7 @@ fn build_override_meta(source: OverrideSource, bytes: &[u8]) -> Result<(WadHash,
     Ok((
         path_hash,
         OverrideMeta {
-            content_hash: xxh3_64(bytes),
+            content_hash: ContentHash::of(bytes),
             uncompressed_size: bytes.len(),
             source,
             fallback_wad: None,
@@ -958,7 +957,7 @@ mod tests {
         };
 
         let raw_meta = |rel_path: &str| OverrideMeta {
-            content_hash: 1,
+            content_hash: ContentHash(1),
             uncompressed_size: 1,
             source: OverrideSource::Raw {
                 mod_id: "strings-shipper".to_string(),
@@ -1150,7 +1149,7 @@ mod tests {
             overrides: vec![
                 CachedOverride {
                     path_hash: WadHash(0x1234),
-                    content_hash: 0x5678,
+                    content_hash: ContentHash(0x5678),
                     uncompressed_size: 100,
                     target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
                     unlocalized_wad: None,
@@ -1161,7 +1160,7 @@ mod tests {
                 },
                 CachedOverride {
                     path_hash: WadHash(0xABCD),
-                    content_hash: 0xEF01,
+                    content_hash: ContentHash(0xEF01),
                     uncompressed_size: 200,
                     target_wad: None,
                     unlocalized_wad: None,
@@ -1175,8 +1174,8 @@ mod tests {
 
         let meta = cached.reconstruct("test-mod");
         assert_eq!(meta.len(), 2);
-        assert_eq!(meta[&WadHash(0x1234)].content_hash, 0x5678);
-        assert_eq!(meta[&WadHash(0xABCD)].content_hash, 0xEF01);
+        assert_eq!(meta[&WadHash(0x1234)].content_hash, ContentHash(0x5678));
+        assert_eq!(meta[&WadHash(0xABCD)].content_hash, ContentHash(0xEF01));
         assert_eq!(
             meta[&WadHash(0x1234)].fallback_wad.as_deref(),
             Some(Utf8Path::new("DATA/FINAL/test.wad.client"))

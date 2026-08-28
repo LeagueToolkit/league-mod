@@ -11,10 +11,15 @@
 //! themselves, cheaply, and any doubt drops the WAD onto the full-rebuild path,
 //! which is the same code that wrote it the first time.
 
-use super::*;
-use crate::state::WadLayoutRecord;
-use crate::wad_builder::{PreparedOverride, SourceWadIdentity, merged_entry_count};
-use ltk_wad::{Wad, WadChunk, WadHash};
+use crate::builder::{OverlayBuilder, OverrideMeta};
+use crate::error::{Error, Result};
+use crate::state::{OverlayState, WadLayoutRecord};
+use crate::wad_builder::{PreparedOverride, SourceWadIdentity, WadTailLayout, merged_entry_count};
+use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::{Wad, WadChunk, WadChunks, WadHash};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::File;
+use std::io::BufReader;
 
 /// Why a WAD cannot keep its file and rewrite only its tail.
 ///
@@ -101,6 +106,20 @@ impl std::fmt::Display for RebuildReason {
     }
 }
 
+/// Whether the overlay files an earlier build wrote are still on disk.
+///
+/// A tail rewrite keeps the file it finds there, so this is the precondition
+/// for planning one at all. The full-rebuild path empties the overlay directory
+/// before any planning happens, which leaves every record pointing at a file
+/// that is gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviousOverlay {
+    /// Untouched since the last build, so a rewrite has a file to keep.
+    OnDisk,
+    /// Already deleted by the full-rebuild path.
+    Wiped,
+}
+
 /// A WAD this build can rebuild by rewriting only its override tail.
 pub(crate) struct TailRewrite {
     /// The verified record this rewrite starts from. Its `overrides` map is the
@@ -133,7 +152,13 @@ impl OverlayBuilder {
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
         prev_state: Option<&OverlayState>,
+        previous_overlay: PreviousOverlay,
     ) -> BTreeMap<Utf8PathBuf, TailRewrite> {
+        // Verifying a record costs a mount and a TOC hash of the game WAD, so
+        // checking one against a file that is already gone is pure loss.
+        if previous_overlay == PreviousOverlay::Wiped {
+            return BTreeMap::new();
+        }
         let Some(state) = prev_state else {
             return BTreeMap::new();
         };
@@ -358,6 +383,7 @@ fn reuse_unchanged_overrides<S: std::io::Read + std::io::Seek>(
 mod tests {
     use super::*;
     use crate::test_support::{hash, write_game_wad};
+    use crate::utils::ContentHash;
     use crate::wad_builder::build_patched_wad;
 
     const WAD_REL: &str = "DATA/FINAL/Champions/Test.wad.client";
@@ -401,9 +427,9 @@ mod tests {
             state.wad_layouts.insert(
                 WAD_REL.to_string(),
                 WadLayoutRecord {
-                    source: stats.source.expect("a full build records its source"),
+                    source: stats.source,
                     layout: stats.layout,
-                    overrides: BTreeMap::from([(hash(SKIN), 0xC0FFEE)]),
+                    overrides: BTreeMap::from([(hash(SKIN), ContentHash(0xC0FFEE))]),
                 },
             );
 
@@ -415,24 +441,34 @@ mod tests {
             }
         }
 
-        fn plan_with(&self, state: &OverlayState) -> BTreeMap<Utf8PathBuf, TailRewrite> {
+        fn plan_with(
+            &self,
+            state: &OverlayState,
+            previous: PreviousOverlay,
+        ) -> BTreeMap<Utf8PathBuf, TailRewrite> {
             self.builder.plan_tail_rewrites(
                 &self.wads,
                 &self.hash_sets,
                 &HashMap::new(),
                 Some(state),
+                previous,
             )
         }
     }
 
-    /// The fixture must sit on the fast path, or the test below proves nothing.
+    /// The fixture must sit on the fast path, or the tests below prove nothing.
     #[test]
     fn an_untouched_overlay_plans_a_tail_rewrite() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
         let fixture = Fixture::new(&root);
 
-        assert_eq!(fixture.plan_with(&fixture.state).len(), 1);
+        assert_eq!(
+            fixture
+                .plan_with(&fixture.state, PreviousOverlay::OnDisk)
+                .len(),
+            1
+        );
     }
 
     /// A state file from an older schema says nothing trustworthy about the
@@ -446,6 +482,27 @@ mod tests {
         let mut stale = fixture.state.clone();
         stale.version -= 1;
 
-        assert!(fixture.plan_with(&stale).is_empty());
+        assert!(
+            fixture
+                .plan_with(&stale, PreviousOverlay::OnDisk)
+                .is_empty()
+        );
+    }
+
+    /// A full rebuild deletes the overlay directory before planning begins, so
+    /// every record describes a file that is gone. Planning anyway costs a mount
+    /// and a full TOC hash of every game WAD to reach that conclusion one file
+    /// at a time.
+    #[test]
+    fn a_full_rebuild_plans_no_tail_rewrites() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+        let fixture = Fixture::new(&root);
+
+        assert!(
+            fixture
+                .plan_with(&fixture.state, PreviousOverlay::Wiped)
+                .is_empty()
+        );
     }
 }

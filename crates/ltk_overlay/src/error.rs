@@ -1,8 +1,9 @@
 //! Error types for overlay operations.
 //!
-//! All fallible functions in this crate return [`Result<T>`], which uses [`Error`]
-//! as the error type. External error types (`std::io::Error`, `serde_json::Error`,
-//! WAD errors) are automatically converted via `From` impls.
+//! All fallible functions in this crate return [`Result<T>`], which uses
+//! [`Error`](enum@Error) as the error type. External error types
+//! (`std::io::Error`, `serde_json::Error`, WAD errors) are automatically
+//! converted via `From` impls.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
@@ -51,11 +52,11 @@ pub enum Error {
 
     /// Error from the `ltk_wad` crate when mounting or reading a WAD file.
     #[error(transparent)]
-    WadError(#[from] ltk_wad::WadError),
+    Wad(#[from] ltk_wad::WadError),
 
     /// Error from the `ltk_wad` WAD builder when writing a patched WAD.
     #[error(transparent)]
-    WadBuilderError(#[from] ltk_wad::WadBuilderError),
+    WadBuilder(#[from] ltk_wad::WadBuilderError),
 
     /// A ZIP archive (`.fantome` mod content) could not be opened or read.
     #[error(transparent)]
@@ -149,6 +150,13 @@ pub enum Invariant {
     /// A writer asked for override bytes pass 2 never prepared.
     #[error("a writer asked for an override this build never prepared")]
     OverrideNeverPrepared,
+
+    /// A string patch reached the per-mod read loop, which groups by mod id.
+    ///
+    /// String patches are synthesized from several mods at once, so they are
+    /// resolved by their own pass and never carry a mod to be grouped under.
+    #[error("a string patch was grouped with a single mod's overrides")]
+    StringPatchGroupedByMod,
 }
 
 /// Why a game directory cannot be used for a build.

@@ -23,6 +23,7 @@
 //! subsequent builds when the game hasn't been patched.
 
 use crate::error::{Error, GameDirError, Result};
+use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ use std::{
     fs::File,
 };
 use walkdir::WalkDir;
+use xxhash_rust::xxh3::xxh3_64;
 
 /// Version tag for the cache format.
 const CACHE_VERSION: u32 = 3;
@@ -327,7 +329,7 @@ impl GameIndex {
         &self,
         game_dir: &Utf8Path,
         path_hashes: &HashSet<WadHash>,
-    ) -> HashMap<WadHash, u64> {
+    ) -> HashMap<WadHash, ContentHash> {
         // Group requested hashes by WAD file (pick the first WAD for each hash).
         //
         // Picking any single WAD is correct even when a hash lives in several WADs: the game
@@ -346,7 +348,7 @@ impl GameIndex {
         use rayon::prelude::*;
 
         let num_wads = wad_to_hashes.len();
-        let result: HashMap<WadHash, u64> = wad_to_hashes
+        let result: HashMap<WadHash, ContentHash> = wad_to_hashes
             .into_par_iter()
             .flat_map_iter(|(wad_rel_path, hashes)| {
                 let abs_path = game_dir.join(wad_rel_path);
@@ -519,9 +521,11 @@ fn mount_and_extract_hashes(
 /// Errors opening or mounting the WAD, or decompressing an individual chunk, are logged and
 /// skipped - the WAD contributes whatever it could read (an empty vec if it can't be opened or
 /// mounted). Used by [`GameIndex::compute_content_hashes_batch`].
-fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<WadHash>) -> Vec<(WadHash, u64)> {
+fn content_hashes_for_wad(
+    abs_path: &Utf8Path,
+    wanted: &HashSet<WadHash>,
+) -> Vec<(WadHash, ContentHash)> {
     use ltk_wad::Wad;
-    use xxhash_rust::xxh3::xxh3_64;
 
     let file = match File::open(abs_path.as_std_path()) {
         Ok(file) => file,
@@ -549,7 +553,7 @@ fn content_hashes_for_wad(abs_path: &Utf8Path, wanted: &HashSet<WadHash>) -> Vec
     let mut hashes = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
         match wad.load_chunk_decompressed(chunk) {
-            Ok(data) => hashes.push((chunk.path_hash, xxh3_64(&data))),
+            Ok(data) => hashes.push((chunk.path_hash, ContentHash::of(&data))),
             Err(e) => tracing::trace!(
                 "Failed to decompress chunk {:016x} in '{}': {}",
                 chunk.path_hash,
@@ -645,8 +649,6 @@ fn build_subchunktoc_blocked(wad_relative_paths: &[Utf8PathBuf]) -> HashSet<WadH
 
 /// Compute an xxHash3 fingerprint from pre-collected WAD paths, sizes, and modification times.
 fn calculate_game_fingerprint(wad_paths: &[Utf8PathBuf]) -> u64 {
-    use xxhash_rust::xxh3::xxh3_64;
-
     let mut hasher_input = Vec::new();
 
     for path in wad_paths {

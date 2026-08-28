@@ -18,6 +18,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Write};
 
+/// The path hash a chunk at `path` would have.
+///
+/// # Panics
+///
+/// Panics when the path cannot be hashed, which means the fixture is wrong.
+pub fn hash(path: &str) -> WadHash {
+    ltk_overlay::utils::resolve_chunk_hash(Utf8Path::new(path), b"").expect("chunk path hashes")
+}
+
 /// Everything about one chunk that does not depend on where it sits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFacts {
@@ -149,13 +158,7 @@ pub fn write_game_wad(wad_path: &Utf8Path, chunks: &[(&str, &[u8])]) {
 
     let by_hash: BTreeMap<WadHash, Vec<u8>> = chunks
         .iter()
-        .map(|(path, bytes)| {
-            (
-                ltk_overlay::utils::resolve_chunk_hash(Utf8Path::new(path), b"")
-                    .expect("chunk path hashes"),
-                bytes.to_vec(),
-            )
-        })
+        .map(|(path, bytes)| (hash(path), bytes.to_vec()))
         .collect();
 
     let mut cursor = Cursor::new(Vec::new());

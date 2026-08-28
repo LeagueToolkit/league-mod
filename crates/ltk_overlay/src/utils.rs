@@ -7,8 +7,40 @@ use crate::builder::OverrideMeta;
 use crate::error::Result;
 use camino::Utf8Path;
 use ltk_wad::{WadHash, is_hex_chunk_path};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use xxhash_rust::xxh3::xxh3_64;
+
+/// xxh3_64 over an override's uncompressed bytes: *what* a chunk holds.
+///
+/// The counterpart to [`WadHash`], which says *where* a chunk goes. The two are
+/// both 64-bit hashes and are routinely held in the same map, so keeping them
+/// distinct in the type system is what stops one being read as the other: a
+/// content hash is shared by every override carrying identical bytes, which is
+/// exactly what lets the build compress that content once and hand the result
+/// to every WAD holding it.
+///
+/// Serializes as the bare integer, so it costs `overlay.json` and the metadata
+/// cache nothing.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct ContentHash(pub u64);
+
+impl ContentHash {
+    /// The content hash of `bytes`.
+    pub fn of(bytes: &[u8]) -> Self {
+        Self(xxh3_64(bytes))
+    }
+}
+
+impl fmt::Display for ContentHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
 
 /// Normalize a relative path for hash computation.
 ///
@@ -90,9 +122,9 @@ pub fn compute_wad_overrides_fingerprint<B: AsRef<[u8]>>(overrides: &HashMap<Wad
     }
 
     // Sort by path_hash for determinism
-    let mut entries: Vec<(WadHash, u64)> = overrides
+    let mut entries: Vec<(WadHash, ContentHash)> = overrides
         .iter()
-        .map(|(&path_hash, bytes)| (path_hash, xxh3_64(bytes.as_ref())))
+        .map(|(&path_hash, bytes)| (path_hash, ContentHash::of(bytes.as_ref())))
         .collect();
     entries.sort_unstable_by_key(|(path_hash, _)| *path_hash);
 
@@ -114,7 +146,7 @@ pub fn compute_wad_fingerprint_from_meta(
         return 0;
     }
 
-    let mut entries: Vec<(WadHash, u64)> = wad_hashes
+    let mut entries: Vec<(WadHash, ContentHash)> = wad_hashes
         .iter()
         .filter_map(|&path_hash| {
             let meta = all_meta.get(&path_hash)?;
@@ -128,9 +160,10 @@ pub fn compute_wad_fingerprint_from_meta(
 
 /// Hash sorted `(path_hash, content_hash)` pairs into a single fingerprint.
 ///
-/// The `.0` is the one place the newtype is unwrapped on purpose: this encodes
-/// the hash as bytes, and the layout is persisted in `overlay.json`.
-fn fingerprint_from_sorted_pairs(entries: &[(WadHash, u64)]) -> u64 {
+/// The two `.0`s are the one place these newtypes are unwrapped on purpose:
+/// this encodes the hashes as bytes, and the result is persisted in
+/// `overlay.json`, so the layout has to stay fixed.
+fn fingerprint_from_sorted_pairs(entries: &[(WadHash, ContentHash)]) -> u64 {
     if entries.is_empty() {
         return 0;
     }
@@ -138,7 +171,7 @@ fn fingerprint_from_sorted_pairs(entries: &[(WadHash, u64)]) -> u64 {
     let mut buf = Vec::with_capacity(entries.len() * 16);
     for (path_hash, content_hash) in entries {
         buf.extend_from_slice(&path_hash.0.to_le_bytes());
-        buf.extend_from_slice(&content_hash.to_le_bytes());
+        buf.extend_from_slice(&content_hash.0.to_le_bytes());
     }
 
     xxh3_64(&buf)
@@ -238,7 +271,7 @@ mod tests {
             all_meta.insert(
                 path_hash,
                 OverrideMeta {
-                    content_hash: xxh3_64(bytes),
+                    content_hash: ContentHash::of(bytes),
                     uncompressed_size: bytes.len(),
                     source: OverrideSource::Raw {
                         mod_id: "test-mod".to_string(),

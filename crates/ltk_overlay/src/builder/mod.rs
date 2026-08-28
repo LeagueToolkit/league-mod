@@ -36,19 +36,18 @@ mod incremental;
 mod metadata;
 mod resolve;
 
+use crate::builder::incremental::PreviousOverlay;
 use crate::content::ModContentProvider;
-use crate::error::{Error, GameDirError, Invariant, Result};
+use crate::error::{Error, GameDirError, Result};
 use crate::game_index::GameIndex;
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
 use crate::state::{OverlayState, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
-use crate::wad_builder::WadTailLayout;
+use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_wad::{WadChunks, WadHash};
+use ltk_wad::WadHash;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
-use std::io::BufReader;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,7 +107,7 @@ impl OverrideSource {
 /// Lightweight metadata collected in pass 1 (no byte data).
 #[derive(Clone, Debug)]
 pub struct OverrideMeta {
-    pub content_hash: u64,
+    pub content_hash: ContentHash,
     pub uncompressed_size: usize,
     pub(crate) source: OverrideSource,
     /// WAD path to route this override to when the game index has no match
@@ -465,11 +464,11 @@ fn collect_wad_layouts(
 ) -> BTreeMap<String, WadLayoutRecord> {
     let mut layouts: BTreeMap<String, WadLayoutRecord> = built
         .iter()
-        .filter_map(|wad| {
-            Some((
+        .map(|wad| {
+            (
                 wad.relative_path.as_str().to_string(),
                 WadLayoutRecord {
-                    source: wad.stats.source?,
+                    source: wad.stats.source,
                     layout: wad.stats.layout,
                     // The overrides the file actually holds, not the ones this
                     // build routed to it: a record that overstates its tail
@@ -480,7 +479,7 @@ fn collect_wad_layouts(
                         .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
                         .collect(),
                 },
-            ))
+            )
         })
         .collect();
 
@@ -798,6 +797,11 @@ impl OverlayBuilder {
             &wad_hash_sets,
             &all_meta,
             prev_state.as_ref(),
+            if can_incremental {
+                PreviousOverlay::OnDisk
+            } else {
+                PreviousOverlay::Wiped
+            },
         );
         self.mark_dirty(&state_path, prev_state.as_ref(), rewrites.keys())?;
 
@@ -1234,7 +1238,7 @@ mod tests {
     #[test]
     fn test_override_meta_types() {
         let meta = OverrideMeta {
-            content_hash: 0x1234,
+            content_hash: ContentHash(0x1234),
             uncompressed_size: 100,
             source: OverrideSource::LayerWad {
                 mod_id: "test-mod".to_string(),
@@ -1246,13 +1250,13 @@ mod tests {
             unlocalized_wad: None,
             linked_bins: Vec::new(),
         };
-        assert_eq!(meta.content_hash, 0x1234);
+        assert_eq!(meta.content_hash, ContentHash(0x1234));
         assert_eq!(meta.uncompressed_size, 100);
     }
 
     fn dummy_meta() -> OverrideMeta {
         OverrideMeta {
-            content_hash: 0,
+            content_hash: ContentHash(0),
             uncompressed_size: 0,
             source: OverrideSource::LayerWad {
                 mod_id: "m".to_string(),
@@ -1423,7 +1427,7 @@ mod tests {
         // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
         // declared placement - hash matches must not be widened by it.
         let meta = OverrideMeta {
-            content_hash: 1,
+            content_hash: ContentHash(1),
             uncompressed_size: 1,
             source: OverrideSource::Raw {
                 mod_id: "m".to_string(),

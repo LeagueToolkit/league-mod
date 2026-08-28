@@ -6,6 +6,7 @@
 
 use crate::builder::{OverrideMeta, OverrideSource};
 use crate::error::{Error, Result};
+use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
@@ -33,7 +34,7 @@ pub struct CachedOverride {
     /// xxHash3 path hash (the WAD chunk key).
     pub path_hash: WadHash,
     /// xxHash3 of the uncompressed override bytes.
-    pub content_hash: u64,
+    pub content_hash: ContentHash,
     /// Size of the uncompressed override bytes.
     pub uncompressed_size: usize,
 
@@ -289,7 +290,7 @@ mod tests {
                 content_fingerprint: 0xDEAD,
                 overrides: vec![CachedOverride {
                     path_hash: WadHash(0x1234),
-                    content_hash: 0x5678,
+                    content_hash: ContentHash(0x5678),
                     uncompressed_size: 100,
                     target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
                     unlocalized_wad: None,

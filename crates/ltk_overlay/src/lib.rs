@@ -6,29 +6,35 @@
 //!
 //! # How It Works
 //!
-//! The overlay build process has four stages:
+//! A build runs two passes over the mods, with the routing decisions in between.
+//! `docs/overlay-builder-design.md` covers the strategies and the patched-WAD
+//! file layout in full; the shape is:
 //!
 //! 1. **Indexing** - Scan the game's `DATA/FINAL` directory and mount every
 //!    `.wad.client` file. Build two indexes:
 //!    - *Filename index*: WAD filename (case-insensitive) -> filesystem paths
-//!    - *Hash index*: chunk path hash (`u64`) -> list of WAD files containing it
+//!    - *Hash index*: chunk path hash ([`WadHash`](ltk_wad::WadHash)) -> the WADs
+//!      holding it
 //!
-//! 2. **Collecting overrides** - For each enabled mod (in order), read its layer
+//! 2. **Pass 1, metadata** - For each enabled mod (in order), read its layer
 //!    structure and WAD override files through the [`ModContentProvider`] trait.
-//!    Each override file is resolved to a `u64` path hash (either parsed from a hex
-//!    filename or computed from the normalized path). All overrides are collected
-//!    into a single `HashMap<u64, Vec<u8>>`. When multiple mods override the same
-//!    hash, the first mod in the list (highest priority) wins.
+//!    Each override file is resolved to a [`WadHash`](ltk_wad::WadHash) path hash
+//!    (either parsed from a hex filename or computed from the normalized path),
+//!    then hashed and *dropped*: what survives is its content hash, its size and
+//!    where to re-read it from, so a build's memory does not scale with the mods
+//!    it holds. When multiple mods override the same hash, the first mod in the
+//!    list (highest priority) wins.
 //!
 //! 3. **Distributing to WADs** - Using the hash index, each override is distributed
 //!    to *every* game WAD that contains that path hash ("cross-WAD matching"). This
 //!    means a single skin texture override will automatically be applied to both
 //!    the champion WAD and any map WAD that shares the same asset.
 //!
-//! 4. **Patching WADs** - For each affected game WAD, a patched copy is built in the
-//!    overlay directory. The patched WAD contains all original chunks plus the
-//!    overrides, with optimizations for audio files (kept uncompressed) and chunk
-//!    deduplication.
+//! 4. **Pass 2, bytes** - Only the overrides the chosen WADs actually need are
+//!    re-read and compressed, once per distinct content, and shared across every
+//!    WAD they route to. For each affected game WAD a patched copy is then
+//!    written into the overlay directory - or, when only override bytes changed,
+//!    the existing copy keeps its data region and has only its tail rewritten.
 //!
 //! # Content Provider Abstraction
 //!
@@ -121,8 +127,8 @@ pub use builder::{
 };
 pub use content::{FsModContent, ModContentProvider};
 pub use error::{
-    CacheError, CorruptionError, Error, GameDirError, ModContentError, Result, WadLimitError,
-    WadRegion,
+    CacheError, CorruptionError, Error, GameDirError, Invariant, ModContentError, Result,
+    WadLimitError, WadRegion,
 };
 pub use fantome_content::FantomeContent;
 pub use game_index::GameIndex;
@@ -130,3 +136,4 @@ pub use linked_bins::LinkedBinOffender;
 pub use modpkg_content::ModpkgContent;
 pub use state::OverlayState;
 pub use strings::StringOverrideMode;
+pub use utils::ContentHash;

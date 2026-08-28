@@ -3,11 +3,21 @@
 //! Routes override hashes to affected WADs, partitions into rebuild/reuse sets,
 //! re-reads bytes for WADs that need rebuilding, and patches WADs in parallel.
 
-use super::*;
 use crate::builder::incremental::TailRewrite;
-use crate::utils::compute_wad_fingerprint_from_meta;
+use crate::builder::{
+    OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource, SharedBytes,
+};
+use crate::error::{Error, Invariant, Result};
+use crate::game_index::GameIndex;
+use crate::state::OverlayState;
+use crate::strings::{self, StringPatchPlan};
+use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
 use crate::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad, rewrite_wad_tail};
+use camino::{Utf8Path, Utf8PathBuf};
+use ltk_wad::WadHash;
 use rayon::prelude::*;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Uncompressed override bytes as read in pass 2, before [`prepare_overrides`]
@@ -106,20 +116,20 @@ fn prepare_overrides(
     let content_hash_of = |path_hash: WadHash| {
         all_meta
             .get(&path_hash)
-            .map_or(path_hash.0, |meta| meta.content_hash)
+            .map_or(ContentHash(path_hash.0), |meta| meta.content_hash)
     };
 
     // Everything below is keyed by *content* hash, not path hash: that is what
     // makes one buffer serve every chunk carrying identical bytes.
-    let mut memo: HashMap<u64, PreparedOverride> = reused
+    let mut memo: HashMap<ContentHash, PreparedOverride> = reused
         .iter()
         .map(|(&path_hash, prepared)| (content_hash_of(path_hash), prepared.clone()))
         .collect();
 
     // One representative (path hash, bytes) per distinct content still needing
     // compression. Duplicate buffers are released here, before any starts.
-    let mut content_of: HashMap<WadHash, u64> = HashMap::with_capacity(resolved.len());
-    let mut distinct: HashMap<u64, (WadHash, ResolvedChunk)> = HashMap::new();
+    let mut content_of: HashMap<WadHash, ContentHash> = HashMap::with_capacity(resolved.len());
+    let mut distinct: HashMap<ContentHash, (WadHash, ResolvedChunk)> = HashMap::new();
     for (path_hash, bytes) in resolved {
         let content_hash = content_hash_of(path_hash);
         content_of.insert(path_hash, content_hash);
@@ -366,7 +376,7 @@ impl OverlayBuilder {
                         provider.read_raw_override_file(rel_path)?
                     }
                     OverrideSource::StringPatch { .. } => {
-                        unreachable!("StringPatch sources are not grouped by mod")
+                        return Err(Error::Bug(Invariant::StringPatchGroupedByMod));
                     }
                 };
                 resolved.insert(path_hash, Arc::from(bytes));
@@ -536,16 +546,16 @@ impl OverlayBuilder {
             tail_hashes.len()
         );
 
-        let mut stats = rewrite_wad_tail(
+        // The planner proved this source identity before choosing the in-place
+        // path; the rewrite itself never opens the game WAD.
+        let stats = rewrite_wad_tail(
             dst_wad_path,
             &rewrite.record.layout,
+            rewrite.record.source,
             rewrite.base_entries,
             &tail_hashes,
             |hash| overrides.get(&hash).cloned().ok_or_else(missing_override),
         )?;
-        // The planner proved this source identity before choosing the in-place
-        // path; the rewrite itself never opens the game WAD.
-        stats.source = Some(rewrite.record.source);
 
         Ok(WrittenWad {
             stats,
@@ -646,7 +656,7 @@ pub(crate) struct PatchedWad {
 mod tests {
     use super::*;
 
-    fn meta_with_content_hash(content_hash: u64) -> OverrideMeta {
+    fn meta_with_content_hash(content_hash: ContentHash) -> OverrideMeta {
         OverrideMeta {
             content_hash,
             uncompressed_size: 0,
@@ -668,8 +678,14 @@ mod tests {
         let bytes: ResolvedChunk = Arc::from(b"the same asset, twice".repeat(64).as_slice());
         let resolved = HashMap::from([(WadHash(0xAAAA), bytes.clone()), (WadHash(0xBBBB), bytes)]);
         let all_meta = HashMap::from([
-            (WadHash(0xAAAA), meta_with_content_hash(0xC0FFEE)),
-            (WadHash(0xBBBB), meta_with_content_hash(0xC0FFEE)),
+            (
+                WadHash(0xAAAA),
+                meta_with_content_hash(ContentHash(0xC0FFEE)),
+            ),
+            (
+                WadHash(0xBBBB),
+                meta_with_content_hash(ContentHash(0xC0FFEE)),
+            ),
         ]);
 
         let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();
@@ -699,8 +715,8 @@ mod tests {
             ),
         ]);
         let all_meta = HashMap::from([
-            (WadHash(0xAAAA), meta_with_content_hash(1)),
-            (WadHash(0xBBBB), meta_with_content_hash(2)),
+            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(1))),
+            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(2))),
         ]);
 
         let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();

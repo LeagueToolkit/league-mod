@@ -14,6 +14,7 @@
 
 use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
+use crate::utils::ContentHash;
 use crate::wad_builder::{SourceWadIdentity, WadTailLayout};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
@@ -42,13 +43,14 @@ pub struct WadLayoutRecord {
 
     /// `path_hash -> content_hash` for every override currently in the tail.
     ///
-    /// The key is a [`WadHash`] but serializes as the same bare integer a
-    /// `u64` key did, so state files written before the change still load.
+    /// The key is a [`WadHash`], which serializes as the bare integer a `u64`
+    /// key would: the newtype is transparent to serde, so it costs the on-disk
+    /// format nothing.
     ///
     /// Comparing this against the next build's override set is what splits it
     /// into overrides whose compressed bytes can be lifted straight out of the
     /// old tail and overrides that have to be resolved and compressed again.
-    pub overrides: BTreeMap<WadHash, u64>,
+    pub overrides: BTreeMap<WadHash, ContentHash>,
 }
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
@@ -734,7 +736,10 @@ mod tests {
                 tail_offset: 4000,
                 toc_capacity: 7,
             },
-            overrides: overrides.iter().copied().collect(),
+            overrides: overrides
+                .iter()
+                .map(|&(path_hash, content_hash)| (path_hash, ContentHash(content_hash)))
+                .collect(),
         }
     }
 
@@ -759,6 +764,29 @@ mod tests {
         assert_eq!(
             loaded.wad_layout("DATA/FINAL/Champions/Ahri.wad.client"),
             Some(&record)
+        );
+    }
+
+    /// Both sides of an `overrides` entry are newtypes over `u64`, and both
+    /// have to stay bare integers on disk: a state file written before either
+    /// newtype existed must still load, and the documented format above says
+    /// integers. A round trip alone would not catch this - it would agree with
+    /// itself whatever shape serde chose.
+    #[test]
+    fn override_entries_serialize_as_bare_integers() {
+        // 0xAAAA is 43690 and 0x1111 is 4369.
+        let record = layout_record(&[(WadHash(0xAAAA), 0x1111)]);
+        let json = serde_json::to_string(&record).expect("a record serializes");
+        assert!(
+            json.contains(r#""overrides":{"43690":4369}"#),
+            "overrides must serialize as integer -> integer, got {json}"
+        );
+
+        // And the same bytes read back, which is the compatibility direction.
+        let loaded: WadLayoutRecord = serde_json::from_str(&json).expect("a record deserializes");
+        assert_eq!(
+            loaded.overrides.get(&WadHash(0xAAAA)),
+            Some(&ContentHash(0x1111))
         );
     }
 

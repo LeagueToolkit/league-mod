@@ -148,13 +148,43 @@ impl Run {
 }
 
 fn required_dir(var: &str) -> Result<Utf8PathBuf, Box<dyn std::error::Error>> {
-    let path = Utf8PathBuf::from(
-        std::env::var(var).map_err(|_| format!("{var} is not set; see this example's docs"))?,
-    );
+    let path = Utf8PathBuf::from(required_var(var)?);
     if !path.as_std_path().is_dir() {
         return Err(format!("{var} is not a directory: {path}").into());
     }
     Ok(path)
+}
+
+/// Read `var`, trimmed, refusing an unset or blank one.
+fn required_var(var: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let value = std::env::var(var)
+        .map_err(|_| format!("{var} is not set; see this example's docs"))?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err(format!("{var} is empty; see this example's docs").into());
+    }
+    Ok(value)
+}
+
+/// Read an optional `var`, or `default` when it is unset or blank.
+///
+/// A value that is set but unusable is an error rather than a fallback: these
+/// numbers end up in benchmark results, and silently benchmarking something
+/// other than what was asked for is worse than refusing to run.
+fn optional_var<T>(var: &str, default: T) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(var) {
+        Err(_) => Ok(default),
+        Ok(raw) if raw.trim().is_empty() => Ok(default),
+        Ok(raw) => raw
+            .trim()
+            .parse()
+            .map_err(|e| format!("{var} is not usable: {e}").into()),
+    }
 }
 
 fn utf8(path: std::path::PathBuf) -> Result<Utf8PathBuf, Box<dyn std::error::Error>> {
@@ -172,12 +202,11 @@ fn synthesize_mod(
     game_dir: &Utf8Path,
     mod_dir: &Utf8Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let wad_name =
-        std::env::var("LTK_BENCH_WAD").unwrap_or_else(|_| "Aatrox.wad.client".to_string());
-    let chunk_count: usize = std::env::var("LTK_BENCH_CHUNKS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(64);
+    let wad_name = optional_var("LTK_BENCH_WAD", "Aatrox.wad.client".to_string())?;
+    let chunk_count: usize = optional_var("LTK_BENCH_CHUNKS", 64)?;
+    if chunk_count == 0 {
+        return Err("LTK_BENCH_CHUNKS is 0, which would build a mod with no overrides".into());
+    }
 
     let wad_path = find_wad(game_dir, &wad_name)?;
     let wad_len = std::fs::metadata(wad_path.as_std_path())?.len();

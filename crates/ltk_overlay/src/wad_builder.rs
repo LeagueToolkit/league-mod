@@ -34,9 +34,10 @@
 //!
 //! # Compression Strategy
 //!
-//! **Non-overridden chunks** are passed through as raw compressed bytes from the
-//! original WAD - no decompression or recompression occurs. This is the fast path
-//! for the vast majority of chunks.
+//! **Transient chunks** - those no mod overrides, which merely transit the build -
+//! are passed through as raw compressed bytes from the original WAD: no
+//! decompression or recompression occurs. This is the fast path for the vast
+//! majority of chunks.
 //!
 //! **Override chunks** arrive already compressed, as [`PreparedOverride`] values.
 //! [`PreparedOverride::compress`] auto-detects an override's file type via
@@ -66,6 +67,13 @@ use xxhash_rust::xxh3::xxh3_64;
 /// Size of a single v3.4 WAD TOC entry.
 const TOC_ENTRY_SIZE: usize = 32;
 
+/// Size of the v3.4 WAD header, which every other offset in the file follows.
+///
+/// 2 bytes of `RW` magic, 2 of version, 256 of RSA signature and 8 of checksum.
+/// The `u32` chunk count sits directly on top of it and the TOC directly on top
+/// of that, so the first TOC entry of a well-formed v3.4 WAD begins at 272.
+const WAD_HEADER_SIZE: u64 = 268;
+
 /// Write buffer size for the output WAD
 const WRITE_BUFFER_SIZE: usize = 1 << 20; // 1 MiB
 
@@ -80,11 +88,13 @@ const REGION_COPY_STEP: usize = 8 << 20; // 8 MiB
 /// Zero, deliberately. Reserving slack would let a WAD gain or lose a chunk
 /// without moving any data, but it leaves a gap between the last TOC entry and
 /// the first data byte, and the game has not been observed tolerating that gap
-/// in a real session. The capacity is still recorded and honoured throughout, so
-/// enabling slack once that is proven is this constant alone.
+/// in a real session. The capacity is still recorded and honoured throughout,
+/// and both writers zero the slots they leave unfilled, so enabling slack once
+/// that is proven is this constant alone.
 ///
 /// While it is zero, capacity equals the entry count, so any change to a WAD's
-/// entry set fails the capacity precondition and takes the full-rebuild path.
+/// entry set fails the capacity precondition and takes the full-rebuild path -
+/// which also means nothing exercises the zero-fill until this is raised.
 const TOC_SLACK_ENTRIES: u32 = 0;
 
 /// Highest byte offset the WAD v3.4 format's `u32` offset fields can address.
@@ -118,7 +128,7 @@ impl PreparedOverride {
     /// WAD v3.4 format's `u32` size fields.
     pub fn compress(path_hash: WadHash, data: &[u8]) -> Result<Self> {
         let codec = OverrideCodec::for_data(data);
-        let compressed = compress_by_type(data, codec)?;
+        let compressed = compress_with(data, codec)?;
         ensure_chunk_fits(path_hash, compressed.len(), data.len())?;
         Ok(Self {
             checksum: xxh3_64(&compressed),
@@ -214,9 +224,12 @@ impl OverrideCodec {
 
 /// One slot in a patched WAD's TOC, before its data offset is known.
 ///
-/// A transient entry carries the source entry it will be shifted from rather than
-/// its hash alone, so "this hash should be in the source TOC but is not" is not
-/// a state the writer can reach.
+/// A chunk is *transient* when it merely transits the build: no mod overrides
+/// it, so its bytes arrive in the copied source region untouched and only its
+/// recorded offset moves. The opposite is an override, whose bytes this build
+/// writes itself. A transient entry carries the source entry it will be shifted
+/// from rather than its hash alone, so "this hash should be in the source TOC
+/// but is not" is not a state the writer can reach.
 enum PlannedEntry {
     /// A source chunk keeping the bytes copied into the region.
     Transient(WadChunk),
@@ -260,28 +273,42 @@ pub struct WadTailLayout {
 impl WadTailLayout {
     /// Absolute offset of the first TOC entry.
     ///
-    /// Derived from the region offset rather than the header size, so the
-    /// 268-byte header stays a fact of the writer alone.
+    /// Derived by subtracting the TOC from the region offset rather than from
+    /// the header size, so where the region sits stays the single fact the rest
+    /// of the layout is read off.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics in debug builds, and wraps in release ones, when the layout does
-    /// not place its region past a TOC of the recorded capacity. Every field
-    /// here is deserialized from a state file that anything could have written,
-    /// so run [`validate`](Self::validate) first unless the layout came
-    /// straight out of a fresh build.
-    pub fn toc_offset(&self) -> u64 {
-        self.data_region_offset - u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64
+    /// Fails when the layout does not place its region past a header, a chunk
+    /// count and a TOC of the recorded capacity. Every field here is
+    /// deserialized from a state file that anything could have written, and the
+    /// result is a seek target in a file the game loads, so the subtraction
+    /// reports rather than wraps.
+    pub fn toc_offset(&self) -> Result<u64> {
+        self.chunk_count_offset()
+            .map(|offset| offset + size_of::<u32>() as u64)
     }
 
     /// Absolute offset of the `u32` chunk count, which precedes the TOC.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics under the same unvalidated layouts as
-    /// [`toc_offset`](Self::toc_offset), which this subtracts from.
-    pub fn chunk_count_offset(&self) -> u64 {
-        self.toc_offset() - size_of::<u32>() as u64
+    /// Fails on the same layouts as [`toc_offset`](Self::toc_offset), of which
+    /// this is the lower bound.
+    pub fn chunk_count_offset(&self) -> Result<u64> {
+        let below_region =
+            u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64 + size_of::<u32>() as u64;
+        self.data_region_offset
+            .checked_sub(below_region)
+            .filter(|&offset| offset >= WAD_HEADER_SIZE)
+            .ok_or_else(|| {
+                CorruptionError::IncoherentLayout {
+                    toc_capacity: self.toc_capacity,
+                    data_region_offset: self.data_region_offset,
+                    tail_offset: self.tail_offset,
+                }
+                .into()
+            })
     }
 
     /// A source chunk's TOC entry with its offset moved into the copied region.
@@ -332,14 +359,12 @@ impl WadTailLayout {
     ///
     /// # Errors
     ///
-    /// Fails when the region does not start past a chunk count and a TOC of the
-    /// recorded capacity, or when the tail starts before the region does.
+    /// Fails when the region does not start past a header, a chunk count and a
+    /// TOC of the recorded capacity, or when the tail starts before the region
+    /// does.
     pub fn validate(&self) -> Result<()> {
-        let smallest_region_offset =
-            u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64 + size_of::<u32>() as u64;
-        if self.data_region_offset < smallest_region_offset
-            || self.tail_offset < self.data_region_offset
-        {
+        self.chunk_count_offset()?;
+        if self.tail_offset < self.data_region_offset {
             return Err(CorruptionError::IncoherentLayout {
                 toc_capacity: self.toc_capacity,
                 data_region_offset: self.data_region_offset,
@@ -395,17 +420,15 @@ pub struct PatchedWadStats {
     pub overrides_applied: usize,
     /// Number of new entries added (not present in the original WAD).
     pub new_entries_added: usize,
-    /// Number of chunks passed through unchanged from the original WAD.
+    /// Number of *transient* chunks: those no override replaced, which keep the
+    /// original WAD's bytes and only move (see the [module docs](self)).
     pub chunks_transient: usize,
     /// Wall-clock time to build this WAD, in milliseconds.
     pub elapsed_ms: u128,
     /// Where this build put the source data region and the override tail.
     pub layout: WadTailLayout,
     /// The game WAD this output was built from.
-    ///
-    /// `None` for a [tail rewrite](rewrite_wad_tail), which never opens the
-    /// source: its caller already verified the identity to get there.
-    pub source: Option<SourceWadIdentity>,
+    pub source: SourceWadIdentity,
 }
 
 /// Build a patched WAD by overlaying mod chunks on top of an original game WAD.
@@ -624,12 +647,12 @@ fn write_patched_wad(
         chunks_transient,
         elapsed_ms,
         layout,
-        source: Some(SourceWadIdentity::new(
+        source: SourceWadIdentity::new(
             &file
                 .metadata()
                 .map_err(|source| Error::read(src_wad_path, source))?,
             chunks,
-        )?),
+        )?,
     })
 }
 
@@ -645,12 +668,18 @@ fn write_patched_wad(
 ///
 /// * `wad_path` - The overlay WAD to rewrite in place.
 /// * `layout` - The layout recorded when this file was built.
+/// * `source` - The game WAD this file was built from, which the caller has
+///   already verified is unchanged. Reported back in the stats: a rewrite never
+///   opens the source itself, so it cannot re-derive this.
 /// * `base_entries` - The TOC entry each chunk already in the copied region
 ///   would have with no override applied, keyed by path hash. A tail hash
 ///   overwrites its entry here, so a chunk whose override is gone reverts to the
 ///   bytes the region still holds. Consumed and written back out as the new TOC,
 ///   which for a map WAD is tens of thousands of entries not worth copying.
 /// * `tail_hashes` - Path hashes whose data goes into the new tail, ascending.
+///   An ordered slice rather than the set [`build_patched_wad`] takes: that one
+///   only asks each source chunk whether it is overridden, while this writes the
+///   tail in the given order and needs it to match the TOC it produces.
 /// * `resolve_override` - Supplies each tail hash's compressed bytes, in the
 ///   order they are written.
 ///
@@ -670,6 +699,7 @@ fn write_patched_wad(
 pub fn rewrite_wad_tail(
     wad_path: &Utf8Path,
     layout: &WadTailLayout,
+    source: SourceWadIdentity,
     base_entries: BTreeMap<WadHash, WadChunk>,
     tail_hashes: &[WadHash],
     mut resolve_override: impl FnMut(WadHash) -> Result<PreparedOverride>,
@@ -730,10 +760,17 @@ pub fn rewrite_wad_tail(
     }
 
     // `entries` is a BTreeMap, so this walks the TOC in ascending hash order.
-    writer.seek(SeekFrom::Start(layout.chunk_count_offset()))?;
+    writer.seek(SeekFrom::Start(layout.chunk_count_offset()?))?;
     writer.write_u32::<LE>(entries.len() as u32)?;
     for chunk in entries.values() {
         chunk.write_v3_4(&mut writer)?;
+    }
+    // Reserved slots this build did not fill are zeroed, as the full-rebuild
+    // path zeroes them: rewriting in place would otherwise leave the previous
+    // build's entries sitting past the new chunk count. Empty while
+    // `TOC_SLACK_ENTRIES` is zero, since capacity then equals the entry count.
+    for _ in entries.len()..layout.toc_capacity as usize {
+        writer.write_all(&[0u8; TOC_ENTRY_SIZE])?;
     }
 
     writer.flush()?;
@@ -755,7 +792,7 @@ pub fn rewrite_wad_tail(
         chunks_transient: entries.len() - tail_hashes.len(),
         elapsed_ms,
         layout: *layout,
-        source: None,
+        source,
     })
 }
 
@@ -966,7 +1003,7 @@ fn ensure_chunk_fits(path_hash: WadHash, compressed: usize, uncompressed: usize)
 ///
 /// Fails only when the Zstd encoder does, which it does for I/O reasons alone
 /// when writing into a `Vec`.
-fn compress_by_type(data: &[u8], codec: OverrideCodec) -> Result<Vec<u8>> {
+fn compress_with(data: &[u8], codec: OverrideCodec) -> Result<Vec<u8>> {
     match codec {
         OverrideCodec::Stored => Ok(data.to_vec()),
         OverrideCodec::Zstd => {
@@ -1031,6 +1068,7 @@ mod tests {
         let refused = rewrite_wad_tail(
             &overlay_path,
             &stats.layout,
+            stats.source,
             base_entries,
             &[new_entry],
             |_| Ok(prepared.clone()),
@@ -1048,17 +1086,78 @@ mod tests {
     }
 
     #[test]
-    fn test_compress_by_type_none() {
+    fn test_compress_with_none() {
         let data = b"Hello, world!";
-        let result = compress_by_type(data, OverrideCodec::Stored).unwrap();
+        let result = compress_with(data, OverrideCodec::Stored).unwrap();
         assert_eq!(result, data);
     }
 
     #[test]
-    fn test_compress_by_type_zstd() {
+    fn test_compress_with_zstd() {
         let data = b"Hello, world!".repeat(100);
-        let compressed = compress_by_type(&data, OverrideCodec::Zstd).unwrap();
+        let compressed = compress_with(&data, OverrideCodec::Zstd).unwrap();
         assert!(compressed.len() < data.len());
+    }
+
+    /// A layout puts the chunk count and the TOC in front of its data region by
+    /// subtraction, and `rewrite_wad_tail` seeks to that result and writes.
+    /// A region offset that leaves no room for the header means those writes
+    /// land on the magic and Riot's signature, so the layout must be refused
+    /// before anything opens the file.
+    #[test]
+    fn a_layout_whose_toc_would_land_in_the_header_is_refused() {
+        // A v3.4 header is 268 bytes, so the smallest coherent region offset for
+        // a one-entry TOC is 268 + 4 (the chunk count) + 32 (the entry).
+        let smallest = WadTailLayout {
+            data_region_offset: 268 + 4 + 32,
+            offset_delta: 0,
+            tail_offset: 4096,
+            toc_capacity: 1,
+        };
+        assert!(
+            smallest.validate().is_ok(),
+            "the tightest legal layout must still be usable"
+        );
+
+        let in_the_header = WadTailLayout {
+            data_region_offset: 4 + 32,
+            ..smallest
+        };
+        assert!(
+            in_the_header.validate().is_err(),
+            "a region offset that leaves no room for the header must be refused"
+        );
+    }
+
+    /// The header size `validate` reserves is the one the writer actually emits.
+    /// Pinning them against a real build stops the constant drifting from the
+    /// bytes written above it.
+    #[test]
+    fn a_built_wad_puts_its_toc_exactly_past_the_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+        let source_path = root.join("Game").join(WAD_REL);
+        write_game_wad(&source_path, &[(SKIN, b"the original skin")]);
+
+        let stats = build_patched_wad(
+            &source_path,
+            &root.join("overlay").join(WAD_REL),
+            &HashSet::new(),
+            |_| unreachable!("this build has no overrides"),
+        )
+        .expect("the overlay WAD builds");
+
+        assert_eq!(
+            stats.layout.chunk_count_offset().unwrap(),
+            268,
+            "the chunk count follows the header"
+        );
+        assert_eq!(
+            stats.layout.toc_offset().unwrap(),
+            272,
+            "the TOC follows the chunk count"
+        );
     }
 
     /// Audio is already compressed, so it is stored; everything else is Zstd.

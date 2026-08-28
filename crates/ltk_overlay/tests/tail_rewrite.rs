@@ -16,10 +16,11 @@
 mod common;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use common::{assert_chunks_equivalent, assert_wad_is_well_formed, write_game_wad, write_mod_dir};
-use ltk_overlay::utils::resolve_chunk_hash;
+use common::{
+    assert_chunks_equivalent, assert_wad_is_well_formed, hash, write_game_wad, write_mod_dir,
+};
 use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder, OverlayState};
-use ltk_wad::{Wad, WadHash};
+use ltk_wad::Wad;
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -45,10 +46,6 @@ const STAMP: u8 = 0xAB;
 /// exact-match skip and never reach the code under test.
 const EDIT_V1: &[u8] = b"SKIN_V1";
 const EDIT_V2: &[u8] = b"SKIN_V2_WHICH_IS_LONGER";
-
-fn hash(path: &str) -> WadHash {
-    resolve_chunk_hash(Utf8Path::new(path), b"").expect("chunk path hashes")
-}
 
 /// A game directory with one champion WAD holding three chunks.
 fn write_game(root: &Utf8Path) -> Utf8PathBuf {
@@ -567,7 +564,11 @@ mod fallbacks {
         let profile = after_sabotage(&root, |profile| {
             let record = profile.layout_record();
             // Corrupt the compressed size of whichever entry sorts first.
-            let entry = record.layout.toc_offset() + 12;
+            let entry = record
+                .layout
+                .toc_offset()
+                .expect("the recorded layout is coherent")
+                + 12;
             let mut file = fs::OpenOptions::new()
                 .write(true)
                 .open(profile.overlay_wad().as_std_path())

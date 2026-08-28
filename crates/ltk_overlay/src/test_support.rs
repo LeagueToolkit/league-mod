@@ -1,7 +1,9 @@
 //! Fixtures shared by the crate's own unit tests.
 //!
-//! The integration tests keep their own helpers in `tests/common`; these are
-//! the ones that need to reach items the crate does not export.
+//! `tests/common` carries the same two fixtures for the integration tests. The
+//! duplication is the crate boundary, not an oversight: a `#[cfg(test)]` module
+//! is compiled only into the lib's own test binary, and a `tests/` module is
+//! compiled only into the integration ones, so neither can see the other.
 
 use crate::utils::resolve_chunk_hash;
 use camino::Utf8Path;
