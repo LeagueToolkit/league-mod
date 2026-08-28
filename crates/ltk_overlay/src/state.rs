@@ -14,7 +14,7 @@
 
 use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -169,9 +169,13 @@ impl OverlayState {
         Ok(Some(state))
     }
 
-    /// Save overlay state to a file.
+    /// Save overlay state to a file, atomically.
     ///
-    /// Creates parent directories if needed.
+    /// Creates parent directories if needed, writes a sibling `.tmp` file and
+    /// renames it into place, so a crash mid-write leaves the previous state
+    /// intact rather than a truncated file. Incremental rebuilds trust what
+    /// this file says about WADs already on disk, so a torn one would have to
+    /// be caught rather than believed.
     ///
     /// # Arguments
     ///
@@ -183,9 +187,17 @@ impl OverlayState {
         }
 
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path.as_std_path(), contents)
-            .map_err(|source| Error::write(path, source))?;
-        Ok(())
+        let tmp_path = Utf8PathBuf::from(format!("{path}.tmp"));
+        std::fs::write(tmp_path.as_std_path(), contents)
+            .map_err(|source| Error::write(&tmp_path, source))?;
+
+        match std::fs::rename(tmp_path.as_std_path(), path.as_std_path()) {
+            Ok(()) => Ok(()),
+            Err(source) => {
+                let _ = std::fs::remove_file(tmp_path.as_std_path());
+                Err(Error::write(path, source))
+            }
+        }
     }
 
     /// Check if this state is an exact match for the current configuration.
@@ -516,6 +528,60 @@ mod tests {
         assert_eq!(loaded.mod_fingerprints, state.mod_fingerprints);
         assert_eq!(loaded.game_fingerprint, state.game_fingerprint);
         assert_eq!(loaded.wad_fingerprints, state.wad_fingerprints);
+    }
+
+    /// A crash mid-save must leave the previous state readable, so the write
+    /// goes through a sibling temp file that is renamed into place.
+    #[test]
+    fn save_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("overlay.json");
+
+        OverlayState::default().save(&path).unwrap();
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(leftovers, vec!["overlay.json"], "{leftovers:?}");
+        assert!(OverlayState::load(&path).unwrap().is_some());
+    }
+
+    /// Saving over an existing state file replaces it rather than failing on
+    /// the rename, which Windows would do without replace-existing semantics.
+    #[test]
+    fn save_replaces_an_existing_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("overlay.json");
+
+        let first = OverlayState::new(
+            vec!["mod1".to_string()],
+            BTreeMap::new(),
+            1,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        first.save(&path).unwrap();
+
+        let second = OverlayState::new(
+            vec!["mod2".to_string()],
+            BTreeMap::new(),
+            2,
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        );
+        second.save(&path).unwrap();
+
+        let loaded = OverlayState::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.enabled_mods, vec!["mod2".to_string()]);
+        assert_eq!(loaded.game_fingerprint, 2);
     }
 
     #[test]
