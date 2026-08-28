@@ -161,8 +161,9 @@ fn utf8(path: std::path::PathBuf) -> Result<Utf8PathBuf, Box<dyn std::error::Err
     Utf8PathBuf::from_path_buf(path).map_err(|p| format!("non-UTF-8 path: {}", p.display()).into())
 }
 
-/// Build a mod fixture at `mod_dir` out of the install's own chunks, and
-/// return a one-line description of what it holds.
+/// Build a mod fixture at `mod_dir` out of the install's own chunks.
+///
+/// Returns a one-line description of what the fixture holds.
 ///
 /// The overrides are the WAD's own chunks with bytes appended, so they route
 /// exactly like real content (the hashes are the game's) but survive the

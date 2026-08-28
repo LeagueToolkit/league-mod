@@ -54,9 +54,16 @@
 //! - **Incremental**: game fingerprint matches but the mod list or some mod's
 //!   content changed. Per-WAD override fingerprints are compared and only WADs
 //!   whose inputs changed are re-patched. Stale WADs (no longer needed) are
-//!   removed.
+//!   removed. A WAD whose override *bytes* changed but whose chunk set did not
+//!   keeps its file and has only its tail and TOC rewritten, so the cost is the
+//!   mod's own bytes rather than the WAD's size.
 //! - **Full rebuild**: game fingerprint or state version changed - all overlay WADs
 //!   are wiped and rebuilt from scratch.
+//!
+//! Every shortcut is guarded: the recorded state is treated as a hint, verified
+//! against the files themselves, and any doubt costs a full rebuild of that WAD
+//! rather than a wrong one. See `docs/overlay-builder-design.md` for the layout
+//! and the trust rules.
 //!
 //! The game index (`GameIndex`) is also cached to disk to avoid re-mounting every
 //! WAD file on subsequent builds when the game hasn't been patched.

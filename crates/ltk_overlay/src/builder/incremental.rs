@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::state::WadLayoutRecord;
-use crate::wad_builder::{PreparedOverride, SourceWadIdentity};
+use crate::wad_builder::{PreparedOverride, SourceWadIdentity, merged_entry_count};
 use ltk_wad::{Wad, WadChunk, WadHash};
 
 /// A WAD this build can rebuild by rewriting only its override tail.
@@ -97,6 +97,10 @@ impl OverlayBuilder {
         let overlay_path = self.overlay_root.join(relative_path);
         let source_path = self.game_dir.join(relative_path);
 
+        // The record came out of a JSON file that anything could have written,
+        // and its offsets become seek targets below.
+        record.layout.validate()?;
+
         // The game WAD must be the one this overlay was built from.
         let source_file = File::open(source_path.as_std_path())
             .map_err(|source| Error::read(&source_path, source))?;
@@ -137,11 +141,7 @@ impl OverlayBuilder {
 
         // The new override set must fit the TOC the file already reserved.
         let base_entries = base_entries(&record.layout, source.chunks())?;
-        let entry_count = base_entries.len()
-            + new_overrides
-                .iter()
-                .filter(|hash| !base_entries.contains_key(hash))
-                .count();
+        let entry_count = merged_entry_count(&base_entries, new_overrides.iter().copied());
         if !record.layout.admits_entry_count(entry_count) {
             return Err(Error::Other(format!(
                 "the new override set needs {entry_count} TOC entries, not the \

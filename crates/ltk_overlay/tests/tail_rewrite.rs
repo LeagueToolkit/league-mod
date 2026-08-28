@@ -98,6 +98,24 @@ impl Profile {
         builder.build().expect("overlay builds")
     }
 
+    /// Build with a caller-supplied content provider, surfacing failures.
+    fn try_build_with(
+        &self,
+        content: Box<dyn ltk_overlay::ModContentProvider>,
+    ) -> ltk_overlay::Result<ltk_overlay::OverlayBuildResult> {
+        let mut builder = OverlayBuilder::new(
+            self.game_dir.clone(),
+            self.overlay_root.clone(),
+            self.profile_dir.clone(),
+        );
+        builder.set_enabled_mods(vec![EnabledMod {
+            id: "a-mod".to_string(),
+            content,
+            enabled_layers: None,
+        }]);
+        builder.build()
+    }
+
     fn overlay_wad(&self) -> Utf8PathBuf {
         self.overlay_root.join(WAD_REL)
     }
@@ -187,6 +205,53 @@ impl Profile {
             Wad::mount(fs::File::open(self.overlay_wad().as_std_path()).unwrap()).unwrap();
         let chunk = *wad.chunks().get(WadHash(hash(chunk_path)))?;
         Some(wad.load_chunk_decompressed(&chunk).unwrap().to_vec())
+    }
+}
+
+/// A mod whose pass-2 reads fail, so a build dies after the dirty markers are
+/// written but before any WAD is finished.
+///
+/// Everything else delegates to a real [`FsModContent`], so pass 1, the
+/// fingerprints, and the routing all behave normally and the build gets far
+/// enough to plan its tail rewrites.
+struct FailsInPassTwo(FsModContent);
+
+impl ltk_overlay::ModContentProvider for FailsInPassTwo {
+    fn mod_project(&mut self) -> ltk_overlay::Result<ltk_mod_project::ModProject> {
+        self.0.mod_project()
+    }
+
+    fn list_layer_wads(&mut self, layer: &str) -> ltk_overlay::Result<Vec<String>> {
+        self.0.list_layer_wads(layer)
+    }
+
+    fn read_wad_overrides(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+    ) -> ltk_overlay::Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+        self.0.read_wad_overrides(layer, wad_name)
+    }
+
+    fn read_raw_overrides(&mut self) -> ltk_overlay::Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+        self.0.read_raw_overrides()
+    }
+
+    fn content_fingerprint(&self) -> ltk_overlay::Result<Option<u64>> {
+        self.0.content_fingerprint()
+    }
+
+    fn read_wad_override_file(
+        &mut self,
+        _layer: &str,
+        _wad_name: &str,
+        _rel_path: &Utf8Path,
+    ) -> ltk_overlay::Result<Vec<u8>> {
+        Err(ltk_overlay::Error::Other("the mod vanished".to_string()))
+    }
+
+    fn read_raw_override_file(&mut self, _rel_path: &Utf8Path) -> ltk_overlay::Result<Vec<u8>> {
+        Err(ltk_overlay::Error::Other("the mod vanished".to_string()))
     }
 }
 
@@ -544,6 +609,45 @@ mod fallbacks {
         });
 
         assert_full_rebuild(&profile);
+    }
+
+    /// The dirty markers are written *before* the patch pass, so a build that
+    /// dies part-way leaves them on disk for the next one to find.
+    ///
+    /// This drives the marking through a real build rather than planting the
+    /// flag by hand: the WAD is planned for a tail rewrite, then pass 2 fails.
+    #[test]
+    fn a_build_that_dies_after_planning_leaves_its_wads_marked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+        let profile = Profile::new(&root, &[(SKIN, EDIT_V1)]);
+        profile.build();
+        profile.stamp_shadow(SKIN);
+        let key = profile.layout_key();
+
+        profile.write_override(SKIN, EDIT_V2);
+        let failed = profile.try_build_with(Box::new(FailsInPassTwo(FsModContent::new(
+            profile.mod_dir.clone(),
+        ))));
+
+        assert!(failed.is_err(), "pass 2 was supposed to fail");
+        assert!(
+            profile.state().dirty_wads.contains(&key),
+            "a build interrupted after planning must leave its in-place WADs marked, \
+             so the next build does not trust them"
+        );
+
+        // The next build finds the marker and rebuilds rather than reusing.
+        profile.build();
+
+        assert!(
+            !profile.shadow_is_stamped(SKIN),
+            "the marked WAD must be rebuilt in full"
+        );
+        assert_eq!(profile.overlay_chunk(SKIN).as_deref(), Some(EDIT_V2));
+        assert!(profile.state().dirty_wads.is_empty());
+        assert_wad_is_well_formed(&profile.overlay_wad());
     }
 
     /// A WAD left dirty by a killed build may be torn, so it must be rebuilt

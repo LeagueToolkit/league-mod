@@ -478,71 +478,114 @@ impl OverlayBuilder {
             .collect()
     }
 
-    /// Write one overlay WAD, by tail rewrite when it was planned and by full
-    /// rebuild otherwise.
+    /// Write one overlay WAD, by tail rewrite when planned or full rebuild.
+    ///
+    /// A tail rewrite that fails falls back to the full rebuild rather than
+    /// failing the build. Its file may be torn by then, but the full rebuild
+    /// writes a fresh one through a temp file and renames it over the top, so
+    /// the WAD comes out correct either way.
     fn patch_one_wad(&self, work: WadWork) -> Result<PatchedWad> {
         let WadWork {
             relative_path,
-            mut overrides,
+            overrides,
             rewrite,
         } = work;
         let dst_wad_path = self.overlay_root.join(&relative_path);
+
+        if let Some(rewrite) = rewrite {
+            match self.rewrite_one_wad_tail(&dst_wad_path, &rewrite, &overrides) {
+                Ok(patched) => return Ok(patched.into_wad(relative_path, dst_wad_path)),
+                Err(e) => tracing::warn!(
+                    "Tail rewrite of {} failed ({}); rebuilding it in full",
+                    dst_wad_path,
+                    e
+                ),
+            }
+        }
+
+        let patched = self.rebuild_one_wad(&relative_path, &dst_wad_path, overrides)?;
+        Ok(patched.into_wad(relative_path, dst_wad_path))
+    }
+
+    /// Rewrite an overlay WAD's tail, keeping its copied source data region.
+    ///
+    /// The override map is read rather than drained, so a failure here leaves
+    /// the caller able to run the full rebuild with the same data.
+    fn rewrite_one_wad_tail(
+        &self,
+        dst_wad_path: &Utf8Path,
+        rewrite: &TailRewrite,
+        overrides: &HashMap<u64, PreparedOverride>,
+    ) -> Result<WrittenWad> {
+        // An override whose bytes never resolved - a stringtable patch that
+        // failed to apply, say - is dropped rather than fatal, and its chunk
+        // falls back to the entry the source region holds. That is what the
+        // full-rebuild path does with it too.
+        let tail_hashes: Vec<u64> = rewrite
+            .tail_hashes
+            .iter()
+            .copied()
+            .filter(|hash| overrides.contains_key(hash))
+            .collect();
+
+        tracing::info!(
+            "Rewriting WAD tail dst={} overrides={}",
+            dst_wad_path,
+            tail_hashes.len()
+        );
+
+        let mut stats = rewrite_wad_tail(
+            dst_wad_path,
+            &rewrite.record.layout,
+            &rewrite.base_entries,
+            &tail_hashes,
+            |hash| {
+                overrides.get(&hash).cloned().ok_or_else(|| {
+                    Error::Other(format!("Missing override data for hash {hash:016x}"))
+                })
+            },
+        )?;
+        // The planner proved this source identity before choosing the in-place
+        // path; the rewrite itself never opens the game WAD.
+        stats.source = Some(rewrite.record.source);
+
+        Ok(WrittenWad {
+            stats,
+            written_overrides: tail_hashes,
+        })
+    }
+
+    /// Rebuild an overlay WAD from its game WAD, through a temp file.
+    fn rebuild_one_wad(
+        &self,
+        relative_path: &Utf8Path,
+        dst_wad_path: &Utf8Path,
+        mut overrides: HashMap<u64, PreparedOverride>,
+    ) -> Result<WrittenWad> {
+        let src_wad_path = self.game_dir.join(relative_path);
         let override_hashes: HashSet<u64> = overrides.keys().copied().collect();
 
-        let stats = match rewrite {
-            Some(rewrite) => {
-                // An override whose bytes never resolved - a stringtable patch
-                // that failed to apply, say - is dropped rather than fatal, and
-                // its chunk falls back to the entry the source region holds.
-                // That is what the full-rebuild path does with it too.
-                let tail_hashes: Vec<u64> = rewrite
-                    .tail_hashes
-                    .iter()
-                    .copied()
-                    .filter(|hash| override_hashes.contains(hash))
-                    .collect();
+        tracing::info!(
+            "Patching WAD src={} dst={} overrides={}",
+            src_wad_path,
+            dst_wad_path,
+            override_hashes.len()
+        );
 
-                tracing::info!(
-                    "Rewriting WAD tail dst={} overrides={}",
-                    dst_wad_path,
-                    tail_hashes.len()
-                );
-                let mut stats = rewrite_wad_tail(
-                    &dst_wad_path,
-                    &rewrite.record.layout,
-                    &rewrite.base_entries,
-                    &tail_hashes,
-                    |hash| take_override(&mut overrides, hash),
-                )?;
-                // The planner proved this source identity before choosing the
-                // in-place path; the rewrite itself never opens the game WAD.
-                stats.source = Some(rewrite.record.source);
-                stats
-            }
-            None => {
-                let src_wad_path = self.game_dir.join(&relative_path);
-                tracing::info!(
-                    "Patching WAD src={} dst={} overrides={}",
-                    src_wad_path,
-                    dst_wad_path,
-                    override_hashes.len()
-                );
-                build_patched_wad(&src_wad_path, &dst_wad_path, &override_hashes, |hash| {
-                    take_override(&mut overrides, hash)
-                })?
-            }
-        };
+        let stats = build_patched_wad(&src_wad_path, dst_wad_path, &override_hashes, |hash| {
+            take_override(&mut overrides, hash)
+        })?;
 
-        Ok(PatchedWad {
-            relative_path,
-            path: dst_wad_path,
+        Ok(WrittenWad {
             stats,
+            written_overrides: override_hashes.into_iter().collect(),
         })
     }
 }
 
-/// Hand one prepared override to a writer, releasing it from the WAD's map so
-/// its bytes are freed as soon as the last WAD holding them has written it.
+/// Hand one prepared override to a writer, releasing it from the WAD's map.
+///
+/// Its bytes are then freed as soon as the last WAD holding them has written it.
 fn take_override(
     overrides: &mut HashMap<u64, PreparedOverride>,
     path_hash: u64,
@@ -561,6 +604,23 @@ struct WadWork {
     rewrite: Option<TailRewrite>,
 }
 
+/// The result of one write, before it is paired with the WAD's paths.
+struct WrittenWad {
+    stats: PatchedWadStats,
+    written_overrides: Vec<u64>,
+}
+
+impl WrittenWad {
+    fn into_wad(self, relative_path: Utf8PathBuf, path: Utf8PathBuf) -> PatchedWad {
+        PatchedWad {
+            relative_path,
+            path,
+            stats: self.stats,
+            written_overrides: self.written_overrides,
+        }
+    }
+}
+
 /// One overlay WAD this build wrote.
 pub(crate) struct PatchedWad {
     /// Game-relative path, the key both `wad_fingerprints` and `wad_layouts`
@@ -570,6 +630,12 @@ pub(crate) struct PatchedWad {
     pub(crate) path: Utf8PathBuf,
     /// Metrics, layout and source identity of the write.
     pub(crate) stats: PatchedWadStats,
+    /// The overrides that actually reached the file.
+    ///
+    /// Not always the set that was routed to this WAD: an override whose bytes
+    /// could not be resolved is skipped. The layout record has to describe what
+    /// the file holds, not what the build intended it to hold.
+    pub(crate) written_overrides: Vec<u64>,
 }
 
 #[cfg(test)]

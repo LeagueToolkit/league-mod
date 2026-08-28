@@ -9,7 +9,8 @@
 //! 2. Build (or load from cache) a [`GameIndex`] from all `.wad.client` files.
 //! 3. Load the saved [`OverlayState`] and choose a build strategy:
 //!    - **Skip**: mod list, per-mod content fingerprints, and game fingerprint
-//!      all match, and every overlay WAD file still exists on disk.
+//!      all match, no WAD is marked dirty, and every overlay WAD file still
+//!      exists on disk.
 //!    - **Incremental**: game fingerprint and state version match but the mod
 //!      list or some mod's content differs. Compute per-WAD override
 //!      fingerprints and only rebuild WADs whose fingerprint changed. Remove
@@ -19,10 +20,17 @@
 //! 4. **Pass 1**: Collect lightweight override metadata (hashes, sizes, source
 //!    locations) from all mods. Uses a persistent metadata cache to skip
 //!    unchanged mods entirely. Bytes are hashed and then dropped.
-//! 5. Distribute override hashes to WADs, partition into rebuild/reuse sets.
-//! 6. **Pass 2**: Re-read override bytes only for WADs that need rebuilding.
-//!    Call [`build_patched_wad`](crate::wad_builder::build_patched_wad).
-//! 7. Persist the new [`OverlayState`] with per-WAD fingerprints.
+//! 5. Distribute override hashes to WADs, partition into rebuild/reuse sets,
+//!    then work out which of the rebuilds can keep their file and rewrite only
+//!    its tail (see [`incremental`]). Those are marked dirty in one atomic state
+//!    write before any byte is touched.
+//! 6. **Pass 2**: Re-read override bytes only for WADs being rebuilt, and only
+//!    for the overrides a tail rewrite cannot lift out of the file it is about
+//!    to rewrite. Compress each distinct content once, then write every WAD in
+//!    parallel via [`build_patched_wad`](crate::wad_builder::build_patched_wad)
+//!    or [`rewrite_wad_tail`](crate::wad_builder::rewrite_wad_tail).
+//! 7. Persist the new [`OverlayState`]: per-WAD fingerprints, the layout record
+//!    of every WAD now on disk, and no dirty flags.
 
 mod incremental;
 mod metadata;
@@ -452,19 +460,9 @@ pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 fn collect_wad_layouts(
     built: &[resolve::PatchedWad],
     reused: &[Utf8PathBuf],
-    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<u64>>,
     all_meta: &HashMap<u64, OverrideMeta>,
     prev_state: Option<&OverlayState>,
 ) -> BTreeMap<String, WadLayoutRecord> {
-    let overrides_of = |relative_path: &Utf8PathBuf| -> BTreeMap<u64, u64> {
-        wad_hash_sets
-            .get(relative_path)
-            .into_iter()
-            .flatten()
-            .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
-            .collect()
-    };
-
     let mut layouts: BTreeMap<String, WadLayoutRecord> = built
         .iter()
         .filter_map(|wad| {
@@ -473,7 +471,14 @@ fn collect_wad_layouts(
                 WadLayoutRecord {
                     source: wad.stats.source?,
                     layout: wad.stats.layout,
-                    overrides: overrides_of(&wad.relative_path),
+                    // The overrides the file actually holds, not the ones this
+                    // build routed to it: a record that overstates its tail
+                    // would let a later build reuse bytes that are not there.
+                    overrides: wad
+                        .written_overrides
+                        .iter()
+                        .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
+                        .collect(),
                 },
             ))
         })
@@ -827,13 +832,8 @@ impl OverlayBuilder {
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
-        state.wad_layouts = collect_wad_layouts(
-            &built,
-            &wads_to_reuse,
-            &wad_hash_sets,
-            &all_meta,
-            prev_state.as_ref(),
-        );
+        state.wad_layouts =
+            collect_wad_layouts(&built, &wads_to_reuse, &all_meta, prev_state.as_ref());
         state.save(&state_path)?;
 
         let built_paths: Vec<Utf8PathBuf> = built.into_iter().map(|wad| wad.path).collect();
@@ -1022,8 +1022,7 @@ impl OverlayBuilder {
         Ok(plans)
     }
 
-    /// Record, in one atomic state write, that `wads` are about to be rewritten
-    /// in place.
+    /// Mark `wads` as about to be rewritten in place, in one state write.
     ///
     /// A tail rewrite edits a file the injector will serve, so a build killed
     /// half way through one leaves a torn WAD behind. The marker is what the
