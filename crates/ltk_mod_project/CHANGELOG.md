@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.8.3...ltk_mod_project-v0.8.4) - 2026-08-29
+
+### Other
+
+- updated the following local packages: ltk_fantome
+
 ## [0.8.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.8.2...ltk_mod_project-v0.8.3) - 2026-08-29
 
 ### Other
