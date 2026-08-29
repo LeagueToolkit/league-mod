@@ -14,11 +14,13 @@
 //! # Environment
 //!
 //! - `LTK_BENCH_GAME_DIR` - the game's `Game/` directory (required).
-//! - `LTK_BENCH_MOD_FANTOME` - a `.fantome` archive, read through
-//!   [`FantomeContent`] exactly as a manager enabling it would. Copied into the
-//!   work directory first. Its overrides live inside the archive, so the
-//!   scenarios that edit an override file are skipped. Takes precedence over
-//!   `LTK_BENCH_MOD_DIR`.
+//! - `LTK_BENCH_MOD_FANTOME` - one or more `.fantome` archives separated by
+//!   `;`, read through [`FantomeContent`] exactly as a manager enabling them
+//!   would. Each is copied into the work directory first. Their overrides live
+//!   inside the archives, so the scenarios that edit an override file are
+//!   skipped. Takes precedence over `LTK_BENCH_MOD_DIR`. Passing several
+//!   archives is what measures the N-mod no-op case, where per-mod opening
+//!   cost dominates.
 //! - `LTK_BENCH_MOD_DIR` - a mod project directory in the [`FsModContent`]
 //!   layout. Copied into the work directory first; the original is never
 //!   written to. When unset, a fixture is synthesized from the install itself
@@ -72,11 +74,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mod_dir = work_dir.join("mod");
     let explode = optional_var("LTK_BENCH_EXPLODE", 0u8)? != 0;
     let fixture = match std::env::var("LTK_BENCH_MOD_FANTOME") {
-        Ok(archive) => {
-            let source = Utf8PathBuf::from(archive.trim());
+        Ok(path_list) => {
+            let sources: Vec<Utf8PathBuf> = path_list
+                .split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(Utf8PathBuf::from)
+                .collect();
+            if sources.is_empty() {
+                return Err("LTK_BENCH_MOD_FANTOME holds no archive paths".into());
+            }
             std::fs::create_dir_all(work_dir.as_std_path())?;
             if explode {
-                explode_fantome(&source, &mod_dir)?;
+                let [source] = sources.as_slice() else {
+                    return Err("LTK_BENCH_EXPLODE only supports a single archive".into());
+                };
+                explode_fantome(source, &mod_dir)?;
                 let override_file = first_override_file(&mod_dir)
                     .ok_or("the archive holds no WAD overrides to explode")?;
                 Fixture::Dir {
@@ -85,12 +98,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     source: format!("{source} (exploded)"),
                 }
             } else {
-                let copy = work_dir.join("mod.fantome");
-                std::fs::copy(source.as_std_path(), copy.as_std_path())?;
-                Fixture::Fantome {
-                    archive: copy,
-                    source,
-                }
+                let archives = sources
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, source)| {
+                        let copy = work_dir.join(format!("mod-{i}.fantome"));
+                        std::fs::copy(source.as_std_path(), copy.as_std_path())?;
+                        Ok(FantomeArchive {
+                            archive: copy,
+                            source,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+                Fixture::Fantome { archives }
             }
         }
         Err(_) => {
@@ -117,7 +137,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let overlay_root = profile_dir.join("overlay");
 
     println!("game:    {game_dir}");
-    println!("mod:     {}", fixture.source());
+    match &fixture {
+        Fixture::Dir { source, .. } => println!("mod:     {source}"),
+        Fixture::Fantome { archives } => {
+            for archive in archives {
+                println!("mod:     {}", archive.source);
+            }
+        }
+    }
     println!("profile: {profile_dir}");
     match &fixture {
         Fixture::Dir { override_file, .. } => {
@@ -135,16 +162,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // is work a consumer pays on every build, and for an archive provider it
         // is not small. `opening` breaks it out so the two are separable.
         let start = Instant::now();
-        let content = fixture.provider()?;
+        let enabled_mods = fixture.enabled_mods()?;
         let opening = start.elapsed();
 
         let mut builder =
             OverlayBuilder::new(game_dir.clone(), overlay_root.clone(), profile_dir.clone());
-        builder.set_enabled_mods(vec![EnabledMod {
-            id: "bench-mod".to_string(),
-            content,
-            enabled_layers: None,
-        }]);
+        builder.set_enabled_mods(enabled_mods);
 
         let result = builder.build()?;
         Ok(Run::new(label, start.elapsed(), opening, &result))
@@ -157,6 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // directory fixture has. A `.fantome` is read as the manager reads it.
     let Fixture::Dir { override_file, .. } = &fixture else {
         report(&runs);
+        report_peak_memory();
         return Ok(());
     };
 
@@ -169,8 +193,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runs.push(build("add entry")?);
 
     report(&runs);
+    report_peak_memory();
     Ok(())
 }
+
+/// Print the process's two memory peaks across every scenario in the run.
+///
+/// `peak commit` is the number that matters: private, pagefile-backed
+/// allocations the OS cannot reclaim without writing them out - the kind that
+/// freezes low-RAM machines. `peak working set` also counts clean file-backed
+/// pages (the builder memory-maps game WADs to copy them), which the OS
+/// evicts for free, so it overstates pressure by roughly the mapped WAD sizes.
+///
+/// The OS reports one process-lifetime peak, not one per scenario, so this is
+/// a trailing line rather than a table column.
+#[cfg(windows)]
+fn report_peak_memory() {
+    // Field layout from PROCESS_MEMORY_COUNTERS in psapi.h; cb (in),
+    // PeakWorkingSetSize and PeakPagefileUsage are consumed.
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn K32GetProcessMemoryInfo(
+            process: isize,
+            counters: *mut ProcessMemoryCounters,
+            cb: u32,
+        ) -> i32;
+    }
+
+    let mut counters = ProcessMemoryCounters {
+        cb: size_of::<ProcessMemoryCounters>() as u32,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+    };
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing,
+    // and the out-pointer is a live, correctly sized ProcessMemoryCounters
+    // whose cb tells the API how much it may write.
+    let ok =
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 };
+    if ok {
+        println!(
+            "\npeak commit: {:.0} MiB (private; the pressure that freezes low-RAM machines)",
+            counters.peak_pagefile_usage as f64 / (1024.0 * 1024.0)
+        );
+        println!(
+            "peak working set: {:.0} MiB (includes evictable mapped game-WAD pages)",
+            counters.peak_working_set_size as f64 / (1024.0 * 1024.0)
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn report_peak_memory() {}
 
 /// Unpack a `.fantome`'s WAD content into a mod project directory.
 ///
@@ -215,38 +310,49 @@ enum Fixture {
         override_file: Utf8PathBuf,
         source: String,
     },
-    /// A `.fantome` archive, read exactly as a manager enabling it would.
+    /// One or more `.fantome` archives, read exactly as a manager enabling
+    /// them would.
     ///
-    /// Copied into the work directory first, so the original is never touched.
-    /// Its overrides live inside a zipped WAD rather than as files on disk, so
-    /// the scenarios that edit one do not apply.
-    Fantome {
-        archive: Utf8PathBuf,
-        source: Utf8PathBuf,
-    },
+    /// Each is copied into the work directory first, so the originals are
+    /// never touched. Their overrides live inside zipped WADs rather than as
+    /// files on disk, so the scenarios that edit one do not apply.
+    Fantome { archives: Vec<FantomeArchive> },
+}
+
+/// A `.fantome` archive under benchmark: its work-directory copy and where it
+/// was copied from.
+struct FantomeArchive {
+    archive: Utf8PathBuf,
+    source: Utf8PathBuf,
 }
 
 impl Fixture {
-    /// What to print as the benchmark's input.
-    fn source(&self) -> &str {
-        match self {
-            Self::Dir { source, .. } => source,
-            Self::Fantome { source, .. } => source.as_str(),
-        }
-    }
-
-    /// A fresh provider, since a build consumes the one it is given.
-    fn provider(
-        &self,
-    ) -> Result<Box<dyn ltk_overlay::ModContentProvider>, Box<dyn std::error::Error>> {
+    /// Fresh enabled mods for one build, since a build consumes the providers
+    /// it is given.
+    fn enabled_mods(&self) -> Result<Vec<EnabledMod>, Box<dyn std::error::Error>> {
         Ok(match self {
-            Self::Dir { mod_dir, .. } => Box::new(FsModContent::new(mod_dir.clone())),
-            Self::Fantome { archive, .. } => Box::new(
-                // The archive path is what lets the metadata cache fingerprint
-                // this mod, which the no-op scenario needs to hit the skip.
-                FantomeContent::new(std::fs::File::open(archive.as_std_path())?)?
-                    .with_archive_path(archive.clone()),
-            ),
+            Self::Dir { mod_dir, .. } => vec![EnabledMod {
+                id: "bench-mod".to_string(),
+                content: Box::new(FsModContent::new(mod_dir.clone())),
+                enabled_layers: None,
+            }],
+            Self::Fantome { archives } => archives
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    Ok(EnabledMod {
+                        id: format!("bench-mod-{i}"),
+                        // The archive path is what lets the metadata cache
+                        // fingerprint this mod, which the no-op scenario needs
+                        // to hit the skip.
+                        content: Box::new(
+                            FantomeContent::new(std::fs::File::open(a.archive.as_std_path())?)?
+                                .with_archive_path(a.archive.clone()),
+                        ),
+                        enabled_layers: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?,
         })
     }
 }
@@ -281,12 +387,7 @@ struct Run {
 }
 
 impl Run {
-    fn new(
-        label: &str,
-        elapsed: Duration,
-        opening: Duration,
-        result: &OverlayBuildResult,
-    ) -> Self {
+    fn new(label: &str, elapsed: Duration, opening: Duration, result: &OverlayBuildResult) -> Self {
         Self {
             label: label.to_string(),
             elapsed,

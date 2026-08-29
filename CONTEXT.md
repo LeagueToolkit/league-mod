@@ -106,6 +106,20 @@ Turning a mod held as an archive into an unpacked mod project directory. A mod c
 way; projectifying changes the storage shape, never the mod's identity.
 _Avoid_: unpack, extract, convert, explode
 
+**Normalize**:
+Rewriting a mod's container into its canonical stored form - packed WADs held seekable in place,
+metadata correct - without changing the mod's identity. Runs at import, on copies the importer
+owns, never on a file the user handed in.
+_Avoid_: repack, optimize, convert, fix up
+
+### Overlay building
+
+**Pass-through**:
+Copying a chunk's already-compressed bytes from a mod's container straight into an overlay WAD,
+identity verified in flight, never decompressed. The fallback for content that cannot pass through
+is to decompress and recompress it.
+_Avoid_: raw copy, zero-copy, fast path
+
 ### Preserving names
 
 **Harvest**:

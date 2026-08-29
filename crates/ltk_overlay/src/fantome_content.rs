@@ -145,6 +145,10 @@ pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: FantomeIndex,
     archive_path: Option<Utf8PathBuf>,
+    /// Packed WADs mounted so far, keyed by lowercase WAD name. Filled lazily
+    /// by `packed_wad`: the exact-match skip path never needs the bytes, and
+    /// eagerly mounting every packed WAD would charge a full archive read to
+    /// builds that end up reusing everything.
     packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>>,
 }
 
@@ -153,24 +157,11 @@ impl<R: Read + Seek> FantomeContent<R> {
         let mut archive = ZipArchive::new(reader)?;
         let index = FantomeIndex::build(&mut archive);
 
-        // Mount all packed WADs upfront, reading via the stored entry path.
-        let mut packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>> = HashMap::new();
-        for (wad_key, zip_path) in &index.packed_wad_paths {
-            let mut entry = archive
-                .by_name(zip_path)
-                .map_err(|source| Error::archive_entry(zip_path, source))?;
-            let wad_data = read_zip_entry_bytes(&mut entry)
-                .map_err(|source| Error::archive_entry(zip_path, source))?;
-
-            let wad = Wad::mount(Cursor::new(wad_data))?;
-            packed_wads.insert(wad_key.clone(), wad);
-        }
-
         Ok(Self {
             archive,
             index,
             archive_path: None,
-            packed_wads,
+            packed_wads: HashMap::new(),
         })
     }
 
@@ -178,6 +169,31 @@ impl<R: Read + Seek> FantomeContent<R> {
     pub fn with_archive_path(mut self, path: Utf8PathBuf) -> Self {
         self.archive_path = Some(path);
         self
+    }
+
+    /// The packed WAD for `wad_key`, mounting it on first access.
+    ///
+    /// Returns `Ok(None)` when the archive holds no packed WAD under that key.
+    /// An entry that exists but cannot be read or mounted is an error.
+    fn packed_wad(&mut self, wad_key: &str) -> Result<Option<&mut Wad<Cursor<Vec<u8>>>>> {
+        if !self.packed_wads.contains_key(wad_key) {
+            let Some(zip_path) = self.index.packed_wad_paths.get(wad_key) else {
+                return Ok(None);
+            };
+
+            let mut entry = self
+                .archive
+                .by_name(zip_path)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            let wad_data = read_zip_entry_bytes(&mut entry)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            drop(entry);
+
+            let wad = Wad::mount(Cursor::new(wad_data))?;
+            self.packed_wads.insert(wad_key.to_string(), wad);
+        }
+
+        Ok(self.packed_wads.get_mut(wad_key))
     }
 }
 
@@ -282,7 +298,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         // Try packed WAD - extract all chunks as hex-hash files.
-        if let Some(wad) = self.packed_wads.get_mut(&wad_key) {
+        if let Some(wad) = self.packed_wad(&wad_key)? {
             // The entries are copied out whole rather than re-looked-up by hash:
             // loading a chunk needs `&mut wad`, and carrying the entry is what
             // keeps "the TOC listed it but does not hold it" unrepresentable.
@@ -299,6 +315,71 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         Ok(Vec::new())
+    }
+
+    fn visit_wad_override(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        if layer != "base" {
+            return Ok(());
+        }
+
+        let wad_key = wad_name.to_ascii_lowercase();
+
+        if let Some(entries) = self.index.wad_dir_entries.get(&wad_key) {
+            let entry_names: Vec<(String, String)> = entries.clone();
+            for (zip_path, rel_path) in &entry_names {
+                let mut entry = self
+                    .archive
+                    .by_name(zip_path)
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                let bytes = read_zip_entry_bytes(&mut entry)
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                drop(entry);
+                visit(Utf8PathBuf::from(rel_path), bytes)?;
+            }
+            return Ok(());
+        }
+
+        if let Some(wad) = self.packed_wad(&wad_key)? {
+            // One chunk's decompressed bytes live at a time - the whole reason
+            // this method exists next to the bulk read.
+            let chunks: Vec<WadChunk> = wad.chunks().iter().copied().collect();
+            for chunk in chunks {
+                // Re-borrow per iteration: `visit` must not run under the
+                // `&mut Wad` borrow, and the map entry is stable once mounted.
+                let wad = self
+                    .packed_wads
+                    .get_mut(&wad_key)
+                    .expect("packed WAD mounted above");
+                let bytes = wad.load_chunk_decompressed(&chunk)?.to_vec();
+                let hex_name = format!("{:016x}.bin", chunk.path_hash);
+                visit(Utf8PathBuf::from(hex_name), bytes)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn visit_raw_override(
+        &mut self,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let entries: Vec<(String, String)> = self.index.raw_entries.clone();
+        for (zip_path, rel_path) in &entries {
+            let mut entry = self
+                .archive
+                .by_name(zip_path)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            let bytes = read_zip_entry_bytes(&mut entry)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            drop(entry);
+            visit(Utf8PathBuf::from(rel_path), bytes)?;
+        }
+        Ok(())
     }
 
     fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
@@ -357,9 +438,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         // Try packed WAD - extract specific chunk by hex hash filename
-        if let Some(wad) = self.packed_wads.get_mut(&wad_key)
-            && is_hex_chunk_path(rel_path)
+        if is_hex_chunk_path(rel_path)
             && let Ok(target_hash) = WadHash::from_str_radix(rel_path.file_stem().unwrap_or(""), 16)
+            && let Some(wad) = self.packed_wad(&wad_key)?
         {
             let chunk =
                 *wad.chunks()
@@ -838,6 +919,95 @@ mod tests {
             .read_wad_override_file("base", "Packed.wad.client", &hex_name)
             .expect("read_wad_override_file");
         assert_eq!(single, PACKED_PAYLOAD);
+    }
+
+    #[test]
+    fn streaming_visits_the_same_overrides_as_the_bulk_read() {
+        // The streaming visitor exists so the metadata pass holds one chunk at
+        // a time instead of a whole WAD; it must surface exactly the entries
+        // the bulk read does, for both directory-style and packed WADs.
+        let wad_bytes = make_packed_wad_bytes(b"packed_payload");
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Streamed")),
+            ("WAD/Aatrox.wad.client/file1.bin", b"data1"),
+            ("WAD/Aatrox.wad.client/sub/file2.bin", b"data2"),
+            ("WAD/Packed.wad.client", &wad_bytes),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        for wad_name in ["Aatrox.wad.client", "Packed.wad.client"] {
+            let mut streamed: Vec<(Utf8PathBuf, Vec<u8>)> = Vec::new();
+            content
+                .visit_wad_override("base", wad_name, &mut |rel_path, bytes| {
+                    streamed.push((rel_path, bytes));
+                    Ok(())
+                })
+                .unwrap();
+
+            let mut bulk = content.read_wad_overrides("base", wad_name).unwrap();
+            bulk.sort();
+            streamed.sort();
+            assert_eq!(streamed, bulk, "streaming and bulk disagree for {wad_name}");
+        }
+    }
+
+    #[test]
+    fn streaming_visits_the_same_raw_overrides_as_the_bulk_read() {
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Streamed Raw")),
+            ("RAW/assets/a.bin", b"raw_a"),
+            ("RAW/assets/b.bin", b"raw_b"),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        let mut streamed: Vec<(Utf8PathBuf, Vec<u8>)> = Vec::new();
+        content
+            .visit_raw_override(&mut |rel_path, bytes| {
+                streamed.push((rel_path, bytes));
+                Ok(())
+            })
+            .unwrap();
+
+        let mut bulk = content.read_raw_overrides().unwrap();
+        bulk.sort();
+        streamed.sort();
+        assert_eq!(streamed, bulk);
+    }
+
+    #[test]
+    fn packed_wad_is_not_read_before_first_access() {
+        // The exact-match skip path only needs META/info.json and a file stat,
+        // so construction and mod_project must not touch packed WAD bytes. A
+        // deliberately invalid packed WAD makes that observable at the seam:
+        // an eager mount would fail in `new`, a lazy one only on first read.
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Lazy")),
+            ("WAD/Broken.wad.client", b"not a wad at all"),
+        ]);
+        let mut content = FantomeContent::new(cursor).expect("new must not mount packed WADs");
+
+        let project = content.mod_project().expect("mod_project");
+        assert_eq!(project.display_name, "Lazy");
+
+        // The WAD is still listed - the index alone knows its name.
+        let wads = content.list_layer_wads("base").unwrap();
+        assert_eq!(wads, vec!["broken.wad.client"]);
+
+        // First real access is where the invalid WAD surfaces.
+        assert!(
+            content
+                .read_wad_overrides("base", "Broken.wad.client")
+                .is_err()
+        );
+        assert!(
+            content
+                .read_wad_override_file(
+                    "base",
+                    "Broken.wad.client",
+                    Utf8Path::new("0000000000000000.bin"),
+                )
+                .is_err()
+        );
     }
 
     #[test]
