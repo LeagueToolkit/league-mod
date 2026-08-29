@@ -70,6 +70,24 @@ Full list of fields and their default value are located in file `data/menu/en_us
 Approach of shipping only overrides in mod is due to need to have `lol.stringtable` file *ALWAYS* up to date.
 Tool that allows converting between `.stringtable` and `.json` is [Rion](https://github.com/Roshaless/Rion/releases)
 
+## Normalized archives
+
+A `WAD/` entry may hold a whole packed `.wad.client` rather than a directory of
+loose files. The zip format lets such an entry be deflated like any other, and
+the tools in the wild write it that way - but a deflated entry has to be
+inflated whole before any chunk inside it can be reached, which puts the entire
+WAD in memory for the sake of the few chunks a reader wants.
+
+An archive is **normalized** when its packed WADs are held `Stored`: the same
+bytes, now a byte range a reader seeks into. Nothing else changes shape - the
+metadata, the loose files and the hashtables stay deflated, because they are
+read whole or not at all. `normalize_archive` performs the conversion, and only
+an importer working on a copy it owns should call it; see
+`docs/adr/0002-normalization-happens-at-import-never-at-build.md`.
+
+Both forms are valid Fantome archives, and every reader in this repo accepts
+either.
+
 ## Limitations
 
 - **Fixed structure**: Must follow the exact WAD folder structure expected by League of Legends

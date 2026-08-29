@@ -5,12 +5,19 @@
 //! [`FantomeReader`] for consuming them. Turning a mod *project* into an
 //! archive (and back) lives in `ltk_mod_project`'s `fantome` module, which
 //! composes the primitives here.
+//!
+//! Two operations rewrite an archive in place of reading it: [`add_hashtables`]
+//! merges harvested names into one, and [`normalize_archive`] holds its packed
+//! WADs stored so a reader can seek to them. Both raw-copy everything they do
+//! not themselves replace, and both belong to an importer working on a copy it
+//! owns.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod error;
+mod normalize;
 mod reader;
 mod rewrite;
 mod writer;
@@ -21,6 +28,9 @@ pub use error::{FantomeExtractError, FantomeWriteError};
 /// default [`NoResolver`] in place and leaves the naming to the archive's own
 /// bins. [`NamingPolicy`] decides what becomes of a chunk two paths claim.
 pub use ltk_wad::{NamingPolicy, NoResolver, PathResolver};
+pub use normalize::{
+    FantomeNormalizeError, NormalizeOutcome, normalize_archive, store_packed_wads,
+};
 pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
 pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables};
 pub use writer::FantomeWriter;

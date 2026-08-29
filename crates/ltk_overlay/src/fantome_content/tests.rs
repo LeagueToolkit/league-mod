@@ -608,3 +608,138 @@ fn hex_chunk_names_are_zero_padded() {
     assert_eq!(name, "00000000000000ff.bin");
     assert_eq!(Utf8Path::new(&name).file_stem().unwrap().len(), 16);
 }
+
+/// The archive entry every on-disk fixture holds its packed WAD under.
+const PACKED_WAD_ENTRY: &str = "WAD/Aatrox.wad.client";
+
+/// Write a `.fantome` to disk, its packed WAD held under `packed`.
+///
+/// Stored is what a normalized archive looks like; deflated is what the tools
+/// in the wild write.
+fn write_archive(dir: &Utf8Path, packed: zip::CompressionMethod, wad: &[u8]) -> Utf8PathBuf {
+    let path = dir.join("mod.fantome");
+    let file = std::fs::File::create(path.as_std_path()).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    zip.start_file("META/info.json", deflated).unwrap();
+    zip.write_all(&make_info_json("Test")).unwrap();
+    zip.start_file(PACKED_WAD_ENTRY, deflated.compression_method(packed))
+        .unwrap();
+    zip.write_all(wad).unwrap();
+    zip.finish().unwrap();
+
+    path
+}
+
+/// The provider over an archive on disk, told where that archive lives.
+fn open_archive(path: &Utf8Path) -> FantomeContent<std::fs::File> {
+    FantomeContent::new(std::fs::File::open(path.as_std_path()).unwrap())
+        .unwrap()
+        .with_archive_path(path.to_path_buf())
+}
+
+/// The hex name the packed fixture's one chunk is addressed by.
+fn packed_chunk_name() -> String {
+    format!("{:016x}.bin", hash(PACKED_CHUNK_PATH))
+}
+
+/// A normalized archive stores its packed WADs, and the provider then reads
+/// their chunks where they lie. Inflating a whole WAD to reach a few chunks is
+/// what put a build's memory in proportion to the mods it held.
+#[test]
+fn a_stored_packed_wad_is_read_where_it_lies() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = Utf8Path::from_path(dir.path()).unwrap();
+    let path = write_archive(
+        dir,
+        zip::CompressionMethod::Stored,
+        &make_packed_wad_bytes(b"stored payload"),
+    );
+    let mut content = open_archive(&path);
+
+    let bytes = content
+        .read_wad_override_file(
+            "base",
+            "Aatrox.wad.client",
+            Utf8Path::new(&packed_chunk_name()),
+        )
+        .unwrap();
+
+    assert_eq!(bytes, b"stored payload");
+    assert!(
+        content.stored_window(PACKED_WAD_ENTRY).unwrap().is_some(),
+        "a stored entry must be read where the archive holds it"
+    );
+}
+
+/// A deflated archive still works, at the cost ADR-0002 accepts: there is
+/// nothing seekable to point a WAD at, so the entry is inflated whole.
+#[test]
+fn a_deflated_packed_wad_is_inflated_into_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = Utf8Path::from_path(dir.path()).unwrap();
+    let path = write_archive(
+        dir,
+        zip::CompressionMethod::Deflated,
+        &make_packed_wad_bytes(b"deflated payload"),
+    );
+    let mut content = open_archive(&path);
+
+    let bytes = content
+        .read_wad_override_file(
+            "base",
+            "Aatrox.wad.client",
+            Utf8Path::new(&packed_chunk_name()),
+        )
+        .unwrap();
+
+    assert_eq!(bytes, b"deflated payload");
+    assert!(content.stored_window(PACKED_WAD_ENTRY).unwrap().is_none());
+}
+
+/// Without a path there is no second handle to open, so even a stored entry is
+/// inflated: the provider never guesses where the archive it was handed lives.
+#[test]
+fn a_stored_packed_wad_without_an_archive_path_is_inflated() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = Utf8Path::from_path(dir.path()).unwrap();
+    let path = write_archive(
+        dir,
+        zip::CompressionMethod::Stored,
+        &make_packed_wad_bytes(b"stored payload"),
+    );
+    let mut content =
+        FantomeContent::new(std::fs::File::open(path.as_std_path()).unwrap()).unwrap();
+
+    let bytes = content
+        .read_wad_override_file(
+            "base",
+            "Aatrox.wad.client",
+            Utf8Path::new(&packed_chunk_name()),
+        )
+        .unwrap();
+
+    assert_eq!(bytes, b"stored payload");
+    assert!(content.stored_window(PACKED_WAD_ENTRY).unwrap().is_none());
+}
+
+/// The window is exactly its entry. A WAD whose TOC reaches past its own last
+/// byte has to run out of bytes, not read on into whatever the archive stores
+/// after it.
+#[test]
+fn a_window_is_exactly_its_entry() {
+    let archive = Arc::new(b"....ENTRYBYTES....".to_vec());
+
+    let window = EntryWindow::new(archive, 4, 10).unwrap();
+
+    assert_eq!(window.as_ref(), b"ENTRYBYTES");
+}
+
+/// A range the file does not hold is a reason to fall back to inflating the
+/// entry, never a reason to read whatever happens to be at that offset.
+#[test]
+fn a_window_past_the_end_of_the_archive_is_refused() {
+    assert!(EntryWindow::new(Arc::new(b"short".to_vec()), 2, 10).is_none());
+}
