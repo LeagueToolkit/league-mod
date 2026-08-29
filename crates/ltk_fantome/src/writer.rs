@@ -1,16 +1,24 @@
 //! [`FantomeWriter`]: writes the entries of a Fantome archive.
 //!
-//! The writer owns the archive flavor (a Deflate-compressed zip) and the
-//! entry naming conventions (`WAD/`, `META/`). It does not know what a mod
-//! project is: deciding which files go into the archive is the caller's job
-//! (see `ltk_mod_project`'s `fantome` module).
+//! The writer owns the archive flavor and the entry naming conventions
+//! (`WAD/`, `META/`). It does not know what a mod project is: deciding which
+//! files go into the archive is the caller's job (see `ltk_mod_project`'s
+//! `fantome` module).
+//!
+//! The flavor is a Deflate-compressed zip with one exception: a **packed WAD
+//! is stored**. A reader seeks into a stored entry to reach one chunk and has
+//! to inflate a deflated one whole, so deflating a packed WAD costs a map mod
+//! a minute of CPU to produce an archive nothing can read cheaply. That is the
+//! same rule [`store_packed_wads`](crate::store_packed_wads) normalizes an
+//! archive to, and the writer holds to it so that a rewrite passing a WAD
+//! through cannot quietly undo it.
 
 use std::io::{Read, Seek, Write};
 
-use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
-use crate::{FantomeHashtable, FantomeInfo};
+use crate::{FantomeEntry, FantomeHashtable, FantomeInfo, classify_entry};
 
 /// Failure to write a Fantome archive entry.
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +48,14 @@ pub struct FantomeWriter<W: Write + Seek> {
 
 impl<W: Write + Seek> FantomeWriter<W> {
     /// Create a writer producing the standard Fantome flavor: a zip archive
-    /// with Deflate compression.
+    /// with Deflate compression, its packed WADs stored.
+    ///
+    /// A reader seeks into a stored entry to reach one chunk of a WAD and has
+    /// to inflate a deflated one whole, so a packed WAD is written stored
+    /// however it arrived - which is what [`store_packed_wads`] normalizes an
+    /// archive to, held to here so a rewrite cannot undo it.
+    ///
+    /// [`store_packed_wads`]: crate::store_packed_wads
     pub fn new(writer: W) -> Self {
         Self {
             zip: ZipWriter::new(writer),
@@ -135,8 +150,24 @@ impl<W: Write + Seek> FantomeWriter<W> {
         entry_path: &str,
         content: &mut impl Read,
     ) -> Result<(), FantomeWriteError> {
-        self.zip.start_file(entry_path, self.options)?;
+        self.zip
+            .start_file(entry_path, self.options_for(entry_path))?;
         std::io::copy(content, &mut self.zip)?;
         Ok(())
+    }
+
+    /// How the entry at `entry_path` is compressed.
+    ///
+    /// Read off the path rather than taken from the caller: whether an entry
+    /// is a packed WAD is the only thing the answer depends on, and a caller
+    /// asked to state it each time is a caller that can get it wrong. See the
+    /// [module docs](self) for what deflating a packed WAD costs.
+    fn options_for(&self, entry_path: &str) -> SimpleFileOptions {
+        match classify_entry(entry_path) {
+            Some(FantomeEntry::PackedWad(_)) => {
+                self.options.compression_method(CompressionMethod::Stored)
+            }
+            _ => self.options,
+        }
     }
 }
