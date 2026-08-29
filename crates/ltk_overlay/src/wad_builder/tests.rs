@@ -6,9 +6,10 @@ const WAD_REL: &str = "DATA/FINAL/Champions/Test.wad.client";
 const SKIN: &str = "assets/characters/test/skins/skin0.dds";
 const VFX: &str = "assets/characters/test/particles.bin";
 
-/// Rewriting in place truncates the file before it writes, so a rewrite that
-/// is going to be refused must be refused before that happens - otherwise
-/// the caller's fallback inherits a torn file it did not need to.
+/// Rewriting in place is destructive - the caller truncates the file before
+/// the write - so a rewrite that is going to be refused must be refused
+/// before that happens, or the fallback inherits a torn file it did not need
+/// to. Planning is what refuses, and a plan never touches the WAD.
 #[test]
 fn a_rejected_entry_count_leaves_the_file_untouched() {
     let tmp = tempfile::tempdir().unwrap();
@@ -46,14 +47,8 @@ fn a_rejected_entry_count_leaves_the_file_untouched() {
     // One chunk the file reserved no TOC entry for, which is exactly what
     // the capacity check exists to refuse.
     let new_entry = hash("assets/characters/test/brand_new.bin");
-    let refused = rewrite_wad_tail(
-        &overlay_path,
-        &stats.layout,
-        stats.source,
-        base_entries,
-        &[new_entry],
-        |_| Ok(prepared.clone()),
-    );
+    let tail = [(new_entry, prepared.clone())];
+    let refused = WadTailPlan::new(&stats.layout, base_entries, &tail);
 
     assert!(
         refused.is_err(),
@@ -63,6 +58,90 @@ fn a_rejected_entry_count_leaves_the_file_untouched() {
         std::fs::read(overlay_path.as_std_path()).unwrap(),
         before,
         "a refused rewrite must not have touched the file"
+    );
+}
+
+/// Story: the same rewrite, into a WAD that is not the whole file.
+///
+/// A WAD packed inside an archive starts partway through its container, so
+/// every seek the write makes has to be offset by where it begins - and every
+/// offset it *records* must not be, because the game reads the WAD without
+/// knowing what holds it. Getting that backwards produces a WAD whose TOC
+/// points at the container's bytes.
+#[test]
+fn a_tail_written_at_a_base_offset_reads_back_as_a_wad() {
+    use std::io::Cursor;
+
+    const BASE: u64 = 4096;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+    let source_path = root.join("Game").join(WAD_REL);
+    write_game_wad(
+        &source_path,
+        &[(SKIN, b"the original skin"), (VFX, b"the original vfx")],
+    );
+
+    let overlay_path = root.join("overlay").join(WAD_REL);
+    let first = PreparedOverride::compress(hash(SKIN), b"a modded skin").unwrap();
+    let stats = build_patched_wad(
+        &source_path,
+        &overlay_path,
+        &[hash(SKIN)].into_iter().collect(),
+        |_| Ok(first.clone()),
+    )
+    .expect("the overlay WAD builds");
+
+    let base_entries: BTreeMap<WadHash, WadChunk> = {
+        let file = File::open(source_path.as_std_path()).unwrap();
+        let source = Wad::mount(std::io::BufReader::new(file)).unwrap();
+        source
+            .chunks()
+            .iter()
+            .map(|chunk| (chunk.path_hash, stats.layout.shifted(chunk).unwrap()))
+            .collect()
+    };
+
+    // The container: padding, then the overlay WAD cut back to where its tail
+    // begins - which is what a caller makes room the same way for.
+    let built = std::fs::read(overlay_path.as_std_path()).unwrap();
+    let mut container = vec![0xAAu8; BASE as usize];
+    container.extend_from_slice(&built[..stats.layout.tail_offset as usize]);
+
+    let replacement = PreparedOverride::compress(hash(SKIN), b"a differently modded skin").unwrap();
+    let tail = [(hash(SKIN), replacement.clone())];
+    let plan =
+        WadTailPlan::new(&stats.layout, base_entries, &tail).expect("the plan is admissible");
+    let tail_len = plan.tail_len();
+
+    let mut cursor = Cursor::new(container);
+    let report = plan.write(&mut cursor, BASE).expect("the tail writes");
+    let container = cursor.into_inner();
+
+    assert_eq!(
+        report.tail_len, tail_len,
+        "the plan predicted the tail length"
+    );
+    assert_eq!(report.entry_count, 2);
+
+    // The padding is untouched: a write at a base offset stays inside the WAD.
+    assert!(
+        container[..BASE as usize].iter().all(|byte| *byte == 0xAA),
+        "the write ran back over the container's own bytes"
+    );
+
+    // And the region reads as a WAD in its own right, holding the replacement.
+    let mut wad = Wad::mount(Cursor::new(&container[BASE as usize..])).unwrap();
+    let chunk = *wad.chunks().get(hash(SKIN)).expect("the overridden chunk");
+    assert_eq!(
+        &*wad.load_chunk_decompressed(&chunk).unwrap(),
+        b"a differently modded skin"
+    );
+    let untouched = *wad.chunks().get(hash(VFX)).expect("the transient chunk");
+    assert_eq!(
+        &*wad.load_chunk_decompressed(&untouched).unwrap(),
+        b"the original vfx"
     );
 }
 

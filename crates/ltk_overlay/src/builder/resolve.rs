@@ -14,11 +14,12 @@ use crate::game_index::GameIndex;
 use crate::state::OverlayState;
 use crate::strings::{self, StringPatchPlan};
 use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
-use crate::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad, rewrite_wad_tail};
+use crate::wad_builder::{PatchedWadStats, PreparedOverride, WadTailPlan, build_patched_wad};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -681,36 +682,71 @@ impl OverlayBuilder {
         rewrite: TailRewrite,
         overrides: &HashMap<WadHash, PreparedOverride>,
     ) -> Result<WrittenWad> {
+        let start = std::time::Instant::now();
+        let TailRewrite {
+            record,
+            base_entries,
+            tail_hashes,
+            ..
+        } = rewrite;
+
         // An override whose bytes never resolved - a stringtable patch that
         // failed to apply, say - is dropped rather than fatal, and its chunk
         // falls back to the entry the source region holds. That is what the
         // full-rebuild path does with it too.
-        let tail_hashes: Vec<WadHash> = rewrite
-            .tail_hashes
+        let tail: Vec<(WadHash, PreparedOverride)> = tail_hashes
             .into_iter()
-            .filter(|hash| overrides.contains_key(hash))
+            .filter_map(|hash| overrides.get(&hash).cloned().map(|over| (hash, over)))
             .collect();
 
         tracing::info!(
             "Rewriting WAD tail dst={} overrides={}",
             dst_wad_path,
-            tail_hashes.len()
+            tail.len()
         );
 
         // The planner proved this source identity before choosing the in-place
         // path; the rewrite itself never opens the game WAD.
-        let stats = rewrite_wad_tail(
+        let base_entry_count = base_entries.len();
+        let plan = WadTailPlan::new(&record.layout, base_entries, &tail)?;
+
+        // Every check that can be made without the file has now been made, so
+        // the file can be committed to. Truncating is what makes room for a
+        // tail shorter than the one the file holds, and there is no `.tmp` to
+        // discard if the write then fails - which is exactly what the caller's
+        // fallback rebuild is for.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dst_wad_path.as_std_path())
+            .map_err(|source| Error::write(dst_wad_path, source))?;
+        file.set_len(record.layout.tail_offset)
+            .map_err(|source| Error::write(dst_wad_path, source))?;
+
+        let mut file = file;
+        let report = plan.write(&mut file, 0)?;
+
+        let elapsed_ms = start.elapsed().as_millis();
+        tracing::info!(
+            "Rewrote WAD tail dst={} chunks={} overrides={} tail_bytes={} elapsed_ms={}",
             dst_wad_path,
-            &rewrite.record.layout,
-            rewrite.record.source,
-            rewrite.base_entries,
-            &tail_hashes,
-            |hash| overrides.get(&hash).cloned().ok_or_else(missing_override),
-        )?;
+            report.entry_count,
+            tail.len(),
+            report.tail_len,
+            elapsed_ms
+        );
 
         Ok(WrittenWad {
-            stats,
-            written_overrides: tail_hashes,
+            stats: PatchedWadStats {
+                chunks_written: report.entry_count,
+                overrides_applied: tail.len(),
+                new_entries_added: report.entry_count.saturating_sub(base_entry_count),
+                chunks_transient: report.entry_count - tail.len(),
+                elapsed_ms,
+                layout: record.layout,
+                source: record.source,
+            },
+            written_overrides: tail.into_iter().map(|(hash, _)| hash).collect(),
         })
     }
 

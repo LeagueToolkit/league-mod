@@ -116,6 +116,10 @@ pub enum Error {
     #[error(transparent)]
     WadLimit(#[from] WadLimitError),
 
+    /// A WAD's tail could not be rewritten.
+    #[error(transparent)]
+    WadTail(#[from] crate::wad_builder::WadTailError),
+
     /// A file is not what its own metadata says it is.
     #[error(transparent)]
     Corrupt(#[from] CorruptionError),

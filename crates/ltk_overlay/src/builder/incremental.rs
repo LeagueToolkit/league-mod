@@ -30,8 +30,9 @@ use std::io::BufReader;
 enum RebuildReason {
     /// A file or record the plan depends on could not be read, mounted, or used.
     Unusable(Error),
-    /// The recorded layout's own numbers do not hang together.
-    IncoherentLayout(Error),
+    /// The recorded layout is unusable: its own numbers do not hang together,
+    /// or a chunk it places falls outside what the format can address.
+    IncoherentLayout(crate::wad_builder::WadTailError),
     /// The game WAD is no longer the one this overlay was built from.
     GameWadChanged {
         found: SourceWadIdentity,
@@ -54,6 +55,12 @@ enum RebuildReason {
 impl From<Error> for RebuildReason {
     fn from(error: Error) -> Self {
         Self::Unusable(error)
+    }
+}
+
+impl From<crate::wad_builder::WadTailError> for RebuildReason {
+    fn from(error: crate::wad_builder::WadTailError) -> Self {
+        Self::IncoherentLayout(error)
     }
 }
 

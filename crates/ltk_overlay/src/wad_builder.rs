@@ -63,7 +63,7 @@ use ltk_file::LeagueFileKind;
 use ltk_wad::{FileExt as _, Wad, WadChunk, WadChunkCompression, WadChunks, WadHash};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
@@ -104,6 +104,79 @@ const TOC_SLACK_ENTRIES: u32 = 0;
 
 /// Highest byte offset the WAD v3.4 format's `u32` offset fields can address.
 const MAX_WAD_OFFSET: u64 = u32::MAX as u64;
+
+/// Why a WAD's tail could not be rewritten.
+///
+/// Everything the tail rewrite alone can refuse, named without reference to
+/// where the WAD lives: it is handed a seekable target and a base offset, so it
+/// has no path to put in a message. A caller that has one attaches it.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum WadTailError {
+    /// The recorded layout does not place its regions past a header, a chunk
+    /// count and a TOC of the recorded capacity.
+    #[error(
+        "a layout reserving {toc_capacity} TOC entries cannot put its data region at \
+         {data_region_offset} and its tail at {tail_offset}"
+    )]
+    IncoherentLayout {
+        /// TOC entries the layout reserved.
+        toc_capacity: u32,
+        /// Where the layout puts the copied source data region.
+        data_region_offset: u64,
+        /// Where the layout puts the override tail.
+        tail_offset: u64,
+    },
+
+    /// The rewritten TOC no longer fits the capacity the file reserved.
+    #[error("the WAD reserved {reserved} TOC entries, not the {needed} this rewrite needs")]
+    TocCapacity {
+        /// Entries the rewritten TOC would hold.
+        needed: usize,
+        /// Entries the file has room for.
+        reserved: u32,
+    },
+
+    /// The tail would reach past what the format's `u32` offsets can address.
+    #[error(
+        "the override tail would reach offset {offset}, past the 4 GiB the WAD v3.4 \
+         format can address"
+    )]
+    TailTooLarge {
+        /// The offset the tail would have reached.
+        offset: u64,
+    },
+
+    /// A source chunk's shifted range falls outside the addressable file.
+    #[error("chunk {path_hash:016x} cannot be addressed at offset {offset}")]
+    ChunkUnaddressable {
+        /// The chunk that would not fit.
+        path_hash: WadHash,
+        /// Where shifting would have put it.
+        offset: i64,
+    },
+
+    /// A TOC entry could not be encoded.
+    #[error(transparent)]
+    Wad(#[from] ltk_wad::WadError),
+
+    /// The target refused a write or a seek.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// What a tail rewrite wrote.
+///
+/// The numbers the write itself produced, and nothing the caller already held:
+/// the layout it passed in, the source it verified and the time it chose to
+/// measure are all its own to report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WadTailReport {
+    /// Entries in the rewritten TOC.
+    pub entry_count: usize,
+    /// Bytes the override tail now occupies.
+    pub tail_len: u64,
+}
 
 /// An override chunk's compressed bytes plus the TOC fields describing them.
 ///
@@ -350,7 +423,7 @@ impl WadTailLayout {
     /// deserialized from a state file that anything could have written, and the
     /// result is a seek target in a file the game loads, so the subtraction
     /// reports rather than wraps.
-    pub fn toc_offset(&self) -> Result<u64> {
+    pub fn toc_offset(&self) -> std::result::Result<u64, WadTailError> {
         self.chunk_count_offset()
             .map(|offset| offset + size_of::<u32>() as u64)
     }
@@ -361,19 +434,16 @@ impl WadTailLayout {
     ///
     /// Fails on the same layouts as [`toc_offset`](Self::toc_offset), of which
     /// this is the lower bound.
-    pub fn chunk_count_offset(&self) -> Result<u64> {
+    pub fn chunk_count_offset(&self) -> std::result::Result<u64, WadTailError> {
         let below_region =
             u64::from(self.toc_capacity) * TOC_ENTRY_SIZE as u64 + size_of::<u32>() as u64;
         self.data_region_offset
             .checked_sub(below_region)
             .filter(|&offset| offset >= WAD_HEADER_SIZE)
-            .ok_or_else(|| {
-                CorruptionError::IncoherentLayout {
-                    toc_capacity: self.toc_capacity,
-                    data_region_offset: self.data_region_offset,
-                    tail_offset: self.tail_offset,
-                }
-                .into()
+            .ok_or(WadTailError::IncoherentLayout {
+                toc_capacity: self.toc_capacity,
+                data_region_offset: self.data_region_offset,
+                tail_offset: self.tail_offset,
             })
     }
 
@@ -387,15 +457,14 @@ impl WadTailLayout {
     ///
     /// Fails when the shifted range falls outside what the format's `u32`
     /// offset fields can address.
-    pub fn shifted(&self, orig: &WadChunk) -> Result<WadChunk> {
+    pub fn shifted(&self, orig: &WadChunk) -> std::result::Result<WadChunk, WadTailError> {
         let shifted = orig.data_offset as i64 + self.offset_delta;
         let end = shifted + orig.compressed_size as i64;
         if shifted < 0 || end > MAX_WAD_OFFSET as i64 {
-            return Err(WadLimitError::ChunkUnaddressable {
+            return Err(WadTailError::ChunkUnaddressable {
                 path_hash: orig.path_hash,
                 offset: shifted,
-            }
-            .into());
+            });
         }
 
         Ok(WadChunk {
@@ -428,15 +497,14 @@ impl WadTailLayout {
     /// Fails when the region does not start past a header, a chunk count and a
     /// TOC of the recorded capacity, or when the tail starts before the region
     /// does.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), WadTailError> {
         self.chunk_count_offset()?;
         if self.tail_offset < self.data_region_offset {
-            return Err(CorruptionError::IncoherentLayout {
+            return Err(WadTailError::IncoherentLayout {
                 toc_capacity: self.toc_capacity,
                 data_region_offset: self.data_region_offset,
                 tail_offset: self.tail_offset,
-            }
-            .into());
+            });
         }
         Ok(())
     }
@@ -677,7 +745,6 @@ fn write_patched_wad(
                     *path_hash,
                     &over,
                     &mut tail_cursor,
-                    dst_wad_path,
                 )?);
             }
             PlannedEntry::Transient(orig) => final_chunks.push(layout.shifted(orig)?),
@@ -722,144 +789,159 @@ fn write_patched_wad(
     })
 }
 
-/// Rebuild a patched WAD by rewriting only its override tail and its TOC.
+/// A checked plan to rewrite a WAD's override tail and its TOC.
 ///
-/// The file keeps its header and its copied source data region - the bytes that
-/// dominate a game WAD - so the work is bounded by the override bytes, not by
-/// the WAD's size. Everything this needs to be safe has been decided by the
-/// caller: `layout` and `base_entries` describe a file whose identity and TOC
-/// it already verified against the game WAD and the recorded layout.
+/// The file keeps its header and its copied source data region - the bytes
+/// that dominate a game WAD - so the work is bounded by the override bytes,
+/// not by the WAD's size.
 ///
-/// # Arguments
+/// Building a plan performs every check that can be made without touching the
+/// WAD; [`write`](Self::write) then consumes it. That split is the whole point
+/// of the type. Rewriting in place is destructive by nature, so a caller has to
+/// commit to it before a byte is written, by truncating a file or growing an
+/// entry inside a container, and a plan is the proof that committing is safe.
+/// [`tail_len`](Self::tail_len) reports how far a container's own bytes move,
+/// which such a caller also needs before it starts.
 ///
-/// * `wad_path` - The overlay WAD to rewrite in place.
-/// * `layout` - The layout recorded when this file was built.
-/// * `source` - The game WAD this file was built from, which the caller has
-///   already verified is unchanged. Reported back in the stats: a rewrite never
-///   opens the source itself, so it cannot re-derive this.
-/// * `base_entries` - The TOC entry each chunk already in the copied region
-///   would have with no override applied, keyed by path hash. A tail hash
-///   overwrites its entry here, so a chunk whose override is gone reverts to the
-///   bytes the region still holds. Consumed and written back out as the new TOC,
-///   which for a map WAD is tens of thousands of entries not worth copying.
-/// * `tail_hashes` - Path hashes whose data goes into the new tail, ascending.
-///   An ordered slice rather than the set [`build_patched_wad`] takes: that one
-///   only asks each source chunk whether it is overridden, while this writes the
-///   tail in the given order and needs it to match the TOC it produces.
-/// * `resolve_override` - Supplies each tail hash's compressed bytes, in the
-///   order they are written.
-///
-/// # Errors
-///
-/// Fails when the recorded layout is incoherent, when the resulting entry count
-/// no longer fits the reserved TOC capacity, when the tail would push the file
-/// past the format's 4 GiB limit, or when the disk refuses a write. The caller's
-/// fallback for all of these is a full rebuild.
-///
-/// Rewriting in place is destructive by nature: the file is truncated at the
-/// tail before anything is written, and there is no `.tmp` to discard. Every
-/// check that can be made without touching the file is therefore made first,
-/// and the tail's bytes are gathered before the truncation, so the only failures
-/// that can leave a torn file are I/O ones. That is what the caller's dirty
-/// marker exists to cover.
-pub fn rewrite_wad_tail(
-    wad_path: &Utf8Path,
-    layout: &WadTailLayout,
-    source: SourceWadIdentity,
-    base_entries: BTreeMap<WadHash, WadChunk>,
-    tail_hashes: &[WadHash],
-    mut resolve_override: impl FnMut(WadHash) -> Result<PreparedOverride>,
-) -> Result<PatchedWadStats> {
-    let start = std::time::Instant::now();
+/// Everything a plan needs to be *correct* has been decided by the caller:
+/// `layout` and `base_entries` describe a WAD whose identity and TOC it has
+/// already verified.
+#[derive(Debug)]
+pub struct WadTailPlan<'a> {
+    layout: WadTailLayout,
+    /// The TOC the write emits. A tail hash overwrites its entry here, so a
+    /// chunk whose override is gone reverts to the bytes the region still
+    /// holds. Consumed and written back out, which for a map WAD is tens of
+    /// thousands of entries not worth copying.
+    entries: BTreeMap<WadHash, WadChunk>,
+    tail: &'a [(WadHash, PreparedOverride)],
+    entry_count: usize,
+    tail_end: u64,
+}
 
-    layout.validate()?;
+impl<'a> WadTailPlan<'a> {
+    /// Check that `tail` can be written into the WAD `layout` describes.
+    ///
+    /// # Arguments
+    ///
+    /// * `layout` - The layout recorded when the WAD was built.
+    /// * `base_entries` - The TOC entry each chunk already in the copied region
+    ///   would have with no override applied, keyed by path hash.
+    /// * `tail` - The overrides whose bytes go into the new tail, in the order
+    ///   they are written. Their order decides where the bytes land and nothing
+    ///   else: each TOC entry carries its own offset, and the TOC itself comes
+    ///   out in hash order whatever order the tail was given in. A hash may
+    ///   appear once.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the recorded layout is incoherent, when the resulting entry
+    /// count no longer fits the reserved TOC capacity, or when the tail would
+    /// push the WAD past the format's 4 GiB limit. The caller's fallback for
+    /// all of these is a full rebuild - and because nothing has been written,
+    /// it inherits an untouched WAD.
+    pub fn new(
+        layout: &WadTailLayout,
+        base_entries: BTreeMap<WadHash, WadChunk>,
+        tail: &'a [(WadHash, PreparedOverride)],
+    ) -> std::result::Result<Self, WadTailError> {
+        layout.validate()?;
 
-    let base_entry_count = base_entries.len();
-    let entry_count = merged_entry_count(&base_entries, tail_hashes.iter().copied());
-    if !layout.admits_entry_count(entry_count) {
-        return Err(WadLimitError::TocCapacity {
-            wad: wad_path.to_path_buf(),
-            needed: entry_count,
-            reserved: layout.toc_capacity,
+        let entry_count = merged_entry_count(&base_entries, tail.iter().map(|(hash, _)| *hash));
+        if !layout.admits_entry_count(entry_count) {
+            return Err(WadTailError::TocCapacity {
+                needed: entry_count,
+                reserved: layout.toc_capacity,
+            });
         }
-        .into());
-    }
 
-    // Everything that can fail without touching the file has now been checked,
-    // and the tail's own bytes are gathered before the truncation, so the only
-    // failures past this point are the disk itself giving out.
-    let tail: Vec<(WadHash, PreparedOverride)> = tail_hashes
-        .iter()
-        .map(|&path_hash| Ok((path_hash, resolve_override(path_hash)?)))
-        .collect::<Result<_>>()?;
-    // Saturating rather than checked: any sum large enough to wrap a u64 is far
-    // past the 4 GiB limit the next check rejects it by, so there is nothing a
-    // separate overflow error would tell the caller.
-    let tail_end = tail.iter().fold(layout.tail_offset, |end, (_, over)| {
-        end.saturating_add(over.compressed().len() as u64)
-    });
-    if tail_end > MAX_WAD_OFFSET {
-        return Err(WadLimitError::FileTooLarge {
-            wad: wad_path.to_path_buf(),
-            region: WadRegion::OverrideTail,
-            offset: tail_end,
+        // Saturating rather than checked: any sum large enough to wrap a u64 is
+        // far past the 4 GiB limit the next check rejects it by, so there is
+        // nothing a separate overflow error would tell the caller.
+        let tail_end = tail.iter().fold(layout.tail_offset, |end, (_, over)| {
+            end.saturating_add(over.compressed().len() as u64)
+        });
+        if tail_end > MAX_WAD_OFFSET {
+            return Err(WadTailError::TailTooLarge { offset: tail_end });
         }
-        .into());
+
+        Ok(Self {
+            layout: *layout,
+            entries: base_entries,
+            tail,
+            entry_count,
+            tail_end,
+        })
     }
 
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(wad_path.as_std_path())
-        .map_err(|source| Error::write(wad_path, source))?;
-    file.set_len(layout.tail_offset)
-        .map_err(|source| Error::write(wad_path, source))?;
-
-    let mut writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, file);
-    writer.seek(SeekFrom::Start(layout.tail_offset))?;
-
-    let mut entries = base_entries;
-    let mut tail_cursor = layout.tail_offset;
-    for (path_hash, over) in &tail {
-        let chunk = write_tail_chunk(&mut writer, *path_hash, over, &mut tail_cursor, wad_path)?;
-        entries.insert(*path_hash, chunk);
+    /// Bytes the rewritten override tail will occupy.
+    #[must_use]
+    pub fn tail_len(&self) -> u64 {
+        self.tail_end - self.layout.tail_offset
     }
 
-    // `entries` is a BTreeMap, so this walks the TOC in ascending hash order.
-    writer.seek(SeekFrom::Start(layout.chunk_count_offset()?))?;
-    writer.write_u32::<LE>(entries.len() as u32)?;
-    for chunk in entries.values() {
-        chunk.write_v3_4(&mut writer)?;
-    }
-    // Reserved slots this build did not fill are zeroed, as the full-rebuild
-    // path zeroes them: rewriting in place would otherwise leave the previous
-    // build's entries sitting past the new chunk count. Empty while
-    // `TOC_SLACK_ENTRIES` is zero, since capacity then equals the entry count.
-    for _ in entries.len()..layout.toc_capacity as usize {
-        writer.write_all(&[0u8; TOC_ENTRY_SIZE])?;
+    /// Entries the rewritten TOC will hold.
+    #[must_use]
+    pub fn entry_count(&self) -> usize {
+        self.entry_count
     }
 
-    writer.flush()?;
+    /// Write the tail and the TOC into `wad`, whose first byte is at `base`.
+    ///
+    /// `base` is where the WAD begins inside whatever holds it: `0` for a file
+    /// that is one WAD, and the entry's offset for a WAD stored inside an
+    /// archive. It shifts every seek and no recorded offset - a TOC entry
+    /// counts from the WAD's own first byte, because the game reads the WAD
+    /// without knowing what it is stored in.
+    ///
+    /// The caller owns the container, so the caller makes room: a file is
+    /// truncated to the layout's tail offset before this is called, and a WAD
+    /// inside an archive has its entry grown or shrunk by the difference
+    /// [`tail_len`](Self::tail_len) reports.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the target refuses a write or a seek, or when a TOC entry
+    /// cannot be encoded. Every check that does not need the target was made
+    /// when the plan was built, so a failure here means the target itself gave
+    /// out - and, the write being in place, may leave a torn WAD. That is what
+    /// a caller's dirty marker exists to cover.
+    pub fn write<W: Write + Seek>(
+        mut self,
+        wad: &mut W,
+        base: u64,
+    ) -> std::result::Result<WadTailReport, WadTailError> {
+        let mut writer = BufWriter::with_capacity(WRITE_BUFFER_SIZE, wad);
+        writer.seek(SeekFrom::Start(base + self.layout.tail_offset))?;
 
-    let elapsed_ms = start.elapsed().as_millis();
-    tracing::info!(
-        "Rewrote WAD tail dst={} chunks={} overrides={} tail_bytes={} elapsed_ms={}",
-        wad_path,
-        entries.len(),
-        tail_hashes.len(),
-        tail_cursor - layout.tail_offset,
-        elapsed_ms
-    );
+        let mut cursor = self.layout.tail_offset;
+        for (path_hash, over) in self.tail {
+            let chunk = write_tail_chunk(&mut writer, *path_hash, over, &mut cursor)?;
+            self.entries.insert(*path_hash, chunk);
+        }
+        let tail_len = cursor - self.layout.tail_offset;
 
-    Ok(PatchedWadStats {
-        chunks_written: entries.len(),
-        overrides_applied: tail_hashes.len(),
-        new_entries_added: entries.len().saturating_sub(base_entry_count),
-        chunks_transient: entries.len() - tail_hashes.len(),
-        elapsed_ms,
-        layout: *layout,
-        source,
-    })
+        // `entries` is a BTreeMap, so this walks the TOC in ascending hash order.
+        writer.seek(SeekFrom::Start(base + self.layout.chunk_count_offset()?))?;
+        writer.write_u32::<LE>(self.entries.len() as u32)?;
+        for chunk in self.entries.values() {
+            chunk.write_v3_4(&mut writer)?;
+        }
+        // Reserved slots this build did not fill are zeroed, as the full-rebuild
+        // path zeroes them: rewriting in place would otherwise leave the previous
+        // build's entries sitting past the new chunk count. Empty while
+        // `TOC_SLACK_ENTRIES` is zero, since capacity then equals the entry count.
+        for _ in self.entries.len()..self.layout.toc_capacity as usize {
+            writer.write_all(&[0u8; TOC_ENTRY_SIZE])?;
+        }
+
+        writer.flush()?;
+
+        Ok(WadTailReport {
+            entry_count: self.entries.len(),
+            tail_len,
+        })
+    }
 }
 
 /// Place the source region and the tail behind a TOC of `toc_capacity` entries.
@@ -982,17 +1064,11 @@ fn write_tail_chunk<W: Write>(
     path_hash: WadHash,
     over: &PreparedOverride,
     cursor: &mut u64,
-    dst_wad_path: &Utf8Path,
-) -> Result<WadChunk> {
+) -> std::result::Result<WadChunk, WadTailError> {
     let compressed_size = over.compressed().len();
     let end = *cursor + compressed_size as u64;
     if end > MAX_WAD_OFFSET {
-        return Err(WadLimitError::FileTooLarge {
-            wad: dst_wad_path.to_path_buf(),
-            region: WadRegion::OverrideTail,
-            offset: end,
-        }
-        .into());
+        return Err(WadTailError::TailTooLarge { offset: end });
     }
 
     let chunk = WadChunk {
