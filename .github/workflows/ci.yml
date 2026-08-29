@@ -57,3 +57,26 @@ jobs:
       - name: Build release binary
         if: runner.os == 'Windows'
         run: cargo build --locked --release --bin league-mod
+
+  publish-check:
+    name: Publish check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebp-dev liblzma-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check each crate with its default features
+        run: |
+          members=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          test -n "$members" || { echo "no workspace members found"; exit 1; }
+          for pkg in $members; do
+            echo "::group::cargo check -p $pkg"
+            cargo check --locked -p "$pkg"
+            echo "::endgroup::"
+          done

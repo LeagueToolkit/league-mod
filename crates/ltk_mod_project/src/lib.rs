@@ -27,6 +27,7 @@ pub mod preserve;
 pub use cancellation::Cancellation;
 pub use config_format::ConfigFormat;
 pub use error::{ModProjectError, SerializeError};
+#[cfg(any(feature = "fantome", feature = "modpkg"))]
 pub use hashtable_routes::DuplicateHashtableName;
 pub use import::{
     ConfigRefusal, ImportError, ImportFormat, ImportProgress, ImportReporter, ImportStage,
