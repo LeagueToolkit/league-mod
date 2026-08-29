@@ -47,6 +47,14 @@ A build runs in two passes over the mods, with the routing decisions in between.
    each override's bytes are handed over on demand and freed once the last WAD
    holding them has written it.
 
+   A mod that ships its content as a packed WAD is read where that WAD lies, so
+   long as its container stores it whole - which for a `.fantome` means one
+   `ltk_fantome` has normalized at import. A container that deflated it has no
+   seekable bytes to point at, so the whole WAD is inflated into memory to reach
+   the few chunks a build wants. That is the fallback
+   `adr/0002-normalization-happens-at-import-never-at-build.md` accepts rather
+   than have the builder rewrite a file it does not own.
+
 6. **Compress once, or not at all.** Every distinct override content is
    compressed a single time, in parallel, memoized on its content hash.
 

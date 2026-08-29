@@ -34,7 +34,10 @@
 //!    re-read and compressed, once per distinct content, and shared across every
 //!    WAD they route to. An override its mod already holds as a WAD chunk is
 //!    *passed through* instead: its stored bytes are copied into the overlay
-//!    verbatim, their checksum recomputed in flight and never decoded. For each
+//!    verbatim, their checksum recomputed in flight and never decoded. A mod
+//!    whose container holds that WAD whole - a normalized `.fantome` - has its
+//!    chunks read where they lie, rather than out of an inflated copy of the
+//!    archive. For each
 //!    affected game WAD a patched copy is then
 //!    written into the overlay directory - or, when only override bytes changed,
 //!    the existing copy keeps its data region and has only its tail rewritten.

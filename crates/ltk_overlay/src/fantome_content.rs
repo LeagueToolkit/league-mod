@@ -3,7 +3,8 @@
 //! Fantome archives only support a single "base" layer. WAD content is stored
 //! under the `WAD/` directory, either as:
 //! - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
-//! - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
+//! - **Packed WADs**: `WAD/{name}.wad.client` - a complete WAD, read where the
+//!   archive stores it when it stores it whole, inflated into memory when not
 //!
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
@@ -13,10 +14,14 @@ use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_wad::{Wad, WadChunk, WadHash, is_hex_chunk_path};
+use memmap2::Mmap;
 use std::collections::HashMap;
-use std::io::{self, Cursor, Read, Seek};
-use zip::ZipArchive;
+use std::fs::File;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::ops::Range;
+use std::sync::Arc;
 use zip::read::ZipFile;
+use zip::{CompressionMethod, ZipArchive};
 
 /// Read a ZIP entry's uncompressed bytes, bypassing the zip crate's CRC32 check.
 ///
@@ -38,6 +43,74 @@ fn read_zip_entry_bytes(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
     entry.take(size).read_to_end(&mut data)?;
 
     Ok(data)
+}
+
+/// The bytes one archive entry occupies, viewed inside the whole archive.
+///
+/// A packed WAD is addressed from its own first byte, so reading one where the
+/// archive keeps it means handing over that range and nothing around it. The
+/// view *is* the entry, so a WAD whose TOC reaches past its own last byte hits
+/// the end of the slice rather than reading on into the next entry.
+#[derive(Debug, Clone)]
+struct EntryWindow<T> {
+    archive: Arc<T>,
+    range: Range<usize>,
+}
+
+impl<T: AsRef<[u8]>> EntryWindow<T> {
+    /// The `len` bytes of `archive` that start at `start`.
+    ///
+    /// `None` when the archive is too short to hold that range: a header
+    /// claiming bytes the file does not have is a reason to read the entry the
+    /// long way, never a reason to read whatever is there.
+    fn new(archive: Arc<T>, start: u64, len: u64) -> Option<Self> {
+        let start = usize::try_from(start).ok()?;
+        let end = usize::try_from(len).ok()?.checked_add(start)?;
+
+        (end <= archive.as_ref().as_ref().len()).then_some(Self {
+            archive,
+            range: start..end,
+        })
+    }
+}
+
+impl<T: AsRef<[u8]>> AsRef<[u8]> for EntryWindow<T> {
+    fn as_ref(&self) -> &[u8] {
+        &self.archive.as_ref().as_ref()[self.range.clone()]
+    }
+}
+
+/// Where a mounted packed WAD reads its bytes from.
+///
+/// Both hand [`Wad`] the same bytes; they differ in what the build pays for
+/// them.
+#[derive(Debug)]
+enum PackedSource {
+    /// The entry inflated into memory, which a deflated archive costs in full
+    /// whether the build wants one chunk out of the WAD or all of them.
+    Buffered(Cursor<Vec<u8>>),
+    /// A window onto the entry where a normalized archive stores it. The bytes
+    /// stay in the mapped file, so the pages behind them are the kind the OS
+    /// can drop under pressure rather than private commit the build has to hold.
+    InPlace(Cursor<EntryWindow<Mmap>>),
+}
+
+impl Read for PackedSource {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Buffered(cursor) => cursor.read(buf),
+            Self::InPlace(cursor) => cursor.read(buf),
+        }
+    }
+}
+
+impl Seek for PackedSource {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        match self {
+            Self::Buffered(cursor) => cursor.seek(pos),
+            Self::InPlace(cursor) => cursor.seek(pos),
+        }
+    }
 }
 
 /// Pre-computed index of a fantome archive's contents.
@@ -145,11 +218,14 @@ pub struct FantomeContent<R: Read + Seek> {
     archive: ZipArchive<R>,
     index: FantomeIndex,
     archive_path: Option<Utf8PathBuf>,
+    /// The archive file mapped, once, for the packed WADs it stores whole.
+    /// Absent until one is asked for, and for as long as none can be.
+    archive_map: Option<Arc<Mmap>>,
     /// Packed WADs mounted so far, keyed by lowercase WAD name. Filled lazily
     /// by `packed_wad`: the exact-match skip path never needs the bytes, and
     /// eagerly mounting every packed WAD would charge a full archive read to
     /// builds that end up reusing everything.
-    packed_wads: HashMap<String, Wad<Cursor<Vec<u8>>>>,
+    packed_wads: HashMap<String, Wad<PackedSource>>,
 }
 
 impl<R: Read + Seek> FantomeContent<R> {
@@ -161,11 +237,17 @@ impl<R: Read + Seek> FantomeContent<R> {
             archive,
             index,
             archive_path: None,
+            archive_map: None,
             packed_wads: HashMap::new(),
         })
     }
 
-    /// Set the archive file path, enabling content fingerprinting for the metadata cache.
+    /// Tell the provider where the archive it is reading lives.
+    ///
+    /// The path must name that same file: it fingerprints the archive for the
+    /// metadata cache, and it is the file a packed WAD stored whole is read out
+    /// of, so a path naming a different archive would have the build trust one
+    /// mod's bytes for another's.
     pub fn with_archive_path(mut self, path: Utf8PathBuf) -> Self {
         self.archive_path = Some(path);
         self
@@ -175,25 +257,103 @@ impl<R: Read + Seek> FantomeContent<R> {
     ///
     /// Returns `Ok(None)` when the archive holds no packed WAD under that key.
     /// An entry that exists but cannot be read or mounted is an error.
-    fn packed_wad(&mut self, wad_key: &str) -> Result<Option<&mut Wad<Cursor<Vec<u8>>>>> {
+    fn packed_wad(&mut self, wad_key: &str) -> Result<Option<&mut Wad<PackedSource>>> {
         if !self.packed_wads.contains_key(wad_key) {
-            let Some(zip_path) = self.index.packed_wad_paths.get(wad_key) else {
+            let Some(zip_path) = self.index.packed_wad_paths.get(wad_key).cloned() else {
                 return Ok(None);
             };
 
-            let mut entry = self
-                .archive
-                .by_name(zip_path)
-                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
-            let wad_data = read_zip_entry_bytes(&mut entry)
-                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
-            drop(entry);
+            let source = match self.stored_window(&zip_path)? {
+                Some(window) => PackedSource::InPlace(Cursor::new(window)),
+                None => {
+                    let mut entry = self
+                        .archive
+                        .by_name(&zip_path)
+                        .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                    let wad_data = read_zip_entry_bytes(&mut entry)
+                        .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                    PackedSource::Buffered(Cursor::new(wad_data))
+                }
+            };
+            tracing::debug!(
+                wad = wad_key,
+                entry = zip_path.as_str(),
+                in_place = matches!(source, PackedSource::InPlace(_)),
+                "mounting packed WAD"
+            );
 
-            let wad = Wad::mount(Cursor::new(wad_data))?;
+            let wad = Wad::mount(source)?;
             self.packed_wads.insert(wad_key.to_string(), wad);
         }
 
         Ok(self.packed_wads.get_mut(wad_key))
+    }
+
+    /// A window onto the packed WAD at `zip_path`, when it can be read where it
+    /// lies.
+    ///
+    /// `Ok(None)` whenever any part of that is untrue - the archive deflated the
+    /// entry, the caller never said where the archive lives, or the file does
+    /// not hold the range its header claims - and the caller then inflates the
+    /// entry into memory instead. That fallback is the accepted cost of leaving
+    /// a user's own archives untouched; see
+    /// `docs/adr/0002-normalization-happens-at-import-never-at-build.md`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry's header cannot be read or the archive
+    /// file cannot be reopened.
+    fn stored_window(&mut self, zip_path: &str) -> Result<Option<EntryWindow<Mmap>>> {
+        let Some(index) = self.archive.index_for_name(zip_path) else {
+            return Ok(None);
+        };
+
+        let entry = self
+            .archive
+            .by_index_raw(index)
+            .map_err(|source| Error::archive_entry(zip_path, source))?;
+        if entry.compression() != CompressionMethod::Stored {
+            return Ok(None);
+        }
+        let (start, len) = (entry.data_start(), entry.size());
+        drop(entry);
+
+        let Some(archive) = self.archive_map()? else {
+            return Ok(None);
+        };
+
+        Ok(EntryWindow::new(archive, start, len))
+    }
+
+    /// The archive file, mapped, shared by every packed WAD read where it lies.
+    ///
+    /// `Ok(None)` when the caller never said where the archive lives, since a
+    /// mapping needs the file and the provider only ever got a reader.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive cannot be opened or mapped.
+    fn archive_map(&mut self) -> Result<Option<Arc<Mmap>>> {
+        if self.archive_map.is_none() {
+            let Some(path) = self.archive_path.clone() else {
+                return Ok(None);
+            };
+            let file =
+                File::open(path.as_std_path()).map_err(|source| Error::read(&path, source))?;
+
+            // SAFETY: mapping a file is only sound while nothing shortens it
+            // underneath the mapping - a read into pages the file no longer
+            // backs faults rather than failing. The builder never writes to a
+            // mod's archive (ADR-0002) and runs before the game launches, which
+            // is the same bet `write_patched_wad` makes on the game's own WADs.
+            // A user replacing the archive mid-build is the residual risk, and
+            // the alternative - inflating every packed WAD - is what this
+            // avoids.
+            let map = unsafe { Mmap::map(&file) }.map_err(|source| Error::read(&path, source))?;
+            self.archive_map = Some(Arc::new(map));
+        }
+
+        Ok(self.archive_map.clone())
     }
 
     /// The TOC entry `rel_path` names inside this archive's packed WAD, if any.

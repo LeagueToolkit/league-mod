@@ -145,8 +145,9 @@ impl fmt::Debug for WadExtractOptions<'_> {
 /// genuinely truncated entry is not mistaken for a good one.
 ///
 /// Every read of an entry goes through here or [`read_entry`]: an archive that
-/// only some of the reads accept is worse than one none of them do.
-fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> io::Result<()> {
+/// only some of the reads accept is worse than one none of them do - the
+/// normalize included, which is why this is reachable from the crate at large.
+pub(crate) fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> io::Result<()> {
     let size = entry.size();
     let copied = io::copy(&mut entry.take(size), sink)?;
     if copied != size {

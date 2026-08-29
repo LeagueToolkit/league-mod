@@ -19,8 +19,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 camino = "1.1"
+tempfile = "3.15"
 ltk_wad = { workspace = true }
 ltk_hashtable = { version = "0.1.0", path = "../ltk_hashtable" }
-
-[dev-dependencies]
-tempfile = "3.15"
