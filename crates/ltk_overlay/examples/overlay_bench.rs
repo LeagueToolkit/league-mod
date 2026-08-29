@@ -180,6 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // directory fixture has. A `.fantome` is read as the manager reads it.
     let Fixture::Dir { override_file, .. } = &fixture else {
         report(&runs);
+        report_peak_memory();
         return Ok(());
     };
 
@@ -192,8 +193,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runs.push(build("add entry")?);
 
     report(&runs);
+    report_peak_memory();
     Ok(())
 }
+
+/// Print the process's two memory peaks across every scenario in the run.
+///
+/// `peak commit` is the number that matters: private, pagefile-backed
+/// allocations the OS cannot reclaim without writing them out - the kind that
+/// freezes low-RAM machines. `peak working set` also counts clean file-backed
+/// pages (the builder memory-maps game WADs to copy them), which the OS
+/// evicts for free, so it overstates pressure by roughly the mapped WAD sizes.
+///
+/// The OS reports one process-lifetime peak, not one per scenario, so this is
+/// a trailing line rather than a table column.
+#[cfg(windows)]
+fn report_peak_memory() {
+    // Field layout from PROCESS_MEMORY_COUNTERS in psapi.h; cb (in),
+    // PeakWorkingSetSize and PeakPagefileUsage are consumed.
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn K32GetProcessMemoryInfo(
+            process: isize,
+            counters: *mut ProcessMemoryCounters,
+            cb: u32,
+        ) -> i32;
+    }
+
+    let mut counters = ProcessMemoryCounters {
+        cb: size_of::<ProcessMemoryCounters>() as u32,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+    };
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing,
+    // and the out-pointer is a live, correctly sized ProcessMemoryCounters
+    // whose cb tells the API how much it may write.
+    let ok =
+        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 };
+    if ok {
+        println!(
+            "\npeak commit: {:.0} MiB (private; the pressure that freezes low-RAM machines)",
+            counters.peak_pagefile_usage as f64 / (1024.0 * 1024.0)
+        );
+        println!(
+            "peak working set: {:.0} MiB (includes evictable mapped game-WAD pages)",
+            counters.peak_working_set_size as f64 / (1024.0 * 1024.0)
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn report_peak_memory() {}
 
 /// Unpack a `.fantome`'s WAD content into a mod project directory.
 ///
