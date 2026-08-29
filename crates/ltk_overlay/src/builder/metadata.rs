@@ -6,7 +6,6 @@
 use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
-use rayon::prelude::*;
 
 /// Collect override metadata from a single mod (pass 1).
 ///
@@ -130,24 +129,24 @@ fn collect_wad_dir_metadata(
     mod_meta: &mut HashMap<WadHash, OverrideMeta>,
 ) -> Result<()> {
     let before = mod_meta.len();
-    let override_files = enabled_mod
-        .content
-        .read_wad_overrides(layer_name, wad_name)?;
 
-    // Capture only the id: the provider box inside `EnabledMod` isn't `Sync`.
-    let mod_id = &enabled_mod.id;
-    let entries: Vec<(WadHash, OverrideMeta)> = override_files
-        .into_par_iter()
-        .map(|(rel_path, bytes)| {
+    // Streamed one override at a time: a WAD's full decompressed content held
+    // at once was the largest single allocation of a cold build. Hashing is
+    // sequential now, but it runs at a fraction of the read+decompress cost.
+    let mod_id = enabled_mod.id.clone();
+    let mut entries: Vec<(WadHash, OverrideMeta)> = Vec::new();
+    enabled_mod
+        .content
+        .visit_wad_override(layer_name, wad_name, &mut |rel_path, bytes| {
             let source = OverrideSource::LayerWad {
                 mod_id: mod_id.clone(),
                 layer: layer_name.to_string(),
                 wad_name: wad_name.to_string(),
                 rel_path,
             };
-            build_override_meta(source, &bytes)
-        })
-        .collect::<Result<_>>()?;
+            entries.push(build_override_meta(source, &bytes)?);
+            Ok(())
+        })?;
 
     let path_hashes: Vec<WadHash> = entries.iter().map(|(path_hash, _)| *path_hash).collect();
     let fallback = resolve_fallback_wad(
@@ -315,22 +314,24 @@ fn collect_raw_metadata(
     enabled_mod: &mut EnabledMod,
     mod_meta: &mut HashMap<WadHash, OverrideMeta>,
 ) -> Result<()> {
-    let raw_overrides = enabled_mod.content.read_raw_overrides()?;
-    if raw_overrides.is_empty() {
-        return Ok(());
-    }
-
     let before = mod_meta.len();
-    for (rel_path, bytes) in raw_overrides {
-        let (path_hash, meta) = build_override_meta(
-            OverrideSource::Raw {
-                mod_id: enabled_mod.id.clone(),
-                rel_path,
-            },
-            &bytes,
-        )?;
+    let mod_id = enabled_mod.id.clone();
+    enabled_mod
+        .content
+        .visit_raw_override(&mut |rel_path, bytes| {
+            let (path_hash, meta) = build_override_meta(
+                OverrideSource::Raw {
+                    mod_id: mod_id.clone(),
+                    rel_path,
+                },
+                &bytes,
+            )?;
 
-        mod_meta.insert(path_hash, meta);
+            mod_meta.insert(path_hash, meta);
+            Ok(())
+        })?;
+    if mod_meta.len() == before {
+        return Ok(());
     }
 
     tracing::info!(

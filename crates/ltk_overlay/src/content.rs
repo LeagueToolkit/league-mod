@@ -96,6 +96,29 @@ pub trait ModContentProvider: Send + Sync {
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>>;
 
+    /// Visit every override file for a WAD in a layer, one at a time.
+    ///
+    /// Same entries as [`read_wad_overrides`](Self::read_wad_overrides), but
+    /// handed to `visit` one by one so the caller never holds a whole WAD's
+    /// content at once. The default delegates to the bulk read; providers that
+    /// can stream should override it so only one chunk's bytes are live at a
+    /// time.
+    ///
+    /// # Errors
+    ///
+    /// Fails when reading fails, or with the first error `visit` returns.
+    fn visit_wad_override(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        for (rel_path, bytes) in self.read_wad_overrides(layer, wad_name)? {
+            visit(rel_path, bytes)?;
+        }
+        Ok(())
+    }
+
     /// Read all RAW override files from the mod.
     ///
     /// RAW overrides are files identified by their game asset path (e.g.,
@@ -109,6 +132,25 @@ pub trait ModContentProvider: Send + Sync {
     /// The default implementation returns an empty list.
     fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         Ok(Vec::new())
+    }
+
+    /// Visit every RAW override file, one at a time.
+    ///
+    /// Same entries as [`read_raw_overrides`](Self::read_raw_overrides), but
+    /// handed to `visit` one by one. The default delegates to the bulk read;
+    /// providers that can stream should override it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when reading fails, or with the first error `visit` returns.
+    fn visit_raw_override(
+        &mut self,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        for (rel_path, bytes) in self.read_raw_overrides()? {
+            visit(rel_path, bytes)?;
+        }
+        Ok(())
     }
 
     /// Compute a fingerprint that changes when any mod content changes.

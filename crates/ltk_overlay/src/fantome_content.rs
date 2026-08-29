@@ -317,6 +317,71 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         Ok(Vec::new())
     }
 
+    fn visit_wad_override(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        if layer != "base" {
+            return Ok(());
+        }
+
+        let wad_key = wad_name.to_ascii_lowercase();
+
+        if let Some(entries) = self.index.wad_dir_entries.get(&wad_key) {
+            let entry_names: Vec<(String, String)> = entries.clone();
+            for (zip_path, rel_path) in &entry_names {
+                let mut entry = self
+                    .archive
+                    .by_name(zip_path)
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                let bytes = read_zip_entry_bytes(&mut entry)
+                    .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+                drop(entry);
+                visit(Utf8PathBuf::from(rel_path), bytes)?;
+            }
+            return Ok(());
+        }
+
+        if let Some(wad) = self.packed_wad(&wad_key)? {
+            // One chunk's decompressed bytes live at a time - the whole reason
+            // this method exists next to the bulk read.
+            let chunks: Vec<WadChunk> = wad.chunks().iter().copied().collect();
+            for chunk in chunks {
+                // Re-borrow per iteration: `visit` must not run under the
+                // `&mut Wad` borrow, and the map entry is stable once mounted.
+                let wad = self
+                    .packed_wads
+                    .get_mut(&wad_key)
+                    .expect("packed WAD mounted above");
+                let bytes = wad.load_chunk_decompressed(&chunk)?.to_vec();
+                let hex_name = format!("{:016x}.bin", chunk.path_hash);
+                visit(Utf8PathBuf::from(hex_name), bytes)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn visit_raw_override(
+        &mut self,
+        visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let entries: Vec<(String, String)> = self.index.raw_entries.clone();
+        for (zip_path, rel_path) in &entries {
+            let mut entry = self
+                .archive
+                .by_name(zip_path)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            let bytes = read_zip_entry_bytes(&mut entry)
+                .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+            drop(entry);
+            visit(Utf8PathBuf::from(rel_path), bytes)?;
+        }
+        Ok(())
+    }
+
     fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let entries: Vec<(String, String)> = self.index.raw_entries.clone();
         let mut results = Vec::with_capacity(entries.len());
@@ -854,6 +919,59 @@ mod tests {
             .read_wad_override_file("base", "Packed.wad.client", &hex_name)
             .expect("read_wad_override_file");
         assert_eq!(single, PACKED_PAYLOAD);
+    }
+
+    #[test]
+    fn streaming_visits_the_same_overrides_as_the_bulk_read() {
+        // The streaming visitor exists so the metadata pass holds one chunk at
+        // a time instead of a whole WAD; it must surface exactly the entries
+        // the bulk read does, for both directory-style and packed WADs.
+        let wad_bytes = make_packed_wad_bytes(b"packed_payload");
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Streamed")),
+            ("WAD/Aatrox.wad.client/file1.bin", b"data1"),
+            ("WAD/Aatrox.wad.client/sub/file2.bin", b"data2"),
+            ("WAD/Packed.wad.client", &wad_bytes),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        for wad_name in ["Aatrox.wad.client", "Packed.wad.client"] {
+            let mut streamed: Vec<(Utf8PathBuf, Vec<u8>)> = Vec::new();
+            content
+                .visit_wad_override("base", wad_name, &mut |rel_path, bytes| {
+                    streamed.push((rel_path, bytes));
+                    Ok(())
+                })
+                .unwrap();
+
+            let mut bulk = content.read_wad_overrides("base", wad_name).unwrap();
+            bulk.sort();
+            streamed.sort();
+            assert_eq!(streamed, bulk, "streaming and bulk disagree for {wad_name}");
+        }
+    }
+
+    #[test]
+    fn streaming_visits_the_same_raw_overrides_as_the_bulk_read() {
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Streamed Raw")),
+            ("RAW/assets/a.bin", b"raw_a"),
+            ("RAW/assets/b.bin", b"raw_b"),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        let mut streamed: Vec<(Utf8PathBuf, Vec<u8>)> = Vec::new();
+        content
+            .visit_raw_override(&mut |rel_path, bytes| {
+                streamed.push((rel_path, bytes));
+                Ok(())
+            })
+            .unwrap();
+
+        let mut bulk = content.read_raw_overrides().unwrap();
+        bulk.sort();
+        streamed.sort();
+        assert_eq!(streamed, bulk);
     }
 
     #[test]
