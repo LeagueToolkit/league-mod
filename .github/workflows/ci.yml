@@ -61,7 +61,7 @@ jobs:
   publish-check:
     name: Publish check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install Linux dependencies
@@ -71,12 +71,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Check each crate with its default features
-        run: |
-          members=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          test -n "$members" || { echo "no workspace members found"; exit 1; }
-          for pkg in $members; do
-            echo "::group::cargo check -p $pkg"
-            cargo check --locked -p "$pkg"
-            echo "::endgroup::"
-          done
+      # Builds every crate from its packaged tarball, each with its own default
+      # features - the one shape the other jobs never cover, since they all pass
+      # `--all-features` and a workspace build unifies features across members.
+      # Without this the release job is the first thing to compile a crate the
+      # way `cargo publish` will, and it finds out mid-publish.
+      - name: Verify every crate packages as it will on publish
+        run: cargo package --workspace --locked

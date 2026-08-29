@@ -1,5 +1,10 @@
 [workspace]
-release_always = false
+# release-plz's own default. With `false`, a release that fails partway
+# wedges: the release job skips every later push ("current commit is not
+# from a release PR") while reporting green, and the PR job opens nothing
+# because main's versions already match. release-plz has no retry, so
+# `true` is the retry - each push republishes only what crates.io lacks.
+release_always = true
 changelog_update = true
 git_tag_enable = true
 git_release_enable = true

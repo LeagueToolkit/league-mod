@@ -1,0 +1,48 @@
+name: Release Health
+
+# A release can fail for reasons CI cannot pre-empt: an expired registry token,
+# a crates.io outage, a rate limit. `release_always = true` retries those on the
+# next push, but only if a next push comes - a quiet week stays silently
+# unreleased. So assert the invariant directly instead of inferring it from a
+# green release job.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tag-drift:
+    name: Tag drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Tags rather than crates.io: this matches release-plz's `git_tag_name`,
+      # needs no network, and covers league-mod, which is tagged but never
+      # published (`publish = false`) and so is absent from crates.io by design.
+      - name: Every version on main must be tagged
+        run: |
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | "\(.name) \(.version)"' > pkgs.txt
+          test -s pkgs.txt || { echo "no workspace members found"; exit 1; }
+          fail=0
+          while read -r name version; do
+            if git rev-parse -q --verify "refs/tags/${name}-v${version}" >/dev/null; then
+              echo "ok      $name $version"
+            else
+              echo "MISSING $name $version has no tag ${name}-v${version}"
+              fail=1
+            fi
+          done < pkgs.txt
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "main claims versions that were never released."
+            echo "Check the most recent Release-plz run for a failed publish."
+          fi
+          exit $fail
