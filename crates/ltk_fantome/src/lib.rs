@@ -11,6 +11,11 @@
 //! WADs stored so a reader can seek to them. Both raw-copy everything they do
 //! not themselves replace, and both belong to an importer working on a copy it
 //! owns.
+//!
+//! What normalizing buys is spent by
+//! [`FantomeReader::mount_packed_wad`]: a packed WAD an archive stores is read
+//! chunk by chunk where it lies, so looking inside one costs its TOC and the
+//! chunks asked for rather than the whole archive unpacked to a directory.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -18,19 +23,24 @@ use std::collections::HashMap;
 
 pub mod error;
 mod normalize;
+mod packed;
 mod reader;
 mod rewrite;
 mod writer;
 
 pub use error::{FantomeExtractError, FantomeWriteError};
-/// Re-exported because [`WadExtractOptions`] names them: a caller names chunks
-/// by implementing [`PathResolver`] over whatever it holds, or leaves the
-/// default [`NoResolver`] in place and leaves the naming to the archive's own
-/// bins. [`NamingPolicy`] decides what becomes of a chunk two paths claim.
-pub use ltk_wad::{NamingPolicy, NoResolver, PathResolver};
+/// Re-exported because this crate's own signatures name them.
+///
+/// [`WadExtractOptions`] takes the first three: a caller names chunks by
+/// implementing [`PathResolver`] over whatever it holds, or leaves the default
+/// [`NoResolver`] in place and leaves the naming to the archive's own bins,
+/// and [`NamingPolicy`] decides what becomes of a chunk two paths claim.
+/// [`Wad`] is what [`FantomeReader::mount_packed_wad`] answers with.
+pub use ltk_wad::{NamingPolicy, NoResolver, PathResolver, Wad};
 pub use normalize::{
     FantomeNormalizeError, NormalizeOutcome, normalize_archive, store_packed_wads,
 };
+pub use packed::PackedWadSource;
 pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
 pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
 pub use writer::FantomeWriter;
