@@ -14,7 +14,29 @@
 use crate::error::{Error, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer};
+use ltk_wad::WadChunkCompression;
 use xxhash_rust::xxh3::xxh3_64;
+
+/// One chunk exactly as its container stores it, ready to be copied into an
+/// overlay WAD without ever being decoded.
+///
+/// What a provider hands to a *pass-through*: the bytes are the payload a WAD
+/// TOC calls compressed, which for [`WadChunkCompression::None`] is the file
+/// itself. [`claimed_checksum`](Self::claimed_checksum) is what the container's
+/// own TOC records for those bytes - a hint the build verifies rather than
+/// trusts, since the game kills the process over a checksum that disagrees with
+/// the bytes next to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompressedChunk {
+    /// The chunk's stored bytes, copied into the overlay verbatim.
+    pub compressed: Vec<u8>,
+    /// The codec [`compressed`](Self::compressed) is encoded with.
+    pub compression: WadChunkCompression,
+    /// Size of the chunk once decoded, as the source TOC records it.
+    pub uncompressed_size: usize,
+    /// The checksum the source TOC claims for [`compressed`](Self::compressed).
+    pub claimed_checksum: u64,
+}
 
 /// Compute a content fingerprint from an archive file's size and modification time.
 ///
@@ -185,6 +207,35 @@ pub trait ModContentProvider: Send + Sync {
     ///
     /// Used in pass 2 to re-read only the bytes needed for WADs being rebuilt.
     fn read_raw_override_file(&mut self, rel_path: &Utf8Path) -> Result<Vec<u8>>;
+
+    /// Offer one override in the form this provider already stores it.
+    ///
+    /// Answers "can this chunk be copied into the overlay without decoding it?".
+    /// `Some` only when the provider holds the override as a WAD chunk and can
+    /// hand those exact bytes over; `None` - the default, and the answer for
+    /// every chunk a provider cannot offer - leaves the caller to read it
+    /// through [`read_wad_override_file`](Self::read_wad_override_file) as
+    /// usual. Declining is never an error, so a provider need not distinguish
+    /// "not stored that way" from "not here at all".
+    ///
+    /// The bytes are written into the overlay WAD verbatim, so an
+    /// implementation must hand over what its container holds and never a
+    /// re-encoded form. Their checksum is recomputed during the copy and
+    /// [`claimed_checksum`](CompressedChunk::claimed_checksum) is only reported
+    /// on, so a container with wrong metadata still produces a correct overlay.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the chunk is one this provider stores but cannot read.
+    fn read_wad_override_compressed(
+        &mut self,
+        layer: &str,
+        wad_name: &str,
+        rel_path: &Utf8Path,
+    ) -> Result<Option<CompressedChunk>> {
+        let _ = (layer, wad_name, rel_path);
+        Ok(None)
+    }
 }
 
 /// Filesystem-backed mod content provider.
