@@ -130,7 +130,7 @@ impl<W: Write + Seek> FantomeWriter<W> {
         Ok(self.zip.finish()?)
     }
 
-    fn write_entry(
+    pub(crate) fn write_entry(
         &mut self,
         entry_path: &str,
         content: &mut impl Read,

@@ -32,7 +32,7 @@ pub use normalize::{
     FantomeNormalizeError, NormalizeOutcome, normalize_archive, store_packed_wads,
 };
 pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
-pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables};
+pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
 pub use writer::FantomeWriter;
 
 /// Fantome metadata structure that goes into info.json

@@ -308,6 +308,82 @@ mod rewrite {
             ["ASSETS/Custom/New.tex"]
         );
     }
+
+    /// The reason a repair edits rather than repacks: the entry it named
+    /// carries its new bytes, and the archive around it was copied.
+    #[test]
+    fn a_replaced_entry_is_written_and_every_other_is_raw_copied() {
+        const CHANGED: &str = "WAD/Aatrox.wad.client/data/x.bin";
+
+        let bytes = archive_with_wrong_crc(
+            &FantomeInfo {
+                name: "Mod".to_owned(),
+                ..Default::default()
+            },
+            b"wad payload bytes",
+        );
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        let outcome = crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[(CHANGED, b"repaired bytes".as_slice())],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(outcome, RewriteOutcome::Rewritten { names_added: 0 });
+
+        let mut out_reader = FantomeReader::new(Cursor::new(sink.into_inner())).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = camino::Utf8Path::from_path(dir.path()).unwrap();
+        out_reader
+            .extract_wads(dir_path, WadExtractOptions::new())
+            .unwrap();
+
+        let extracted =
+            std::fs::read(dir_path.join("Aatrox.wad.client/data/x.bin").as_std_path()).unwrap();
+        assert_eq!(extracted, b"repaired bytes");
+    }
+
+    /// An entry given but not held is added, so a caller does not have to know
+    /// which of the two it is doing.
+    #[test]
+    fn an_entry_the_archive_does_not_hold_is_added() {
+        let bytes = archive_with_wrong_crc(&FantomeInfo::default(), b"payload");
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[("WAD/Aatrox.wad.client/data/new.bin", b"fresh".as_slice())],
+            &[],
+        )
+        .unwrap();
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(sink.into_inner())).unwrap();
+        assert!(
+            archive
+                .by_name("WAD/Aatrox.wad.client/data/new.bin")
+                .is_ok()
+        );
+        assert!(archive.by_name("WAD/Aatrox.wad.client/data/x.bin").is_ok());
+    }
+
+    /// Nothing to change is nothing written, so a caller can ask without
+    /// first deciding whether it needs to.
+    #[test]
+    fn no_entries_and_no_names_leaves_the_sink_alone() {
+        let bytes = archive_with_wrong_crc(&FantomeInfo::default(), b"payload");
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        let outcome = crate::replace_entries(&mut reader, &mut sink, &[], &[]).unwrap();
+
+        assert_eq!(outcome, RewriteOutcome::Unchanged);
+        assert!(sink.into_inner().is_empty());
+    }
 }
 
 mod rewrite_merge {

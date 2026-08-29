@@ -1,10 +1,15 @@
-//! [`add_hashtables`]: merge harvested names into an archive, in one pass.
+//! Editing an archive in place: merge harvested names, replace content, or
+//! both, in one pass.
 //!
 //! The rewrite raw-copies every entry it does not itself replace, so the
 //! mismatched CRC32 values Fantome tools in the wild write are carried
 //! through rather than recomputed - which is what [`FantomeReader`] already
 //! expects, since it deliberately bypasses the check - and no entry is ever
 //! decompressed or recompressed.
+//!
+//! That is what editing buys over repacking. A caller changing a handful of
+//! files in a gigabyte archive pays for those files and a byte copy of the
+//! rest, where packing the project again re-encodes every chunk in it.
 
 use std::collections::HashSet;
 use std::io::{Read, Seek, Write};
@@ -87,6 +92,37 @@ struct PlannedTable {
 pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
     reader: &mut FantomeReader<R>,
     sink: W,
+    harvested: &[(Category, Hashtable)],
+) -> Result<RewriteOutcome, FantomeRewriteError> {
+    replace_entries(reader, sink, &[], harvested)
+}
+
+/// Write `entries` in place of what the archive holds, and merge `harvested`.
+///
+/// Each entry is an archive path and the bytes to store under it, replacing
+/// that path where the archive has one and adding it where it has none. Every
+/// entry not named here is raw-copied, so the cost is the entries given plus a
+/// byte copy - which is what makes editing a large archive worth doing at all
+/// over packing its project again.
+///
+/// `harvested` merges exactly as [`add_hashtables`] describes, because that is
+/// this function with no entries. A caller replacing content it hashed a name
+/// out of wants both halves in one pass: two passes would write the archive
+/// twice to change it once.
+///
+/// A call with no entries and no genuinely new names leaves the sink untouched
+/// and answers [`RewriteOutcome::Unchanged`]. The caller owns where the sink
+/// lives, so a rewrite over a file the user did not ask to lose belongs behind
+/// a temp-file-and-rename.
+///
+/// # Errors
+///
+/// Returns an error if the source archive cannot be read or the rewritten
+/// archive cannot be written. Nothing is written on a read failure.
+pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
+    reader: &mut FantomeReader<R>,
+    sink: W,
+    entries: &[(&str, &[u8])],
     harvested: &[(Category, Hashtable)],
 ) -> Result<RewriteOutcome, FantomeRewriteError> {
     let mut info = reader.read_info()?;
@@ -174,7 +210,7 @@ pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
         });
     }
 
-    if plans.is_empty() {
+    if plans.is_empty() && entries.is_empty() {
         return Ok(RewriteOutcome::Unchanged);
     }
 
@@ -186,9 +222,14 @@ pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
         .map(|plan| plan.manifest.path.to_ascii_lowercase())
         .collect();
     replaced.insert("meta/info.json".to_owned());
+    replaced.extend(entries.iter().map(|(path, _)| path.to_ascii_lowercase()));
 
     for plan in &plans {
         writer.write_hashtable(&plan.manifest, &plan.table)?;
+    }
+
+    for (path, bytes) in entries {
+        writer.write_entry(path, &mut &bytes[..])?;
     }
 
     for index in 0..reader.entry_count() {
