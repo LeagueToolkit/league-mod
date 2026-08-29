@@ -46,11 +46,16 @@
 //! - **Audio files** (Wwise Bank / Wwise Package): stored uncompressed (`None`).
 //! - **Everything else**: compressed with Zstd at level 3.
 //!
+//! An override whose mod already holds it as a WAD chunk skips both steps:
+//! `PreparedOverride::pass_through` adopts those stored bytes verbatim, so
+//! nothing is decoded or re-encoded on the way into the overlay.
+//!
 //! League validates a chunk shared across WADs by its **compressed** checksum, so
 //! every WAD holding a given chunk must receive the same bytes. Compressing once
 //! and sharing the [`PreparedOverride`] guarantees that structurally, without
 //! relying on the compressor being deterministic across versions.
 
+use crate::content::CompressedChunk;
 use crate::error::{CorruptionError, Error, Result, WadLimitError, WadRegion};
 use byteorder::{LE, WriteBytesExt};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -168,6 +173,50 @@ impl PreparedOverride {
         })
     }
 
+    /// Adopt a chunk's stored bytes verbatim, recomputing their checksum.
+    ///
+    /// The overlay TOC carries the checksum computed here and never the one the
+    /// source claimed: the game kills the process over a chunk whose checksum
+    /// disagrees with its bytes, so a container shipping wrong metadata must not
+    /// be able to put that value in a WAD it loads. Recomputing runs at about
+    /// memcpy speed, so the copy stays the cost. Callers compare
+    /// [`checksum`](Self::checksum) against
+    /// [`CompressedChunk::claimed_checksum`] to report the disagreement, which
+    /// is a warning and never a failed build (`docs/adr/0001-*`).
+    ///
+    /// `None` when the chunk is stored under a codec this crate does not emit,
+    /// which leaves the caller to decode and compress it as usual.
+    ///
+    /// A stored chunk's uncompressed size is derived from its own byte count
+    /// rather than carried over: the two are the same number by definition, and
+    /// a TOC where they differ makes the client read past the buffer it
+    /// allocated for the chunk. Every other size is the source's, which is the
+    /// trust a pass-through accepts in exchange for never decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the sizes overflow the WAD v3.4 format's `u32`
+    /// size fields.
+    pub(crate) fn pass_through(path_hash: WadHash, chunk: CompressedChunk) -> Result<Option<Self>> {
+        let Some(codec) = OverrideCodec::for_stored(chunk.compression) else {
+            return Ok(None);
+        };
+
+        let compressed = chunk.compressed;
+        let uncompressed_size = match codec {
+            OverrideCodec::Stored => compressed.len(),
+            OverrideCodec::Zstd => chunk.uncompressed_size,
+        };
+        ensure_chunk_fits(path_hash, compressed.len(), uncompressed_size)?;
+
+        Ok(Some(Self {
+            checksum: xxh3_64(&compressed),
+            compressed: Arc::from(compressed),
+            uncompressed_size: uncompressed_size as u32,
+            compression: codec.as_wad_compression(),
+        }))
+    }
+
     /// The compressed bytes, written into the WAD verbatim.
     pub fn compressed(&self) -> &[u8] {
         &self.compressed
@@ -210,6 +259,23 @@ impl OverrideCodec {
             // Zstd is what this crate writes for everything that is not audio,
             // so any other codec `ltk_file` names maps to the same choice.
             _ => Self::Zstd,
+        }
+    }
+
+    /// The codec to re-emit a chunk already stored under `compression`, or
+    /// `None` when this crate cannot copy those bytes verbatim.
+    ///
+    /// GZip and Satellite are codecs the crate never writes. A `ZstdMulti`
+    /// chunk's bytes are only decodable alongside the subchunk table that
+    /// describes them, which lives in its source WAD rather than in the chunk,
+    /// so copying one on its own would produce an overlay the game cannot read.
+    fn for_stored(compression: WadChunkCompression) -> Option<Self> {
+        match compression {
+            WadChunkCompression::None => Some(Self::Stored),
+            WadChunkCompression::Zstd => Some(Self::Zstd),
+            WadChunkCompression::GZip
+            | WadChunkCompression::Satellite
+            | WadChunkCompression::ZstdMulti => None,
         }
     }
 
@@ -1017,162 +1083,4 @@ fn compress_with(data: &[u8], codec: OverrideCodec) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{hash, write_game_wad};
-
-    const WAD_REL: &str = "DATA/FINAL/Champions/Test.wad.client";
-    const SKIN: &str = "assets/characters/test/skins/skin0.dds";
-    const VFX: &str = "assets/characters/test/particles.bin";
-
-    /// Rewriting in place truncates the file before it writes, so a rewrite that
-    /// is going to be refused must be refused before that happens - otherwise
-    /// the caller's fallback inherits a torn file it did not need to.
-    #[test]
-    fn a_rejected_entry_count_leaves_the_file_untouched() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-
-        let source_path = root.join("Game").join(WAD_REL);
-        write_game_wad(
-            &source_path,
-            &[(SKIN, b"the original skin"), (VFX, b"the original vfx")],
-        );
-
-        let overlay_path = root.join("overlay").join(WAD_REL);
-        let prepared =
-            PreparedOverride::compress(hash(SKIN), b"a modded skin").expect("override compresses");
-        let stats = build_patched_wad(
-            &source_path,
-            &overlay_path,
-            &[hash(SKIN)].into_iter().collect(),
-            |_| Ok(prepared.clone()),
-        )
-        .expect("the overlay WAD builds");
-
-        let base_entries: BTreeMap<WadHash, WadChunk> = {
-            let file = File::open(source_path.as_std_path()).unwrap();
-            let source = Wad::mount(std::io::BufReader::new(file)).unwrap();
-            source
-                .chunks()
-                .iter()
-                .map(|chunk| (chunk.path_hash, stats.layout.shifted(chunk).unwrap()))
-                .collect()
-        };
-
-        let before = std::fs::read(overlay_path.as_std_path()).unwrap();
-
-        // One chunk the file reserved no TOC entry for, which is exactly what
-        // the capacity check exists to refuse.
-        let new_entry = hash("assets/characters/test/brand_new.bin");
-        let refused = rewrite_wad_tail(
-            &overlay_path,
-            &stats.layout,
-            stats.source,
-            base_entries,
-            &[new_entry],
-            |_| Ok(prepared.clone()),
-        );
-
-        assert!(
-            refused.is_err(),
-            "an over-capacity entry set must be refused"
-        );
-        assert_eq!(
-            std::fs::read(overlay_path.as_std_path()).unwrap(),
-            before,
-            "a refused rewrite must not have touched the file"
-        );
-    }
-
-    #[test]
-    fn test_compress_with_none() {
-        let data = b"Hello, world!";
-        let result = compress_with(data, OverrideCodec::Stored).unwrap();
-        assert_eq!(result, data);
-    }
-
-    #[test]
-    fn test_compress_with_zstd() {
-        let data = b"Hello, world!".repeat(100);
-        let compressed = compress_with(&data, OverrideCodec::Zstd).unwrap();
-        assert!(compressed.len() < data.len());
-    }
-
-    /// A layout puts the chunk count and the TOC in front of its data region by
-    /// subtraction, and `rewrite_wad_tail` seeks to that result and writes.
-    /// A region offset that leaves no room for the header means those writes
-    /// land on the magic and Riot's signature, so the layout must be refused
-    /// before anything opens the file.
-    #[test]
-    fn a_layout_whose_toc_would_land_in_the_header_is_refused() {
-        // A v3.4 header is 268 bytes, so the smallest coherent region offset for
-        // a one-entry TOC is 268 + 4 (the chunk count) + 32 (the entry).
-        let smallest = WadTailLayout {
-            data_region_offset: 268 + 4 + 32,
-            offset_delta: 0,
-            tail_offset: 4096,
-            toc_capacity: 1,
-        };
-        assert!(
-            smallest.validate().is_ok(),
-            "the tightest legal layout must still be usable"
-        );
-
-        let in_the_header = WadTailLayout {
-            data_region_offset: 4 + 32,
-            ..smallest
-        };
-        assert!(
-            in_the_header.validate().is_err(),
-            "a region offset that leaves no room for the header must be refused"
-        );
-    }
-
-    /// The header size `validate` reserves is the one the writer actually emits.
-    /// Pinning them against a real build stops the constant drifting from the
-    /// bytes written above it.
-    #[test]
-    fn a_built_wad_puts_its_toc_exactly_past_the_header() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-
-        let source_path = root.join("Game").join(WAD_REL);
-        write_game_wad(&source_path, &[(SKIN, b"the original skin")]);
-
-        let stats = build_patched_wad(
-            &source_path,
-            &root.join("overlay").join(WAD_REL),
-            &HashSet::new(),
-            |_| unreachable!("this build has no overrides"),
-        )
-        .expect("the overlay WAD builds");
-
-        assert_eq!(
-            stats.layout.chunk_count_offset().unwrap(),
-            268,
-            "the chunk count follows the header"
-        );
-        assert_eq!(
-            stats.layout.toc_offset().unwrap(),
-            272,
-            "the TOC follows the chunk count"
-        );
-    }
-
-    /// Audio is already compressed, so it is stored; everything else is Zstd.
-    /// Codecs the format names but this crate never emits collapse onto Zstd
-    /// rather than reaching the writer, which is what keeps it total.
-    #[test]
-    fn the_codec_for_data_is_one_of_the_two_this_crate_writes() {
-        // A Wwise bank header - the audio case.
-        let mut audio = b"BKHD".to_vec();
-        audio.extend_from_slice(&[0u8; 64]);
-
-        assert_eq!(OverrideCodec::for_data(&audio), OverrideCodec::Stored);
-        assert_eq!(
-            OverrideCodec::for_data(b"an ordinary asset"),
-            OverrideCodec::Zstd
-        );
-    }
-}
+mod tests;

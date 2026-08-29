@@ -5,8 +5,10 @@
 
 use crate::builder::incremental::TailRewrite;
 use crate::builder::{
-    OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource, SharedBytes,
+    ChecksumMismatch, OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource,
+    SharedBytes,
 };
+use crate::content::ModContentProvider;
 use crate::error::{Error, Invariant, Result};
 use crate::game_index::GameIndex;
 use crate::state::OverlayState;
@@ -132,6 +134,8 @@ struct OverrideCompressor<'a> {
     batch_bytes: usize,
     budget: usize,
     compressed_total: usize,
+    /// Contents copied in already compressed, which never reach a batch.
+    passed_through: usize,
 }
 
 impl<'a> OverrideCompressor<'a> {
@@ -160,6 +164,7 @@ impl<'a> OverrideCompressor<'a> {
             batch_bytes: 0,
             budget,
             compressed_total: 0,
+            passed_through: 0,
         }
     }
 
@@ -207,6 +212,26 @@ impl<'a> OverrideCompressor<'a> {
         Ok(())
     }
 
+    /// Record a chunk whose bytes arrived already compressed, skipping the
+    /// batch entirely.
+    ///
+    /// A pass-through has nothing left to compress, so its buffer goes straight
+    /// into the memo and serves every other path hash carrying the same content.
+    /// Callers gate this on [`needs`](Self::needs) exactly as they gate
+    /// [`supply`](Self::supply), so a content is never both queued and memoized.
+    ///
+    /// One content can reach a build both ways - passed through from one mod's
+    /// packed WAD and read loose from another's - and whichever arrives first
+    /// wins. The two encodings are equally valid and every WAD in the build
+    /// still gets the one buffer, which is all the game's shared-chunk rule
+    /// asks for; a later build settling on the other encoding only matters to a
+    /// WAD being rewritten, and those seed the memo from the tail they keep.
+    fn supply_prepared(&mut self, path_hash: WadHash, prepared: PreparedOverride) {
+        let content_hash = self.record(path_hash);
+        self.memo.insert(content_hash, prepared);
+        self.passed_through += 1;
+    }
+
     /// Compress the queued batch in parallel and drop its uncompressed bytes.
     fn flush(&mut self) -> Result<()> {
         if self.batch.is_empty() {
@@ -242,8 +267,10 @@ impl<'a> OverrideCompressor<'a> {
         self.flush()?;
 
         tracing::info!(
-            "Compressed {} unique override chunk(s); reused {} from the previous build",
+            "Compressed {} unique override chunk(s); passed {} through already compressed; \
+             reused {} from the previous build",
             self.compressed_total,
+            self.passed_through,
             self.reused.len()
         );
 
@@ -422,8 +449,10 @@ impl OverlayBuilder {
         let sources = ChunkSources::classify(&needed_hashes, all_meta);
 
         let mut preparer = OverrideCompressor::new(all_meta, reused, BATCH_BUDGET_BYTES);
-        self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut preparer)?;
+        let mismatches =
+            self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut preparer)?;
         self.resolve_string_patches(&sources.string_patches, string_plans, &mut preparer)?;
+        self.last_checksum_mismatches.extend(mismatches);
 
         let prepared = preparer.finish()?;
 
@@ -437,18 +466,28 @@ impl OverlayBuilder {
     /// Resolve overrides read from mod content providers into the preparer,
     /// reading each distinct content once no matter how many path hashes or
     /// WADs carry it.
+    ///
+    /// An override whose provider already holds it in a WAD's stored form is
+    /// *passed through*: its bytes go to the preparer already compressed and are
+    /// never decoded (see [`try_pass_through`]). Everything else is read
+    /// decompressed and compressed by the preparer as before.
+    ///
+    /// Returns the chunks whose container claimed a checksum its bytes do not
+    /// have, which the caller reports and does not fail on.
     fn resolve_provider_overrides(
         &mut self,
         by_mod: &HashMap<&str, Vec<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
         preparer: &mut OverrideCompressor<'_>,
-    ) -> Result<()> {
+    ) -> Result<Vec<ChecksumMismatch>> {
         let mod_id_to_index: HashMap<String, usize> = self
             .enabled_mods
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id.clone(), i))
             .collect();
+
+        let mut mismatches = Vec::new();
 
         for (mod_id, hashes) in by_mod {
             let Some(&idx) = mod_id_to_index.get(*mod_id) else {
@@ -466,7 +505,21 @@ impl OverlayBuilder {
                         wad_name,
                         rel_path,
                         ..
-                    } => provider.read_wad_override_file(layer, wad_name, rel_path)?,
+                    } => {
+                        if let Some(passed) = try_pass_through(
+                            provider.as_mut(),
+                            mod_id,
+                            path_hash,
+                            layer,
+                            wad_name,
+                            rel_path,
+                            &mut mismatches,
+                        )? {
+                            preparer.supply_prepared(path_hash, passed);
+                            continue;
+                        }
+                        provider.read_wad_override_file(layer, wad_name, rel_path)?
+                    }
                     OverrideSource::Raw { rel_path, .. } => {
                         provider.read_raw_override_file(rel_path)?
                     }
@@ -478,7 +531,7 @@ impl OverlayBuilder {
             }
         }
 
-        Ok(())
+        Ok(mismatches)
     }
 
     /// Resolve synthetic stringtable patches into uncompressed bytes: the game's
@@ -689,6 +742,66 @@ impl OverlayBuilder {
     }
 }
 
+/// Copy one override's stored bytes through, when its provider holds them that
+/// way and this crate can write them.
+///
+/// `None` sends the override down the ordinary read-and-compress path, for
+/// either reason it can fail to qualify: the provider stores it loose, or it is
+/// stored under a codec the overlay writer does not emit - in practice a `.tex`
+/// inside a packed WAD, whose subchunk table lives in the WAD it came from.
+/// Refusing the second kind costs one copy of its compressed bytes, which is
+/// what buys the codec decision staying with the writer instead of being
+/// duplicated into every provider.
+///
+/// A claim that disagrees with the bytes is warned about and pushed onto
+/// `mismatches`; the overlay carries the checksum computed over the bytes
+/// either way, so the build carries on (ADR-0001).
+///
+/// # Errors
+///
+/// Fails when the provider offers the chunk but cannot read it, or when its
+/// sizes overflow the WAD format's `u32` fields.
+fn try_pass_through(
+    provider: &mut dyn ModContentProvider,
+    mod_id: &str,
+    path_hash: WadHash,
+    layer: &str,
+    wad_name: &str,
+    rel_path: &Utf8Path,
+    mismatches: &mut Vec<ChecksumMismatch>,
+) -> Result<Option<PreparedOverride>> {
+    let Some(chunk) = provider.read_wad_override_compressed(layer, wad_name, rel_path)? else {
+        return Ok(None);
+    };
+
+    let claimed = chunk.claimed_checksum;
+    let Some(prepared) = PreparedOverride::pass_through(path_hash, chunk)? else {
+        return Ok(None);
+    };
+
+    let computed = prepared.checksum();
+    if computed != claimed {
+        tracing::warn!(
+            "Mod '{}' claims checksum {:016x} for chunk {:016x} of '{}', but those bytes hash \
+             to {:016x}; the overlay records the computed value",
+            mod_id,
+            claimed,
+            path_hash,
+            wad_name,
+            computed,
+        );
+        mismatches.push(ChecksumMismatch {
+            mod_id: mod_id.to_string(),
+            wad_name: wad_name.to_string(),
+            path_hash,
+            claimed,
+            computed,
+        });
+    }
+
+    Ok(Some(prepared))
+}
+
 /// Hand one prepared override to a writer, releasing it from the WAD's map.
 ///
 /// Its bytes are then freed as soon as the last WAD holding them has written it.
@@ -751,172 +864,4 @@ pub(crate) struct PatchedWad {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn meta_with_content_hash(content_hash: ContentHash) -> OverrideMeta {
-        OverrideMeta {
-            content_hash,
-            uncompressed_size: 0,
-            source: OverrideSource::Raw {
-                mod_id: "m".to_string(),
-                rel_path: Utf8PathBuf::from("assets/x.bin"),
-            },
-            fallback_wad: None,
-            unlocalized_wad: None,
-            linked_bins: Vec::new(),
-        }
-    }
-
-    /// Two chunks with the same content must end up sharing one compressed
-    /// buffer: that is what makes every copy of a cross-WAD chunk carry the
-    /// same compressed checksum, which the game validates. The second chunk's
-    /// bytes are never even requested - `needs` answers false for it.
-    #[test]
-    fn identical_content_is_read_and_compressed_once() {
-        let all_meta = HashMap::from([
-            (
-                WadHash(0xAAAA),
-                meta_with_content_hash(ContentHash(0xC0FFEE)),
-            ),
-            (
-                WadHash(0xBBBB),
-                meta_with_content_hash(ContentHash(0xC0FFEE)),
-            ),
-        ]);
-        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), BATCH_BUDGET_BYTES);
-
-        assert!(preparer.needs(WadHash(0xAAAA)));
-        preparer
-            .supply(
-                WadHash(0xAAAA),
-                Arc::from(b"the same asset, twice".repeat(64).as_slice()),
-            )
-            .unwrap();
-        assert!(
-            !preparer.needs(WadHash(0xBBBB)),
-            "a second path hash with the same content must not be read again"
-        );
-
-        let prepared = preparer.finish().unwrap();
-
-        assert_eq!(prepared.len(), 2);
-        let a = &prepared[&WadHash(0xAAAA)];
-        let b = &prepared[&WadHash(0xBBBB)];
-        assert!(
-            std::ptr::eq(a.compressed(), b.compressed()),
-            "equal content must share one compressed buffer, not two equal copies"
-        );
-        assert_eq!(a.checksum(), b.checksum());
-    }
-
-    /// Different content still gets its own compression, and the writer's TOC
-    /// fields come straight off each prepared override.
-    #[test]
-    fn differing_content_is_compressed_separately() {
-        let all_meta = HashMap::from([
-            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(1))),
-            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(2))),
-        ]);
-        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), BATCH_BUDGET_BYTES);
-
-        assert!(preparer.needs(WadHash(0xAAAA)));
-        preparer
-            .supply(WadHash(0xAAAA), Arc::from(b"first".repeat(64).as_slice()))
-            .unwrap();
-        assert!(preparer.needs(WadHash(0xBBBB)));
-        preparer
-            .supply(WadHash(0xBBBB), Arc::from(b"second".repeat(64).as_slice()))
-            .unwrap();
-
-        let prepared = preparer.finish().unwrap();
-
-        assert_ne!(
-            prepared[&WadHash(0xAAAA)].checksum(),
-            prepared[&WadHash(0xBBBB)].checksum()
-        );
-        assert_eq!(prepared[&WadHash(0xAAAA)].uncompressed_size(), 5 * 64);
-        assert_eq!(prepared[&WadHash(0xBBBB)].uncompressed_size(), 6 * 64);
-    }
-
-    /// A chunk the metadata pass never saw cannot be deduplicated against
-    /// anything, but it must still be prepared rather than dropped.
-    #[test]
-    fn content_without_metadata_still_gets_prepared() {
-        let empty_meta = HashMap::new();
-        let mut preparer = OverrideCompressor::new(&empty_meta, HashMap::new(), BATCH_BUDGET_BYTES);
-
-        assert!(preparer.needs(WadHash(0xAAAA)));
-        preparer
-            .supply(WadHash(0xAAAA), Arc::from(b"orphan".as_slice()))
-            .unwrap();
-
-        let prepared = preparer.finish().unwrap();
-
-        assert_eq!(prepared.len(), 1);
-        assert_eq!(prepared[&WadHash(0xAAAA)].uncompressed_size(), 6);
-    }
-
-    /// A budget small enough to flush on every supply must not break content
-    /// sharing: a duplicate arriving after its content already flushed still
-    /// skips the read and lands on the memoized buffer.
-    #[test]
-    fn sharing_survives_a_batch_flush_boundary() {
-        let all_meta = HashMap::from([
-            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(7))),
-            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(7))),
-            (WadHash(0xCCCC), meta_with_content_hash(ContentHash(8))),
-        ]);
-        // A 1-byte budget forces a flush after every supply.
-        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), 1);
-
-        assert!(preparer.needs(WadHash(0xAAAA)));
-        preparer
-            .supply(WadHash(0xAAAA), Arc::from(b"shared".repeat(64).as_slice()))
-            .unwrap();
-        assert!(preparer.needs(WadHash(0xCCCC)));
-        preparer
-            .supply(WadHash(0xCCCC), Arc::from(b"other".repeat(64).as_slice()))
-            .unwrap();
-        assert!(
-            !preparer.needs(WadHash(0xBBBB)),
-            "content compressed in an earlier batch must not be requested again"
-        );
-
-        let prepared = preparer.finish().unwrap();
-
-        assert_eq!(prepared.len(), 3);
-        assert!(std::ptr::eq(
-            prepared[&WadHash(0xAAAA)].compressed(),
-            prepared[&WadHash(0xBBBB)].compressed()
-        ));
-    }
-
-    /// Reused overrides recovered from a tail rewrite seed the memo: content
-    /// they already cover is never requested, and the reused entry itself
-    /// survives into the result under its own path hash.
-    #[test]
-    fn reused_content_is_never_requested() {
-        let all_meta = HashMap::from([
-            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(9))),
-            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(9))),
-        ]);
-        let reused_override =
-            PreparedOverride::compress(WadHash(0xAAAA), b"recovered from the tail").unwrap();
-        let reused = HashMap::from([(WadHash(0xAAAA), reused_override)]);
-        let mut preparer = OverrideCompressor::new(&all_meta, reused, BATCH_BUDGET_BYTES);
-
-        assert!(
-            !preparer.needs(WadHash(0xBBBB)),
-            "content a tail rewrite recovered must not be read or compressed again"
-        );
-
-        let prepared = preparer.finish().unwrap();
-
-        assert_eq!(prepared.len(), 2);
-        assert!(std::ptr::eq(
-            prepared[&WadHash(0xAAAA)].compressed(),
-            prepared[&WadHash(0xBBBB)].compressed()
-        ));
-    }
-}
+mod tests;

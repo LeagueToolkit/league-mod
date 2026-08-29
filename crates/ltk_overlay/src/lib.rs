@@ -32,7 +32,10 @@
 //!
 //! 4. **Pass 2, bytes** - Only the overrides the chosen WADs actually need are
 //!    re-read and compressed, once per distinct content, and shared across every
-//!    WAD they route to. For each affected game WAD a patched copy is then
+//!    WAD they route to. An override its mod already holds as a WAD chunk is
+//!    *passed through* instead: its stored bytes are copied into the overlay
+//!    verbatim, their checksum recomputed in flight and never decoded. For each
+//!    affected game WAD a patched copy is then
 //!    written into the overlay directory - or, when only override bytes changed,
 //!    the existing copy keeps its data region and has only its tail rewritten.
 //!
@@ -122,10 +125,10 @@ mod test_support;
 
 // Re-export main public API.
 pub use builder::{
-    AffectedWad, BASE_LAYER_NAME, EnabledMod, ModWadReport, OverlayBuildResult, OverlayBuilder,
-    OverlayProgress, OverlayStage,
+    AffectedWad, BASE_LAYER_NAME, ChecksumMismatch, EnabledMod, ModWadReport, OverlayBuildResult,
+    OverlayBuilder, OverlayProgress, OverlayStage,
 };
-pub use content::{FsModContent, ModContentProvider};
+pub use content::{CompressedChunk, FsModContent, ModContentProvider};
 pub use error::{
     CacheError, CorruptionError, Error, GameDirError, Invariant, ModContentError, Result,
     WadLimitError, WadRegion,

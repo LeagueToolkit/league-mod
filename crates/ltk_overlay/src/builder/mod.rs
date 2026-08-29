@@ -319,8 +319,36 @@ pub struct OverlayBuildResult {
     pub wads_reused: Vec<Utf8PathBuf>,
     /// Detected conflicts between mods (not yet implemented).
     pub conflicts: Vec<Conflict>,
+    /// Chunks whose container claimed a checksum its own bytes do not have.
+    ///
+    /// Empty on a build that passed no chunk through, and on one where every
+    /// container told the truth.
+    pub checksum_mismatches: Vec<ChecksumMismatch>,
     /// Wall-clock time for the entire build.
     pub build_time: Duration,
+}
+
+/// A chunk whose container claimed a checksum its own bytes do not have.
+///
+/// Reported, never fatal. Mod tools in the wild ship wrong metadata over
+/// perfectly good bytes - the same tools already ship wrong ZIP CRCs, which this
+/// crate also tolerates - and the overlay carries the checksum recomputed while
+/// the bytes were copied, so the mod's content still reaches the game intact.
+/// What the report is for is the container: a mod that produces these is worth
+/// re-exporting. See `docs/adr/0001-pass-through-recomputes-checksums-and-warns.md`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksumMismatch {
+    /// Mod identifier (matches [`EnabledMod::id`]).
+    pub mod_id: String,
+    /// The mod's WAD target the chunk was read from, e.g. `Aatrox.wad.client`.
+    pub wad_name: String,
+    /// Path hash of the chunk that disagreed.
+    pub path_hash: WadHash,
+    /// What the container's own TOC claimed for the chunk's stored bytes.
+    pub claimed: u64,
+    /// What those bytes actually hash to - the value the overlay TOC carries.
+    pub computed: u64,
 }
 
 /// A conflict where multiple mods override the same chunk (not yet implemented).
@@ -519,6 +547,10 @@ pub struct OverlayBuilder {
     /// [`build`](Self::build), drained via
     /// [`take_linked_bin_offenders`](Self::take_linked_bin_offenders).
     last_linked_bin_offenders: Vec<LinkedBinOffender>,
+    /// Chunks the most recent [`build`](Self::build) passed through whose
+    /// container claimed the wrong checksum for them. Moved into that build's
+    /// [`OverlayBuildResult`].
+    last_checksum_mismatches: Vec<ChecksumMismatch>,
 }
 
 impl OverlayBuilder {
@@ -543,6 +575,7 @@ impl OverlayBuilder {
             progress_callback: None,
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
+            last_checksum_mismatches: Vec::new(),
         }
     }
 
@@ -655,6 +688,7 @@ impl OverlayBuilder {
 
         // Reset per-build outputs; each return path sets these as appropriate.
         self.last_linked_bin_offenders = Vec::new();
+        self.last_checksum_mismatches = Vec::new();
 
         let effective_blocked = self.effective_blocked_wads();
 
@@ -726,6 +760,7 @@ impl OverlayBuilder {
                 wads_built: Vec::new(),
                 wads_reused: Vec::new(),
                 conflicts: Vec::new(),
+                checksum_mismatches: Vec::new(),
                 build_time: start_time.elapsed(),
             });
         }
@@ -862,6 +897,7 @@ impl OverlayBuilder {
             wads_built: built_paths,
             wads_reused: reused_paths,
             conflicts: Vec::new(),
+            checksum_mismatches: std::mem::take(&mut self.last_checksum_mismatches),
             build_time: start_time.elapsed(),
         })
     }
@@ -953,6 +989,8 @@ impl OverlayBuilder {
                 .map(|k| self.overlay_root.join(k))
                 .collect(),
             conflicts: Vec::new(),
+            // A skipped build read no container, so it has nothing to report.
+            checksum_mismatches: Vec::new(),
             build_time: start_time.elapsed(),
         })
     }

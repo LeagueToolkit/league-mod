@@ -47,8 +47,17 @@ A build runs in two passes over the mods, with the routing decisions in between.
    each override's bytes are handed over on demand and freed once the last WAD
    holding them has written it.
 
-6. **Compress once.** Every distinct override content is compressed a single
-   time, in parallel, memoized on its content hash.
+6. **Compress once, or not at all.** Every distinct override content is
+   compressed a single time, in parallel, memoized on its content hash.
+
+   An override whose container already holds it as a WAD chunk skips that
+   entirely: its stored bytes are *passed through* into the overlay verbatim,
+   never decoded and never re-encoded. Only codecs this crate writes qualify -
+   stored and plain Zstd - so a `ZstdMulti` chunk, whose subchunk table lives in
+   the WAD it came from, still takes the decode-and-compress path. The checksum
+   the overlay TOC records is always recomputed over the bytes being written; a
+   container that claimed a different one is reported in the build result and
+   never fails the build (see `adr/0001-pass-through-recomputes-checksums-and-warns.md`).
 
 7. **Write.** WADs are patched in parallel, each either rewritten in full or
    updated in place. See [Patched WAD layout](#patched-wad-layout).
