@@ -14,12 +14,20 @@
 //! # Environment
 //!
 //! - `LTK_BENCH_GAME_DIR` - the game's `Game/` directory (required).
+//! - `LTK_BENCH_MOD_FANTOME` - a `.fantome` archive, read through
+//!   [`FantomeContent`] exactly as a manager enabling it would. Copied into the
+//!   work directory first. Its overrides live inside the archive, so the
+//!   scenarios that edit an override file are skipped. Takes precedence over
+//!   `LTK_BENCH_MOD_DIR`.
 //! - `LTK_BENCH_MOD_DIR` - a mod project directory in the [`FsModContent`]
 //!   layout. Copied into the work directory first; the original is never
 //!   written to. When unset, a fixture is synthesized from the install itself
 //!   (see below), which is what makes runs comparable across machines.
 //! - `LTK_BENCH_WAD` - WAD to synthesize the fixture from. Default
 //!   `Aatrox.wad.client`.
+//! - `LTK_BENCH_EXPLODE` - set to `1` to unpack a `.fantome` into a mod project
+//!   directory instead of reading it as an archive, which makes the edit
+//!   scenarios available for a real distributed mod.
 //! - `LTK_BENCH_CHUNKS` - how many of that WAD's chunks the fixture overrides.
 //!   Default 64.
 //! - `LTK_BENCH_WORK_DIR` - scratch directory for the mod copy and the
@@ -41,7 +49,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
-use ltk_overlay::{EnabledMod, FsModContent, OverlayBuildResult, OverlayBuilder};
+use ltk_overlay::{EnabledMod, FantomeContent, FsModContent, OverlayBuildResult, OverlayBuilder};
 use ltk_wad::Wad;
 use std::time::{Duration, Instant};
 
@@ -62,26 +70,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_dir_all(work_dir.as_std_path())?;
     }
     let mod_dir = work_dir.join("mod");
-    let source_mod = match std::env::var("LTK_BENCH_MOD_DIR") {
-        Ok(dir) => {
-            let source = Utf8PathBuf::from(dir);
-            copy_dir(&source, &mod_dir)?;
-            source.to_string()
+    let explode = optional_var("LTK_BENCH_EXPLODE", 0u8)? != 0;
+    let fixture = match std::env::var("LTK_BENCH_MOD_FANTOME") {
+        Ok(archive) => {
+            let source = Utf8PathBuf::from(archive.trim());
+            std::fs::create_dir_all(work_dir.as_std_path())?;
+            if explode {
+                explode_fantome(&source, &mod_dir)?;
+                let override_file = first_override_file(&mod_dir)
+                    .ok_or("the archive holds no WAD overrides to explode")?;
+                Fixture::Dir {
+                    mod_dir,
+                    override_file,
+                    source: format!("{source} (exploded)"),
+                }
+            } else {
+                let copy = work_dir.join("mod.fantome");
+                std::fs::copy(source.as_std_path(), copy.as_std_path())?;
+                Fixture::Fantome {
+                    archive: copy,
+                    source,
+                }
+            }
         }
-        Err(_) => synthesize_mod(&game_dir, &mod_dir)?,
+        Err(_) => {
+            let source = match std::env::var("LTK_BENCH_MOD_DIR") {
+                Ok(dir) => {
+                    let source = Utf8PathBuf::from(dir.trim());
+                    copy_dir(&source, &mod_dir)?;
+                    source.to_string()
+                }
+                Err(_) => synthesize_mod(&game_dir, &mod_dir)?,
+            };
+            let override_file = first_override_file(&mod_dir).ok_or(
+                "the mod directory has no override files under content/<layer>/<wad>/ or content/raw/",
+            )?;
+            Fixture::Dir {
+                mod_dir,
+                override_file,
+                source,
+            }
+        }
     };
 
     let profile_dir = work_dir.join("profile");
     let overlay_root = profile_dir.join("overlay");
 
-    let override_file = first_override_file(&mod_dir).ok_or(
-        "the mod directory has no override files under content/<layer>/<wad>/ or content/raw/",
-    )?;
-
     println!("game:    {game_dir}");
-    println!("mod:     {source_mod}");
+    println!("mod:     {}", fixture.source());
     println!("profile: {profile_dir}");
-    println!("edits:   {}\n", override_file.file_name().unwrap_or("?"));
+    match &fixture {
+        Fixture::Dir { override_file, .. } => {
+            println!("edits:   {}\n", override_file.file_name().unwrap_or("?"))
+        }
+        Fixture::Fantome { .. } => {
+            println!("edits:   n/a - a .fantome's overrides live inside the archive\n")
+        }
+    }
 
     let mut runs: Vec<Run> = Vec::new();
 
@@ -90,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             OverlayBuilder::new(game_dir.clone(), overlay_root.clone(), profile_dir.clone());
         builder.set_enabled_mods(vec![EnabledMod {
             id: "bench-mod".to_string(),
-            content: Box::new(FsModContent::new(mod_dir.clone())),
+            content: fixture.provider()?,
             enabled_layers: None,
         }]);
 
@@ -102,20 +147,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runs.push(build("cold")?);
     runs.push(build("no-op")?);
 
+    // The remaining scenarios mutate an override file in place, which only a
+    // directory fixture has. A `.fantome` is read as the manager reads it.
+    let Fixture::Dir { override_file, .. } = &fixture else {
+        report(&runs);
+        return Ok(());
+    };
+
     for round in 1..=3 {
-        touch_bytes(&override_file, round)?;
+        touch_bytes(override_file, round)?;
         runs.push(build(&format!("edit #{round}"))?);
     }
 
-    add_new_entry(&override_file)?;
+    add_new_entry(override_file)?;
     runs.push(build("add entry")?);
 
+    report(&runs);
+    Ok(())
+}
+
+/// Unpack a `.fantome`'s WAD content into a mod project directory.
+///
+/// A fantome ships its overrides inside a packed WAD, which no scenario can
+/// edit in place. Writing them out as the loose files a workshop project holds
+/// is what makes the edit scenarios available for a real distributed mod - the
+/// same content, read the way its author would be iterating on it.
+fn explode_fantome(
+    archive: &Utf8Path,
+    mod_dir: &Utf8Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ltk_overlay::ModContentProvider as _;
+
+    let mut content = FantomeContent::new(std::fs::File::open(archive.as_std_path())?)?;
+    let project = content.mod_project()?;
+
+    let mut chunks = 0usize;
+    for wad_name in content.list_layer_wads("base")? {
+        let wad_dir = mod_dir.join("content").join("base").join(&wad_name);
+        for (rel_path, bytes) in content.read_wad_overrides("base", &wad_name)? {
+            let file = wad_dir.join(&rel_path);
+            std::fs::create_dir_all(file.parent().expect("override has a parent").as_std_path())?;
+            std::fs::write(file.as_std_path(), &bytes)?;
+            chunks += 1;
+        }
+    }
+
+    std::fs::write(
+        mod_dir.join("mod.config.json").as_std_path(),
+        serde_json::to_string_pretty(&project)?,
+    )?;
+    println!("exploded {chunks} override(s) from {archive}");
+
+    Ok(())
+}
+
+/// The mod this run builds from, and how it has to be read.
+enum Fixture {
+    /// A mod project directory, which every scenario can edit in place.
+    Dir {
+        mod_dir: Utf8PathBuf,
+        override_file: Utf8PathBuf,
+        source: String,
+    },
+    /// A `.fantome` archive, read exactly as a manager enabling it would.
+    ///
+    /// Copied into the work directory first, so the original is never touched.
+    /// Its overrides live inside a zipped WAD rather than as files on disk, so
+    /// the scenarios that edit one do not apply.
+    Fantome {
+        archive: Utf8PathBuf,
+        source: Utf8PathBuf,
+    },
+}
+
+impl Fixture {
+    /// What to print as the benchmark's input.
+    fn source(&self) -> &str {
+        match self {
+            Self::Dir { source, .. } => source,
+            Self::Fantome { source, .. } => source.as_str(),
+        }
+    }
+
+    /// A fresh provider, since a build consumes the one it is given.
+    fn provider(
+        &self,
+    ) -> Result<Box<dyn ltk_overlay::ModContentProvider>, Box<dyn std::error::Error>> {
+        Ok(match self {
+            Self::Dir { mod_dir, .. } => Box::new(FsModContent::new(mod_dir.clone())),
+            Self::Fantome { archive, .. } => Box::new(
+                // The archive path is what lets the metadata cache fingerprint
+                // this mod, which the no-op scenario needs to hit the skip.
+                FantomeContent::new(std::fs::File::open(archive.as_std_path())?)?
+                    .with_archive_path(archive.clone()),
+            ),
+        })
+    }
+}
+
+/// Print the timing table.
+fn report(runs: &[Run]) {
     println!(
         "\n{:<12} {:>10} {:>7} {:>7}",
         "scenario", "elapsed", "built", "reused"
     );
     println!("{}", "-".repeat(40));
-    for run in &runs {
+    for run in runs {
         println!(
             "{:<12} {:>10} {:>7} {:>7}",
             run.label,
@@ -124,8 +261,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run.reused,
         );
     }
-
-    Ok(())
 }
 
 /// One timed `build()` call.
