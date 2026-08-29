@@ -1429,7 +1429,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_overlay"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "byteorder",
  "camino",
