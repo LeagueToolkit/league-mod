@@ -20,8 +20,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Uncompressed override bytes as read in pass 2, before [`prepare_overrides`]
-/// turns them into the compressed [`PreparedOverride`]s the writer consumes.
+/// Uncompressed override bytes as read in pass 2, before the
+/// [`OverrideCompressor`] turns them into the compressed [`PreparedOverride`]s
+/// the writer consumes.
 pub(crate) type ResolvedChunk = SharedBytes;
 
 struct ChunkSources<'a> {
@@ -87,83 +88,174 @@ fn distribute_prepared_to_wads(
     wad_overrides
 }
 
-/// Compress every resolved override, once per distinct content, in parallel.
+/// How many uncompressed bytes accumulate before a batch is compressed.
 ///
-/// Overrides are memoized on their pass-1 `content_hash`, so a chunk routed to
-/// several WADs - and any two overrides that happen to carry identical bytes -
-/// are compressed a single time and then share one [`PreparedOverride`]. That
-/// structural sharing is what keeps every copy of a cross-WAD chunk on the same
-/// compressed checksum, which the game validates (see the [`wad_builder`] module
-/// docs).
+/// The bound on pass 2's uncompressed residency: one batch plus per-thread
+/// compression buffers, instead of every rebuilt WAD's bytes at once. 256 MiB
+/// keeps every compression thread saturated between flushes while staying
+/// immaterial next to the page cache on the 16 GiB machines this exists for.
+const BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+/// Compresses needed overrides once per distinct content, in bounded batches.
 ///
-/// Consumes `resolved`: each uncompressed buffer is dropped as soon as its
-/// compressed form exists, and nothing downstream of the writer reads
-/// uncompressed override bytes.
+/// The caller asks [`needs`](Self::needs) before reading a chunk's bytes and
+/// supplies them only when asked to, so a content appearing under many path
+/// hashes - a chunk routed to several WADs, or two overrides carrying
+/// identical bytes - is read and compressed a single time and then shares one
+/// [`PreparedOverride`]. That structural sharing is what keeps every copy of a
+/// cross-WAD chunk on the same compressed checksum, which the game validates
+/// (see the [`wad_builder`] module docs).
+///
+/// Supplied bytes accumulate up to the budget and are compressed in parallel
+/// per batch, each uncompressed buffer dropped as soon as its compressed form
+/// exists. Nothing downstream of the writer reads uncompressed override bytes.
 ///
 /// `reused` seeds the memo with bytes already compressed in a previous build,
 /// recovered from an overlay's tail. Anything whose content they already cover
-/// is never compressed again, and every WAD needing that content emits those
-/// exact bytes.
+/// is never read or compressed again, and every WAD needing that content emits
+/// those exact bytes.
 ///
 /// [`wad_builder`]: crate::wad_builder
-fn prepare_overrides(
-    resolved: HashMap<WadHash, ResolvedChunk>,
-    all_meta: &HashMap<WadHash, OverrideMeta>,
+struct OverrideCompressor<'a> {
+    all_meta: &'a HashMap<WadHash, OverrideMeta>,
     reused: HashMap<WadHash, PreparedOverride>,
-) -> Result<HashMap<WadHash, PreparedOverride>> {
-    // A chunk with no metadata entry cannot be deduplicated against anything,
-    // so it keys on its own path hash - distinct by construction.
-    let content_hash_of = |path_hash: WadHash| {
-        all_meta
+    /// Compressed overrides so far, keyed by *content* hash: that is what makes
+    /// one buffer serve every chunk carrying identical bytes.
+    memo: HashMap<ContentHash, PreparedOverride>,
+    /// Every path hash `needs` or `supply` saw, mapped to its content identity,
+    /// so `finish` can spread the memo back over path hashes.
+    content_of: HashMap<WadHash, ContentHash>,
+    /// Contents waiting in the current batch, so a duplicate arriving before
+    /// the flush is not requested again.
+    pending: HashSet<ContentHash>,
+    batch: Vec<(ContentHash, WadHash, ResolvedChunk)>,
+    batch_bytes: usize,
+    budget: usize,
+    compressed_total: usize,
+}
+
+impl<'a> OverrideCompressor<'a> {
+    fn new(
+        all_meta: &'a HashMap<WadHash, OverrideMeta>,
+        reused: HashMap<WadHash, PreparedOverride>,
+        budget: usize,
+    ) -> Self {
+        let content_hash_of = |path_hash: WadHash| {
+            all_meta
+                .get(&path_hash)
+                .map_or(ContentHash(path_hash.0), |meta| meta.content_hash)
+        };
+        let memo = reused
+            .iter()
+            .map(|(&path_hash, prepared)| (content_hash_of(path_hash), prepared.clone()))
+            .collect();
+
+        Self {
+            all_meta,
+            reused,
+            memo,
+            content_of: HashMap::new(),
+            pending: HashSet::new(),
+            batch: Vec::new(),
+            batch_bytes: 0,
+            budget,
+            compressed_total: 0,
+        }
+    }
+
+    /// The content identity a path hash is deduplicated under.
+    ///
+    /// A chunk with no metadata entry cannot be deduplicated against anything,
+    /// so it keys on its own path hash - distinct by construction.
+    fn record(&mut self, path_hash: WadHash) -> ContentHash {
+        let content_hash = self
+            .all_meta
             .get(&path_hash)
-            .map_or(ContentHash(path_hash.0), |meta| meta.content_hash)
-    };
-
-    // Everything below is keyed by *content* hash, not path hash: that is what
-    // makes one buffer serve every chunk carrying identical bytes.
-    let mut memo: HashMap<ContentHash, PreparedOverride> = reused
-        .iter()
-        .map(|(&path_hash, prepared)| (content_hash_of(path_hash), prepared.clone()))
-        .collect();
-
-    // One representative (path hash, bytes) per distinct content still needing
-    // compression. Duplicate buffers are released here, before any starts.
-    let mut content_of: HashMap<WadHash, ContentHash> = HashMap::with_capacity(resolved.len());
-    let mut distinct: HashMap<ContentHash, (WadHash, ResolvedChunk)> = HashMap::new();
-    for (path_hash, bytes) in resolved {
-        let content_hash = content_hash_of(path_hash);
-        content_of.insert(path_hash, content_hash);
-        if !memo.contains_key(&content_hash) {
-            distinct.entry(content_hash).or_insert((path_hash, bytes));
-        }
+            .map_or(ContentHash(path_hash.0), |meta| meta.content_hash);
+        self.content_of.insert(path_hash, content_hash);
+        content_hash
     }
 
-    let compressed = distinct.len();
-    memo.par_extend(
-        distinct
-            .into_par_iter()
-            .map(|(content_hash, (path_hash, bytes))| {
-                PreparedOverride::compress(path_hash, &bytes)
-                    .map(|prepared| (content_hash, prepared))
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
-
-    tracing::info!(
-        "Compressed {} unique override chunk(s); reused {} from the previous build",
-        compressed,
-        reused.len()
-    );
-
-    let mut prepared = reused;
-    prepared.reserve(content_of.len());
-    for (path_hash, content_hash) in content_of {
-        if let Some(chunk) = memo.get(&content_hash) {
-            prepared.insert(path_hash, chunk.clone());
-        }
+    /// Whether `path_hash`'s bytes still have to be read and supplied.
+    ///
+    /// False when its content is already compressed or waiting in the current
+    /// batch; the path hash is remembered either way and lands on the shared
+    /// buffer at [`finish`](Self::finish).
+    fn needs(&mut self, path_hash: WadHash) -> bool {
+        let content_hash = self.record(path_hash);
+        !self.memo.contains_key(&content_hash) && !self.pending.contains(&content_hash)
     }
 
-    Ok(prepared)
+    /// Queue one chunk's uncompressed bytes, flushing when the batch is full.
+    ///
+    /// Bytes for a content already compressed or already queued are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a flushed batch fails to compress.
+    fn supply(&mut self, path_hash: WadHash, bytes: ResolvedChunk) -> Result<()> {
+        let content_hash = self.record(path_hash);
+        if self.memo.contains_key(&content_hash) || !self.pending.insert(content_hash) {
+            return Ok(());
+        }
+
+        self.batch_bytes += bytes.len();
+        self.batch.push((content_hash, path_hash, bytes));
+        if self.batch_bytes >= self.budget {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Compress the queued batch in parallel and drop its uncompressed bytes.
+    fn flush(&mut self) -> Result<()> {
+        if self.batch.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.batch);
+        self.batch_bytes = 0;
+        self.compressed_total += batch.len();
+
+        self.memo.par_extend(
+            batch
+                .into_par_iter()
+                .map(|(content_hash, path_hash, bytes)| {
+                    PreparedOverride::compress(path_hash, &bytes)
+                        .map(|prepared| (content_hash, prepared))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+        self.pending.clear();
+        Ok(())
+    }
+
+    /// Flush the last batch and spread the memo over every recorded path hash.
+    ///
+    /// A path hash whose content never arrived - a stringtable patch that
+    /// failed to apply, say - is dropped rather than fatal; the writer falls
+    /// back per chunk.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the final batch fails to compress.
+    fn finish(mut self) -> Result<HashMap<WadHash, PreparedOverride>> {
+        self.flush()?;
+
+        tracing::info!(
+            "Compressed {} unique override chunk(s); reused {} from the previous build",
+            self.compressed_total,
+            self.reused.len()
+        );
+
+        let mut prepared = self.reused;
+        prepared.reserve(self.content_of.len());
+        for (path_hash, content_hash) in self.content_of {
+            if let Some(chunk) = self.memo.get(&content_hash) {
+                prepared.insert(path_hash, chunk.clone());
+            }
+        }
+        Ok(prepared)
+    }
 }
 
 impl OverlayBuilder {
@@ -304,7 +396,7 @@ impl OverlayBuilder {
     /// memo, so a WAD building the same content fresh in this build emits the
     /// bytes the reusing WAD is keeping.
     ///
-    /// The rest is compressed by [`prepare_overrides`], once per distinct
+    /// The rest is compressed by the [`OverrideCompressor`], once per distinct
     /// content, and the results are spread across the WADs.
     pub(crate) fn resolve_overrides_for_wads(
         &mut self,
@@ -329,12 +421,11 @@ impl OverlayBuilder {
 
         let sources = ChunkSources::classify(&needed_hashes, all_meta);
 
-        let mut resolved: HashMap<WadHash, ResolvedChunk> =
-            HashMap::with_capacity(needed_hashes.len());
-        self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut resolved)?;
-        self.resolve_string_patches(&sources.string_patches, string_plans, &mut resolved)?;
+        let mut preparer = OverrideCompressor::new(all_meta, reused, BATCH_BUDGET_BYTES);
+        self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut preparer)?;
+        self.resolve_string_patches(&sources.string_patches, string_plans, &mut preparer)?;
 
-        let prepared = prepare_overrides(resolved, all_meta, reused)?;
+        let prepared = preparer.finish()?;
 
         Ok(distribute_prepared_to_wads(
             wads_to_build,
@@ -343,13 +434,14 @@ impl OverlayBuilder {
         ))
     }
 
-    /// Resolve overrides read from mod content providers into uncompressed bytes,
-    /// reading each file once and cloning the bytes for every WAD that needs it.
+    /// Resolve overrides read from mod content providers into the preparer,
+    /// reading each distinct content once no matter how many path hashes or
+    /// WADs carry it.
     fn resolve_provider_overrides(
         &mut self,
         by_mod: &HashMap<&str, Vec<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
-        resolved: &mut HashMap<WadHash, ResolvedChunk>,
+        preparer: &mut OverrideCompressor<'_>,
     ) -> Result<()> {
         let mod_id_to_index: HashMap<String, usize> = self
             .enabled_mods
@@ -365,6 +457,9 @@ impl OverlayBuilder {
             let provider = &mut self.enabled_mods[idx].content;
 
             for &path_hash in hashes {
+                if !preparer.needs(path_hash) {
+                    continue;
+                }
                 let bytes = match &all_meta[&path_hash].source {
                     OverrideSource::LayerWad {
                         layer,
@@ -379,7 +474,7 @@ impl OverlayBuilder {
                         return Err(Error::Bug(Invariant::StringPatchGroupedByMod));
                     }
                 };
-                resolved.insert(path_hash, Arc::from(bytes));
+                preparer.supply(path_hash, Arc::from(bytes))?;
             }
         }
 
@@ -396,9 +491,12 @@ impl OverlayBuilder {
         &self,
         string_patch_hashes: &[WadHash],
         string_plans: &HashMap<WadHash, StringPatchPlan>,
-        resolved: &mut HashMap<WadHash, ResolvedChunk>,
+        preparer: &mut OverrideCompressor<'_>,
     ) -> Result<()> {
         for &path_hash in string_patch_hashes {
+            if !preparer.needs(path_hash) {
+                continue;
+            }
             let plan = string_plans
                 .get(&path_hash)
                 .ok_or(Error::Bug(Invariant::StringPatchWithoutPlan))?;
@@ -407,7 +505,7 @@ impl OverlayBuilder {
                     .and_then(|base_bytes| plan.apply(&base_bytes));
             match patched {
                 Ok(bytes) => {
-                    resolved.insert(path_hash, Arc::from(bytes));
+                    preparer.supply(path_hash, Arc::from(bytes))?;
                 }
                 Err(e) => tracing::error!(
                     "Failed to apply string overrides for locale '{}': {}; the game \
@@ -672,11 +770,10 @@ mod tests {
 
     /// Two chunks with the same content must end up sharing one compressed
     /// buffer: that is what makes every copy of a cross-WAD chunk carry the
-    /// same compressed checksum, which the game validates.
+    /// same compressed checksum, which the game validates. The second chunk's
+    /// bytes are never even requested - `needs` answers false for it.
     #[test]
-    fn identical_content_is_compressed_once() {
-        let bytes: ResolvedChunk = Arc::from(b"the same asset, twice".repeat(64).as_slice());
-        let resolved = HashMap::from([(WadHash(0xAAAA), bytes.clone()), (WadHash(0xBBBB), bytes)]);
+    fn identical_content_is_read_and_compressed_once() {
         let all_meta = HashMap::from([
             (
                 WadHash(0xAAAA),
@@ -687,8 +784,21 @@ mod tests {
                 meta_with_content_hash(ContentHash(0xC0FFEE)),
             ),
         ]);
+        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), BATCH_BUDGET_BYTES);
 
-        let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();
+        assert!(preparer.needs(WadHash(0xAAAA)));
+        preparer
+            .supply(
+                WadHash(0xAAAA),
+                Arc::from(b"the same asset, twice".repeat(64).as_slice()),
+            )
+            .unwrap();
+        assert!(
+            !preparer.needs(WadHash(0xBBBB)),
+            "a second path hash with the same content must not be read again"
+        );
+
+        let prepared = preparer.finish().unwrap();
 
         assert_eq!(prepared.len(), 2);
         let a = &prepared[&WadHash(0xAAAA)];
@@ -704,22 +814,22 @@ mod tests {
     /// fields come straight off each prepared override.
     #[test]
     fn differing_content_is_compressed_separately() {
-        let resolved = HashMap::from([
-            (
-                WadHash(0xAAAA),
-                ResolvedChunk::from(b"first".repeat(64).as_slice()),
-            ),
-            (
-                WadHash(0xBBBB),
-                ResolvedChunk::from(b"second".repeat(64).as_slice()),
-            ),
-        ]);
         let all_meta = HashMap::from([
             (WadHash(0xAAAA), meta_with_content_hash(ContentHash(1))),
             (WadHash(0xBBBB), meta_with_content_hash(ContentHash(2))),
         ]);
+        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), BATCH_BUDGET_BYTES);
 
-        let prepared = prepare_overrides(resolved, &all_meta, HashMap::new()).unwrap();
+        assert!(preparer.needs(WadHash(0xAAAA)));
+        preparer
+            .supply(WadHash(0xAAAA), Arc::from(b"first".repeat(64).as_slice()))
+            .unwrap();
+        assert!(preparer.needs(WadHash(0xBBBB)));
+        preparer
+            .supply(WadHash(0xBBBB), Arc::from(b"second".repeat(64).as_slice()))
+            .unwrap();
+
+        let prepared = preparer.finish().unwrap();
 
         assert_ne!(
             prepared[&WadHash(0xAAAA)].checksum(),
@@ -733,12 +843,80 @@ mod tests {
     /// anything, but it must still be prepared rather than dropped.
     #[test]
     fn content_without_metadata_still_gets_prepared() {
-        let resolved =
-            HashMap::from([(WadHash(0xAAAA), ResolvedChunk::from(b"orphan".as_slice()))]);
+        let empty_meta = HashMap::new();
+        let mut preparer = OverrideCompressor::new(&empty_meta, HashMap::new(), BATCH_BUDGET_BYTES);
 
-        let prepared = prepare_overrides(resolved, &HashMap::new(), HashMap::new()).unwrap();
+        assert!(preparer.needs(WadHash(0xAAAA)));
+        preparer
+            .supply(WadHash(0xAAAA), Arc::from(b"orphan".as_slice()))
+            .unwrap();
+
+        let prepared = preparer.finish().unwrap();
 
         assert_eq!(prepared.len(), 1);
         assert_eq!(prepared[&WadHash(0xAAAA)].uncompressed_size(), 6);
+    }
+
+    /// A budget small enough to flush on every supply must not break content
+    /// sharing: a duplicate arriving after its content already flushed still
+    /// skips the read and lands on the memoized buffer.
+    #[test]
+    fn sharing_survives_a_batch_flush_boundary() {
+        let all_meta = HashMap::from([
+            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(7))),
+            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(7))),
+            (WadHash(0xCCCC), meta_with_content_hash(ContentHash(8))),
+        ]);
+        // A 1-byte budget forces a flush after every supply.
+        let mut preparer = OverrideCompressor::new(&all_meta, HashMap::new(), 1);
+
+        assert!(preparer.needs(WadHash(0xAAAA)));
+        preparer
+            .supply(WadHash(0xAAAA), Arc::from(b"shared".repeat(64).as_slice()))
+            .unwrap();
+        assert!(preparer.needs(WadHash(0xCCCC)));
+        preparer
+            .supply(WadHash(0xCCCC), Arc::from(b"other".repeat(64).as_slice()))
+            .unwrap();
+        assert!(
+            !preparer.needs(WadHash(0xBBBB)),
+            "content compressed in an earlier batch must not be requested again"
+        );
+
+        let prepared = preparer.finish().unwrap();
+
+        assert_eq!(prepared.len(), 3);
+        assert!(std::ptr::eq(
+            prepared[&WadHash(0xAAAA)].compressed(),
+            prepared[&WadHash(0xBBBB)].compressed()
+        ));
+    }
+
+    /// Reused overrides recovered from a tail rewrite seed the memo: content
+    /// they already cover is never requested, and the reused entry itself
+    /// survives into the result under its own path hash.
+    #[test]
+    fn reused_content_is_never_requested() {
+        let all_meta = HashMap::from([
+            (WadHash(0xAAAA), meta_with_content_hash(ContentHash(9))),
+            (WadHash(0xBBBB), meta_with_content_hash(ContentHash(9))),
+        ]);
+        let reused_override =
+            PreparedOverride::compress(WadHash(0xAAAA), b"recovered from the tail").unwrap();
+        let reused = HashMap::from([(WadHash(0xAAAA), reused_override)]);
+        let mut preparer = OverrideCompressor::new(&all_meta, reused, BATCH_BUDGET_BYTES);
+
+        assert!(
+            !preparer.needs(WadHash(0xBBBB)),
+            "content a tail rewrite recovered must not be read or compressed again"
+        );
+
+        let prepared = preparer.finish().unwrap();
+
+        assert_eq!(prepared.len(), 2);
+        assert!(std::ptr::eq(
+            prepared[&WadHash(0xAAAA)].compressed(),
+            prepared[&WadHash(0xBBBB)].compressed()
+        ));
     }
 }
