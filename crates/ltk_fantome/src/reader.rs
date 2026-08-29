@@ -15,6 +15,7 @@ use zip::read::ZipFile;
 
 use crate::FantomeInfo;
 use crate::error::FantomeExtractError;
+use crate::packed::PackedWadSource;
 
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
@@ -164,7 +165,7 @@ pub(crate) fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> 
 ///
 /// The buffer grows as the copy runs rather than being sized from the entry's
 /// header, so a declared length nothing backs cannot ask for the allocation.
-fn read_entry(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
+pub(crate) fn read_entry(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     copy_entry(entry, &mut bytes)?;
     Ok(bytes)
@@ -288,18 +289,77 @@ impl<R: Read + Seek> FantomeReader<R> {
         &mut self,
         wad_name: &str,
     ) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        let index = (0..self.archive.len()).find(|i| {
-            self.archive.by_index(*i).is_ok_and(|file| {
-                matches!(
-                    classify_entry(file.name()),
-                    Some(FantomeEntry::PackedWad(name)) if name.eq_ignore_ascii_case(wad_name)
-                )
-            })
-        });
-        let Some(index) = index else {
+        let Some(index) = self.packed_wad_index(wad_name) else {
             return Ok(None);
         };
         Ok(Some(read_entry(&mut self.archive.by_index(index)?)?))
+    }
+
+    /// Mount the packed WAD stored as the single entry `WAD/{wad_name}`, or
+    /// `None` when the archive holds no such entry.
+    ///
+    /// Reading a WAD costs its TOC and the chunks actually asked for, not the
+    /// whole entry, whenever the archive stores that entry - which is what
+    /// [`normalize_archive`](crate::normalize_archive) arranges and
+    /// [`PackedWadSource::is_in_place`] reports. A deflated entry is inflated
+    /// into memory first, because deflate cannot be seeked into; the mounted
+    /// WAD then behaves the same and only the cost differs.
+    ///
+    /// The name is matched case-insensitively, like every entry lookup here,
+    /// and a WAD stored as a directory of files answers `None` on the same
+    /// terms as [`read_packed_wad`](Self::read_packed_wad). The mounted WAD
+    /// borrows the reader, so read whatever else is wanted from the archive
+    /// before mounting or after dropping it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be read, or if its bytes are not a
+    /// WAD the mount understands.
+    pub fn mount_packed_wad(
+        &mut self,
+        wad_name: &str,
+    ) -> Result<Option<Wad<PackedWadSource<'_, R>>>, FantomeExtractError> {
+        match self.packed_wad_source(wad_name)? {
+            Some(source) => Ok(Some(Wad::mount(source)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The bytes of the packed WAD `wad_name`, without mounting them.
+    ///
+    /// What [`mount_packed_wad`](Self::mount_packed_wad) is built on, for a
+    /// caller that wants to know what the read will cost - see
+    /// [`PackedWadSource::is_in_place`] - or to do something with the bytes
+    /// other than mount them. Mounting consumes the source, so a caller that
+    /// wants both asks here first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be read.
+    pub fn packed_wad_source(
+        &mut self,
+        wad_name: &str,
+    ) -> Result<Option<PackedWadSource<'_, R>>, FantomeExtractError> {
+        let Some(index) = self.packed_wad_index(wad_name) else {
+            return Ok(None);
+        };
+        PackedWadSource::at_index(&mut self.archive, index).map(Some)
+    }
+
+    /// The index of the entry holding the packed WAD `wad_name`.
+    ///
+    /// Only entry names are read, so a lookup that finds nothing costs no
+    /// decompression. The name is resolved back to an index through the
+    /// archive's own table rather than by counting the iteration, so nothing
+    /// here rests on that iteration being in index order.
+    fn packed_wad_index(&self, wad_name: &str) -> Option<usize> {
+        let entry = self.archive.file_names().find(|name| {
+            matches!(
+                classify_entry(name),
+                Some(FantomeEntry::PackedWad(packed)) if packed.eq_ignore_ascii_case(wad_name)
+            )
+        })?;
+        self.archive.index_for_name(entry)
     }
 
     /// How many entries the archive holds, directory records included.
