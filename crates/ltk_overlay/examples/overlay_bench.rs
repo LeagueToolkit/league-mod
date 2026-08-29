@@ -131,17 +131,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut runs: Vec<Run> = Vec::new();
 
     let build = |label: &str| -> Result<Run, Box<dyn std::error::Error>> {
+        // Timed from provider construction, not from `build()`: opening the mod
+        // is work a consumer pays on every build, and for an archive provider it
+        // is not small. `opening` breaks it out so the two are separable.
+        let start = Instant::now();
+        let content = fixture.provider()?;
+        let opening = start.elapsed();
+
         let mut builder =
             OverlayBuilder::new(game_dir.clone(), overlay_root.clone(), profile_dir.clone());
         builder.set_enabled_mods(vec![EnabledMod {
             id: "bench-mod".to_string(),
-            content: fixture.provider()?,
+            content,
             enabled_layers: None,
         }]);
 
-        let start = Instant::now();
         let result = builder.build()?;
-        Ok(Run::new(label, start.elapsed(), &result))
+        Ok(Run::new(label, start.elapsed(), opening, &result))
     };
 
     runs.push(build("cold")?);
@@ -248,34 +254,43 @@ impl Fixture {
 /// Print the timing table.
 fn report(runs: &[Run]) {
     println!(
-        "\n{:<12} {:>10} {:>7} {:>7}",
-        "scenario", "elapsed", "built", "reused"
+        "\n{:<12} {:>10} {:>10} {:>7} {:>7}",
+        "scenario", "elapsed", "opening", "built", "reused"
     );
-    println!("{}", "-".repeat(40));
+    println!("{}", "-".repeat(51));
     for run in runs {
         println!(
-            "{:<12} {:>10} {:>7} {:>7}",
+            "{:<12} {:>10} {:>10} {:>7} {:>7}",
             run.label,
             format!("{:.3} s", run.elapsed.as_secs_f64()),
+            format!("{:.3} s", run.opening.as_secs_f64()),
             run.built,
             run.reused,
         );
     }
 }
 
-/// One timed `build()` call.
+/// One timed build, from opening the mod to the finished overlay.
 struct Run {
     label: String,
     elapsed: Duration,
+    /// Share of `elapsed` spent constructing the content provider.
+    opening: Duration,
     built: usize,
     reused: usize,
 }
 
 impl Run {
-    fn new(label: &str, elapsed: Duration, result: &OverlayBuildResult) -> Self {
+    fn new(
+        label: &str,
+        elapsed: Duration,
+        opening: Duration,
+        result: &OverlayBuildResult,
+    ) -> Self {
         Self {
             label: label.to_string(),
             elapsed,
+            opening,
             built: result.wads_built.len(),
             reused: result.wads_reused.len(),
         }
