@@ -346,6 +346,120 @@ mod rewrite {
         assert_eq!(extracted, b"repaired bytes");
     }
 
+    /// A packed WAD holding one stored chunk, as bytes for a zip entry.
+    fn packed_wad_bytes(payload: &[u8]) -> Vec<u8> {
+        use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
+
+        let payload = payload.to_vec();
+        let mut cursor = Cursor::new(Vec::new());
+        WadBuilder::default()
+            .with_chunk(
+                WadChunkBuilder::default()
+                    .with_path("data/x.bin")
+                    .with_force_compression(WadChunkCompression::None),
+            )
+            .build_to_writer(&mut cursor, move |_hash, writer| {
+                std::io::Write::write_all(writer, &payload)?;
+                Ok(())
+            })
+            .unwrap();
+        cursor.into_inner()
+    }
+
+    /// A normalized archive: metadata deflated, its packed WAD stored.
+    fn archive_with_stored_wad(wad: &[u8]) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, ZipWriter};
+
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file("META/info.json", deflated).unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            br#"{"Name":"Mod","Author":"A","Version":"1","Description":"d"}"#,
+        )
+        .unwrap();
+        zip.start_file(
+            "WAD/Aatrox.wad.client",
+            deflated.compression_method(CompressionMethod::Stored),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut zip, wad).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// Story: a repaired packed WAD goes back into the archive still seekable.
+    ///
+    /// Deflating it would undo exactly what [`normalize_archive`] bought - a
+    /// reader would have to inflate the whole entry to reach any chunk in it -
+    /// and would spend a minute of CPU on a large map mod to do it.
+    ///
+    /// [`normalize_archive`]: crate::normalize_archive
+    #[test]
+    fn a_replaced_packed_wad_stays_stored() {
+        let replacement = packed_wad_bytes(b"repaired chunk payload");
+        let bytes = archive_with_stored_wad(&packed_wad_bytes(b"stale chunk payload"));
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[("WAD/Aatrox.wad.client", replacement.as_slice())],
+            &[],
+        )
+        .unwrap();
+
+        let rewritten = sink.into_inner();
+        let mut out = FantomeReader::new(Cursor::new(rewritten)).unwrap();
+        assert!(
+            out.packed_wad_source("Aatrox.wad.client")
+                .unwrap()
+                .unwrap()
+                .is_in_place(),
+            "the replaced WAD was not written stored"
+        );
+
+        // And the bytes that come back are the replacement's, not the stale
+        // ones the archive held.
+        let mut wad = out.mount_packed_wad("Aatrox.wad.client").unwrap().unwrap();
+        let chunk = *wad.chunks().iter().next().unwrap();
+        assert_eq!(
+            &*wad.load_chunk_decompressed(&chunk).unwrap(),
+            b"repaired chunk payload"
+        );
+    }
+
+    /// Everything that is not a packed WAD stays deflated, which is what the
+    /// archive holds every loose file, table and metadata entry as.
+    #[test]
+    fn a_replaced_loose_entry_stays_deflated() {
+        use zip::CompressionMethod;
+
+        const CHANGED: &str = "WAD/Aatrox.wad.client/data/x.bin";
+
+        let bytes = archive_with_wrong_crc(&FantomeInfo::default(), b"payload");
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[(
+                CHANGED,
+                b"a replacement long enough to be worth deflating".as_slice(),
+            )],
+            &[],
+        )
+        .unwrap();
+
+        let mut out = zip::ZipArchive::new(Cursor::new(sink.into_inner())).unwrap();
+        let index = out.index_for_name(CHANGED).expect("the replaced entry");
+        assert_eq!(
+            out.by_index_raw(index).unwrap().compression(),
+            CompressionMethod::Deflated
+        );
+    }
+
     /// An entry given but not held is added, so a caller does not have to know
     /// which of the two it is doing.
     #[test]
