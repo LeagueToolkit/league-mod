@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.9.2...ltk_fantome-v0.9.3) - 2026-08-29
+
+### Added
+
+- *(fantome)* mount packed WADs in place
+- *(fantome)* in-place editing
+
 ## [0.9.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.9.1...ltk_fantome-v0.9.2) - 2026-08-29
 
 ### Added
