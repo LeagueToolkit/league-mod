@@ -116,6 +116,10 @@ pub enum Error {
     #[error(transparent)]
     WadLimit(#[from] WadLimitError),
 
+    /// A WAD could not be rebased.
+    #[error(transparent)]
+    WadRebase(#[from] ltk_wad::WadRebaseError),
+
     /// A file is not what its own metadata says it is.
     #[error(transparent)]
     Corrupt(#[from] CorruptionError),
@@ -257,6 +261,12 @@ pub enum WadLimitError {
 
     /// A chunk shifted into the copied region falls outside the format's `u32`
     /// offset fields.
+    ///
+    /// Nothing constructs this any more: shifting moved to
+    /// [`ltk_wad::WadTailLayout::shifted`], which reports its own
+    /// [`ltk_wad::WadRebaseError::ChunkUnaddressable`]. Left in place because
+    /// pruning the dead variants is its own decision, not one to take in passing
+    /// while moving the mechanism out.
     #[error("chunk {path_hash:016x} cannot be addressed at offset {offset}")]
     ChunkUnaddressable { path_hash: WadHash, offset: i64 },
 
@@ -264,6 +274,11 @@ pub enum WadLimitError {
     ///
     /// While `TOC_SLACK_ENTRIES` is zero this also fires when the set *shrinks*,
     /// because capacity is then exactly the entry count.
+    ///
+    /// Unconstructible for the same reason as
+    /// [`ChunkUnaddressable`](Self::ChunkUnaddressable): the capacity check runs
+    /// inside a rebase now, and reports
+    /// [`ltk_wad::WadRebaseError::TocCapacity`].
     #[error("{wad} reserved {reserved} TOC entries, not the {needed} this rebuild needs")]
     TocCapacity {
         wad: Utf8PathBuf,

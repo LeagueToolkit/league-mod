@@ -14,16 +14,17 @@ use crate::game_index::GameIndex;
 use crate::state::OverlayState;
 use crate::strings::{self, StringPatchPlan};
 use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
-use crate::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad, rewrite_wad_tail};
+use crate::wad_builder::{OverrideEncoding as _, PatchedWadStats, build_patched_wad};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_wad::WadHash;
+use ltk_wad::{EncodedChunk, WadHash, WadRebasePlan};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Uncompressed override bytes as read in pass 2, before the
-/// [`OverrideCompressor`] turns them into the compressed [`PreparedOverride`]s
+/// [`OverrideCompressor`] turns them into the encoded [`EncodedChunk`]s
 /// the writer consumes.
 pub(crate) type ResolvedChunk = SharedBytes;
 
@@ -71,15 +72,14 @@ impl<'a> ChunkSources<'a> {
 fn distribute_prepared_to_wads(
     wads_to_build: &[Utf8PathBuf],
     wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
-    prepared: &HashMap<WadHash, PreparedOverride>,
-) -> BTreeMap<Utf8PathBuf, HashMap<WadHash, PreparedOverride>> {
-    let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<WadHash, PreparedOverride>> =
-        BTreeMap::new();
+    prepared: &HashMap<WadHash, EncodedChunk>,
+) -> BTreeMap<Utf8PathBuf, HashMap<WadHash, EncodedChunk>> {
+    let mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<WadHash, EncodedChunk>> = BTreeMap::new();
     for wad_path in wads_to_build {
         let Some(hashes) = wad_hash_sets.get(wad_path) else {
             continue;
         };
-        let mut per_wad: HashMap<WadHash, PreparedOverride> = HashMap::with_capacity(hashes.len());
+        let mut per_wad: HashMap<WadHash, EncodedChunk> = HashMap::with_capacity(hashes.len());
         for &hash in hashes {
             if let Some(chunk) = prepared.get(&hash) {
                 per_wad.insert(hash, chunk.clone());
@@ -104,7 +104,7 @@ const BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 /// supplies them only when asked to, so a content appearing under many path
 /// hashes - a chunk routed to several WADs, or two overrides carrying
 /// identical bytes - is read and compressed a single time and then shares one
-/// [`PreparedOverride`]. That structural sharing is what keeps every copy of a
+/// [`EncodedChunk`]. That structural sharing is what keeps every copy of a
 /// cross-WAD chunk on the same compressed checksum, which the game validates
 /// (see the [`wad_builder`] module docs).
 ///
@@ -120,10 +120,10 @@ const BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 /// [`wad_builder`]: crate::wad_builder
 struct OverrideCompressor<'a> {
     all_meta: &'a HashMap<WadHash, OverrideMeta>,
-    reused: HashMap<WadHash, PreparedOverride>,
+    reused: HashMap<WadHash, EncodedChunk>,
     /// Compressed overrides so far, keyed by *content* hash: that is what makes
     /// one buffer serve every chunk carrying identical bytes.
-    memo: HashMap<ContentHash, PreparedOverride>,
+    memo: HashMap<ContentHash, EncodedChunk>,
     /// Every path hash `needs` or `supply` saw, mapped to its content identity,
     /// so `finish` can spread the memo back over path hashes.
     content_of: HashMap<WadHash, ContentHash>,
@@ -141,7 +141,7 @@ struct OverrideCompressor<'a> {
 impl<'a> OverrideCompressor<'a> {
     fn new(
         all_meta: &'a HashMap<WadHash, OverrideMeta>,
-        reused: HashMap<WadHash, PreparedOverride>,
+        reused: HashMap<WadHash, EncodedChunk>,
         budget: usize,
     ) -> Self {
         let content_hash_of = |path_hash: WadHash| {
@@ -226,7 +226,7 @@ impl<'a> OverrideCompressor<'a> {
     /// still gets the one buffer, which is all the game's shared-chunk rule
     /// asks for; a later build settling on the other encoding only matters to a
     /// WAD being rewritten, and those seed the memo from the tail they keep.
-    fn supply_prepared(&mut self, path_hash: WadHash, prepared: PreparedOverride) {
+    fn supply_prepared(&mut self, path_hash: WadHash, prepared: EncodedChunk) {
         let content_hash = self.record(path_hash);
         self.memo.insert(content_hash, prepared);
         self.passed_through += 1;
@@ -245,7 +245,7 @@ impl<'a> OverrideCompressor<'a> {
             batch
                 .into_par_iter()
                 .map(|(content_hash, path_hash, bytes)| {
-                    PreparedOverride::compress(path_hash, &bytes)
+                    EncodedChunk::compress(path_hash, &bytes)
                         .map(|prepared| (content_hash, prepared))
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -263,7 +263,7 @@ impl<'a> OverrideCompressor<'a> {
     /// # Errors
     ///
     /// Fails when the final batch fails to compress.
-    fn finish(mut self) -> Result<HashMap<WadHash, PreparedOverride>> {
+    fn finish(mut self) -> Result<HashMap<WadHash, EncodedChunk>> {
         self.flush()?;
 
         tracing::info!(
@@ -431,8 +431,8 @@ impl OverlayBuilder {
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
         string_plans: &HashMap<WadHash, StringPatchPlan>,
-        reused: HashMap<WadHash, PreparedOverride>,
-    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<WadHash, PreparedOverride>>> {
+        reused: HashMap<WadHash, EncodedChunk>,
+    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<WadHash, EncodedChunk>>> {
         // Every unique path hash needed across the WADs being rebuilt, minus
         // the ones a tail rewrite supplies out of the file it is rewriting.
         let needed_hashes: HashSet<WadHash> = wads_to_build
@@ -582,7 +582,7 @@ impl OverlayBuilder {
     pub(crate) fn patch_wads_parallel(
         &self,
         wads_to_build: Vec<Utf8PathBuf>,
-        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<WadHash, PreparedOverride>>,
+        mut wad_overrides: BTreeMap<Utf8PathBuf, HashMap<WadHash, EncodedChunk>>,
         mut rewrites: BTreeMap<Utf8PathBuf, TailRewrite>,
     ) -> Result<Vec<PatchedWad>> {
         let total_wads = wads_to_build.len() as u32;
@@ -679,38 +679,73 @@ impl OverlayBuilder {
         &self,
         dst_wad_path: &Utf8Path,
         rewrite: TailRewrite,
-        overrides: &HashMap<WadHash, PreparedOverride>,
+        overrides: &HashMap<WadHash, EncodedChunk>,
     ) -> Result<WrittenWad> {
+        let start = std::time::Instant::now();
+        let TailRewrite {
+            record,
+            base_entries,
+            tail_hashes,
+            ..
+        } = rewrite;
+
         // An override whose bytes never resolved - a stringtable patch that
         // failed to apply, say - is dropped rather than fatal, and its chunk
         // falls back to the entry the source region holds. That is what the
         // full-rebuild path does with it too.
-        let tail_hashes: Vec<WadHash> = rewrite
-            .tail_hashes
+        let tail: Vec<(WadHash, EncodedChunk)> = tail_hashes
             .into_iter()
-            .filter(|hash| overrides.contains_key(hash))
+            .filter_map(|hash| overrides.get(&hash).cloned().map(|over| (hash, over)))
             .collect();
 
         tracing::info!(
             "Rewriting WAD tail dst={} overrides={}",
             dst_wad_path,
-            tail_hashes.len()
+            tail.len()
         );
 
         // The planner proved this source identity before choosing the in-place
         // path; the rewrite itself never opens the game WAD.
-        let stats = rewrite_wad_tail(
+        let base_entry_count = base_entries.len();
+        let plan = WadRebasePlan::tail(&record.layout, base_entries, &tail)?;
+
+        // Every check that can be made without the file has now been made, so
+        // the file can be committed to. Truncating is what makes room for a
+        // tail shorter than the one the file holds, and there is no `.tmp` to
+        // discard if the write then fails - which is exactly what the caller's
+        // fallback rebuild is for.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dst_wad_path.as_std_path())
+            .map_err(|source| Error::write(dst_wad_path, source))?;
+        file.set_len(record.layout.tail_offset)
+            .map_err(|source| Error::write(dst_wad_path, source))?;
+
+        let mut file = file;
+        let report = plan.write(&mut file, 0)?;
+
+        let elapsed_ms = start.elapsed().as_millis();
+        tracing::info!(
+            "Rewrote WAD tail dst={} chunks={} overrides={} tail_bytes={} elapsed_ms={}",
             dst_wad_path,
-            &rewrite.record.layout,
-            rewrite.record.source,
-            rewrite.base_entries,
-            &tail_hashes,
-            |hash| overrides.get(&hash).cloned().ok_or_else(missing_override),
-        )?;
+            report.entry_count,
+            tail.len(),
+            report.tail_len,
+            elapsed_ms
+        );
 
         Ok(WrittenWad {
-            stats,
-            written_overrides: tail_hashes,
+            stats: PatchedWadStats {
+                chunks_written: report.entry_count,
+                overrides_applied: tail.len(),
+                new_entries_added: report.entry_count.saturating_sub(base_entry_count),
+                chunks_transient: report.entry_count - tail.len(),
+                elapsed_ms,
+                layout: record.layout,
+                source: record.source,
+            },
+            written_overrides: tail.into_iter().map(|(hash, _)| hash).collect(),
         })
     }
 
@@ -719,7 +754,7 @@ impl OverlayBuilder {
         &self,
         relative_path: &Utf8Path,
         dst_wad_path: &Utf8Path,
-        mut overrides: HashMap<WadHash, PreparedOverride>,
+        mut overrides: HashMap<WadHash, EncodedChunk>,
     ) -> Result<WrittenWad> {
         let src_wad_path = self.game_dir.join(relative_path);
         let override_hashes: HashSet<WadHash> = overrides.keys().copied().collect();
@@ -769,13 +804,13 @@ fn try_pass_through(
     wad_name: &str,
     rel_path: &Utf8Path,
     mismatches: &mut Vec<ChecksumMismatch>,
-) -> Result<Option<PreparedOverride>> {
+) -> Result<Option<EncodedChunk>> {
     let Some(chunk) = provider.read_wad_override_compressed(layer, wad_name, rel_path)? else {
         return Ok(None);
     };
 
     let claimed = chunk.claimed_checksum;
-    let Some(prepared) = PreparedOverride::pass_through(path_hash, chunk)? else {
+    let Some(prepared) = EncodedChunk::pass_through(path_hash, chunk)? else {
         return Ok(None);
     };
 
@@ -806,9 +841,9 @@ fn try_pass_through(
 ///
 /// Its bytes are then freed as soon as the last WAD holding them has written it.
 fn take_override(
-    overrides: &mut HashMap<WadHash, PreparedOverride>,
+    overrides: &mut HashMap<WadHash, EncodedChunk>,
     path_hash: WadHash,
-) -> Result<PreparedOverride> {
+) -> Result<EncodedChunk> {
     overrides.remove(&path_hash).ok_or_else(missing_override)
 }
 
@@ -823,7 +858,7 @@ fn missing_override() -> Error {
 /// One WAD's share of a parallel patch pass.
 struct WadWork {
     relative_path: Utf8PathBuf,
-    overrides: HashMap<WadHash, PreparedOverride>,
+    overrides: HashMap<WadHash, EncodedChunk>,
     /// `Some` when this WAD passed the [tail-rewrite](super::incremental)
     /// preconditions, in which case its file is kept and only its tail rewritten.
     rewrite: Option<TailRewrite>,

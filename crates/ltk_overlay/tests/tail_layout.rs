@@ -11,8 +11,8 @@ mod common;
 
 use camino::Utf8PathBuf;
 use common::{assert_wad_is_well_formed, chunk_facts, hash, write_game_wad};
-use ltk_overlay::wad_builder::{PatchedWadStats, PreparedOverride, build_patched_wad};
-use ltk_wad::{Wad, WadHash};
+use ltk_overlay::wad_builder::{OverrideEncoding as _, PatchedWadStats, build_patched_wad};
+use ltk_wad::{EncodedChunk, Wad, WadHash};
 use std::collections::HashSet;
 use std::fs;
 
@@ -58,7 +58,7 @@ fn patch_fixture(
             .find(|(candidate, _)| *candidate == h)
             .map(|(_, bytes)| bytes.clone())
             .expect("the writer only asks for hashes it was given");
-        PreparedOverride::compress(h, &bytes)
+        EncodedChunk::compress(h, &bytes)
     })
     .expect("patched WAD builds");
 

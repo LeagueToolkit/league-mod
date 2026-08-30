@@ -8,9 +8,9 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectLayer};
 use ltk_overlay::utils::resolve_chunk_hash;
-use ltk_overlay::wad_builder::{PreparedOverride, build_patched_wad};
+use ltk_overlay::wad_builder::{OverrideEncoding as _, build_patched_wad};
 use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder};
-use ltk_wad::{Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
+use ltk_wad::{EncodedChunk, Wad, WadBuilder, WadChunkBuilder, WadChunkCompression};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Write};
@@ -271,7 +271,7 @@ fn patched_wad_preserves_original_signature_and_checksum() {
         &src,
         &dst,
         &HashSet::from([override_hash, new_hash]),
-        |hash| PreparedOverride::compress(hash, b"MODDED"),
+        |hash| EncodedChunk::compress(hash, b"MODDED"),
     )
     .unwrap();
 

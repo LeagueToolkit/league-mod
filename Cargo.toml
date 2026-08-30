@@ -15,5 +15,5 @@ members = [
 camino = "1.1"
 indexmap = { version = "2", features = ["serde"] }
 ltk_hash = "0.4"
-ltk_wad = "0.5.3"
+ltk_wad = "0.5.4"
 sysinfo = "0.32"

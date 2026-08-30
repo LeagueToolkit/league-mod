@@ -15,9 +15,9 @@
 use crate::error::{Error, Result};
 use crate::linked_bins::LinkedBinOffender;
 use crate::utils::ContentHash;
-use crate::wad_builder::{SourceWadIdentity, WadTailLayout};
+use crate::wad_builder::SourceWadIdentity;
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_wad::WadHash;
+use ltk_wad::{WadHash, WadTailLayout};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -765,6 +765,49 @@ mod tests {
             loaded.wad_layout("DATA/FINAL/Champions/Ahri.wad.client"),
             Some(&record)
         );
+    }
+
+    /// The layout's four keys are a wire format `ltk_wad` now owns.
+    ///
+    /// A rename there would not fail a build here: the record would simply stop
+    /// deserializing, `wad_layout` would answer `None`, and every WAD would
+    /// quietly fall back to a full rebuild - the exact cost this record exists
+    /// to avoid, lost silently.
+    ///
+    /// So the compatibility direction is pinned against bytes rather than
+    /// against a round trip, which would agree with itself whatever names
+    /// `ltk_wad` chose. This JSON is what league-mod wrote before the layout
+    /// moved out of `wad_builder`.
+    #[test]
+    fn a_layout_written_before_the_move_still_loads() {
+        const WRITTEN_BY_932574F: &str = r#"{
+            "source": {"len": 4096, "mtime": 1700000000000000000, "tocHash": 118230807},
+            "layout": {
+                "dataRegionOffset": 500,
+                "offsetDelta": 0,
+                "tailOffset": 4000,
+                "tocCapacity": 7
+            },
+            "overrides": {"43690": 4369}
+        }"#;
+
+        let loaded: WadLayoutRecord =
+            serde_json::from_str(WRITTEN_BY_932574F).expect("an older record still deserializes");
+        assert_eq!(loaded, layout_record(&[(WadHash(0xAAAA), 0x1111)]));
+
+        // And the writing direction, so a rename cannot land silently either.
+        let json = serde_json::to_string(&loaded).expect("a record serializes");
+        for key in [
+            "dataRegionOffset",
+            "offsetDelta",
+            "tailOffset",
+            "tocCapacity",
+        ] {
+            assert!(
+                json.contains(&format!("\"{key}\"")),
+                "the layout must still write {key}, got {json}"
+            );
+        }
     }
 
     /// Both sides of an `overrides` entry are newtypes over `u64`, and both
