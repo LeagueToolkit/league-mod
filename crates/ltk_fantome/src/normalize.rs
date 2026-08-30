@@ -16,8 +16,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::reader::copy_entry;
-use crate::{FantomeEntry, FantomeExtractError, FantomeReader, FantomeWriteError, classify_entry};
+use crate::error::{IoResultExt as _, PathIo};
+use crate::reader::{copy_entry, is_packed_wad};
+use crate::{FantomeExtractError, FantomeReader, FantomeWriteError};
 
 /// What a normalize did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,11 +54,11 @@ pub enum FantomeNormalizeError {
     Write(#[from] FantomeWriteError),
 }
 
-impl FantomeNormalizeError {
-    fn io(path: impl Into<Utf8PathBuf>, source: std::io::Error) -> Self {
+impl From<PathIo> for FantomeNormalizeError {
+    fn from(failed: PathIo) -> Self {
         Self::Io {
-            path: path.into(),
-            source,
+            path: failed.path,
+            source: failed.source,
         }
     }
 }
@@ -85,37 +86,28 @@ pub fn normalize_archive(
     source: &Utf8Path,
     dest: &Utf8Path,
 ) -> Result<NormalizeOutcome, FantomeNormalizeError> {
-    let file =
-        File::open(source.as_std_path()).map_err(|e| FantomeNormalizeError::io(source, e))?;
+    let file = File::open(source.as_std_path()).at(source)?;
     let mut reader = FantomeReader::new(BufReader::new(file))?;
 
     let parent = match dest.parent() {
         Some(parent) if !parent.as_str().is_empty() => parent,
         _ => Utf8Path::new("."),
     };
-    fs::create_dir_all(parent.as_std_path()).map_err(|e| FantomeNormalizeError::io(parent, e))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent.as_std_path())
-        .map_err(|e| FantomeNormalizeError::io(parent, e))?;
+    fs::create_dir_all(parent.as_std_path()).at(parent)?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent.as_std_path()).at(parent)?;
 
     let outcome = store_packed_wads(&mut reader, temp.as_file_mut())?;
     drop(reader);
 
     match outcome {
         NormalizeOutcome::Unchanged if source != dest => {
-            // The plain copy still lands through the temp file and the rename,
-            // so an interrupted normalize can no more truncate an already
-            // normalized mod than a rewritten one.
-            let mut original = File::open(source.as_std_path())
-                .map_err(|e| FantomeNormalizeError::io(source, e))?;
-            std::io::copy(&mut original, temp.as_file_mut())
-                .map_err(|e| FantomeNormalizeError::io(dest, e))?;
-            temp.persist(dest.as_std_path())
-                .map_err(|e| FantomeNormalizeError::io(dest, e.error))?;
+            let mut original = File::open(source.as_std_path()).at(source)?;
+            std::io::copy(&mut original, temp.as_file_mut()).at(dest)?;
+            temp.persist(dest.as_std_path()).at(dest)?;
         }
         NormalizeOutcome::Unchanged => drop(temp),
         NormalizeOutcome::Normalized { .. } => {
-            temp.persist(dest.as_std_path())
-                .map_err(|e| FantomeNormalizeError::io(dest, e.error))?;
+            temp.persist(dest.as_std_path()).at(dest)?;
         }
     }
 
@@ -131,11 +123,20 @@ pub fn normalize_archive(
 /// writes, so the entries a reader now seeks into are the ones whose checksums
 /// are true.
 ///
+/// The packed WADs come last, keeping their order among themselves and leaving
+/// every other entry in the order the source held it. A WAD that is one entry
+/// at the end of the archive can later be grown in place - only the central
+/// directory moves - which is the cheaper repair a rewrite through a copy does
+/// not need but should not foreclose.
+///
 /// When every packed WAD is already stored the sink is left untouched and
 /// [`NormalizeOutcome::Unchanged`] comes back - deciding costs the entry table
 /// alone, so a normalized archive is never rewritten and a rerun is a no-op.
-/// The caller owns where the sink lives; a normalize over a file the user did
-/// not ask to lose belongs behind a temp-file-and-rename.
+/// That includes one whose WADs are stored but not last: reordering alone is
+/// not worth rewriting every archive already in the field for, and such an
+/// archive is valid, merely without the future fast path. The caller owns where
+/// the sink lives; a normalize over a file the user did not ask to lose belongs
+/// behind a temp-file-and-rename.
 ///
 /// # Errors
 ///
@@ -145,8 +146,8 @@ pub fn store_packed_wads<R: Read + Seek, W: Write + Seek>(
     reader: &mut FantomeReader<R>,
     sink: W,
 ) -> Result<NormalizeOutcome, FantomeNormalizeError> {
-    let deflated = deflated_packed_wads(reader)?;
-    if deflated.is_empty() {
+    let packed = packed_wads(reader)?;
+    if packed.deflated.is_empty() {
         return Ok(NormalizeOutcome::Unchanged);
     }
 
@@ -157,8 +158,9 @@ pub fn store_packed_wads<R: Read + Seek, W: Write + Seek>(
         .unix_permissions(0o755);
     let mut writer = ZipWriter::new(sink);
 
-    for index in 0..reader.entry_count() {
-        if deflated.contains(&index) {
+    let others = (0..reader.entry_count()).filter(|index| !packed.all.contains(index));
+    for index in others.chain(packed.all.iter().copied()) {
+        if packed.deflated.contains(&index) {
             let mut entry = reader
                 .zip_archive_mut()
                 .by_index(index)
@@ -181,30 +183,40 @@ pub fn store_packed_wads<R: Read + Seek, W: Write + Seek>(
     writer.finish().map_err(FantomeWriteError::from)?;
 
     Ok(NormalizeOutcome::Normalized {
-        wads_stored: deflated.len(),
+        wads_stored: packed.deflated.len(),
     })
 }
 
-/// The indexes of the packed WAD entries held in anything but stored form.
+/// Which of an archive's entries are packed WADs, and which of those need
+/// re-encoding.
+struct PackedWads {
+    /// Every packed WAD's index, in the order the archive holds them, which is
+    /// the order they are written back out in.
+    all: Vec<usize>,
+    /// Those of them held in anything but stored form.
+    deflated: HashSet<usize>,
+}
+
+/// The packed WAD entries an archive holds.
 ///
 /// Only the entry table is read, so an archive that needs nothing costs no
 /// decompression to recognise.
-fn deflated_packed_wads<R: Read + Seek>(
+fn packed_wads<R: Read + Seek>(
     reader: &mut FantomeReader<R>,
-) -> Result<HashSet<usize>, FantomeExtractError> {
+) -> Result<PackedWads, FantomeExtractError> {
+    let mut all = Vec::new();
     let mut deflated = HashSet::new();
     for index in 0..reader.entry_count() {
         let entry = reader.zip_archive_mut().by_index_raw(index)?;
-        if entry.compression() != CompressionMethod::Stored
-            && matches!(
-                classify_entry(entry.name()),
-                Some(FantomeEntry::PackedWad(_))
-            )
-        {
+        if !is_packed_wad(entry.name()) {
+            continue;
+        }
+        all.push(index);
+        if entry.compression() != CompressionMethod::Stored {
             deflated.insert(index);
         }
     }
-    Ok(deflated)
+    Ok(PackedWads { all, deflated })
 }
 
 #[cfg(test)]

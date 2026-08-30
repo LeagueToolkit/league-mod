@@ -6,21 +6,26 @@
 //! archive (and back) lives in `ltk_mod_project`'s `fantome` module, which
 //! composes the primitives here.
 //!
-//! Two operations rewrite an archive in place of reading it: [`add_hashtables`]
-//! merges harvested names into one, and [`normalize_archive`] holds its packed
-//! WADs stored so a reader can seek to them. Both raw-copy everything they do
-//! not themselves replace, and both belong to an importer working on a copy it
-//! owns.
+//! Three operations rewrite an archive in place of reading it:
+//! [`add_hashtables`] merges harvested names into one, [`normalize_archive`]
+//! holds its packed WADs stored so a reader can seek to them, and
+//! [`apply_delta`] repairs its content - chunks inside a packed WAD, whole
+//! entries, or both - without repacking the mod. All three raw-copy everything
+//! they do not themselves replace, and all three belong to a caller working on
+//! a copy it owns.
 //!
-//! What normalizing buys is spent by
-//! [`FantomeReader::mount_packed_wad`]: a packed WAD an archive stores is read
-//! chunk by chunk where it lies, so looking inside one costs its TOC and the
-//! chunks asked for rather than the whole archive unpacked to a directory.
+//! What normalizing buys is spent twice over. [`FantomeReader::mount_packed_wad`]
+//! reads a packed WAD an archive stores chunk by chunk where it lies, so looking
+//! inside one costs its TOC and the chunks asked for rather than the whole
+//! archive unpacked to a directory; and [`apply_delta`] rewrites that WAD's
+//! tail in place of rebuilding it, so a repair costs what changed rather than
+//! what the mod holds.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+mod delta;
 pub mod error;
 mod normalize;
 mod packed;
@@ -28,6 +33,9 @@ mod reader;
 mod rewrite;
 mod writer;
 
+pub use delta::{
+    ArchiveDelta, DeltaProgress, DeltaReport, DeltaStep, FantomeDeltaError, apply_delta,
+};
 pub use error::{FantomeExtractError, FantomeWriteError};
 /// Re-exported because this crate's own signatures name them.
 ///

@@ -79,6 +79,30 @@ impl<W: Write + Seek> FantomeWriter<W> {
         self.write_entry(&entry_path, content)
     }
 
+    /// Write a whole WAD as the single entry `WAD/{wad_name}`.
+    ///
+    /// The other shape a WAD takes in an archive, and the one distributed mods
+    /// overwhelmingly have: one entry holding the built WAD rather than a
+    /// directory of the files that went into it. It is written stored - the one
+    /// exception to this writer's Deflate flavor, for the reason
+    /// [`new`](Self::new) gives - so a reader seeks to any chunk in it where it
+    /// lies. `content` must already be a WAD; nothing here builds one.
+    ///
+    /// Write it after the archive's other entries. A WAD that is one entry at
+    /// the end can later be grown in place, with only the central directory
+    /// behind it to move, which is what [`store_packed_wads`] and
+    /// [`replace_entries`] arrange for the archives they rewrite.
+    ///
+    /// [`store_packed_wads`]: crate::store_packed_wads
+    /// [`replace_entries`]: crate::replace_entries
+    pub fn write_packed_wad(
+        &mut self,
+        wad_name: &str,
+        content: &mut impl Read,
+    ) -> Result<(), FantomeWriteError> {
+        self.write_entry(&format!("WAD/{wad_name}"), content)
+    }
+
     /// Write the mod metadata as `META/info.json`.
     pub fn write_info(&mut self, info: &FantomeInfo) -> Result<(), FantomeWriteError> {
         self.zip.start_file("META/info.json", self.options)?;

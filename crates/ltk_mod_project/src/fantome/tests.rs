@@ -1,11 +1,12 @@
 use super::*;
 use crate::{
     Cancellation, ImportError, ImportProgress, ImportStage, ModProject, ModProjectAuthor,
-    ModProjectLayer, ModProjectLicense, PackError, ProjectImporter, ProjectPacker, ProjectPath,
-    ProjectPaths,
+    ModProjectHashtable, ModProjectLayer, ModProjectLicense, PackError, ProjectImporter,
+    ProjectPacker, ProjectPath, ProjectPaths,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeInfo, FantomeLicense, FantomeReader};
+use ltk_hashtable::Category;
 use std::io::Cursor;
 use std::sync::atomic::AtomicBool;
 use tempfile::TempDir;
@@ -47,6 +48,35 @@ fn try_pack(
 
 fn pack(project: &ModProject, root: &Utf8Path) -> Cursor<Vec<u8>> {
     try_pack(project, root).unwrap()
+}
+
+/// Whether the archive's packed WAD `wad_name` holds the chunk `rel_path`
+/// addresses.
+///
+/// A packed WAD keys its chunks by hash, so asking what a pack wrote means
+/// mounting the WAD rather than looking an entry name up: the file names the
+/// author used are not in the archive at all.
+fn holds_chunk(archive: Cursor<Vec<u8>>, wad_name: &str, rel_path: &str) -> bool {
+    let mut reader = FantomeReader::new(archive).unwrap();
+    let Some(wad) = reader.mount_packed_wad(wad_name).unwrap() else {
+        return false;
+    };
+    wad.chunks()
+        .contains(ltk_wad::chunk_hash_of(Utf8Path::new(rel_path)))
+}
+
+/// The bytes of the chunk `rel_path` addresses, decoded.
+fn read_chunk(archive: Cursor<Vec<u8>>, wad_name: &str, rel_path: &str) -> Vec<u8> {
+    let mut reader = FantomeReader::new(archive).unwrap();
+    let mut wad = reader
+        .mount_packed_wad(wad_name)
+        .unwrap()
+        .expect("a packed WAD");
+    let chunk = *wad
+        .chunks()
+        .get(ltk_wad::chunk_hash_of(Utf8Path::new(rel_path)))
+        .expect("the chunk");
+    wad.load_chunk_decompressed(&chunk).unwrap().into_vec()
 }
 
 // -- packing tests ----------------------------------------------------------
@@ -156,11 +186,9 @@ fn pack_skips_modignored_files() {
 
     let buffer = pack(&test_project(None), &root);
 
-    let mut archive = zip::ZipArchive::new(buffer).unwrap();
-
     // The rest of the WAD directory is packed as before.
-    assert!(archive.by_name("WAD/Test.wad.client/data.bin").is_ok());
-    assert!(archive.by_name("WAD/Test.wad.client/source.psd").is_err());
+    assert!(holds_chunk(buffer.clone(), "Test.wad.client", "data.bin"));
+    assert!(!holds_chunk(buffer, "Test.wad.client", "source.psd"));
 }
 
 #[test]
@@ -175,10 +203,10 @@ fn pack_detects_wad_directories_case_insensitively() {
 
     let buffer = pack(&test_project(None), &root);
 
-    let mut archive = zip::ZipArchive::new(buffer).unwrap();
-
     // The entry keeps the author's spelling; only detection is folded.
-    assert!(archive.by_name("WAD/Upper.WAD.Client/data.bin").is_ok());
+    let mut archive = zip::ZipArchive::new(buffer.clone()).unwrap();
+    assert!(archive.by_name("WAD/Upper.WAD.Client").is_ok());
+    assert!(holds_chunk(buffer, "Upper.WAD.Client", "data.bin"));
 }
 
 #[test]
@@ -193,14 +221,429 @@ fn pack_applies_nested_modignore_and_never_archives_it() {
 
     let buffer = pack(&test_project(None), &root);
 
-    let mut archive = zip::ZipArchive::new(buffer).unwrap();
-
-    assert!(archive.by_name("WAD/Test.wad.client/data.bin").is_ok());
-    assert!(archive.by_name("WAD/Test.wad.client/source.psd").is_err());
+    assert!(holds_chunk(buffer.clone(), "Test.wad.client", "data.bin"));
+    assert!(!holds_chunk(
+        buffer.clone(),
+        "Test.wad.client",
+        "source.psd"
+    ));
     assert!(
-        archive.by_name("WAD/Test.wad.client/.modignore").is_err(),
+        !holds_chunk(buffer, "Test.wad.client", ".modignore"),
         "filter metadata leaked into the archive"
     );
+}
+
+/// Each WAD directory becomes one built WAD, stored as a single archive entry.
+///
+/// That is the shape distributed mods overwhelmingly have, the shape a reader
+/// can seek a chunk out of without inflating anything, and the shape a repair
+/// can rewrite the tail of instead of repacking the mod.
+#[test]
+fn pack_writes_each_wad_directory_as_one_stored_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    let zed = root.join("content").join("base").join("Zed.wad.client");
+    std::fs::create_dir_all(&zed).unwrap();
+    std::fs::write(zed.join("data.bin"), b"zed content").unwrap();
+
+    let buffer = pack(&test_project(None), &root);
+
+    let mut archive = zip::ZipArchive::new(buffer.clone()).unwrap();
+    for name in ["WAD/Test.wad.client", "WAD/Zed.wad.client"] {
+        let entry = archive.by_name(name).unwrap_or_else(|_| panic!("{name}"));
+        assert_eq!(
+            entry.compression(),
+            zip::CompressionMethod::Stored,
+            "{name} must be stored so a reader can seek into it"
+        );
+    }
+    assert!(
+        archive
+            .file_names()
+            .all(|name| !name.starts_with("WAD/Test.wad.client/")),
+        "the WAD's files leaked in as loose entries as well"
+    );
+
+    // And the content is in there, addressed by the hash of its path.
+    assert_eq!(
+        read_chunk(buffer.clone(), "Test.wad.client", "data.bin"),
+        b"content"
+    );
+    assert_eq!(
+        read_chunk(buffer, "Zed.wad.client", "data.bin"),
+        b"zed content"
+    );
+}
+
+/// The WADs are the last entries, in name order.
+///
+/// A WAD that is one entry at the end can later be grown in place, with only
+/// the central directory behind it to move - the same shape `ltk_fantome`'s
+/// normalize and rewrite put an archive into.
+#[test]
+fn pack_writes_the_wads_last_in_name_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    for name in ["Zed.wad.client", "Ahri.wad.client"] {
+        let dir = root.join("content").join("base").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("data.bin"), b"content").unwrap();
+    }
+
+    let buffer = pack(&test_project(None), &root);
+
+    let archive = zip::ZipArchive::new(buffer).unwrap();
+    let names: Vec<&str> = archive.file_names().collect();
+    let wads: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with("WAD/"))
+        .collect();
+    assert_eq!(
+        wads,
+        [
+            "WAD/Ahri.wad.client",
+            "WAD/Test.wad.client",
+            "WAD/Zed.wad.client"
+        ]
+    );
+    assert_eq!(
+        &names[names.len() - 3..],
+        wads.as_slice(),
+        "the WADs must be the last entries: {names:?}"
+    );
+}
+
+/// A chunk keeps the codec its content asks for: audio uncompressed, because it
+/// is already compressed, and everything else Zstd.
+///
+/// The same policy `ltk_wad` holds and the overlay builder applies, so a mod
+/// packed here and the same content built into an overlay agree.
+#[test]
+fn pack_stores_audio_uncompressed_and_compresses_the_rest() {
+    use ltk_wad::WadChunkCompression;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(&wad_dir).unwrap();
+
+    // `BKHD` is the Wwise bank magic; `PROP` a property bin's.
+    std::fs::write(wad_dir.join("sound.bnk"), b"BKHD and then some audio").unwrap();
+    std::fs::write(wad_dir.join("data.bin"), b"PROP and then some properties").unwrap();
+
+    let buffer = pack(&test_project(None), &root);
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    let wad = reader.mount_packed_wad("Test.wad.client").unwrap().unwrap();
+    let codec = |rel: &str| {
+        wad.chunks()
+            .get(ltk_wad::chunk_hash_of(Utf8Path::new(rel)))
+            .unwrap()
+            .compression_type
+    };
+    assert_eq!(codec("sound.bnk"), WadChunkCompression::None);
+    assert_eq!(codec("data.bin"), WadChunkCompression::Zstd);
+}
+
+/// A file too short to carry any magic packs like anything else.
+///
+/// `ltk_file` 0.2.11 panics on a buffer of exactly three bytes, and a mod may
+/// hold such a file, so the packer bounds what the identification is handed.
+#[test]
+fn pack_handles_a_file_too_short_to_identify() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(&wad_dir).unwrap();
+    std::fs::write(wad_dir.join("tiny.bin"), b"one").unwrap();
+    std::fs::write(wad_dir.join("empty.bin"), b"").unwrap();
+
+    let buffer = pack(&test_project(None), &root);
+
+    assert_eq!(
+        read_chunk(buffer.clone(), "Test.wad.client", "tiny.bin"),
+        b"one"
+    );
+    assert_eq!(read_chunk(buffer, "Test.wad.client", "empty.bin"), b"");
+}
+
+/// Two files of one WAD that address the same chunk fail the pack.
+///
+/// The `.ltk` suffix a lossless extraction adds to a path two chunks claimed
+/// hashes back to the path without it, so extracting and repacking is exactly
+/// where this arises. Refused rather than dropping one silently.
+#[test]
+fn pack_refuses_two_files_that_are_the_same_chunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(&wad_dir).unwrap();
+    std::fs::write(wad_dir.join("data.bin"), b"the chunk that claimed the path").unwrap();
+    std::fs::write(wad_dir.join("data.bin.ltk"), b"the chunk that was renamed").unwrap();
+
+    let error = try_pack(&test_project(None), &root).unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            PackError::Format(FantomePackError::ChunkCollision { wad, .. })
+                if wad == "Test.wad.client"
+        ),
+        "expected a chunk collision, got {error:?}"
+    );
+}
+
+/// The round trip a repack is: pack, import, and the files come back under the
+/// names the author gave them.
+///
+/// A packed WAD keys its chunks by hash and carries no paths, so this only
+/// holds because the pack harvests the project's own chunk paths into a table
+/// the import then resolves through. Without it every file here would come back
+/// as sixteen hex digits.
+#[test]
+fn a_packed_wad_imports_back_to_the_files_it_was_built_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(wad_dir.join("assets")).unwrap();
+    std::fs::write(wad_dir.join("assets/thing.bin"), b"PROP the asset").unwrap();
+    std::fs::write(wad_dir.join("data.bin"), b"PROP the data").unwrap();
+
+    let packed = pack(&test_project(None), &root).into_inner();
+
+    let out = utf8_dir(&tmp).join("reimported");
+    import(packed, &out).unwrap();
+
+    let base = out.join("content").join("base").join("Test.wad.client");
+    let mut landed = Vec::new();
+    collect_files(&base, &base, &mut landed);
+    landed.sort();
+    assert_eq!(landed, ["assets/thing.bin", "data.bin"]);
+
+    assert_eq!(
+        std::fs::read(base.join("assets/thing.bin").as_std_path()).unwrap(),
+        b"PROP the asset"
+    );
+    assert_eq!(
+        std::fs::read(base.join("data.bin").as_std_path()).unwrap(),
+        b"PROP the data"
+    );
+}
+
+/// The chain the packed shape exists for: pack, repair a chunk without
+/// repacking, and read the mod back.
+///
+/// A repair changes a handful of files in an archive that may be hundreds of
+/// megabytes. `ltk_fantome`'s delta rewrites that chunk into its WAD's tail
+/// and copies the rest, which only works because the pack put a WAD there to
+/// rebase - a mod packed as loose entries has nothing to rewrite and falls
+/// back to a full repack forever.
+#[test]
+fn a_packed_mod_is_repaired_in_place_and_still_reads_back() {
+    use ltk_fantome::{apply_delta, ArchiveDelta};
+
+    const REPAIRED: &[u8] = b"PROP the repaired data";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(&wad_dir).unwrap();
+    std::fs::write(wad_dir.join("data.bin"), b"PROP the stale data").unwrap();
+    std::fs::write(wad_dir.join("other.bin"), b"PROP the untouched data").unwrap();
+
+    let archive_path = root.join("mod.fantome");
+    std::fs::write(
+        archive_path.as_std_path(),
+        pack(&test_project(None), &root).into_inner(),
+    )
+    .unwrap();
+    let before = std::fs::metadata(archive_path.as_std_path()).unwrap().len();
+
+    // What a repair holds is the file it fixed, named by the path the chunk
+    // was extracted under; `chunk_hash_of` turns that back into the chunk.
+    let mut delta = ArchiveDelta::new();
+    delta.chunk(
+        "Test.wad.client",
+        ltk_wad::chunk_hash_of(Utf8Path::new("data.bin")),
+        REPAIRED,
+    );
+    let report = apply_delta(&archive_path, &archive_path, &delta, None).unwrap();
+    assert_eq!(report.wads_rebased, 1);
+    assert_eq!(report.chunks_replaced, 1);
+
+    // Still one packed WAD a reader can seek into, not a directory of loose
+    // files - which is what a repack would have left behind.
+    let repaired = Cursor::new(std::fs::read(archive_path.as_std_path()).unwrap());
+    let mut reader = FantomeReader::new(repaired.clone()).unwrap();
+    assert!(reader
+        .packed_wad_source("Test.wad.client")
+        .unwrap()
+        .unwrap()
+        .is_in_place());
+
+    assert_eq!(
+        read_chunk(repaired.clone(), "Test.wad.client", "data.bin"),
+        REPAIRED
+    );
+    assert_eq!(
+        read_chunk(repaired, "Test.wad.client", "other.bin"),
+        b"PROP the untouched data"
+    );
+
+    // The repair cost the changed chunk, not a rebuild: the archive grew by the
+    // tail it appended rather than doubling as a loose repack would.
+    let after = std::fs::metadata(archive_path.as_std_path()).unwrap().len();
+    assert!(
+        after < before * 2,
+        "the repaired archive grew from {before} to {after} bytes"
+    );
+
+    // And it imports back to a project the way any archive does.
+    let out = utf8_dir(&tmp).join("reimported");
+    import(std::fs::read(archive_path.as_std_path()).unwrap(), &out).unwrap();
+    let base = out.join("content").join("base").join("Test.wad.client");
+    let mut bodies: Vec<Vec<u8>> = std::fs::read_dir(base.as_std_path())
+        .unwrap()
+        .map(|entry| std::fs::read(entry.unwrap().path()).unwrap())
+        .collect();
+    bodies.sort();
+    assert_eq!(
+        bodies,
+        vec![REPAIRED.to_vec(), b"PROP the untouched data".to_vec()]
+    );
+}
+
+/// Every file of every WAD is still reported exactly once.
+///
+/// The reports moved inside the chunk-data provider so each one lands when its
+/// file is actually read rather than all of them landing before any work; this
+/// is the guard that the move did not drop or double any.
+#[test]
+fn pack_reports_every_file_of_every_wad_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    let zed = root.join("content").join("base").join("Zed.wad.client");
+    std::fs::create_dir_all(&zed).unwrap();
+    std::fs::write(zed.join("one.bin"), b"PROP one").unwrap();
+    std::fs::write(zed.join("two.bin"), b"PROP two").unwrap();
+
+    let mut written: Vec<String> = Vec::new();
+    let mut totals: Vec<(u32, u32)> = Vec::new();
+    ProjectPacker::new(test_project(None), root.clone())
+        .pack_with_progress(
+            FantomeFormat::new(&mut Cursor::new(Vec::new())),
+            &mut |progress: crate::PackProgress<'_>| {
+                if progress.stage == crate::PackStage::Writing {
+                    written.push(progress.current_item.unwrap().to_owned());
+                    totals.push((progress.current, progress.total));
+                }
+            },
+        )
+        .unwrap();
+
+    written.sort();
+    assert_eq!(written, ["data.bin", "one.bin", "two.bin"]);
+    assert_eq!(
+        totals
+            .iter()
+            .map(|(current, _)| *current)
+            .collect::<Vec<_>>(),
+        [0, 1, 2],
+        "the counter must run once through the plan's files"
+    );
+    assert!(totals.iter().all(|(_, total)| *total == 3), "{totals:?}");
+}
+
+/// A name the project's own declared table already resolves is left to it.
+///
+/// The harvest adds and never repeats, so a project that declares a table
+/// covering its chunks packs exactly as it did before harvesting existed.
+#[test]
+fn pack_harvests_nothing_a_declared_table_already_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    // `write_project_tree` puts one file, `data.bin`, in the WAD directory.
+    std::fs::create_dir_all(root.join(crate::HASHES_DIR_NAME)).unwrap();
+    std::fs::write(
+        root.join(crate::HASHES_DIR_NAME).join("game.hashes.txt"),
+        "data.bin\n",
+    )
+    .unwrap();
+    let project = ModProject {
+        hashtables: vec![ModProjectHashtable {
+            path: "hashes/game.hashes.txt".to_owned(),
+            category: Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        }],
+        ..test_project(None)
+    };
+
+    let buffer = pack(&project, &root);
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    let declared: Vec<String> = reader
+        .read_info()
+        .unwrap()
+        .hashtables
+        .iter()
+        .map(|manifest| manifest.path.clone())
+        .collect();
+    assert_eq!(declared, ["META/hashes/game.hashes.txt"]);
+}
+
+/// A file with nothing but a hash for a name contributes nothing to harvest.
+///
+/// It came out of an extraction that could not name it either, so a table
+/// recording it would map a hash to the same hash.
+#[test]
+fn pack_harvests_no_table_for_a_project_of_bare_hashes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let wad_dir = root.join("content").join("base").join("Test.wad.client");
+    std::fs::create_dir_all(&wad_dir).unwrap();
+    std::fs::write(wad_dir.join("0123456789abcdef"), b"PROP nameless").unwrap();
+
+    let buffer = pack(&test_project(None), &root);
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    assert!(
+        reader.read_info().unwrap().hashtables.is_empty(),
+        "a project with no names to record must declare no table"
+    );
+}
+
+/// The harvested table never takes the conventional `game.hashes.txt` name.
+///
+/// That name belongs to a table the author declared, and an archive where it
+/// sometimes means one and sometimes the other cannot be read confidently.
+#[test]
+fn the_harvested_table_never_masquerades_as_a_declared_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    let buffer = pack(&test_project(None), &root);
+
+    let mut archive = zip::ZipArchive::new(buffer.clone()).unwrap();
+    assert!(archive.by_name("META/hashes/game.hashes.txt").is_err());
+    assert!(archive
+        .by_name("META/hashes/game.harvested.hashes.txt")
+        .is_ok());
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    let tables = reader.read_hashtables().unwrap();
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].1.names().collect::<Vec<_>>(), ["data.bin"]);
 }
 
 #[test]
@@ -250,9 +693,8 @@ fn pack_drops_non_base_layers() {
 
     let buffer = pack(&project, &root);
 
-    let mut archive = zip::ZipArchive::new(buffer).unwrap();
-    assert!(archive.by_name("WAD/Test.wad.client/data.bin").is_ok());
-    assert!(archive.by_name("WAD/Test.wad.client/extra.bin").is_err());
+    assert!(holds_chunk(buffer.clone(), "Test.wad.client", "data.bin"));
+    assert!(!holds_chunk(buffer, "Test.wad.client", "extra.bin"));
 }
 
 #[test]
@@ -1205,10 +1647,17 @@ mod hashtables {
         )
         .unwrap();
         let info: FantomeInfo = serde_json::from_str(&info_content).unwrap();
-        assert_eq!(info.hashtables.len(), 1);
         assert_eq!(info.hashtables[0].path, "META/hashes/game.hashes.txt");
         assert_eq!(info.hashtables[0].category, Category::Game);
         assert_eq!(info.hashtables[0].bits, 64);
+
+        // The pack harvests its own chunk paths beside the declared table, so
+        // the WAD it packed can be named again on the way back out.
+        assert_eq!(
+            info.hashtables[1].path,
+            "META/hashes/game.harvested.hashes.txt"
+        );
+        assert_eq!(info.hashtables.len(), 2);
     }
 
     /// `hashes/` is outside `content/`, so the table file must never appear
@@ -1323,10 +1772,23 @@ mod hashtables {
             .import(FantomeImporter::new(buffer))
             .unwrap();
 
-        assert_eq!(imported.hashtables, vec![game_manifest()]);
+        assert_eq!(imported.hashtables[0], game_manifest());
         assert_eq!(
             std::fs::read_to_string(extracted.join(&game_manifest().path)).unwrap(),
             "ASSETS/Custom/One.tex\nassets/custom/two.tex\n"
+        );
+
+        // The harvested table comes back too, naming the WAD file the project
+        // holds - which is what keeps that file's name across the round trip
+        // now that the archive stores it as a hash-keyed chunk.
+        assert_eq!(imported.hashtables.len(), 2);
+        assert_eq!(
+            imported.hashtables[1].path,
+            "hashes/game.harvested.hashes.txt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(extracted.join("hashes/game.harvested.hashes.txt")).unwrap(),
+            "data.bin\n"
         );
     }
 

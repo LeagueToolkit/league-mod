@@ -1319,13 +1319,17 @@ version = "0.9.4"
 dependencies = [
  "camino",
  "indexmap",
+ "ltk_file",
+ "ltk_hash",
  "ltk_hashtable",
  "ltk_wad",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "xxhash-rust",
  "zip",
+ "zstd",
 ]
 
 [[package]]
@@ -1392,6 +1396,7 @@ dependencies = [
  "image",
  "indexmap",
  "ltk_fantome",
+ "ltk_file",
  "ltk_hashtable",
  "ltk_modpkg",
  "ltk_wad",
