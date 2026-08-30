@@ -692,6 +692,14 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
     }
 }
 
+/// Whether the entry named `entry_name` is a whole packed WAD.
+///
+/// The one classification this crate's three archive writers order by, so they
+/// cannot disagree about which entries belong at the end of an archive.
+pub(crate) fn is_packed_wad(entry_name: &str) -> bool {
+    matches!(classify_entry(entry_name), Some(FantomeEntry::PackedWad(_)))
+}
+
 /// Match a `META/LICENSE*` archive entry case-insensitively and return the file
 /// name it should be written to in the extracted project.
 ///

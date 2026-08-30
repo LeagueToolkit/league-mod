@@ -485,6 +485,93 @@ mod rewrite {
         assert!(archive.by_name("WAD/Aatrox.wad.client/data/x.bin").is_ok());
     }
 
+    /// The packed WADs end up last, whether the rewrite replaced them or
+    /// carried them through.
+    ///
+    /// A WAD that is one entry at the end of the archive can later be grown in
+    /// place, with only the central directory behind it to move. A rewrite is
+    /// already writing every entry, so putting them there costs nothing.
+    #[test]
+    fn the_packed_wads_come_last() {
+        use zip::write::SimpleFileOptions;
+        use zip::{CompressionMethod, ZipWriter};
+
+        // A WAD in the middle, which is where the rewrite has to move it from.
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file("META/info.json", deflated).unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            br#"{"Name":"Mod","Author":"A","Version":"1","Description":"d"}"#,
+        )
+        .unwrap();
+        zip.start_file(
+            "WAD/Aatrox.wad.client",
+            deflated.compression_method(CompressionMethod::Stored),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut zip, &packed_wad_bytes(b"a chunk payload")).unwrap();
+        zip.start_file("RAW/assets/note.txt", deflated).unwrap();
+        std::io::Write::write_all(&mut zip, b"a loose file the source holds after the WAD")
+            .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[("RAW/assets/other.txt", b"a fresh loose file".as_slice())],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            entry_names(&sink.into_inner()),
+            [
+                "META/info.json",
+                "RAW/assets/other.txt",
+                "RAW/assets/note.txt",
+                "WAD/Aatrox.wad.client",
+            ],
+            "the packed WAD must be the last entry"
+        );
+    }
+
+    /// A WAD the rewrite itself replaced lands last too, not where it was named.
+    #[test]
+    fn a_replaced_packed_wad_lands_last_as_well() {
+        let bytes = archive_with_stored_wad(&packed_wad_bytes(b"stale chunk payload"));
+        let replacement = packed_wad_bytes(b"repaired chunk payload");
+
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        crate::replace_entries(
+            &mut reader,
+            &mut sink,
+            &[
+                ("WAD/Aatrox.wad.client", replacement.as_slice()),
+                ("RAW/assets/note.txt", b"a fresh loose file".as_slice()),
+            ],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            entry_names(&sink.into_inner()).last().map(String::as_str),
+            Some("WAD/Aatrox.wad.client")
+        );
+    }
+
+    /// The archive's entry names, in the order it holds them.
+    fn entry_names(archive: &[u8]) -> Vec<String> {
+        zip::ZipArchive::new(Cursor::new(archive.to_vec()))
+            .unwrap()
+            .file_names()
+            .map(str::to_owned)
+            .collect()
+    }
+
     /// Nothing to change is nothing written, so a caller can ask without
     /// first deciding whether it needs to.
     #[test]

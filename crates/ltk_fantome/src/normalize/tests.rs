@@ -156,11 +156,11 @@ fn every_other_entry_is_carried_through_untouched() {
     store_packed_wads(&mut reader, &mut sink).unwrap();
 
     let out = sink.into_inner();
-    assert_eq!(
-        entry_names(&out),
-        entry_names(&source),
-        "the archive must hold the same entries, in the same order"
-    );
+    let mut before = entry_names(&source);
+    let mut after = entry_names(&out);
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "the archive must hold the same entries");
 
     let mut normalized = zip::ZipArchive::new(Cursor::new(out.clone())).unwrap();
     for name in ["META/info.json", "WAD/Ahri.wad.client/data/loose.bin"] {
@@ -284,4 +284,52 @@ fn normalizing_in_place_replaces_the_archive_once() {
     // when it next lists the library.
     let left = std::fs::read_dir(library.as_std_path()).unwrap().count();
     assert_eq!(left, 1, "the library must hold the mod and nothing else");
+}
+
+/// The packed WADs end up last, whatever order the source held them in.
+///
+/// A WAD that is one entry at the end of the archive can later be grown in
+/// place, with only the central directory behind it to move. A normalize is the
+/// point where an archive takes the shape this crate wants, so it is where the
+/// reordering costs nothing extra.
+#[test]
+fn the_packed_wads_come_last() {
+    // A WAD in the middle, which is where a normalize has to move it from.
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("META/info.json", deflated).unwrap();
+    zip.write_all(br#"{"Name":"Mod","Author":"A","Version":"1","Description":"d"}"#)
+        .unwrap();
+    zip.start_file(PACKED_WAD_ENTRY, deflated).unwrap();
+    zip.write_all(&packed_wad_bytes(PAYLOAD)).unwrap();
+    zip.start_file("RAW/assets/note.txt", deflated).unwrap();
+    zip.write_all(b"a loose file the source holds after the WAD")
+        .unwrap();
+    let source = zip.finish().unwrap().into_inner();
+
+    let mut reader = FantomeReader::new(Cursor::new(source)).unwrap();
+    let mut sink = Cursor::new(Vec::new());
+    store_packed_wads(&mut reader, &mut sink).unwrap();
+
+    assert_eq!(
+        entry_names(&sink.into_inner()),
+        ["META/info.json", "RAW/assets/note.txt", PACKED_WAD_ENTRY],
+        "the packed WAD must be the last entry, everything else in source order"
+    );
+}
+
+/// An archive whose WADs are stored but not last is still left alone.
+///
+/// Reordering on its own is not worth rewriting every archive already in the
+/// field for: such an archive is valid, and merely misses the fast path a
+/// trailing WAD would later allow.
+#[test]
+fn an_archive_already_stored_is_not_rewritten_just_to_reorder() {
+    let mut reader = FantomeReader::new(Cursor::new(archive(CompressionMethod::Stored))).unwrap();
+    let mut sink = Cursor::new(Vec::new());
+
+    let outcome = store_packed_wads(&mut reader, &mut sink).unwrap();
+
+    assert_eq!(outcome, NormalizeOutcome::Unchanged);
+    assert!(sink.into_inner().is_empty());
 }

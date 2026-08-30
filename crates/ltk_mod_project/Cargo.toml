@@ -26,6 +26,7 @@ ltk_hashtable = { version = "0.1.0", path = "../ltk_hashtable" }
 ltk_modpkg = { version = "0.9.1", path = "../ltk_modpkg", optional = true }
 ltk_fantome = { version = "0.9.4", path = "../ltk_fantome", optional = true }
 ltk_wad = { workspace = true, optional = true }
+ltk_file = { version = "0.2.8", optional = true }
 tempfile = { version = "3.15", optional = true }
 image = { version = "0.25", default-features = false, features = [
     "webp",
@@ -48,6 +49,7 @@ fantome = [
     "dep:image",
     "dep:slug",
     "dep:ltk_wad",
+    "dep:ltk_file",
     "dep:tempfile",
     "ltk_hashtable/wad",
 ]

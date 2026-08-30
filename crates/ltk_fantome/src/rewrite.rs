@@ -16,6 +16,7 @@ use std::io::{Read, Seek, Write};
 
 use ltk_hashtable::{Category, Hashtable, HashtableSet, Key};
 
+use crate::reader::is_packed_wad;
 use crate::{
     FantomeExtractError, FantomeHashtable, FantomeReader, FantomeWriteError, FantomeWriter,
 };
@@ -109,6 +110,11 @@ pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
 /// this function with no entries. A caller replacing content it hashed a name
 /// out of wants both halves in one pass: two passes would write the archive
 /// twice to change it once.
+///
+/// The packed WADs come last, keeping their order among themselves, whether
+/// this replaced them or carried them through. A WAD that is one entry at the
+/// end of the archive can later be grown in place - only the central directory
+/// moves - which this rewrite does not need but should not foreclose.
 ///
 /// A call with no entries and no genuinely new names leaves the sink untouched
 /// and answers [`RewriteOutcome::Unchanged`]. The caller owns where the sink
@@ -228,22 +234,31 @@ pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
         writer.write_hashtable(&plan.manifest, &plan.table)?;
     }
 
-    for (path, bytes) in entries {
-        writer.write_entry(path, &mut &bytes[..])?;
-    }
-
-    for index in 0..reader.entry_count() {
-        let file = reader
-            .zip_archive_mut()
-            .by_index_raw(index)
-            .map_err(FantomeExtractError::from)?;
-        if replaced.contains(&file.name().to_ascii_lowercase()) {
-            continue;
+    // A packed WAD - replaced or carried through - is held back to the end, so
+    // the archive puts every one of them past the entries whose bytes never
+    // move.
+    for packed_wads in [false, true] {
+        for (path, bytes) in entries {
+            if is_packed_wad(path) == packed_wads {
+                writer.write_entry(path, &mut &bytes[..])?;
+            }
         }
-        writer
-            .zip_mut()
-            .raw_copy_file(file)
-            .map_err(FantomeWriteError::from)?;
+
+        for index in 0..reader.entry_count() {
+            let file = reader
+                .zip_archive_mut()
+                .by_index_raw(index)
+                .map_err(FantomeExtractError::from)?;
+            if replaced.contains(&file.name().to_ascii_lowercase())
+                || is_packed_wad(file.name()) != packed_wads
+            {
+                continue;
+            }
+            writer
+                .zip_mut()
+                .raw_copy_file(file)
+                .map_err(FantomeWriteError::from)?;
+        }
     }
     writer.finish()?;
 

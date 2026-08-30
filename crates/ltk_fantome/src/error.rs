@@ -85,3 +85,58 @@ impl FantomeExtractError {
         }
     }
 }
+
+/// A failed file operation and the file it was working on.
+///
+/// [`std::io::Error`] carries no path, so an error a user reads has to be told
+/// which file gave out. This is what [`IoResultExt::at`] produces and what each
+/// of the crate's error types converts from, which is what lets a call site
+/// attach the path and leave the `?` to name the error:
+///
+/// ```text
+/// let file = File::open(path.as_std_path()).at(path)?;
+/// ```
+///
+/// A carrier rather than a generic constructor, because `?` chooses its
+/// conversion from the function's return type alone: an `at` generic over the
+/// error it builds leaves that type for inference to guess, and an error enum
+/// with more than one `#[from]` gives it nothing to guess from.
+#[derive(Debug)]
+pub(crate) struct PathIo {
+    /// The file that failed.
+    pub(crate) path: Utf8PathBuf,
+    /// How it failed.
+    pub(crate) source: std::io::Error,
+}
+
+/// Name the file a failed operation was working on.
+///
+/// Without this it is the same closure at every call site -
+/// `.map_err(|e| Error::io(path, e))?` - which buries the one word that differs
+/// in six that never do, and gets copied wrong.
+pub(crate) trait IoResultExt<T> {
+    /// The value, or the failure with `path` attached.
+    fn at(self, path: impl Into<Utf8PathBuf>) -> Result<T, PathIo>;
+}
+
+impl<T> IoResultExt<T> for Result<T, std::io::Error> {
+    fn at(self, path: impl Into<Utf8PathBuf>) -> Result<T, PathIo> {
+        self.map_err(|source| PathIo {
+            path: path.into(),
+            source,
+        })
+    }
+}
+
+/// A failed persist hands back the temporary file as well as the failure. Only
+/// the failure is kept: the path worth reporting is the one the caller asked to
+/// persist *to*, and dropping the returned handle deletes the temporary exactly
+/// as dropping it anywhere else would.
+impl<T> IoResultExt<T> for Result<T, tempfile::PersistError> {
+    fn at(self, path: impl Into<Utf8PathBuf>) -> Result<T, PathIo> {
+        self.map_err(|failed| PathIo {
+            path: path.into(),
+            source: failed.error,
+        })
+    }
+}

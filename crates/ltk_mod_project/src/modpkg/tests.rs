@@ -793,14 +793,18 @@ fn a_modpkg_converted_through_a_project_carries_its_tables_to_fantome() {
 
     fantome_buffer.set_position(0);
     let mut reader = ltk_fantome::FantomeReader::new(fantome_buffer).unwrap();
+    // The pack also harvests its own chunk paths into a table of their own, so
+    // the declared one is found by name rather than by being the only one.
     let tables = reader.read_hashtables().unwrap();
-    assert_eq!(tables.len(), 1);
-    let (entry, table) = &tables[0];
-    assert_eq!(entry.path(), "META/hashes/game.hashes.txt");
+    let (entry, table) = tables
+        .iter()
+        .find(|(entry, _)| entry.path() == "META/hashes/game.hashes.txt")
+        .expect("the declared table");
     assert_eq!(
         table.names().collect::<Vec<_>>(),
         ["ASSETS/Custom/CasedName.tex"]
     );
+    assert_eq!(*entry.category(), ltk_hashtable::Category::Game);
 }
 
 /// The trim: a `game` name whose key the package's own chunk table already
@@ -1112,12 +1116,12 @@ fn an_unknown_category_survives_all_three_hops() {
     fantome_buffer.set_position(0);
     let mut reader = ltk_fantome::FantomeReader::new(fantome_buffer).unwrap();
     let tables = reader.read_hashtables().unwrap();
-    assert_eq!(tables.len(), 1);
-    let (entry, table) = &tables[0];
-    assert_eq!(
-        *entry.category(),
-        ltk_hashtable::Category::Unknown("wadnames".to_string())
-    );
+    let (entry, table) = tables
+        .iter()
+        .find(|(entry, _)| {
+            *entry.category() == ltk_hashtable::Category::Unknown("wadnames".to_string())
+        })
+        .expect("the unknown-category table");
     assert_eq!(
         *entry.algorithm(),
         ltk_hashtable::Algorithm::Unknown("crc32".to_string())

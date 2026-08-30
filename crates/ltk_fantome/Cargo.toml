@@ -20,5 +20,11 @@ serde_json = "1.0"
 thiserror = "2.0"
 camino = "1.1"
 tempfile = "3.15"
+zstd = "0.13"
 ltk_wad = { workspace = true }
+ltk_file = "0.2.8"
 ltk_hashtable = { version = "0.1.0", path = "../ltk_hashtable" }
+
+[dev-dependencies]
+ltk_hash = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
