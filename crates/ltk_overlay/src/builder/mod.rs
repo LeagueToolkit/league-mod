@@ -28,7 +28,7 @@
 //!    for the overrides a tail rewrite cannot lift out of the file it is about
 //!    to rewrite. Compress each distinct content once, then write every WAD in
 //!    parallel via [`build_patched_wad`](crate::wad_builder::build_patched_wad)
-//!    or a [`WadTailPlan`](crate::wad_builder::WadTailPlan).
+//!    or a [`WadRebasePlan`](ltk_wad::WadRebasePlan).
 //! 7. Persist the new [`OverlayState`]: per-WAD fingerprints, the layout record
 //!    of every WAD now on disk, and no dirty flags.
 

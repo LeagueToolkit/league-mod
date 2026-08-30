@@ -14,9 +14,11 @@
 use crate::builder::{OverlayBuilder, OverrideMeta};
 use crate::error::{Error, Result};
 use crate::state::{OverlayState, WadLayoutRecord};
-use crate::wad_builder::{PreparedOverride, SourceWadIdentity, WadTailLayout, merged_entry_count};
+use crate::wad_builder::{OverrideEncoding as _, SourceWadIdentity};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_wad::{Wad, WadChunk, WadChunks, WadHash};
+use ltk_wad::{
+    EncodedChunk, Wad, WadChunk, WadChunks, WadHash, WadRebaseError, WadRebasePlan, WadTailLayout,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
@@ -30,9 +32,14 @@ use std::io::BufReader;
 enum RebuildReason {
     /// A file or record the plan depends on could not be read, mounted, or used.
     Unusable(Error),
-    /// The recorded layout is unusable: its own numbers do not hang together,
-    /// or a chunk it places falls outside what the format can address.
-    IncoherentLayout(crate::wad_builder::WadTailError),
+    /// The rebase refused the recorded layout, or gave out reading it.
+    ///
+    /// Usually what the name says: the layout's own numbers do not hang
+    /// together, or a chunk it places falls outside what the format can
+    /// address. [`WadRebaseError`] also carries I/O, though, so a target that
+    /// gave out underneath the planner arrives here too. All of them mean the
+    /// same thing to the caller, which is to rebuild this WAD in full.
+    IncoherentLayout(WadRebaseError),
     /// The game WAD is no longer the one this overlay was built from.
     GameWadChanged {
         found: SourceWadIdentity,
@@ -58,8 +65,8 @@ impl From<Error> for RebuildReason {
     }
 }
 
-impl From<crate::wad_builder::WadTailError> for RebuildReason {
-    fn from(error: crate::wad_builder::WadTailError) -> Self {
+impl From<WadRebaseError> for RebuildReason {
+    fn from(error: WadRebaseError) -> Self {
         Self::IncoherentLayout(error)
     }
 }
@@ -145,7 +152,7 @@ pub(crate) struct TailRewrite {
     /// Overrides whose compressed bytes were lifted out of the old tail because
     /// their content is unchanged. The rest of [`tail_hashes`](Self::tail_hashes)
     /// is resolved and compressed by the normal pass-2 path.
-    pub(crate) reused: HashMap<WadHash, PreparedOverride>,
+    pub(crate) reused: HashMap<WadHash, EncodedChunk>,
 }
 
 impl OverlayBuilder {
@@ -261,7 +268,8 @@ impl OverlayBuilder {
 
         // The new override set must fit the TOC the file already reserved.
         let base_entries = base_entries(&record.layout, source.chunks())?;
-        let entry_count = merged_entry_count(&base_entries, new_overrides.iter().copied());
+        let entry_count =
+            WadRebasePlan::merged_entry_count(&base_entries, new_overrides.iter().copied());
         if !record.layout.admits_entry_count(entry_count) {
             return Err(RebuildReason::CapacityMismatch {
                 needed: entry_count,
@@ -360,7 +368,7 @@ fn reuse_unchanged_overrides<S: std::io::Read + std::io::Seek>(
     record: &WadLayoutRecord,
     tail_hashes: &[WadHash],
     all_meta: &HashMap<WadHash, OverrideMeta>,
-) -> std::result::Result<HashMap<WadHash, PreparedOverride>, RebuildReason> {
+) -> std::result::Result<HashMap<WadHash, EncodedChunk>, RebuildReason> {
     let mut reused = HashMap::new();
     for &path_hash in tail_hashes {
         let Some(meta) = all_meta.get(&path_hash) else {
@@ -377,10 +385,7 @@ fn reuse_unchanged_overrides<S: std::io::Read + std::io::Seek>(
         }
 
         let compressed = overlay.load_chunk_raw(&chunk)?;
-        reused.insert(
-            path_hash,
-            PreparedOverride::from_wad_bytes(&chunk, compressed)?,
-        );
+        reused.insert(path_hash, EncodedChunk::from_wad_bytes(&chunk, compressed)?);
     }
 
     Ok(reused)
@@ -420,7 +425,7 @@ mod tests {
             );
 
             let override_hashes: HashSet<WadHash> = [hash(SKIN)].into_iter().collect();
-            let prepared = PreparedOverride::compress(hash(SKIN), b"a modded skin")
+            let prepared = EncodedChunk::compress(hash(SKIN), b"a modded skin")
                 .expect("the override compresses");
             let stats = build_patched_wad(
                 &source_path,

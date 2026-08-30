@@ -157,7 +157,7 @@ fn a_passed_through_chunk_is_never_compressed_or_read_again() {
     assert!(preparer.needs(WadHash(0xAAAA)));
     preparer.supply_prepared(
         WadHash(0xAAAA),
-        PreparedOverride::pass_through(
+        EncodedChunk::pass_through(
             WadHash(0xAAAA),
             CompressedChunk {
                 compressed: stored.clone(),
@@ -197,7 +197,7 @@ fn reused_content_is_never_requested() {
         (WadHash(0xBBBB), meta_with_content_hash(ContentHash(9))),
     ]);
     let reused_override =
-        PreparedOverride::compress(WadHash(0xAAAA), b"recovered from the tail").unwrap();
+        EncodedChunk::compress(WadHash(0xAAAA), b"recovered from the tail").unwrap();
     let reused = HashMap::from([(WadHash(0xAAAA), reused_override)]);
     let mut preparer = OverrideCompressor::new(&all_meta, reused, BATCH_BUDGET_BYTES);
 

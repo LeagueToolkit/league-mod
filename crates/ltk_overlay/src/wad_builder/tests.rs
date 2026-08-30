@@ -6,145 +6,6 @@ const WAD_REL: &str = "DATA/FINAL/Champions/Test.wad.client";
 const SKIN: &str = "assets/characters/test/skins/skin0.dds";
 const VFX: &str = "assets/characters/test/particles.bin";
 
-/// Rewriting in place is destructive - the caller truncates the file before
-/// the write - so a rewrite that is going to be refused must be refused
-/// before that happens, or the fallback inherits a torn file it did not need
-/// to. Planning is what refuses, and a plan never touches the WAD.
-#[test]
-fn a_rejected_entry_count_leaves_the_file_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-
-    let source_path = root.join("Game").join(WAD_REL);
-    write_game_wad(
-        &source_path,
-        &[(SKIN, b"the original skin"), (VFX, b"the original vfx")],
-    );
-
-    let overlay_path = root.join("overlay").join(WAD_REL);
-    let prepared =
-        PreparedOverride::compress(hash(SKIN), b"a modded skin").expect("override compresses");
-    let stats = build_patched_wad(
-        &source_path,
-        &overlay_path,
-        &[hash(SKIN)].into_iter().collect(),
-        |_| Ok(prepared.clone()),
-    )
-    .expect("the overlay WAD builds");
-
-    let base_entries: BTreeMap<WadHash, WadChunk> = {
-        let file = File::open(source_path.as_std_path()).unwrap();
-        let source = Wad::mount(std::io::BufReader::new(file)).unwrap();
-        source
-            .chunks()
-            .iter()
-            .map(|chunk| (chunk.path_hash, stats.layout.shifted(chunk).unwrap()))
-            .collect()
-    };
-
-    let before = std::fs::read(overlay_path.as_std_path()).unwrap();
-
-    // One chunk the file reserved no TOC entry for, which is exactly what
-    // the capacity check exists to refuse.
-    let new_entry = hash("assets/characters/test/brand_new.bin");
-    let tail = [(new_entry, prepared.clone())];
-    let refused = WadTailPlan::new(&stats.layout, base_entries, &tail);
-
-    assert!(
-        refused.is_err(),
-        "an over-capacity entry set must be refused"
-    );
-    assert_eq!(
-        std::fs::read(overlay_path.as_std_path()).unwrap(),
-        before,
-        "a refused rewrite must not have touched the file"
-    );
-}
-
-/// Story: the same rewrite, into a WAD that is not the whole file.
-///
-/// A WAD packed inside an archive starts partway through its container, so
-/// every seek the write makes has to be offset by where it begins - and every
-/// offset it *records* must not be, because the game reads the WAD without
-/// knowing what holds it. Getting that backwards produces a WAD whose TOC
-/// points at the container's bytes.
-#[test]
-fn a_tail_written_at_a_base_offset_reads_back_as_a_wad() {
-    use std::io::Cursor;
-
-    const BASE: u64 = 4096;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-
-    let source_path = root.join("Game").join(WAD_REL);
-    write_game_wad(
-        &source_path,
-        &[(SKIN, b"the original skin"), (VFX, b"the original vfx")],
-    );
-
-    let overlay_path = root.join("overlay").join(WAD_REL);
-    let first = PreparedOverride::compress(hash(SKIN), b"a modded skin").unwrap();
-    let stats = build_patched_wad(
-        &source_path,
-        &overlay_path,
-        &[hash(SKIN)].into_iter().collect(),
-        |_| Ok(first.clone()),
-    )
-    .expect("the overlay WAD builds");
-
-    let base_entries: BTreeMap<WadHash, WadChunk> = {
-        let file = File::open(source_path.as_std_path()).unwrap();
-        let source = Wad::mount(std::io::BufReader::new(file)).unwrap();
-        source
-            .chunks()
-            .iter()
-            .map(|chunk| (chunk.path_hash, stats.layout.shifted(chunk).unwrap()))
-            .collect()
-    };
-
-    // The container: padding, then the overlay WAD cut back to where its tail
-    // begins - which is what a caller makes room the same way for.
-    let built = std::fs::read(overlay_path.as_std_path()).unwrap();
-    let mut container = vec![0xAAu8; BASE as usize];
-    container.extend_from_slice(&built[..stats.layout.tail_offset as usize]);
-
-    let replacement = PreparedOverride::compress(hash(SKIN), b"a differently modded skin").unwrap();
-    let tail = [(hash(SKIN), replacement.clone())];
-    let plan =
-        WadTailPlan::new(&stats.layout, base_entries, &tail).expect("the plan is admissible");
-    let tail_len = plan.tail_len();
-
-    let mut cursor = Cursor::new(container);
-    let report = plan.write(&mut cursor, BASE).expect("the tail writes");
-    let container = cursor.into_inner();
-
-    assert_eq!(
-        report.tail_len, tail_len,
-        "the plan predicted the tail length"
-    );
-    assert_eq!(report.entry_count, 2);
-
-    // The padding is untouched: a write at a base offset stays inside the WAD.
-    assert!(
-        container[..BASE as usize].iter().all(|byte| *byte == 0xAA),
-        "the write ran back over the container's own bytes"
-    );
-
-    // And the region reads as a WAD in its own right, holding the replacement.
-    let mut wad = Wad::mount(Cursor::new(&container[BASE as usize..])).unwrap();
-    let chunk = *wad.chunks().get(hash(SKIN)).expect("the overridden chunk");
-    assert_eq!(
-        &*wad.load_chunk_decompressed(&chunk).unwrap(),
-        b"a differently modded skin"
-    );
-    let untouched = *wad.chunks().get(hash(VFX)).expect("the transient chunk");
-    assert_eq!(
-        &*wad.load_chunk_decompressed(&untouched).unwrap(),
-        b"the original vfx"
-    );
-}
-
 #[test]
 fn test_compress_with_none() {
     let data = b"Hello, world!";
@@ -159,39 +20,12 @@ fn test_compress_with_zstd() {
     assert!(compressed.len() < data.len());
 }
 
-/// A layout puts the chunk count and the TOC in front of its data region by
-/// subtraction, and `rewrite_wad_tail` seeks to that result and writes.
-/// A region offset that leaves no room for the header means those writes
-/// land on the magic and Riot's signature, so the layout must be refused
-/// before anything opens the file.
-#[test]
-fn a_layout_whose_toc_would_land_in_the_header_is_refused() {
-    // A v3.4 header is 268 bytes, so the smallest coherent region offset for
-    // a one-entry TOC is 268 + 4 (the chunk count) + 32 (the entry).
-    let smallest = WadTailLayout {
-        data_region_offset: 268 + 4 + 32,
-        offset_delta: 0,
-        tail_offset: 4096,
-        toc_capacity: 1,
-    };
-    assert!(
-        smallest.validate().is_ok(),
-        "the tightest legal layout must still be usable"
-    );
-
-    let in_the_header = WadTailLayout {
-        data_region_offset: 4 + 32,
-        ..smallest
-    };
-    assert!(
-        in_the_header.validate().is_err(),
-        "a region offset that leaves no room for the header must be refused"
-    );
-}
-
-/// The header size `validate` reserves is the one the writer actually emits.
-/// Pinning them against a real build stops the constant drifting from the
-/// bytes written above it.
+/// The header size `ltk_wad` reserves is the one this crate's writer emits.
+///
+/// `ltk_wad` pins the same property against its own builder; this pins it
+/// against ours, which is the half that can drift. A patched WAD whose TOC did
+/// not land where [`WadTailLayout::validate`] expects would be rebased by
+/// seeking into Riot's signature.
 #[test]
 fn a_built_wad_puts_its_toc_exactly_past_the_header() {
     let tmp = tempfile::tempdir().unwrap();
@@ -229,7 +63,7 @@ fn a_pass_through_recomputes_the_checksum_over_its_own_bytes() {
     const CONTENT: &[u8] = b"a chunk its container already holds compressed";
     let compressed = zstd::encode_all(CONTENT, 3).expect("test content compresses");
 
-    let over = PreparedOverride::pass_through(
+    let over = EncodedChunk::pass_through(
         hash(VFX),
         CompressedChunk {
             compressed: compressed.clone(),
@@ -270,7 +104,7 @@ fn a_passed_through_stored_chunk_reports_equal_sizes() {
     let source_path = root.join("Game").join(WAD_REL);
     write_game_wad(&source_path, &[(SKIN, b"the original skin")]);
 
-    let over = PreparedOverride::pass_through(
+    let over = EncodedChunk::pass_through(
         hash(SKIN),
         CompressedChunk {
             compressed: STORED.to_vec(),
@@ -322,7 +156,7 @@ fn a_codec_this_crate_does_not_emit_refuses_to_pass_through() {
         WadChunkCompression::Satellite,
         WadChunkCompression::ZstdMulti,
     ] {
-        let refused = PreparedOverride::pass_through(
+        let refused = EncodedChunk::pass_through(
             hash(VFX),
             CompressedChunk {
                 compressed: b"stored under a codec we do not write".to_vec(),
