@@ -1481,9 +1481,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_wad"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a72c0141752c9d89946f0be4f5495d7aedea0f14c4bc52fbe87ced26e8c7a26d"
+checksum = "35e3afdb79e9329f7ff8bee7afb507359abcea9a60686ca24fe77206495943be"
 dependencies = [
  "byteorder",
  "camino",
