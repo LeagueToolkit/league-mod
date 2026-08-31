@@ -531,6 +531,7 @@ fn loose_entries_are_replaced_alongside_chunks() {
             wads_rebased: 1,
             chunks_replaced: 1,
             entries_replaced: 2,
+            ..DeltaReport::default()
         }
     );
 
@@ -677,6 +678,281 @@ fn a_wad_named_both_whole_and_by_chunk_is_refused() {
     let mut delta = ArchiveDelta::new();
     delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
     delta.entry(WAD_ENTRY, b"a whole new WAD".as_slice());
+    let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
+
+    assert!(
+        matches!(&error, FantomeDeltaError::ConflictingWad { wad } if wad == WAD_ENTRY),
+        "expected a conflict refusal, got {error:?}"
+    );
+    assert!(!dest.exists());
+}
+
+// -- removal ----------------------------------------------------------------
+
+/// A dropped chunk is out of the TOC, and every chunk around it still reads
+/// back the body it had.
+#[test]
+fn a_removed_chunk_is_gone_and_its_neighbours_still_read() {
+    const REMOVED: &str = "data/two.bin";
+
+    let (_dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_chunk(WAD_NAME, hash_of(REMOVED));
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+
+    assert_eq!(report.chunks_removed, 1);
+    assert_eq!(report.chunks_replaced, 0);
+
+    let mut wad = mount(&source);
+    assert!(
+        wad.chunks().get(hash_of(REMOVED)).is_none(),
+        "the removed chunk is still in the TOC"
+    );
+    for (path, body) in original_bodies() {
+        if path == REMOVED {
+            continue;
+        }
+        let chunk = *wad.chunks().get(hash_of(path)).unwrap();
+        assert_eq!(&*wad.load_chunk_decompressed(&chunk).unwrap(), &body[..]);
+    }
+}
+
+/// The shortened TOC still ends where the first chunk begins.
+///
+/// Every chunk the WAD keeps moves down by the entry the removal freed, so no
+/// gap opens between the last TOC entry and the first data byte - the gap
+/// `ltk_wad` reserves no TOC slack in order to avoid.
+#[test]
+fn a_removal_leaves_no_gap_between_the_toc_and_the_first_chunk() {
+    let wad_bytes = packed_wad(&original_bodies(), WadChunkCompression::Zstd);
+    let first_before = first_chunk_offset(&wad_bytes);
+    let (_dir, source) = staged(&archive(&wad_bytes));
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    apply_delta(&source, &source, &delta, None).unwrap();
+
+    let wad = mount(&source);
+    let chunks = wad.chunks().as_slice();
+    assert_eq!(chunks.len(), CHUNK_PATHS.len() - 1);
+
+    let first_after = chunks.iter().map(|chunk| chunk.data_offset).min().unwrap();
+    assert_eq!(
+        first_after,
+        first_before - TOC_ENTRY_SIZE as usize,
+        "the kept chunks did not move down by the entry the removal freed"
+    );
+    assert_eq!(
+        first_after as u64,
+        WAD_HEADER_SIZE + size_of::<u32>() as u64 + chunks.len() as u64 * TOC_ENTRY_SIZE,
+        "the TOC and the first chunk are not flush"
+    );
+}
+
+/// Where the first chunk of a packed WAD begins.
+fn first_chunk_offset(wad: &[u8]) -> usize {
+    Wad::mount(Cursor::new(wad.to_vec()))
+        .unwrap()
+        .chunks()
+        .as_slice()
+        .iter()
+        .map(|chunk| chunk.data_offset)
+        .min()
+        .unwrap()
+}
+
+/// One rebase carries both instructions, and the replacement still comes back
+/// with a TOC entry describing its own bytes.
+#[test]
+fn a_removal_and_a_replacement_land_in_one_rebase() {
+    const REPAIRED: &[u8] = b"a repaired body, long enough that zstd has something to chew on";
+
+    let (_dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    delta.chunk(WAD_NAME, hash_of("assets/three.bin"), REPAIRED);
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+
+    assert_eq!(report.wads_rebased, 1);
+    assert_eq!(report.chunks_replaced, 1);
+    assert_eq!(report.chunks_removed, 1);
+
+    let mut wad = mount(&source);
+    assert!(wad.chunks().get(hash_of("data/two.bin")).is_none());
+    for chunk in wad.chunks().as_slice().to_vec() {
+        let raw = wad.load_chunk_raw(&chunk).unwrap();
+        assert_eq!(xxh3_64(&raw), chunk.checksum, "{chunk:?}");
+    }
+    let repaired = *wad.chunks().get(hash_of("assets/three.bin")).unwrap();
+    assert_eq!(&*wad.load_chunk_decompressed(&repaired).unwrap(), REPAIRED);
+}
+
+/// A chunk the WAD does not hold is already in the state the removal asks for,
+/// so naming it changes nothing rather than refusing.
+#[test]
+fn removing_a_chunk_the_wad_does_not_hold_changes_nothing() {
+    let (_dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_chunk(WAD_NAME, hash_of("data/never_shipped.bin"));
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+
+    assert_eq!(report.chunks_removed, 0);
+    let wad = mount(&source);
+    assert_eq!(wad.chunks().as_slice().len(), CHUNK_PATHS.len());
+}
+
+/// Naming one chunk both ways is not a state a delta can be in: the last call
+/// takes the other back.
+#[test]
+fn naming_a_chunk_for_both_a_write_and_a_removal_keeps_the_last_call() {
+    const REPAIRED: &[u8] = b"the body the last call asked for";
+    let source_bytes = archive(&packed_wad(&original_bodies(), WadChunkCompression::Zstd));
+
+    let (_dir, source) = staged(&source_bytes);
+    let mut delta = ArchiveDelta::new();
+    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    delta.chunk(WAD_NAME, hash_of("data/two.bin"), REPAIRED);
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+    assert_eq!((report.chunks_replaced, report.chunks_removed), (1, 0));
+    let mut wad = mount(&source);
+    let chunk = *wad.chunks().get(hash_of("data/two.bin")).unwrap();
+    assert_eq!(&*wad.load_chunk_decompressed(&chunk).unwrap(), REPAIRED);
+
+    let (_dir, source) = staged(&source_bytes);
+    let mut delta = ArchiveDelta::new();
+    delta.chunk(WAD_NAME, hash_of("data/two.bin"), REPAIRED);
+    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+    assert_eq!((report.chunks_replaced, report.chunks_removed), (0, 1));
+    let wad = mount(&source);
+    assert!(wad.chunks().get(hash_of("data/two.bin")).is_none());
+}
+
+/// Dropping every chunk leaves a WAD that still mounts, holding none.
+#[test]
+fn removing_every_chunk_leaves_a_wad_that_still_mounts() {
+    let (_dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+
+    let mut delta = ArchiveDelta::new();
+    for path in CHUNK_PATHS {
+        delta.remove_chunk(WAD_NAME, hash_of(path));
+    }
+    let report = apply_delta(&source, &source, &delta, None).unwrap();
+
+    assert_eq!(report.chunks_removed, CHUNK_PATHS.len());
+    assert!(mount(&source).chunks().as_slice().is_empty());
+}
+
+/// A dropped archive entry is not in the rewritten archive, and every entry
+/// nobody named still is.
+#[test]
+fn a_removed_entry_is_gone_from_the_rewritten_archive() {
+    let (dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+    let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_entry("RAW/assets/note.txt");
+    let report = apply_delta(&source, &dest, &delta, None).unwrap();
+
+    assert_eq!(report.entries_removed, 1);
+    // Loose entries first and the packed WAD after them, as any rewrite writes
+    // them.
+    assert_eq!(entry_names(&dest), vec!["META/info.json", WAD_ENTRY]);
+}
+
+/// An entry the archive does not hold is already gone, so naming it changes
+/// nothing.
+#[test]
+fn removing_an_entry_the_archive_does_not_hold_changes_nothing() {
+    let (dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+    let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
+
+    let mut delta = ArchiveDelta::new();
+    delta.remove_entry("RAW/assets/never_shipped.txt");
+    let report = apply_delta(&source, &dest, &delta, None).unwrap();
+
+    assert_eq!(report.entries_removed, 0);
+    assert_eq!(entry_names(&dest).len(), 3);
+}
+
+/// Every entry of an archive, in the order it holds them.
+fn entry_names(path: &Utf8PathBuf) -> Vec<String> {
+    let file = std::fs::File::open(path.as_std_path()).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    (0..zip.len())
+        .map(|index| zip.by_index_raw(index).unwrap().name().to_owned())
+        .collect()
+}
+
+/// An entry nobody writes is no step, so a caller's bar still reaches its
+/// total.
+#[test]
+fn a_removed_entry_is_not_a_progress_step() {
+    let (_dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+
+    let mut steps: Vec<(String, u32, u32)> = Vec::new();
+    let mut delta = ArchiveDelta::new();
+    delta.remove_entry("RAW/assets/note.txt");
+    apply_delta(
+        &source,
+        &source,
+        &delta,
+        Some(&mut |progress: DeltaProgress<'_>| {
+            steps.push((progress.name.to_owned(), progress.index, progress.total));
+        }),
+    )
+    .unwrap();
+
+    // The two entries left, and no rebase: nothing named a chunk.
+    assert_eq!(steps.len(), 2, "{steps:?}");
+    assert!(steps.iter().all(|step| step.2 == 2), "{steps:?}");
+    assert!(
+        steps
+            .iter()
+            .enumerate()
+            .all(|(at, step)| step.1 == at as u32),
+        "the indexes are not a run: {steps:?}"
+    );
+    assert!(steps.iter().all(|step| step.0 != "RAW/assets/note.txt"));
+}
+
+/// Dropping a WAD whole while editing its chunks is the contradiction naming
+/// it whole and by its chunks already is.
+#[test]
+fn a_wad_removed_whole_and_named_by_chunk_is_refused() {
+    let (dir, source) = staged(&archive(&packed_wad(
+        &original_bodies(),
+        WadChunkCompression::Zstd,
+    )));
+    let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
+
+    let mut delta = ArchiveDelta::new();
+    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
+    delta.remove_entry(WAD_ENTRY);
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
     assert!(
@@ -856,10 +1132,12 @@ fn the_debug_shape_counts_rather_than_dumps() {
     delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"one".as_slice());
     delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[1]), b"two".as_slice());
     delta.entry("RAW/x.bin", b"three".as_slice());
+    delta.remove_chunk(WAD_NAME, hash_of(CHUNK_PATHS[2]));
+    delta.remove_entry("RAW/y.bin");
 
     assert_eq!(
         format!("{delta:?}"),
-        "ArchiveDelta { wads: 1, chunks: 2, entries: 1 }"
+        "ArchiveDelta { wads: 1, chunks: 2, chunks_removed: 1, entries: 1, entries_removed: 1 }"
     );
     assert!(!delta.is_empty());
     assert!(ArchiveDelta::new().is_empty());

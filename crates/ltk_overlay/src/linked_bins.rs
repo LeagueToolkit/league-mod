@@ -1,17 +1,8 @@
 //! Property-bin "linked file" dependency validation, run as part of the overlay build.
 //!
 //! League property-bins (`PROP`/`PTCH`) declare a list of *linked* bin paths they
-//! depend on. At load time the game resolves each linked path against the WAD it is
-//! mounted from; a missing dependency yields `STATUS_NOT_FOUND` (`c0000225`), so a
-//! broken mod can silently destabilize the game.
-//!
-//! We replicate the check against the overlay we are about to write: a linked bin is
-//! considered missing when its chunk-path hash is absent from the overlay WAD that
-//! contains the bin declaring it. Because the overlay WAD is the original game WAD
-//! with the mod's overrides layered on top, this set is exactly
-//! `original_chunks(wad) ∪ overrides_routed_to(wad)`. New/custom bins the mod ships
-//! resolve (they exist in the overlay WAD); references to bins that were removed from
-//! the game in a past patch do not.
+//! depend on. One is reported missing when its chunk-path hash is absent from
+//! every archive the build produces and the game mounts.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -19,7 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
-use crate::builder::OverrideMeta;
+use crate::builder::{OverrideMeta, is_wad_blocked};
 use crate::game_index::GameIndex;
 use crate::utils::resolve_chunk_hash;
 
@@ -41,21 +32,59 @@ pub struct LinkedBinOffender {
     pub missing_links: Vec<String>,
 }
 
-/// Scan every enabled mod's property-bin overrides for linked dependencies that
-/// cannot be resolved against the overlay WAD they are routed to.
+/// Every chunk path the game will find once the overlay is in place.
 ///
-/// The present-set for an overlay WAD `W` is the union of:
-/// - the original game chunks of `W` (from `game_index`), which are copied into the
-///   overlay verbatim, and
-/// - every override hash routed to `W` (from `wad_hash_sets`), across all mods.
+/// The union, across every archive the game mounts, of that archive's original
+/// chunks and the overrides the build routes into it. A declared dependency is
+/// missing when it is in none of them, rather than when it is absent from the
+/// archive the declaring bin came from.
+struct PresentSet<'a> {
+    /// Every override hash the build routes into any archive.
+    routed: HashSet<WadHash>,
+    /// The installed game, for the chunks each archive already had.
+    game_index: &'a GameIndex,
+    /// Lower-cased file names of the archives the user blocked, which offer
+    /// nothing.
+    blocked: &'a HashSet<String>,
+}
+
+impl<'a> PresentSet<'a> {
+    /// Read the set off the build's routing table and the installed game.
+    fn of(
+        wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
+        game_index: &'a GameIndex,
+        blocked: &'a HashSet<String>,
+    ) -> Self {
+        Self {
+            routed: wad_hash_sets.values().flatten().copied().collect(),
+            game_index,
+            blocked,
+        }
+    }
+
+    /// Whether any archive the game mounts will offer `path_hash`.
+    fn holds(&self, path_hash: WadHash) -> bool {
+        self.routed.contains(&path_hash)
+            || self
+                .game_index
+                .find_wads_with_hash(path_hash)
+                .is_some_and(|wads| wads.iter().any(|wad| !is_wad_blocked(wad, self.blocked)))
+    }
+}
+
+/// Scan every enabled mod's property-bin overrides for linked dependencies no
+/// archive the game mounts can answer.
 ///
-/// `wad_hash_sets` must already have blocked WADs removed, so blocked WADs are
-/// neither validated nor counted as present.
+/// `wad_hash_sets` must already have blocked WADs removed, and `blocked_wads`
+/// is that same blocklist as lower-cased file names.
 pub(crate) fn collect_linked_bin_offenders(
     all_meta: &HashMap<WadHash, OverrideMeta>,
     wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
     game_index: &GameIndex,
+    blocked_wads: &HashSet<String>,
 ) -> Vec<LinkedBinOffender> {
+    let present = PresentSet::of(wad_hash_sets, game_index, blocked_wads);
+
     // mod_id -> (offending wad filenames, missing linked paths)
     let mut by_mod: HashMap<&str, (BTreeSet<String>, BTreeSet<String>)> = HashMap::new();
 
@@ -72,16 +101,7 @@ pub(crate) fn collect_linked_bin_offenders(
                 let Ok(link_hash) = resolve_chunk_hash(Utf8Path::new(link), b"") else {
                     continue;
                 };
-
-                // Resolved by another override layered into this same overlay WAD.
-                if override_hashes.contains(&link_hash) {
-                    continue;
-                }
-                // Resolved by an original chunk of this WAD (copied into the overlay).
-                let in_original = game_index
-                    .find_wads_with_hash(link_hash)
-                    .is_some_and(|wads| wads.iter().any(|w| w == wad_path));
-                if in_original {
+                if present.holds(link_hash) {
                     continue;
                 }
 
@@ -289,7 +309,8 @@ mod tests {
         wad_hash_sets.insert(wad, HashSet::from([bin_hash, dep_hash]));
 
         let game_index = GameIndex::new();
-        let offenders = collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
         assert!(offenders.is_empty());
     }
 
@@ -310,7 +331,8 @@ mod tests {
         wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
 
         let game_index = GameIndex::new();
-        let offenders = collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
 
         assert_eq!(offenders.len(), 1);
         assert_eq!(offenders[0].mod_id, "mod-a");
@@ -342,13 +364,14 @@ mod tests {
         let mut game_index = GameIndex::new();
         game_index.hash_index.insert(dep_hash, vec![wad]);
 
-        let offenders = collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
         assert!(offenders.is_empty());
     }
 
-    /// A dependency that exists only in a *different* WAD is flagged (per-WAD scope).
+    /// A dependency an archive other than the declaring bin's holds resolves.
     #[test]
-    fn dependency_in_other_wad_is_flagged() {
+    fn dependency_in_another_mounted_archive_resolves() {
         let wad = Utf8PathBuf::from("DATA/FINAL/Champions/Test.wad.client");
         let other_wad = Utf8PathBuf::from("DATA/FINAL/Champions/Other.wad.client");
         let bin_hash = hash("data/characters/test/skins/skin0.bin");
@@ -366,11 +389,90 @@ mod tests {
         let mut game_index = GameIndex::new();
         game_index.hash_index.insert(dep_hash, vec![other_wad]);
 
-        let offenders = collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
-        assert_eq!(offenders.len(), 1);
-        assert_eq!(
-            offenders[0].missing_links,
-            vec!["data/characters/other/other.bin"]
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
+        assert!(offenders.is_empty(), "{offenders:?}");
+    }
+
+    /// A mod shipping its content in a localized archive routes the override
+    /// into both, where the dependency is an original chunk of the base alone.
+    #[test]
+    fn dependency_in_the_base_archive_resolves_on_the_localized_pass() {
+        let base = Utf8PathBuf::from("DATA/FINAL/Champions/Sett.wad.client");
+        let localized = Utf8PathBuf::from("DATA/FINAL/Champions/Sett.en_us.wad.client");
+        let bin_hash = hash("data/characters/sett/skins/skin0.bin");
+        let dep_hash = hash("data/characters/sett/sett.bin");
+
+        let mut all_meta = HashMap::new();
+        all_meta.insert(
+            bin_hash,
+            layer_wad_meta("mod-a", &["data/characters/sett/sett.bin"]),
         );
+
+        let mut wad_hash_sets = BTreeMap::new();
+        wad_hash_sets.insert(base.clone(), HashSet::from([bin_hash]));
+        wad_hash_sets.insert(localized, HashSet::from([bin_hash]));
+
+        let mut game_index = GameIndex::new();
+        game_index.hash_index.insert(dep_hash, vec![base]);
+
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
+        assert!(offenders.is_empty(), "{offenders:?}");
+    }
+
+    /// A dependency another mod ships into a different archive resolves too.
+    #[test]
+    fn dependency_shipped_by_another_mod_elsewhere_resolves() {
+        let wad = Utf8PathBuf::from("DATA/FINAL/Champions/Test.wad.client");
+        let other_wad = Utf8PathBuf::from("DATA/FINAL/Champions/Other.wad.client");
+        let bin_hash = hash("data/characters/test/skins/skin0.bin");
+        let dep_hash = hash("data/characters/other/other.bin");
+
+        let mut all_meta = HashMap::new();
+        all_meta.insert(
+            bin_hash,
+            layer_wad_meta("mod-a", &["data/characters/other/other.bin"]),
+        );
+        all_meta.insert(dep_hash, layer_wad_meta("mod-b", &[]));
+
+        let mut wad_hash_sets = BTreeMap::new();
+        wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
+        wad_hash_sets.insert(other_wad, HashSet::from([dep_hash]));
+
+        let game_index = GameIndex::new();
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
+        assert!(offenders.is_empty(), "{offenders:?}");
+    }
+
+    /// A dependency that resolves only inside an archive the user blocked is
+    /// still reported.
+    #[test]
+    fn dependency_only_in_a_blocked_archive_is_flagged() {
+        let wad = Utf8PathBuf::from("DATA/FINAL/Champions/Test.wad.client");
+        let blocked_wad = Utf8PathBuf::from("DATA/FINAL/Global.wad.client");
+        let bin_hash = hash("data/characters/test/skins/skin0.bin");
+        let dep_hash = hash("data/shared/global.bin");
+
+        let mut all_meta = HashMap::new();
+        all_meta.insert(
+            bin_hash,
+            layer_wad_meta("mod-a", &["data/shared/global.bin"]),
+        );
+
+        // Blocked archives are already gone from the routing table.
+        let mut wad_hash_sets = BTreeMap::new();
+        wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
+
+        let mut game_index = GameIndex::new();
+        game_index.hash_index.insert(dep_hash, vec![blocked_wad]);
+
+        let blocked = HashSet::from(["global.wad.client".to_string()]);
+        let offenders =
+            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &blocked);
+
+        assert_eq!(offenders.len(), 1, "{offenders:?}");
+        assert_eq!(offenders[0].missing_links, vec!["data/shared/global.bin"]);
     }
 }
