@@ -803,7 +803,7 @@ impl OverlayBuilder {
         let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
 
         wad_hash_sets.retain(|path, _| {
-            let blocked = self.is_wad_blocked(path);
+            let blocked = is_wad_blocked(path, &self.blocked_wads);
             if blocked {
                 tracing::info!("Blocked WAD from patching: {}", path);
             }
@@ -813,8 +813,12 @@ impl OverlayBuilder {
         // Validate property-bin linked dependencies against the overlay WADs we are
         // about to write. Runs over every enabled mod's overrides (built and reused
         // alike) since distribution precedes the rebuild/reuse partition.
-        self.last_linked_bin_offenders =
-            collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index);
+        self.last_linked_bin_offenders = collect_linked_bin_offenders(
+            &all_meta,
+            &wad_hash_sets,
+            &game_index,
+            &self.blocked_wads,
+        );
         if !self.last_linked_bin_offenders.is_empty() {
             tracing::info!(
                 "Linked-bin check: {} mod(s) reference unresolved linked bins",
@@ -1223,18 +1227,20 @@ impl OverlayBuilder {
         all
     }
 
-    /// Check if a WAD path is blocked from patching.
-    fn is_wad_blocked(&self, wad_path: &Utf8Path) -> bool {
-        let filename = wad_path.file_name().unwrap_or("").to_ascii_lowercase();
-        self.blocked_wads.contains(&filename)
-    }
-
     /// Emit a progress event if a callback was registered.
     fn emit_progress(&self, progress: OverlayProgress) {
         if let Some(callback) = &self.progress_callback {
             callback(progress);
         }
     }
+}
+
+/// Whether `wad_path` names an archive the user blocked from patching.
+///
+/// `blocked` holds lower-cased file names.
+pub(crate) fn is_wad_blocked(wad_path: &Utf8Path, blocked: &HashSet<String>) -> bool {
+    let filename = wad_path.file_name().unwrap_or("").to_ascii_lowercase();
+    blocked.contains(&filename)
 }
 
 #[cfg(test)]
