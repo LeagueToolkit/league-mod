@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.10.0...ltk_fantome-v0.11.0) - 2026-08-31
+
+### Added
+
+- [**breaking**] drop a chunk or an entry with an archive delta
+
 ## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.9.4...ltk_fantome-v0.10.0) - 2026-08-30
 
 ### Added
