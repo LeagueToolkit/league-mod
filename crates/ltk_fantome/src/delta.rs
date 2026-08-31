@@ -14,12 +14,14 @@
 //! [`replace_entries`](crate::replace_entries) replaces them, and every entry
 //! nobody named is raw-copied, wrong CRC32 values included.
 //!
+//! A chunk dropped by a delta is simply not written.
+//!
 //! The archive is written through a temporary file and renamed over `dest`, so
 //! `source` and `dest` may be the same path and an interrupted repair never
 //! leaves a half-written archive where a mod should be.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -91,6 +93,8 @@ pub struct ArchiveDelta<'a> {
     chunks: BTreeMap<String, WadDelta<'a>>,
     /// Keyed by the entry path lower-cased, on the same terms.
     entries: BTreeMap<String, (String, Cow<'a, [u8]>)>,
+    /// The entries to drop, in `entries`' key space and disjoint from it.
+    removed_entries: BTreeSet<String>,
 }
 
 /// The part of a delta that lands inside one packed WAD.
@@ -99,6 +103,8 @@ struct WadDelta<'a> {
     /// The WAD's name as the caller first spelled it, for error messages.
     name: String,
     chunks: BTreeMap<WadHash, Cow<'a, [u8]>>,
+    /// The chunks to drop, disjoint from `chunks`.
+    removed: BTreeSet<WadHash>,
 }
 
 impl<'a> ArchiveDelta<'a> {
@@ -114,21 +120,29 @@ impl<'a> ArchiveDelta<'a> {
     /// spells it, matched case-insensitively. `bytes` are the chunk's content
     /// uncompressed; what it is stored under is read off those bytes, so naming
     /// one hash in two WADs lands one encoding in both. Naming one hash twice
-    /// keeps the last bytes given.
+    /// keeps the last bytes given, and naming one already given to
+    /// [`remove_chunk`](Self::remove_chunk) takes it back.
     pub fn chunk(
         &mut self,
         wad_name: &str,
         path_hash: WadHash,
         bytes: impl Into<Cow<'a, [u8]>>,
     ) -> &mut Self {
-        self.chunks
-            .entry(wad_name.to_ascii_lowercase())
-            .or_insert_with(|| WadDelta {
-                name: wad_name.to_owned(),
-                chunks: BTreeMap::new(),
-            })
-            .chunks
-            .insert(path_hash, bytes.into());
+        let wad = self.wad_mut(wad_name);
+        wad.removed.remove(&path_hash);
+        wad.chunks.insert(path_hash, bytes.into());
+        self
+    }
+
+    /// Drop the chunk `path_hash` from the packed WAD `wad_name`.
+    ///
+    /// `wad_name` is matched as [`chunk`](Self::chunk) matches it. Naming a
+    /// chunk the WAD does not hold does nothing, and naming one already given
+    /// to [`chunk`](Self::chunk) takes it back.
+    pub fn remove_chunk(&mut self, wad_name: &str, path_hash: WadHash) -> &mut Self {
+        let wad = self.wad_mut(wad_name);
+        wad.chunks.remove(&path_hash);
+        wad.removed.insert(path_hash);
         self
     }
 
@@ -136,24 +150,54 @@ impl<'a> ArchiveDelta<'a> {
     ///
     /// `entry_path` is the path the archive names the entry by
     /// (`META/hashes/game.hashes.txt`, `RAW/assets/x.bin`), matched
-    /// case-insensitively. Naming one path twice keeps the last bytes given.
+    /// case-insensitively. Naming one path twice keeps the last bytes given,
+    /// and naming one already given to [`remove_entry`](Self::remove_entry)
+    /// takes it back.
     pub fn entry(&mut self, entry_path: &str, bytes: impl Into<Cow<'a, [u8]>>) -> &mut Self {
-        self.entries.insert(
-            entry_path.to_ascii_lowercase(),
-            (entry_path.to_owned(), bytes.into()),
-        );
+        let key = entry_path.to_ascii_lowercase();
+        self.removed_entries.remove(&key);
+        self.entries
+            .insert(key, (entry_path.to_owned(), bytes.into()));
+        self
+    }
+
+    /// Drop the archive entry at `entry_path`.
+    ///
+    /// `entry_path` is matched as [`entry`](Self::entry) matches it. Naming an
+    /// entry the archive does not hold does nothing, and naming one already
+    /// given to [`entry`](Self::entry) takes it back.
+    pub fn remove_entry(&mut self, entry_path: &str) -> &mut Self {
+        let key = entry_path.to_ascii_lowercase();
+        self.entries.remove(&key);
+        self.removed_entries.insert(key);
         self
     }
 
     /// Whether nothing is named.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.chunks.is_empty() && self.entries.is_empty()
+        self.chunks.is_empty() && self.entries.is_empty() && self.removed_entries.is_empty()
     }
 
-    /// How many chunks are named, across every WAD.
+    /// The delta's record for `wad_name`, added empty where there is none.
+    fn wad_mut(&mut self, wad_name: &str) -> &mut WadDelta<'a> {
+        self.chunks
+            .entry(wad_name.to_ascii_lowercase())
+            .or_insert_with(|| WadDelta {
+                name: wad_name.to_owned(),
+                chunks: BTreeMap::new(),
+                removed: BTreeSet::new(),
+            })
+    }
+
+    /// How many chunks are named for replacement, across every WAD.
     fn chunk_count(&self) -> usize {
         self.chunks.values().map(|wad| wad.chunks.len()).sum()
+    }
+
+    /// How many chunks are named for removal, across every WAD.
+    fn removed_chunk_count(&self) -> usize {
+        self.chunks.values().map(|wad| wad.removed.len()).sum()
     }
 }
 
@@ -164,7 +208,9 @@ impl fmt::Debug for ArchiveDelta<'_> {
         f.debug_struct("ArchiveDelta")
             .field("wads", &self.chunks.len())
             .field("chunks", &self.chunk_count())
+            .field("chunks_removed", &self.removed_chunk_count())
             .field("entries", &self.entries.len())
+            .field("entries_removed", &self.removed_entries.len())
             .finish()
     }
 }
@@ -181,8 +227,9 @@ pub enum DeltaStep {
 
 /// One step of an [`apply_delta`], reported before the step is taken.
 ///
-/// The steps are the WAD rebases followed by the archive's entries, and `total`
-/// counts both, so a caller showing a bar sees it fill once.
+/// The steps are the WAD rebases followed by the entries the rewrite writes,
+/// and `total` counts both, so a caller showing a bar sees it fill once. A
+/// dropped entry is not a step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeltaProgress<'a> {
     /// The WAD or archive entry the step names.
@@ -202,8 +249,14 @@ pub struct DeltaReport {
     pub wads_rebased: usize,
     /// How many chunks were written into those WADs' tails.
     pub chunks_replaced: usize,
+    /// How many chunks were dropped from those WADs' tables of contents.
+    ///
+    /// Counts only chunks the WAD held.
+    pub chunks_removed: usize,
     /// How many whole archive entries were replaced or added.
     pub entries_replaced: usize,
+    /// How many whole archive entries were dropped, on the same terms.
+    pub entries_removed: usize,
 }
 
 /// Failure to apply a delta to an archive.
@@ -351,6 +404,9 @@ impl FantomeDeltaError {
 /// its new bytes and every other entry is raw-copied, wrong CRC32 values
 /// included.
 ///
+/// A chunk or entry the delta drops is left out of the rewrite, and naming one
+/// the archive does not hold is not an error.
+///
 /// Packed WADs come last in the rewritten archive, so a later edit that grows
 /// one moves only the central directory. `progress`, when given, is called once
 /// before each WAD rebase and once before each entry written.
@@ -393,6 +449,7 @@ pub fn apply_delta(
     // error.
     let mut rebased: Vec<(String, File)> = Vec::with_capacity(plan.wads.len());
     let mut chunks_replaced = 0;
+    let mut chunks_removed = 0;
     for (index, wad) in plan.wads.iter().enumerate() {
         report(
             &mut progress,
@@ -403,11 +460,10 @@ pub fn apply_delta(
                 total,
             },
         );
-        rebased.push((
-            wad.entry_name.clone(),
-            rebase_wad(&mut reader, wad, parent)?,
-        ));
+        let (scratch, removed) = rebase_wad(&mut reader, wad, parent)?;
+        rebased.push((wad.entry_name.clone(), scratch));
         chunks_replaced += wad.chunks.len();
+        chunks_removed += removed;
     }
 
     let mut temp = tempfile::NamedTempFile::new_in(parent.as_std_path()).at(parent)?;
@@ -426,7 +482,9 @@ pub fn apply_delta(
     Ok(DeltaReport {
         wads_rebased: plan.wads.len(),
         chunks_replaced,
+        chunks_removed,
         entries_replaced,
+        entries_removed: plan.entries_removed(),
     })
 }
 
@@ -443,18 +501,28 @@ struct PlannedWad<'a> {
     /// The archive entry holding it, as the archive spells it.
     entry_name: String,
     chunks: &'a BTreeMap<WadHash, Cow<'a, [u8]>>,
+    removed: &'a BTreeSet<WadHash>,
+}
+
+/// One entry the source archive holds, and what the rewrite does with it.
+struct SourceEntry {
+    /// The entry's name, as the archive spells it.
+    name: String,
+    /// Whether it is a packed WAD.
+    packed: bool,
+    /// Whether the delta drops it.
+    removed: bool,
 }
 
 /// What the rewrite will emit, decided before anything is written.
 struct ArchivePlan<'a> {
     wads: Vec<PlannedWad<'a>>,
-    /// The archive's entries, each flagged as a packed WAD.
+    /// Every entry the archive holds, dropped ones included.
     ///
     /// Indexed by the archive's own entry index, which is what the raw copies
     /// look each entry up by, so this cannot drift from what it names.
-    source_entries: Vec<(String, bool)>,
-    /// Delta entries the archive does not hold, each flagged the same
-    /// way.
+    source_entries: Vec<SourceEntry>,
+    /// Delta entries the archive does not hold, each flagged as a packed WAD.
     added_entries: Vec<(String, bool)>,
 }
 
@@ -470,7 +538,7 @@ impl<'a> ArchivePlan<'a> {
         // Walked by index rather than through `entry_names`, because the copy
         // pass addresses each entry by index and nothing promises the name
         // iteration is in that order.
-        let mut source_entries: Vec<(String, bool)> = Vec::with_capacity(reader.entry_count());
+        let mut source_entries: Vec<SourceEntry> = Vec::with_capacity(reader.entry_count());
         for index in 0..reader.entry_count() {
             let name = reader
                 .zip_archive_mut()
@@ -479,25 +547,34 @@ impl<'a> ArchivePlan<'a> {
                 .name()
                 .to_owned();
             let packed = is_packed_wad(&name);
-            source_entries.push((name, packed));
+            let removed = delta.removed_entries.contains(&name.to_ascii_lowercase());
+            source_entries.push(SourceEntry {
+                name,
+                packed,
+                removed,
+            });
         }
 
         let mut wads = Vec::with_capacity(delta.chunks.len());
         for (key, wad) in &delta.chunks {
             let entry_name = source_entries
                 .iter()
-                .find(|(name, _)| match classify_entry(name) {
+                .find(|entry| match classify_entry(&entry.name) {
                     Some(FantomeEntry::PackedWad(packed)) => packed.eq_ignore_ascii_case(key),
                     _ => false,
                 })
-                .map(|(name, _)| name.clone())
+                .map(|entry| entry.name.clone())
                 .ok_or_else(|| FantomeDeltaError::WadNotPacked {
                     wad: wad.name.clone(),
                 })?;
 
             // A WAD given whole and by its chunks would need one of the two
             // dropped, and neither answer is the caller's stated intent.
-            if delta.entries.contains_key(&entry_name.to_ascii_lowercase()) {
+            // Dropping it whole while editing its chunks asks the same
+            // question.
+            let entry_key = entry_name.to_ascii_lowercase();
+            if delta.entries.contains_key(&entry_key) || delta.removed_entries.contains(&entry_key)
+            {
                 return Err(FantomeDeltaError::ConflictingWad { wad: entry_name });
             }
 
@@ -505,6 +582,7 @@ impl<'a> ArchivePlan<'a> {
                 name: wad.name.clone(),
                 entry_name,
                 chunks: &wad.chunks,
+                removed: &wad.removed,
             });
         }
 
@@ -514,7 +592,7 @@ impl<'a> ArchivePlan<'a> {
             .filter(|(key, _)| {
                 !source_entries
                     .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(key))
+                    .any(|entry| entry.name.eq_ignore_ascii_case(key))
             })
             .map(|(_, (name, _))| (name.clone(), is_packed_wad(name)))
             .collect();
@@ -528,12 +606,26 @@ impl<'a> ArchivePlan<'a> {
 
     /// How many steps the replace reports, rebases and entries together.
     fn step_count(&self) -> u32 {
-        let steps = self.wads.len() + self.source_entries.len() + self.added_entries.len();
+        let steps = self.wads.len() + self.written_entry_count() + self.added_entries.len();
         u32::try_from(steps).unwrap_or(u32::MAX)
+    }
+
+    /// How many of the archive's own entries the rewrite carries over.
+    fn written_entry_count(&self) -> usize {
+        self.source_entries
+            .iter()
+            .filter(|entry| !entry.removed)
+            .count()
+    }
+
+    /// How many of the archive's own entries the delta drops.
+    fn entries_removed(&self) -> usize {
+        self.source_entries.len() - self.written_entry_count()
     }
 }
 
-/// Rebase one packed WAD into a scratch file, positioned at its first byte.
+/// Rebase one packed WAD into a scratch file, positioned at its first byte,
+/// and report how many of its chunks the delta dropped.
 ///
 /// Every check a rebase can make without a target is made before a byte of the
 /// scratch file is written, and the scratch file goes with the error either
@@ -542,7 +634,7 @@ fn rebase_wad<R: Read + Seek>(
     reader: &mut FantomeReader<R>,
     wad: &PlannedWad<'_>,
     scratch_dir: &Utf8Path,
-) -> Result<File, FantomeDeltaError> {
+) -> Result<(File, usize), FantomeDeltaError> {
     let mut source =
         reader
             .packed_wad_source(&wad.name)?
@@ -570,9 +662,11 @@ fn rebase_wad<R: Read + Seek>(
 
     let mounted = Wad::mount(source).map_err(FantomeExtractError::from)?;
     let chunks = mounted.chunks().as_slice();
-    let layout = tail_layout(&wad.name, chunks)?;
+    let rebase = RebaseLayout::of(&wad.name, chunks, wad.removed)?;
+    let layout = rebase.target;
     let tail = encode_tail(&wad.name, chunks, wad.chunks)?;
-    let base_entries = base_entries(&wad.name, &layout, chunks)?;
+    let base_entries = base_entries(&wad.name, &layout, chunks, wad.removed)?;
+    let chunks_removed = chunks.len() - base_entries.len();
 
     let plan = WadRebasePlan::tail(&layout, base_entries, &tail).map_err(|source| {
         FantomeDeltaError::Rebase {
@@ -583,20 +677,23 @@ fn rebase_wad<R: Read + Seek>(
 
     let mut scratch = tempfile::tempfile_in(scratch_dir.as_std_path()).at(scratch_dir)?;
     let (mut bytes, _) = mounted.into_parts();
-    bytes
-        .seek(SeekFrom::Start(0))
-        .map_err(FantomeDeltaError::read)?;
-    let copied = io::copy(&mut bytes.take(layout.tail_offset), &mut scratch)
-        .map_err(FantomeDeltaError::read)?;
-    if copied != layout.tail_offset {
-        return Err(FantomeDeltaError::read(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            format!(
-                "{} is truncated: {copied} of the {} bytes below its tail",
-                wad.name, layout.tail_offset
-            ),
-        )));
-    }
+
+    // The header alone, because everything above it - the chunk count, the TOC
+    // and the tail - is what the rebase writes.
+    copy_region(&mut bytes, 0, WAD_HEADER_SIZE, &mut scratch, &wad.name)?;
+    // Then the chunks the WAD keeps, moved down by whatever a removal freed.
+    // The bytes between the two are the shortened TOC's, which the rebase fills
+    // to the byte.
+    scratch
+        .seek(SeekFrom::Start(layout.data_region_offset))
+        .at(scratch_dir)?;
+    copy_region(
+        &mut bytes,
+        rebase.source_region,
+        layout.tail_offset - layout.data_region_offset,
+        &mut scratch,
+        &wad.name,
+    )?;
 
     plan.write(&mut scratch, 0)
         .map_err(|source| FantomeDeltaError::Rebase {
@@ -605,60 +702,137 @@ fn rebase_wad<R: Read + Seek>(
         })?;
     scratch.seek(SeekFrom::Start(0)).at(scratch_dir)?;
 
-    Ok(scratch)
+    Ok((scratch, chunks_removed))
 }
 
-/// Where a packed WAD's regions sit, read off its own TOC.
+/// Copy `len` bytes of `source` from `from` into `dest` where it stands.
 ///
-/// `offset_delta` is zero: the rewrite keeps every byte below the tail exactly
-/// where the source put it, so an unchanged chunk's TOC entry comes back out
-/// byte-identical. The region offset is derived from the header and the entry
-/// count rather than from the first chunk, so a WAD that pads between its TOC
-/// and its data still has its chunk count rewritten where the format puts it.
-fn tail_layout(wad_name: &str, chunks: &[WadChunk]) -> Result<WadTailLayout, FantomeDeltaError> {
-    let toc_capacity = u32::try_from(chunks.len()).map_err(|_| FantomeDeltaError::Rebase {
+/// # Errors
+///
+/// Fails when the source refuses a seek, or runs out before `len` bytes.
+fn copy_region(
+    mut source: impl Read + Seek,
+    from: u64,
+    len: u64,
+    dest: &mut impl Write,
+    wad_name: &str,
+) -> Result<(), FantomeDeltaError> {
+    source
+        .seek(SeekFrom::Start(from))
+        .map_err(FantomeDeltaError::read)?;
+    let copied = io::copy(&mut source.take(len), dest).map_err(FantomeDeltaError::read)?;
+    if copied != len {
+        return Err(FantomeDeltaError::read(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("{wad_name} is truncated: {copied} of the {len} bytes at {from}"),
+        )));
+    }
+    Ok(())
+}
+
+/// A packed WAD's own geometry, and the layout the rewrite gives it.
+///
+/// Two records rather than one because a removal makes them differ: the copy
+/// reads the kept chunks at the source's region offset and writes them at the
+/// shorter TOC's.
+struct RebaseLayout {
+    /// Where the source WAD's data region starts.
+    source_region: u64,
+    /// Where the rewrite puts every region, and how far a kept chunk moves.
+    target: WadTailLayout,
+}
+
+impl RebaseLayout {
+    /// Where `chunks` put a WAD's regions, and where dropping `removed` puts
+    /// them.
+    ///
+    /// The target's `offset_delta` is the 32 bytes per TOC entry a removal
+    /// frees, and is zero where nothing is removed. Both region offsets come
+    /// from the header and an entry count rather than from the first chunk.
+    ///
+    /// # Errors
+    ///
+    /// Reports a WAD holding more chunks than the format's `u32` count, and a
+    /// chunk starting inside the WAD's own TOC.
+    fn of(
+        wad_name: &str,
+        chunks: &[WadChunk],
+        removed: &BTreeSet<WadHash>,
+    ) -> Result<Self, FantomeDeltaError> {
+        let source_capacity = toc_capacity(wad_name, chunks.len())?;
+        let dropped = chunks
+            .iter()
+            .filter(|chunk| removed.contains(&chunk.path_hash))
+            .count();
+        let kept_capacity = toc_capacity(wad_name, chunks.len() - dropped)?;
+
+        let source_region = region_offset(source_capacity);
+        let data_region_offset = region_offset(kept_capacity);
+        let offset_delta = data_region_offset as i64 - source_region as i64;
+
+        let mut tail_offset = source_region;
+        for chunk in chunks {
+            let start = chunk.data_offset as u64;
+            if start < source_region {
+                return Err(FantomeDeltaError::ChunkInsideToc {
+                    wad: wad_name.to_owned(),
+                    path_hash: chunk.path_hash,
+                    data_offset: start,
+                });
+            }
+            if removed.contains(&chunk.path_hash) {
+                continue;
+            }
+            tail_offset = tail_offset.max(start + chunk.compressed_size as u64);
+        }
+
+        Ok(Self {
+            source_region,
+            target: WadTailLayout {
+                data_region_offset,
+                offset_delta,
+                tail_offset: tail_offset.saturating_add_signed(offset_delta),
+                toc_capacity: kept_capacity,
+            },
+        })
+    }
+}
+
+/// The TOC capacity `entry_count` entries need.
+///
+/// # Errors
+///
+/// Fails when the count is past what the format's `u32` chunk count holds.
+fn toc_capacity(wad_name: &str, entry_count: usize) -> Result<u32, FantomeDeltaError> {
+    u32::try_from(entry_count).map_err(|_| FantomeDeltaError::Rebase {
         wad: wad_name.to_owned(),
         source: WadRebaseError::TocCapacity {
-            needed: chunks.len(),
+            needed: entry_count,
             reserved: u32::MAX,
         },
-    })?;
-    let data_region_offset =
-        WAD_HEADER_SIZE + size_of::<u32>() as u64 + u64::from(toc_capacity) * TOC_ENTRY_SIZE;
-
-    let mut tail_offset = data_region_offset;
-    for chunk in chunks {
-        let start = chunk.data_offset as u64;
-        if start < data_region_offset {
-            return Err(FantomeDeltaError::ChunkInsideToc {
-                wad: wad_name.to_owned(),
-                path_hash: chunk.path_hash,
-                data_offset: start,
-            });
-        }
-        tail_offset = tail_offset.max(start + chunk.compressed_size as u64);
-    }
-
-    Ok(WadTailLayout {
-        data_region_offset,
-        offset_delta: 0,
-        tail_offset,
-        toc_capacity,
     })
 }
 
-/// The TOC entry every chunk of the source WAD keeps with nothing rewritten.
+/// Where the data region of a v3.4 WAD reserving `toc_capacity` entries starts.
+const fn region_offset(toc_capacity: u32) -> u64 {
+    WAD_HEADER_SIZE + size_of::<u32>() as u64 + toc_capacity as u64 * TOC_ENTRY_SIZE
+}
+
+/// The TOC entry every chunk the WAD keeps carries into the rewrite.
 ///
-/// `offset_delta` being zero makes the shift the identity, so each entry is the
-/// source's own - subchunked bodies and their frame fields included. The rebase
-/// then overwrites the entries of the chunks it actually appends.
+/// Only the offset moves, and only by what a removal freed - subchunked bodies
+/// and their frame fields carry over untouched, and nothing removed makes the
+/// shift the identity, so each entry is then the source's own byte for byte.
+/// The rebase then overwrites the entries of the chunks it actually appends.
 fn base_entries(
     wad_name: &str,
     layout: &WadTailLayout,
     chunks: &[WadChunk],
+    removed: &BTreeSet<WadHash>,
 ) -> Result<BTreeMap<WadHash, WadChunk>, FantomeDeltaError> {
     chunks
         .iter()
+        .filter(|chunk| !removed.contains(&chunk.path_hash))
         .map(|chunk| {
             let shifted = layout
                 .shifted(chunk)
@@ -786,10 +960,11 @@ fn write_archive<R: Read + Seek, W: Write + Seek>(
     // Loose entries first and packed WADs after them, so an edit that grows a
     // WAD moves only the central directory and the WAD's own bytes.
     for packed_wads in [false, true] {
-        for (source_index, (name, is_packed)) in plan.source_entries.iter().enumerate() {
-            if *is_packed != packed_wads {
+        for (source_index, entry) in plan.source_entries.iter().enumerate() {
+            if entry.removed || entry.packed != packed_wads {
                 continue;
             }
+            let name = &entry.name;
             report(
                 progress,
                 DeltaProgress {
@@ -811,13 +986,13 @@ fn write_archive<R: Read + Seek, W: Write + Seek>(
                     entries_replaced += 1;
                 }
                 None => {
-                    let entry = reader
+                    let source = reader
                         .zip_archive_mut()
                         .by_index_raw(source_index)
                         .map_err(FantomeExtractError::from)?;
                     writer
                         .zip_mut()
-                        .raw_copy_file(entry)
+                        .raw_copy_file(source)
                         .map_err(FantomeWriteError::from)?;
                 }
             }
