@@ -830,6 +830,106 @@ fn create_fantome_with_license(license_entry: &str, info: &str) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+/// Build a fantome archive whose `META/image.png` entry holds `image`.
+fn create_fantome_with_image(image: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = SimpleFileOptions::default();
+
+    zip.start_file("META/info.json", options).unwrap();
+    let info = r#"{
+        "Name": "Test Mod",
+        "Author": "Test Author",
+        "Version": "1.0.0",
+        "Description": "A test mod"
+    }"#;
+    zip.write_all(info.as_bytes()).unwrap();
+
+    zip.start_file("META/image.png", options).unwrap();
+    zip.write_all(image).unwrap();
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// A 1x1 picture, encoded as `format`.
+fn encoded_image(picture: &image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    picture
+        .write_to(&mut Cursor::new(&mut bytes), format)
+        .unwrap();
+    bytes
+}
+
+/// `META/image.png` is the name the format fixes, and authors put under it
+/// whatever their editor saved, so a decode reads PNG then JPEG then WebP
+/// before giving up.
+#[test]
+fn import_converts_a_thumbnail_that_is_not_the_png_its_entry_claims() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = utf8_dir(&temp_dir);
+    let jpeg = encoded_image(
+        &image::DynamicImage::new_rgb8(1, 1),
+        image::ImageFormat::Jpeg,
+    );
+
+    let imported = import(create_fantome_with_image(&jpeg), &output).unwrap();
+
+    assert_eq!(imported.thumbnail.as_deref(), Some("thumbnail.webp"));
+    assert!(output.join("thumbnail.webp").exists());
+}
+
+/// The last rung of the cascade, and the one an author hits by renaming a
+/// picture their editor already saved as WebP.
+#[test]
+fn import_converts_a_thumbnail_already_stored_as_webp() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = utf8_dir(&temp_dir);
+    let webp = encoded_image(
+        &image::DynamicImage::new_rgb8(1, 1),
+        image::ImageFormat::WebP,
+    );
+
+    let imported = import(create_fantome_with_image(&webp), &output).unwrap();
+
+    assert_eq!(imported.thumbnail.as_deref(), Some("thumbnail.webp"));
+    assert!(output.join("thumbnail.webp").exists());
+}
+
+/// The WebP encoder takes 8-bit RGB and RGBA and nothing else.
+#[test]
+fn import_widens_a_thumbnail_whose_colour_type_webp_refuses() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = utf8_dir(&temp_dir);
+    let greyscale = encoded_image(
+        &image::DynamicImage::new_luma8(1, 1),
+        image::ImageFormat::Png,
+    );
+
+    let imported = import(create_fantome_with_image(&greyscale), &output).unwrap();
+
+    assert_eq!(imported.thumbnail.as_deref(), Some("thumbnail.webp"));
+    assert!(output.join("thumbnail.webp").exists());
+}
+
+/// Every byte of content is extracted by the time the thumbnail is converted,
+/// so failing here made one unreadable picture an archive nothing could import
+/// and so nothing could repair.
+#[test]
+fn import_survives_a_thumbnail_it_cannot_convert() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output = utf8_dir(&temp_dir);
+
+    let imported = import(create_fantome_with_image(b"not an image"), &output).unwrap();
+
+    assert_eq!(imported.display_name, "Test Mod");
+    assert_eq!(imported.thumbnail, None);
+    assert!(!output.join("thumbnail.webp").exists());
+}
+
 #[test]
 fn import_materializes_a_project() {
     let temp_dir = tempfile::tempdir().unwrap();

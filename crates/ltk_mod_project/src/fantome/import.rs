@@ -34,8 +34,9 @@ pub enum FantomeImportError {
         source: std::io::Error,
     },
 
-    /// `META/image.png` could not be decoded, or re-encoded as the project
-    /// thumbnail.
+    /// No longer produced. A thumbnail that will not convert leaves the
+    /// project without one rather than failing the import, and the variant is
+    /// kept until the next breaking release so that removing it is not one.
     #[error("Failed to convert the thumbnail")]
     Thumbnail(#[source] Box<dyn std::error::Error + Send + Sync>),
 
@@ -73,7 +74,8 @@ impl FantomeImportError {
 ///    and through the WAD's own bins for whatever it could not name
 /// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
 ///    license text and the thumbnail (converted to `thumbnail.webp`), if
-///    present
+///    present - and skip a thumbnail that will not convert, since the
+///    archive's content is what an import is for
 /// 3. Recover the hashtables the archive declares into `hashes/`, with the
 ///    project manifest rewritten to the new paths - and name packed WAD
 ///    chunks from those tables first, ahead of the supplied resolver, since
@@ -160,8 +162,8 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
     /// # Errors
     ///
     /// [`FantomeImportError`] covers a malformed archive, a file that could not
-    /// be written into the output directory, a thumbnail that could not be
-    /// converted, and a cancellation that answered `true`.
+    /// be written into the output directory, and a cancellation that answered
+    /// `true`.
     fn import(
         self,
         target: &ImportTarget<'_>,
@@ -251,8 +253,8 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
             write_file(&output_dir.join(file_name), &license)?;
         }
 
-        if let Some(png) = reader.read_image_png()? {
-            write_thumbnail(&png, &output_dir.join("thumbnail.webp"))?;
+        if let Some(image) = reader.read_image_png()? {
+            mod_project.thumbnail = write_thumbnail(&image, output_dir)?;
         }
 
         write_hashtables(output_dir, &table_routes, &declared_tables)?;
@@ -337,15 +339,59 @@ fn write_file(path: &Utf8Path, bytes: &[u8]) -> Result<(), FantomeImportError> {
     std::fs::write(path, bytes).map_err(|source| FantomeImportError::write(path, source))
 }
 
-/// Convert the archive's PNG thumbnail to the WebP a project stores.
-fn write_thumbnail(png: &[u8], output_path: &Utf8Path) -> Result<(), FantomeImportError> {
-    let thumbnail_error =
-        |source: image::ImageError| FantomeImportError::Thumbnail(Box::new(source));
+/// Convert the archive's thumbnail into the WebP a project stores, and answer
+/// with the project-relative path it landed at.
+///
+/// `None` for a picture that will not decode or will not re-encode, which is a
+/// project that comes back without a thumbnail rather than an import that
+/// fails. Every byte of content is already extracted by the time this runs, and
+/// throwing that away over decoration would leave the archive unimportable, and
+/// so unrepairable.
+///
+/// The archive path promises a PNG and does not deliver one often enough to
+/// trust: `META/image.png` is the name the format fixes, not a statement about
+/// what an author put there. So PNG is tried first, and a JPEG or a WebP
+/// wearing that name is read as what it is.
+///
+/// # Errors
+///
+/// A converted thumbnail that could not be written, which is the same failure
+/// as for any other file the import writes.
+fn write_thumbnail(
+    bytes: &[u8],
+    output_dir: &Utf8Path,
+) -> Result<Option<String>, FantomeImportError> {
+    const NAME: &str = "thumbnail.webp";
+    const READ_AS: [image::ImageFormat; 3] = [
+        image::ImageFormat::Png,
+        image::ImageFormat::Jpeg,
+        image::ImageFormat::WebP,
+    ];
 
-    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-        .map_err(thumbnail_error)?;
+    let Some(decoded) = READ_AS
+        .into_iter()
+        .find_map(|format| image::load_from_memory_with_format(bytes, format).ok())
+    else {
+        return Ok(None);
+    };
 
-    img.save(output_path).map_err(thumbnail_error)?;
+    // The WebP encoder takes 8-bit RGB and RGBA and refuses every other colour
+    // type, so a greyscale or 16-bit source is widened rather than dropped.
+    let decoded = match decoded {
+        image::DynamicImage::ImageRgb8(_) | image::DynamicImage::ImageRgba8(_) => decoded,
+        other => image::DynamicImage::ImageRgba8(other.to_rgba8()),
+    };
 
-    Ok(())
+    let mut encoded = Vec::new();
+    if decoded
+        .write_to(
+            &mut std::io::Cursor::new(&mut encoded),
+            image::ImageFormat::WebP,
+        )
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    write_file(&output_dir.join(NAME), &encoded).map(|()| Some(String::from(NAME)))
 }
