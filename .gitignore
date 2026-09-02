@@ -16,7 +16,7 @@ result
 bin
 
 # AI local settings
-.claude/
+.claude/settings.local.json
 .mcp.json
 
 # Windows NUL device artifact
