@@ -1,230 +1,68 @@
 # League Mod Toolkit
 
-A comprehensive Rust-based toolkit for creating, managing, and distributing League of Legends mods using the modpkg format.
+[![CI](https://github.com/LeagueToolkit/league-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/LeagueToolkit/league-mod/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-## 🔧 Installation
+Rust libraries for creating, packaging, and installing League of Legends mods - the code behind
+the `.modpkg` format and the overlay the game loads.
 
-### Windows (Recommended)
+This workspace is the toolkit layer, not the app. [LTK Manager](https://github.com/LeagueToolkit/ltk-manager)
+is where an end user clicks buttons; everything it does to a mod happens in the crates here.
 
-**Quick install (PowerShell, no admin):**
-```powershell
-irm https://raw.githubusercontent.com/LeagueToolkit/league-mod/main/scripts/install-league-mod.ps1 | iex
-```
-This downloads the latest release, installs it to `%LOCALAPPDATA%\LeagueToolkit\league-mod`, and adds it to your user `PATH`.
-
-**Via GitHub Releases:**
-1. Download the latest release from [GitHub Releases](https://github.com/LeagueToolkit/league-mod/releases)
-2. Extract the ZIP file to your preferred location
-3. Add the extracted directory to your [PATH environment variable](https://www.architectryan.com/2018/03/17/add-to-the-path-on-windows-10/)
-
-## 🚀 Features
-
-- **Project Management**: Initialize and manage mod projects with layered structure
-- **Efficient Packaging**: Create compressed `.modpkg` files for distribution
-- **Layer System**: Support for multiple mod layers with priority-based overrides
-- **Metadata Management**: Rich metadata including authors, licenses, and descriptions
-- **Cross-format Support**: Both JSON and TOML configuration formats
-- **File Transformation**: Extensible transformer system for asset processing
-
-## 📦 Packages
-
-This workspace contains the following crates:
-
-### `league-mod` - CLI Tool
-
-> **Deprecated:** the `league-mod` CLI no longer receives new features and
-> will be retired in the future. The library crates below remain the
-> supported way to build mod tooling.
-
-The main command-line interface for mod developers and users.
-
-**Features:**
-- Initialize new mod projects with interactive prompts
-- Pack mod projects into distributable `.modpkg` files
-- Extract existing `.modpkg` files for inspection or modification
-- Display detailed information about mod packages
-
-**Usage:**
-```bash
-# Initialize a new mod project
-league-mod init --name my-awesome-mod --display-name "My Awesome Mod"
-
-# Pack a mod project
-league-mod pack --config-path ./mod.config.json --output-dir ./build
-
-# Extract a mod package
-league-mod extract --file-path ./my-mod.modpkg --output-dir ./extracted
-
-# Show mod package information
-league-mod info --file-path ./my-mod.modpkg
-
-# Configure League installation path
-league-mod config auto-detect
-league-mod config set-league-path "C:/Riot Games/League of Legends/Game/League of Legends.exe"
-league-mod config show
-```
-
-### `ltk_modpkg` - Binary Format Library
-
-Library for reading, writing, and manipulating the modpkg binary format.
-
-**Features:**
-- Reading and Writing
-- Zstd compression
-- Layer-based file organization
-- Chunk-based data storage with metadata
-
-### `ltk_mod_core` - Shared Core Library
-
-Shared utilities used by both the CLI and GUI applications.
-
-**Features:**
-- League of Legends installation detection (registry, running processes, common paths)
-- Cross-platform path utilities
-
-### `ltk_mod_project` - Configuration Library
-
-Handles mod project configuration files, metadata structures, and packing
-projects to distributable formats.
-
-**Features:**
-- JSON/TOML config support
-- Layer system
-- Author, license, readme and distribution metadata
-- File transformer configuration
-- `.modignore` content filtering
-- Format-neutral packing driver (`ProjectPacker`) with pluggable format
-  backends (`PackFormat`): `.modpkg` via the `modpkg` feature, `.fantome`
-  via the `fantome` feature
-- Fantome-to-project import (`ImportFormat` / `FantomeImporter`)
-
-### `ltk-manager` - Desktop GUI Application
-
-A graphical desktop application for managing League of Legends mods, built with [Tauri](https://tauri.app/).
-
-**Features:**
-- Visual mod library management
-- Drag & drop mod installation
-- Enable/disable mods with toggles
-- Automatic League of Legends detection
-- Creator Workshop for building mods (coming soon)
-
-**Status:** In active development. See the [design document](crates/ltk-manager/DESIGN.md) for the full roadmap.
-
-**Configuration Example:**
-```json
-{
-  "name": "old-summoners-rift",
-  "display_name": "Old Summoners Rift",
-  "version": "1.0.0",
-  "description": "Brings back the classic Summoners Rift map",
-  "authors": [
-    "TheKillerey",
-    { "name": "Crauzer", "role": "Contributor" }
-  ],
-  "license": "MIT",
-  "layers": [
-    {
-      "name": "base",
-      "priority": 0,
-      "description": "Base layer of the mod"
-    },
-    {
-      "name": "high_res",
-      "priority": 10,
-      "description": "High resolution textures"
-    }
-  ],
-  "transformers": [
-    {
-      "name": "tex-converter",
-      "patterns": ["**/*.dds", "**/*.png"]
-    }
-  ]
-}
-```
-
-## 🏗️ Project Structure
-
-A typical mod project follows this structure:
+## The pipeline
 
 ```
-my-mod/
-├── mod.config.json           # Project configuration
-├── .modignore                # Files to exclude from packing (optional)
-├── content/                  # Mod content organized by layers
-│   ├── base/                 # Base layer (priority 0)
-|   |   ├── Aatrox.wad.client # Mods for the Aatrox wad file
-│   │   |   ├── data/
-│   │   │   └── assets/
-|   |   ├── Map11.wad.client  # Mods for the Map11 (SR) wad file
-│   │   |   ├── data/
-│   │   │   └── assets/
-│   ├── high_res/             # High resolution layer
-│   └── gameplay/             # Gameplay modifications layer
-├── build/                    # Output directory for .modpkg files
-├── LICENSE                   # License text (optional, also LICENSE.md/.txt)
-└── README.md                 # Project documentation/description
+   author's project        distributable            user's library         what the game loads
+   my-mod/           ->    my-mod_1.0.0.modpkg ->   profile/mods/     ->   profile/overlay/
+   mod.config.json         (or .fantome)            + mod.config.json      *.wad.client
+
+   ltk_mod_project         ltk_modpkg               ltk_mod_project        ltk_overlay
+   (pack)                  ltk_fantome              (import)               (build)
 ```
 
-### Ignoring files
+A mod project is a directory of loose files organized by layer and WAD target. Packing turns it
+into one archive. Installing imports that archive back into a project directory in the user's
+library. Enabling a mod rebuilds an overlay: copies of the game's WADs with the mod's chunks
+written into them, which a patcher loads in place of the originals.
 
-A `.modignore` file at the project root lists gitignore-style patterns for
-files under `content/` that should not be packed (working files like `.psd`
-sources, scratch directories, OS junk). Patterns follow gitignore rules:
-`#` comments, `!` negation, directory-only patterns (`cache/`), last match
-wins. Root-file patterns are relative to `content/`, and ignore files nest
-like git's: any directory under `content/` may hold its own `.modignore`
-whose patterns are relative to that directory, with deeper files overriding
-shallower ones. Matching is case-insensitive, because the game resolves
-packed paths case-insensitively. The `.modignore` files themselves are never
-packed, and the same filter is applied when building a live overlay, so what
-you test is what you ship.
+## Crates
 
-Two things trip people up. Always use `/` in patterns, even on Windows: a
-backslash is gitignore's escape character, so `base\scratch` matches nothing
-you meant. And to keep a single file inside an otherwise ignored folder,
-ignore the folder's contents rather than the folder: `scratch/*` followed by
-`!scratch/keep.bin` works, `scratch/` does not, because nothing under an
-excluded directory can be re-included. See the
-[wiki](https://wiki.leaguetoolkit.dev/making-mods/mod-projects/#ignore-files)
-for details.
+| Crate                                          | Version                                                                                                       | What it is                                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`ltk_mod_project`](crates/ltk_mod_project)    | [![crates.io](https://img.shields.io/crates/v/ltk_mod_project.svg)](https://crates.io/crates/ltk_mod_project)  | The `mod.config.json` schema, the project layout, and the pack and import drivers            |
+| [`ltk_modpkg`](crates/ltk_modpkg)              | [![crates.io](https://img.shields.io/crates/v/ltk_modpkg.svg)](https://crates.io/crates/ltk_modpkg)            | The `.modpkg` binary container: read, write, extract                                          |
+| [`ltk_fantome`](crates/ltk_fantome)            | [![crates.io](https://img.shields.io/crates/v/ltk_fantome.svg)](https://crates.io/crates/ltk_fantome)          | The legacy `.fantome` archive: read, write, rewrite in place                                  |
+| [`ltk_overlay`](crates/ltk_overlay)            | [![crates.io](https://img.shields.io/crates/v/ltk_overlay.svg)](https://crates.io/crates/ltk_overlay)          | Builds the WAD overlay from the enabled mods, incrementally                                   |
+| [`ltk_hashtable`](crates/ltk_hashtable)        | [![crates.io](https://img.shields.io/crates/v/ltk_hashtable.svg)](https://crates.io/crates/ltk_hashtable)      | The hashtables a mod embeds: file grammar, keys, merging, collision detection                 |
+| [`ltk_mod_core`](crates/ltk_mod_core)          | [![crates.io](https://img.shields.io/crates/v/ltk_mod_core.svg)](https://crates.io/crates/ltk_mod_core)        | League installation detection and cross-platform path helpers                                 |
+| [`league-mod`](crates/league-mod)              | -                                                                                                              | The CLI for mod authors. Deprecated; distributed through GitHub Releases rather than crates.io |
 
-### Licensing
+Each crate's README is the reference for its own surface. `ltk_mod_project`'s covers the config
+schema and the project layout in full.
 
-A project declares its license in two independent places:
+## For mod authors
 
-- The **`license` field** in `mod.config.json` names the terms - either an SPDX
-  identifier (`"license": "MIT"`) or a custom object
-  (`"license": { "name": "My License", "url": "https://example.com/terms" }`,
-  where `url` is optional).
-- A **`LICENSE` file** at the project root carries the text. `LICENSE`,
-  `LICENSE.md`, and `LICENSE.txt` are recognized, matched case-insensitively
-  and in that precedence order.
+A mod project is a directory:
 
-Either, both, or neither may be present; nothing hard-fails on a mismatch. Both
-formats carry the license through: `.modpkg` stores the text in a compressed
-`_meta_/license` chunk, `.fantome` in a `META/LICENSE` entry (keeping the source
-file's extension, e.g. `META/LICENSE.md`). Extracting either format writes the
-license back to the project root under the name it was packed with.
-
-## 📖 Quick Start
-
-### 1. Create a New Mod Project
-```bash
-league-mod init
-# Follow the interactive prompts
 ```
-
-### 2. Add Your Content
-Place your mod files in the appropriate layer directories:
-```bash
-reworked-aatrox/content/base/data/characters/aatrox/skins/skin0.bin
-reworked-aatrox/content/base/assets/characters/aatrox/skins/base/aatrox_base_tx_cm.tex
+my-mod
+|-- mod.config.json           # or mod.config.toml
+|-- README.md                 # optional, embedded in the package
+|-- LICENSE                   # optional; LICENSE.md and LICENSE.txt also recognized
+|-- thumbnail.webp            # optional, named by the config's thumbnail field
+|-- .modignore                # optional, patterns anchored at content/
+|-- hashes
+|   |-- game.hashes.txt       # declared by the config's hashtables manifest
+|-- content
+|   |-- base                  # the base layer, priority 0, always present
+|   |   |-- Aatrox.wad.client # one directory per WAD target
+|   |   |   |-- assets
+|   |   |   |-- data
+|   |   |-- raw               # files named by game asset path, routed when an overlay builds
+|   |-- high_res              # an optional layer
+|       |-- Aatrox.wad.client
+|-- build                     # packed archives
 ```
-
-### 3. Configure Your Mod
-Edit `mod.config.json` to add metadata, authors, and configure layers:
 
 ```json
 {
@@ -234,179 +72,203 @@ Edit `mod.config.json` to add metadata, authors, and configure layers:
   "description": "A complete visual overhaul for Aatrox",
   "authors": ["Your Name"],
   "license": "MIT",
+  "tags": ["champion-skin"],
+  "champions": ["Aatrox"],
   "layers": [
-    {
-      "name": "base",
-      "priority": 0,
-    }
+    { "name": "base", "priority": 0, "description": "Core modifications" },
+    { "name": "high_res", "priority": 10, "description": "High resolution textures" }
   ]
 }
 ```
 
-### 4. Pack Your Mod
+Full field reference: [`ltk_mod_project`'s README](crates/ltk_mod_project/README.md#configuration).
+Guides and walkthroughs: [wiki.leaguetoolkit.dev](https://wiki.leaguetoolkit.dev/making-mods/mod-projects/).
+
+### Layers
+
+A layer is a named, prioritized set of overrides. Every project has `base` at priority 0. Where
+two layers write the same file, the higher priority wins. A manager can enable a subset of a
+mod's layers, so one package ships a base skin plus optional chromas, high-res textures, or sound
+replacements.
+
+### Ignoring files
+
+`.modignore` at the project root lists gitignore-style patterns for files under `content/` that
+are not part of the mod - `.psd` sources, scratch directories, OS junk. Comments (`#`), negation
+(`!`), directory-only patterns (`cache/`) and last-match-wins all behave as git's do. Any
+directory under `content/` may hold its own `.modignore` governing its subtree. Matching is
+case-insensitive on every platform, and the same filter runs when a live overlay builds, so what
+you test is what you ship.
+
+Two traps:
+
+- Always write `/` in a pattern, even on Windows. A backslash is gitignore's escape character, so
+  `base\scratch` matches nothing you meant.
+- To keep one file inside an otherwise excluded folder, ignore the folder's *contents*:
+  `scratch/*` then `!scratch/keep.bin`. `scratch/` alone cannot work - nothing under an excluded
+  directory is re-includable.
+
+### Licensing a mod
+
+The `license` field names the terms; a `LICENSE` file carries the text. They are independent, and
+either, both or neither may be present. `.modpkg` stores the text in a compressed `_meta_/license`
+chunk, `.fantome` in a `META/LICENSE` entry keeping the source extension. Extraction writes the
+file back under the name it was packed with.
+
+### The CLI
+
+> **Deprecated.** `league-mod` receives no new features. The library crates are the supported way
+> to build mod tooling, and [LTK Manager](https://github.com/LeagueToolkit/ltk-manager) is the
+> supported way to author and install mods.
+
+Windows, no admin:
+
+```powershell
+irm https://raw.githubusercontent.com/LeagueToolkit/league-mod/main/scripts/install-league-mod.ps1 | iex
+```
+
+The script installs the latest release to `%LOCALAPPDATA%\LeagueToolkit\league-mod` and adds it to
+your user `PATH`. The binaries are also on the [releases page](https://github.com/LeagueToolkit/league-mod/releases).
+
 ```bash
-league-mod pack
-# Creates aatrox-rework_1.0.0.modpkg in the build/ directory
+league-mod init                          # scaffold a project, interactively
+league-mod pack                          # -> build/my-mod_1.0.0.modpkg
+league-mod pack --format fantome         # legacy container, base layer only
+league-mod info my-mod_1.0.0.modpkg      # metadata, layers, chunk counts
+league-mod extract my-mod_1.0.0.modpkg   # back to a project directory
+league-mod config auto-detect            # find the League installation
 ```
 
-## 🔄 Layer System
+## For tool developers
 
-The layer system allows for modular and overrideable mod content:
-
-- **Base Layer**: Always present, contains core mod files
-- **Custom Layers**: Additional layers with configurable priorities
-- **Override Behavior**: Higher priority layers override lower priority layers for the same files
-- **Selective Installation**: Users can potentially choose which layers to install
-
-Example layer configuration:
-```json
-{
-  "layers": [
-    {
-      "name": "base",
-      "priority": 0,
-      "description": "Core modifications"
-    },
-    {
-      "name": "optional_sounds",
-      "priority": 10,
-      "description": "Optional sound replacements"
-    },
-    {
-      "name": "experimental",
-      "priority": 20,
-      "description": "Experimental features"
-    }
-  ]
-}
+```toml
+[dependencies]
+ltk_mod_project = { version = "0.9", features = ["modpkg", "fantome"] }
+ltk_overlay = "0.9"
 ```
 
-## 🔗 File Transformers
+Pack a project:
 
-Transformers allow preprocessing of files during the packing process:
+```rust
+use ltk_mod_project::modpkg::ModpkgFormat;
+use ltk_mod_project::ProjectPacker;
 
-```json
-{
-  "transformers": [
-    {
-      "name": "tex-converter",
-      "patterns": ["**/*.png", "**/*.jpg"],
-      "options": {
-        "format": "dds",
-        "compression": "bc7"
-      }
-    },
-    ...
-  ]
-}
+let packer = ProjectPacker::from_dir("my-mod")?;
+let file = std::fs::File::create("build/my-mod_1.0.0.modpkg")?;
+let report = packer.pack(ModpkgFormat::new(file))?;
 ```
-## Building from Source
 
-**Prerequisites:**
-- Rust 1.70+ (2021 edition)
-- Git
+Import a package into a library:
 
-**Build steps:**
+```rust
+use ltk_mod_project::modpkg::ModpkgImporter;
+use ltk_mod_project::ProjectImporter;
+
+let reader = std::fs::File::open("my-mod.modpkg")?;
+let project = ProjectImporter::new("library/my-mod").import(ModpkgImporter::new(reader))?;
+```
+
+Build the overlay from the enabled mods:
+
+```rust
+use camino::Utf8PathBuf;
+use ltk_overlay::{EnabledMod, FsModContent, OverlayBuilder};
+
+let game_dir = Utf8PathBuf::from("C:/Riot Games/League of Legends/Game");
+let profile_dir = Utf8PathBuf::from("profiles/default");
+
+let mut builder = OverlayBuilder::new(game_dir, profile_dir.join("overlay"), profile_dir.clone());
+builder.set_enabled_mods(vec![EnabledMod {
+    id: "my-mod".to_owned(),
+    content: Box::new(FsModContent::new(Utf8PathBuf::from("library/my-mod"))),
+    enabled_layers: None,
+}]);
+let result = builder.build()?;
+```
+
+A rebuild touches only the WADs whose contents changed, and rewrites those by appending the mod's
+bytes rather than recopying the WAD. `docs/overlay-builder-design.md` covers the file layout, the
+trust rules behind that fast path, and the state files.
+
+## Formats
+
+**`.modpkg`** is the toolkit's own container: a binary file storing chunks by path hash, with
+per-chunk zstd compression, xxhash checksums, and layers and WAD targets in the header. Msgpack
+metadata carries the name, version, authors, license, tags, per-layer string overrides and the
+hashtable manifest. The readme, license text, thumbnail and hashtable files are chunks of their
+own under `_meta_/`, so reading the metadata never decompresses them.
+
+**`.fantome`** is the legacy format - a renamed ZIP with `META/info.json`, `WAD/` and `RAW/`
+entries. Reading and writing it is supported for compatibility with the existing mod ecosystem. It
+carries only a project's base layer, and a pack to Fantome warns about the layers it drops.
+
+## Building from source
+
+Stable Rust, 2021 edition. No pinned MSRV; CI builds on the current stable toolchain.
+
 ```bash
 git clone https://github.com/LeagueToolkit/league-mod.git
 cd league-mod
-cargo build --release
+cargo build --release        # binary at target/release/league-mod
+cargo test                   # whole workspace
+cargo test -p ltk_modpkg     # one crate
+cargo clippy --all-targets
+cargo fmt
 ```
 
-The compiled binary will be available at `target/release/league-mod.exe`
+## Documentation
 
-## 📜 License
+- [wiki.leaguetoolkit.dev](https://wiki.leaguetoolkit.dev) - guides for mod authors
+- Per-crate READMEs, linked from the table above
+- `docs/adr/` - architectural decision records, one per decision with real alternatives
+- `docs/overlay-builder-design.md` - the overlay build, its incremental path and its state files
+- `docs/modignore-behavior-notes.md` - `.modignore` edge cases
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+## Contributing
 
-## 🤝 Contributing
+Issues and pull requests are welcome. For a large change, open an issue first.
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
-
-### Commit Message Format
-
-This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automated changelog generation and semantic versioning:
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/); release-plz reads the
+type and the `!` marker to pick each crate's version bump. The scope is the crate without its
+`ltk_` prefix (`modpkg`, `fantome`, `overlay`), `cli` for `league-mod`, or the area (`docs`, `ci`,
+`workspace`) for work outside one.
 
 ```bash
-# Features (minor version bump)
-git commit -m "feat: add support for custom transformers"
-
-# Bug fixes (patch version bump)  
-git commit -m "fix: resolve file path handling on Windows"
-
-# Breaking changes (major version bump)
-git commit -m "feat!: change configuration file format"
-
-# Other types: docs, style, refactor, test, chore
-git commit -m "docs: update installation instructions"
+git commit -m "feat(overlay): pass through container chunks"
+git commit -m "fix(modpkg): reject chunk path with a drive prefix"
+git commit -m "feat(project)!: require a layer directory per declared layer"
 ```
 
-### Claude Code Setup
+Every PR runs: build and test on Linux, Windows and macOS; clippy; `cargo fmt --check`; a package
+check that every crate publishes as it will on crates.io; and `cargo deny` for advisories,
+licenses and duplicate dependencies.
 
-This project includes MCP (Model Context Protocol) configuration for Claude Code. The `.mcp.json` file is gitignored since it requires OS-specific configuration.
+Releases are automated. Push a conventional commit to `main`, release-plz opens a release PR with
+the version bumps and changelogs, and merging it publishes the crates and the Windows binaries.
 
-Create a `.mcp.json` file in the project root:
+## Related
 
-**macOS / Linux:**
-```json
-{
-  "mcpServers": {
-    "tanstack": {
-      "command": "npx",
-      "args": ["@tanstack/cli", "mcp"]
-    }
-  }
-}
-```
+- [ltk-manager](https://github.com/LeagueToolkit/ltk-manager) - the desktop mod manager, and the
+  main consumer of these crates
+- [wadtools](https://github.com/LeagueToolkit/wadtools) - CLI for extracting, listing and
+  comparing `.wad` archives
+- [Mimir](https://github.com/LeagueToolkit/Mimir) - hash-to-path tables as compact memory-mapped
+  `.hashdb` files
+- [lol-meta-wiki](https://github.com/LeagueToolkit/lol-meta-wiki) - documentation and a JSON API
+  for `.bin` meta classes and properties
+- [awesome-league](https://github.com/LeagueToolkit/awesome-league) - a curated list of tools,
+  libraries and resources for League of Legends files, assets and mods
 
-**Windows:**
-```json
-{
-  "mcpServers": {
-    "tanstack": {
-      "command": "cmd",
-      "args": ["/c", "npx", "@tanstack/cli", "mcp"]
-    }
-  }
-}
-```
+## License
 
-After creating the file, restart Claude Code for the MCP server to connect.
+Licensed under either of:
 
-### Development Workflow
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-All contributions go through our CI pipeline:
+at your option.
 
-1. **Create a PR** - All changes must be submitted via pull request
-2. **CI Checks** - Automated checks run on every PR:
-   - ✅ Code compilation on Linux, Windows, and macOS
-   - ✅ Test suite execution
-   - ✅ Clippy linting for code quality
-   - ✅ Code formatting verification
-   - ✅ Security audit for vulnerabilities
-   - ✅ License and dependency checks
-3. **Review & Merge** - Maintainer review and merge approved PRs
-
-### Release Process
-
-Releases are automated using [release-plz](https://release-plz.dev/docs):
-
-1. Make commits using conventional commit format
-2. Push to main branch
-3. Release-plz creates a Release PR with version bump and changelog
-4. Merge the PR to trigger automatic release with Windows binaries
-
-## 📚 Documentation
-
-For detailed documentation about the modpkg format and advanced usage, visit our [GitHub Wiki](https://github.com/LeagueToolkit/league-mod/wiki).
-
-## 🙋‍♀️ Support
-
-If you encounter any issues or have questions:
-1. Check the [GitHub Issues](https://github.com/LeagueToolkit/league-mod/issues)
-2. Consult the [Wiki documentation](https://github.com/LeagueToolkit/league-mod/wiki)
-3. Join our community discussions
-
----
-
-Made with ❤️ for the League of Legends modding community.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.
