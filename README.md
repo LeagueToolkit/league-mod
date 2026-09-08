@@ -1,7 +1,7 @@
 # League Mod Toolkit
 
 [![CI](https://github.com/LeagueToolkit/league-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/LeagueToolkit/league-mod/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
 
 Rust libraries for creating, packaging, and installing League of Legends mods - the code behind
 the `.modpkg` format and the overlay the game loads.
@@ -261,14 +261,9 @@ the version bumps and changelogs, and merging it publishes the crates and the Wi
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
-  http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Licensed under the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+http://www.apache.org/licenses/LICENSE-2.0).
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
-any additional terms or conditions.
+this work by you, as defined in the Apache-2.0 license, shall be licensed as above, without any
+additional terms or conditions.
