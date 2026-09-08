@@ -31,6 +31,7 @@ mod normalize;
 mod packed;
 mod reader;
 mod rewrite;
+mod version;
 mod writer;
 
 pub use delta::{
@@ -64,7 +65,17 @@ pub struct FantomeInfo {
     pub name: String,
     #[serde(rename = "Author")]
     pub author: String,
-    #[serde(rename = "Version")]
+    /// The mod's version.
+    ///
+    /// Sanitized on the way in: the field is hand written, and a number, a
+    /// fourth segment, a `v` prefix, or prose all reach it. A deserialized
+    /// value is valid semver. A value carrying no version at all, and an
+    /// absent field, deserialize to `1.0.0`.
+    #[serde(
+        rename = "Version",
+        default = "version::default_version",
+        deserialize_with = "version::deserialize_version"
+    )]
     pub version: String,
     #[serde(rename = "Description")]
     pub description: String,
