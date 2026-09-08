@@ -126,23 +126,16 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             return Ok(Vec::new());
         }
 
-        // Collect relative paths for each chunk (before mutable borrow for batch load).
+        // Collect relative paths for each chunk
         let mut rel_paths: HashMap<PathHash, String> = HashMap::with_capacity(chunk_keys.len());
         for key in &chunk_keys {
-            match self.modpkg.chunk_paths().get(&key.path) {
-                Some(path) => {
-                    rel_paths.insert(key.path, path.clone());
-                }
-                None => {
-                    tracing::warn!(
-                        "modpkg chunk {} (layer='{}', wad='{}') has no recorded path; \
-                         the override will be skipped",
-                        key.path,
-                        layer,
-                        wad_name
-                    );
-                }
-            }
+            rel_paths.insert(
+                key.path,
+                match self.modpkg.chunk_paths().get(&key.path) {
+                    Some(path) => path.clone(),
+                    None => key.path.to_string(),
+                },
+            );
         }
 
         // Batch load all chunks in offset-sorted order for sequential I/O
@@ -164,13 +157,11 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         _wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
-        let key = ChunkKey::new(
-            ltk_modpkg::ChunkPath::new(rel_path.as_str()).hash(),
-            ltk_modpkg::LayerHash::from_name(layer),
-        );
-
+        // The lookup falls back to the hex hash of a hex-named path.
         // `ModpkgError` already names the chunk it failed on.
-        let bytes = self.modpkg.load_chunk_decompressed(key)?;
+        let bytes = self
+            .modpkg
+            .load_chunk_decompressed_by_path(rel_path.as_str(), Some(layer))?;
 
         Ok(bytes.into_vec())
     }
@@ -307,6 +298,82 @@ mod tests {
         assert_eq!(overrides.len(), 1);
         assert_eq!(overrides[0].0.as_str(), "data/skin0.bin");
         assert_eq!(overrides[0].1, file_data);
+    }
+
+    /// Build a package holding one named chunk and one hex-named chunk, both in
+    /// the base layer of `Graves.wad.client`. Each chunk's bytes are its own
+    /// stored path.
+    fn hex_and_named_package() -> ModpkgContent<Cursor<Vec<u8>>> {
+        let mut cursor = Cursor::new(Vec::new());
+
+        ModpkgBuilder::default()
+            .with_layer(ModpkgLayerBuilder::base())
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_path("data/skin0.bin")
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
+            )
+            .with_chunk(
+                ModpkgChunkBuilder::new()
+                    .with_hashed_chunk_name("abcdef1234567890.dds")
+                    .unwrap()
+                    .with_compression(ModpkgCompression::None)
+                    .with_layer("base")
+                    .with_wad("Graves.wad.client"),
+            )
+            .build_to_writer(&mut cursor, |chunk| Ok(chunk.path().as_bytes().to_vec()))
+            .unwrap();
+
+        cursor.set_position(0);
+        ModpkgContent::new(Modpkg::mount_from_reader(cursor).unwrap())
+    }
+
+    #[test]
+    fn a_hex_named_chunk_is_returned_under_the_hex_of_its_hash() {
+        let mut content = hex_and_named_package();
+
+        let overrides = content
+            .read_wad_overrides("base", "graves.wad.client")
+            .unwrap();
+        assert_eq!(overrides.len(), 2);
+
+        let named = overrides
+            .iter()
+            .find(|(path, _)| path.as_str() == "data/skin0.bin")
+            .expect("named chunk is missing from the overrides");
+        assert_eq!(named.1, b"data/skin0.bin");
+
+        let (hex_path, hex_bytes) = overrides
+            .iter()
+            .find(|(path, _)| path.as_str() == "abcdef1234567890")
+            .expect("hex-named chunk is missing from the overrides");
+        assert_eq!(hex_bytes, b"abcdef1234567890.dds");
+
+        assert_eq!(
+            crate::utils::resolve_chunk_hash(hex_path, hex_bytes).unwrap(),
+            ltk_wad::WadHash(0xabcdef1234567890)
+        );
+    }
+
+    #[test]
+    fn a_single_override_file_reads_back_under_a_hex_name() {
+        let mut content = hex_and_named_package();
+
+        let hex_bytes = content
+            .read_wad_override_file(
+                "base",
+                "graves.wad.client",
+                Utf8Path::new("abcdef1234567890"),
+            )
+            .unwrap();
+        assert_eq!(hex_bytes, b"abcdef1234567890.dds");
+
+        let named_bytes = content
+            .read_wad_override_file("base", "graves.wad.client", Utf8Path::new("data/skin0.bin"))
+            .unwrap();
+        assert_eq!(named_bytes, b"data/skin0.bin");
     }
 
     #[test]
