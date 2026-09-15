@@ -3,7 +3,7 @@
 ## <a id="s1"></a>1. Summary
 
 Game-data declarations travel from a mod project's layer manifest through archives to the
-overlay builder. The authoring standard is the [game-data reference](https://wiki.leaguetoolkit.dev/reference/mod-packages/game-data/).
+overlay builder. The binding syntax follows the [game-data reference](https://wiki.leaguetoolkit.dev/reference/mod-packages/game-data/).
 The supported bindings are `links`, `+links`, and `-links`. Other bindings are errors.
 
 ## <a id="s2"></a>2. Vocabulary
@@ -27,8 +27,13 @@ mod precedence, WAD distribution, and persisted diagnostics.
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 `game_data.json`. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one `target` and a compact binding body, `steps`, or `source`.
-Targets contain exactly one literal `path` or 16-digit hexadecimal `hash` without a prefix.
-Paths hash with ASCII lowercase and XXH64 seed zero. Extensionless paths are valid.
+A target is one nonempty string. Exactly 16 ASCII hexadecimal characters identify a chunk
+hash without a prefix; every other spelling identifies a literal path. Hash-shaped spellings
+are reserved and cannot identify literal paths. Objects and non-string values are errors.
+Numeric-looking YAML targets require quotes. Paths hash with ASCII lowercase and XXH64 seed
+zero. Extensionless paths are valid. Suffixes, separators, and whitespace remain literal.
+The Rust `Target` type privately distinguishes paths and hashes. `Target::from(String)`
+classifies the spelling; callers cannot construct a conflicting identifier kind.
 
 Source files require their own version and a compact body or steps. Sources have no target
 or recursive includes. Source paths remain within the layer through symlink resolution.
@@ -40,6 +45,7 @@ unsupported versions, missing inputs, and ignored required inputs are errors.
 
 Packing expands sources into the ordered program. Manifests and sources are excluded from
 ordinary content, including sources inside WAD directories. Programs retain diagnostic origins.
+Archive programs use the target strings specified in [section 4](#s4).
 Extraction reconstructs a direct `game_data.json` manifest per layer.
 The modpkg layer metadata field is `game_data`; the Fantome layer field is `GameData`.
 Modpkg metadata uses schema version 4. Absent fields represent no declarations.
@@ -82,3 +88,4 @@ selection, enabled layers, link reports, and cached builds.
 | --- | --- | --- | --- | --- |
 | D1 | A shared crate owns executable declarations | Container-specific engines | Consumers share one interpretation | ADR-0004 |
 | D2 | Unsupported bindings are errors | Silent omission | Partial declarations misrepresent author intent | [section 4](#s4) |
+| D3 | Targets use scalar strings | Tagged path/hash objects | Compact identifiers | [ADR-0005](../adr/0005-scalar-game-data-targets.md) |

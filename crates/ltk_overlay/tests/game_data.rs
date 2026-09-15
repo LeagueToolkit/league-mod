@@ -64,7 +64,7 @@ fn declarations_use_the_highest_precedence_copy_even_when_it_matches_the_game() 
         &root,
         "top",
         Some(&bin(&["Game"])),
-        Some(r#"{"version":1,"modules":[{"target":{"path":"shared"},"links":["Added"]}]}"#),
+        Some(r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#),
     );
     let bottom = project(&root, "bottom", Some(&bin(&["Lower"])), None);
     let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
@@ -93,9 +93,9 @@ fn refused_programs_keep_sources_out_of_wad_and_raw_content() {
         Some(&bin(&["ordinary"])),
         Some(
             r#"{"version":1,"modules":[
-        {"target":{"path":"shared"},"unsupported":true},
-        {"target":{"path":"shared"},"source":"Test.wad.client/source.json"},
-        {"target":{"path":"shared"},"source":"raw/raw-source.json"}
+        {"target":"shared","unsupported":true},
+        {"target":"shared","source":"Test.wad.client/source.json"},
+        {"target":"shared","source":"raw/raw-source.json"}
     ]}"#,
         ),
     );
@@ -126,7 +126,13 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
         builder::{ModpkgBuilder, ModpkgLayerBuilder},
     };
     use ltk_overlay::{FantomeContent, ModContentProvider, ModpkgContent};
-    for format in ["modpkg", "fantome"] {
+    for (format, target) in [
+        ("modpkg", "shared".to_owned()),
+        (
+            "fantome",
+            format!("{:016X}", ltk_game_data::path_hash("shared")),
+        ),
+    ] {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
         let game = root.join("game");
@@ -142,11 +148,12 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
         );
         let program = ltk_game_data::compile(
             "game_data.json",
-            r#"{"version":1,"modules":[
-            {"target":{"path":"shared"},"steps":[{"-links":["Absent"]},{"links":["Added"]}]},
-            {"target":{"path":"missing"},"links":["Added"]},
-            {"target":{"path":"invalid"},"links":["Added"]}
-        ]}"#,
+            &r#"{"version":1,"modules":[
+            {"target":"TARGET","steps":[{"-links":["Absent"]},{"links":["Added"]}]},
+            {"target":"missing","links":["Added"]},
+            {"target":"invalid","links":["Added"]}
+        ]}"#
+            .replace("TARGET", &target),
             |_| unreachable!(),
         )
         .unwrap();
@@ -251,7 +258,7 @@ fn linked_dependencies_use_literal_game_paths() {
         "mod",
         None,
         Some(
-            r#"{"version":1,"modules":[{"target":{"path":"shared"},"links":["0123456789abcdef","literal.ltk.bin"]}]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","links":["0123456789abcdef","literal.ltk.bin"]}]}"#,
         ),
     );
     let mut builder = OverlayBuilder::new(game, root.join("overlay"), root.join("state"));
@@ -272,14 +279,14 @@ fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
         "top",
         None,
         Some(
-            r#"{"version":1,"modules":[{"target":{"path":"shared"},"-links":["lower"],"links":["base"]}]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","-links":["lower"],"links":["base"]}]}"#,
         ),
     );
     let bottom = project(
         &root,
         "bottom",
         None,
-        Some(r#"{"version":1,"modules":[{"target":{"path":"shared"},"links":["lower"]}]}"#),
+        Some(r#"{"version":1,"modules":[{"target":"shared","links":["lower"]}]}"#),
     );
     let path = root.join("top");
     let mut config: ModProject =
@@ -301,7 +308,7 @@ fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
     .unwrap();
     fs::create_dir_all(path.join("content/extras")).unwrap();
     fs::create_dir_all(path.join("content/disabled")).unwrap();
-    fs::write(path.join("content/extras/game_data.json"), r#"{"version":1,"modules":[{"target":{"path":"shared"},"steps":[{"-links":["base"],"links":["first"]},{"links":["second"]}]},{"target":{"path":"shared"},"-links":["first"]}]}"#).unwrap();
+    fs::write(path.join("content/extras/game_data.json"), r#"{"version":1,"modules":[{"target":"shared","steps":[{"-links":["base"],"links":["first"]},{"links":["second"]}]},{"target":"shared","-links":["first"]}]}"#).unwrap();
     fs::write(
         path.join("content/disabled/game_data.json"),
         "invalid ignored layer",

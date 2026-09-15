@@ -2,7 +2,16 @@ use ltk_game_data::{compile, materialise};
 
 #[test]
 fn yaml_requires_strings_for_lookup_paths_and_hashes() {
-    for target in ["{ path: 123 }", "{ hash: 0123456789012345 }"] {
+    for target in [
+        "123",
+        "0123456789012345",
+        "true",
+        "null",
+        "[]",
+        "{}",
+        "{path: shared}",
+        "\"\"",
+    ] {
         let text = format!("version: 1\nmodules:\n  - target: {target}\n    links: [shared]\n");
         assert!(
             compile("game_data.yaml", &text, |_| unreachable!()).is_err(),
@@ -11,7 +20,7 @@ fn yaml_requires_strings_for_lookup_paths_and_hashes() {
     }
     let program = compile(
         "game_data.yaml",
-        "version: 1\nmodules:\n  - target: { path: on }\n    links: [yes]\n",
+        "version: 1\nmodules:\n  - target: on\n    links: [yes]\n",
         |_| unreachable!(),
     )
     .unwrap();
@@ -34,11 +43,11 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         ),
         (
             "game_data.json",
-            r#"{"version":1,"modules":[{"target":{"path":"shared"},"links":[],"steps":[] }]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","links":[],"steps":[] }]}"#,
         ),
         (
             "game_data.json",
-            r#"{"version":1,"modules":[{"target":{"path":"shared"},"source":"a.json","links":[] }]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","source":"a.json","links":[] }]}"#,
         ),
         (
             "game_data.json",
@@ -46,16 +55,16 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         ),
         (
             "game_data.yaml",
-            "version: 1\nmodules:\n- target: {path: shared}\n  links: []\n  links: []\n",
+            "version: 1\nmodules:\n- target: shared\n  links: []\n  links: []\n",
         ),
         (
             "game_data.yaml",
-            "version: 1\nmodules:\n- target: {path: shared}\n  links: [!unexpected shared]\n",
+            "version: 1\nmodules:\n- target: shared\n  links: [!unexpected shared]\n",
         ),
         ("game_data.toml", "version = 2\nmodules = []"),
         (
             "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = {path = 'shared'}\noverrides = ['a.ptch']",
+            "version = 1\n[[modules]]\ntarget = 'shared'\noverrides = ['a.ptch']",
         ),
     ];
     for (name, text) in invalid {
@@ -67,7 +76,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
             "{text}"
         );
     }
-    let toml = "version = 1\n[[modules]]\ntarget = {\n path = 'shared',\n}\nlinks = ['yes']";
+    let toml = "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['yes']";
     assert_eq!(
         compile("game_data.toml", toml, |_| unreachable!())
             .unwrap()
@@ -87,7 +96,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
 
 #[test]
 fn input_discovery_retains_sources_in_rejected_documents() {
-    let yaml = "version: 1\nversion: 1\nmodules:\n- target: {path: shared}\n  unknown: !f32 1.0\n  source: one.json\n- source: two.json\n";
+    let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  unknown: !f32 1.0\n  source: one.json\n- source: two.json\n";
     assert!(compile("game_data.yaml", yaml, |_| unreachable!()).is_err());
     assert_eq!(
         ltk_game_data::referenced_sources("game_data.yaml", yaml).unwrap(),
@@ -107,9 +116,9 @@ fn yaml_sources_and_steps_execute_in_order_without_rewriting_objects() {
         r#"
 version: 1
 modules:
-  - target: { path: shared }
+  - target: shared
     source: patches/links.json
-  - target: { hash: '0123456789abcdef' }
+  - target: '0123456789abcdef'
     steps:
       - links: [After]
       - '-links': [after]
@@ -138,4 +147,46 @@ modules:
     assert_eq!(&output.bytes[27..], &base[20..]);
     assert_eq!(output.reports[0].path, "MISSING");
     assert_eq!(output.reports[0].step, 0);
+}
+
+#[test]
+fn scalar_targets_preserve_identifier_kind_and_spelling() {
+    for (value, hash) in [
+        ("0123456789ABCDEF", Some(0x0123456789abcdef)),
+        ("0123456789012345", Some(0x0123456789012345)),
+        ("Data/Characters/Teemo/skin0.bin", None),
+        ("shared", None),
+        ("literal.ltk.bin", None),
+        ("0x0123456789abcdef", None),
+        ("0123456789abcdeg", None),
+        ("0123456789abcde", None),
+    ] {
+        for (name, text) in [
+            (
+                "game_data.json",
+                format!(r#"{{"version":1,"modules":[{{"target":"{value}","links":[]}}]}}"#),
+            ),
+            (
+                "game_data.yaml",
+                format!("version: 1\nmodules:\n- target: '{value}'\n  links: []\n"),
+            ),
+            (
+                "game_data.toml",
+                format!("version = 1\n[[modules]]\ntarget = '{value}'\nlinks = []\n"),
+            ),
+        ] {
+            let program = compile(name, &text, |_| unreachable!()).unwrap();
+            let target = &program.modules[0].target;
+            assert_eq!(target.display_name(), value);
+            assert_eq!(*target, ltk_game_data::Target::from(value.to_owned()));
+            if let Some(hash) = hash {
+                assert_eq!(target.hash().unwrap(), hash);
+            }
+            let manifest = program.manifest_json().unwrap();
+            let json: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            assert_eq!(json["modules"][0]["target"], value);
+            let document = ltk_game_data::Document::from(program.clone());
+            assert_eq!(document.program().unwrap(), program);
+        }
+    }
 }

@@ -10,7 +10,7 @@ use std::{fs, io::Cursor};
 
 fn fixture(root: &Utf8Path) -> ModProject {
     fs::create_dir_all(root.join("content/base/Test.wad.client")).unwrap();
-    fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: { path: shared }\n    source: Test.wad.client/links.json\n").unwrap();
+    fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.json\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
     fs::write(
         root.join("content/base/Test.wad.client/links.json"),
         r#"{"version":1,"steps":[{"links":["Added"]},{"-links":["Removed"]}]}"#,
@@ -79,7 +79,7 @@ fn fantome_import_uses_the_declared_layer_name() {
     let output = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     let program = ltk_game_data::compile(
         "game_data.json",
-        r#"{"version":1,"modules":[{"target":{"path":"shared"},"links":["Added"]}]}"#,
+        r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
         |_| unreachable!(),
     )
     .unwrap();
@@ -191,7 +191,7 @@ fn source_symlinks_cannot_escape_the_layer() {
     .unwrap();
     fs::write(
         root.join("content/base/game_data.json"),
-        r#"{"version":1,"modules":[{"target":{"path":"shared"},"source":"linked.json"}]}"#,
+        r#"{"version":1,"modules":[{"target":"shared","source":"linked.json"}]}"#,
     )
     .unwrap();
     std::os::unix::fs::symlink(
@@ -211,13 +211,13 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     fixture(&root);
     let manifest = root.join("content/base/game_data.yaml");
-    fs::write(&manifest, "version: 1\nmodules:\n- target: {path: shared}\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
+    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
     let ignore = ModIgnore::empty(&root);
     assert!(load_layer(&root, "base", &ignore)
         .program
         .unwrap()
         .is_some());
-    fs::write(&manifest, "version: 1\nmodules:\n- target: {path: shared}\n  source: Test.wad.client/links.json\n- target: {path: SHARED}\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
+    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/links.json\n- target: SHARED\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
     assert!(load_layer(&root, "base", &ignore)
         .program
         .unwrap_err()

@@ -11,8 +11,7 @@ and pipeline contract.
 ```yaml
 version: 1
 modules:
-  - target:
-      path: data/characters/teemo/skins/skin0.bin
+  - target: data/characters/teemo/skins/skin0.bin
     links:
       - mods/example/particles.bin
 ```
@@ -22,7 +21,7 @@ use ltk_game_data::{compile, materialise};
 
 let program = compile("game_data.json", r#"{
   "version": 1,
-  "modules": [{"target": {"path": "shared"}, "links": ["mods/example"]}]
+  "modules": [{"target":"shared", "links": ["mods/example"]}]
 }"#, |path| Err(ltk_game_data::Error::new(path, "source unavailable")))?;
 
 // PROP v3 with an empty dependency list and object table.

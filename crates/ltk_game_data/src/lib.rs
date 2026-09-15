@@ -100,31 +100,50 @@ pub struct Origin {
     pub module: usize,
 }
 
-/// Exactly one game lookup path or a bare 16-digit hexadecimal chunk hash.
+/// A scalar game lookup path or bare 16-digit hexadecimal chunk hash.
+/// Construction classifies the spelling and preserves it verbatim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Target {
+#[serde(from = "String", into = "String")]
+pub struct Target(TargetKind);
+
+#[derive(Debug, Clone, PartialEq)]
+enum TargetKind {
     Path(String),
     Hash(String),
 }
 
+impl From<String> for Target {
+    fn from(value: String) -> Self {
+        Self(
+            if value.len() == 16 && value.bytes().all(|c| c.is_ascii_hexdigit()) {
+                TargetKind::Hash(value)
+            } else {
+                TargetKind::Path(value)
+            },
+        )
+    }
+}
+
+impl From<Target> for String {
+    fn from(target: Target) -> Self {
+        match target.0 {
+            TargetKind::Path(value) | TargetKind::Hash(value) => value,
+        }
+    }
+}
+
 impl Target {
     pub fn hash(&self) -> Result<u64, Error> {
-        match self {
-            Self::Path(path) if !path.is_empty() => Ok(path_hash(path)),
-            Self::Hash(hash) if hash.len() == 16 && hash.bytes().all(|c| c.is_ascii_hexdigit()) => {
-                Ok(u64::from_str_radix(hash, 16).expect("validated hex"))
-            }
-            _ => Err(Error::new(
-                "target",
-                "expected a nonempty path or a 16-digit hexadecimal hash",
-            )),
+        match &self.0 {
+            TargetKind::Path(path) if !path.is_empty() => Ok(path_hash(path)),
+            TargetKind::Hash(hash) => Ok(u64::from_str_radix(hash, 16).expect("validated hex")),
+            _ => Err(Error::new("target", "expected a nonempty target string")),
         }
     }
 
     pub fn display_name(&self) -> &str {
-        match self {
-            Self::Path(value) | Self::Hash(value) => value,
+        match &self.0 {
+            TargetKind::Path(value) | TargetKind::Hash(value) => value,
         }
     }
 }
