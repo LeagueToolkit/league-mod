@@ -138,7 +138,7 @@ impl CachedModMeta {
                     }
                     // Synthetic string patches are injected after per-mod
                     // collection, so they never reach the per-mod cache.
-                    OverrideSource::StringPatch { .. } => {
+                    OverrideSource::StringPatch { .. } | OverrideSource::GameData { .. } => {
                         unreachable!("StringPatch overrides are not cached per-mod")
                     }
                 };

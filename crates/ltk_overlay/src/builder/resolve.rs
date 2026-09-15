@@ -53,7 +53,9 @@ impl<'a> ChunkSources<'a> {
             };
 
             match &meta.source {
-                OverrideSource::LayerWad { mod_id, .. } | OverrideSource::Raw { mod_id, .. } => {
+                OverrideSource::LayerWad { mod_id, .. }
+                | OverrideSource::Raw { mod_id, .. }
+                | OverrideSource::GameData { mod_id, .. } => {
                     sources
                         .by_mod
                         .entry(mod_id.as_str())
@@ -522,6 +524,10 @@ impl OverlayBuilder {
                     }
                     OverrideSource::Raw { rel_path, .. } => {
                         provider.read_raw_override_file(rel_path)?
+                    }
+                    OverrideSource::GameData { bytes, .. } => {
+                        preparer.supply(path_hash, bytes.clone())?;
+                        continue;
                     }
                     OverrideSource::StringPatch { .. } => {
                         return Err(Error::Bug(Invariant::StringPatchGroupedByMod));

@@ -26,6 +26,17 @@ pub(crate) fn collect_single_mod_metadata(
     game_index: &GameIndex,
     game_dir: &Utf8Path,
 ) -> Result<HashMap<WadHash, OverrideMeta>> {
+    let mut mod_meta = collect_unfiltered_mod_metadata(enabled_mod, game_index, game_dir)?;
+    filter_override_metadata(&mut mod_meta, game_index, game_dir);
+    Ok(mod_meta)
+}
+
+/// Metadata before game-identical copies are omitted. Declared targets use these bases.
+pub(super) fn collect_unfiltered_mod_metadata(
+    enabled_mod: &mut EnabledMod,
+    game_index: &GameIndex,
+    game_dir: &Utf8Path,
+) -> Result<HashMap<WadHash, OverrideMeta>> {
     tracing::info!("Processing mod id={}", enabled_mod.id);
 
     let project = enabled_mod.content.mod_project()?;
@@ -47,8 +58,6 @@ pub(crate) fn collect_single_mod_metadata(
     collect_raw_metadata(enabled_mod, &mut mod_meta)?;
 
     route_unroutable_to_dominant_wad(enabled_mod, game_index, &mut mod_meta);
-
-    filter_override_metadata(&mut mod_meta, game_index, game_dir);
 
     Ok(mod_meta)
 }

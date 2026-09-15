@@ -32,6 +32,7 @@
 //! 7. Persist the new [`OverlayState`]: per-WAD fingerprints, the layout record
 //!    of every WAD now on disk, and no dirty flags.
 
+pub mod game_data;
 mod incremental;
 mod metadata;
 mod resolve;
@@ -78,6 +79,12 @@ pub(crate) enum OverrideSource {
     /// than re-read from a provider, so this variant never enters the per-mod
     /// metadata cache.
     StringPatch { chunk_path: Utf8PathBuf },
+    /// A materialised declaration target shared by its destination WADs.
+    GameData {
+        mod_id: String,
+        chunk_path: Utf8PathBuf,
+        bytes: SharedBytes,
+    },
 }
 
 /// Pseudo mod id reported for [`OverrideSource::StringPatch`] entries, which
@@ -90,6 +97,7 @@ impl OverrideSource {
         match self {
             OverrideSource::LayerWad { mod_id, .. } => mod_id,
             OverrideSource::Raw { mod_id, .. } => mod_id,
+            OverrideSource::GameData { mod_id, .. } => mod_id,
             OverrideSource::StringPatch { .. } => STRING_PATCH_MOD_ID,
         }
     }
@@ -100,6 +108,7 @@ impl OverrideSource {
             OverrideSource::LayerWad { rel_path, .. } => rel_path.as_path(),
             OverrideSource::Raw { rel_path, .. } => rel_path.as_path(),
             OverrideSource::StringPatch { chunk_path, .. } => chunk_path.as_path(),
+            OverrideSource::GameData { chunk_path, .. } => chunk_path.as_path(),
         }
     }
 }
@@ -551,6 +560,7 @@ pub struct OverlayBuilder {
     /// container claimed the wrong checksum for them. Moved into that build's
     /// [`OverlayBuildResult`].
     last_checksum_mismatches: Vec<ChecksumMismatch>,
+    pub(crate) last_game_data_reports: Vec<crate::game_data::GameDataReport>,
 }
 
 impl OverlayBuilder {
@@ -576,6 +586,7 @@ impl OverlayBuilder {
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
             last_checksum_mismatches: Vec::new(),
+            last_game_data_reports: Vec::new(),
         }
     }
 
@@ -689,6 +700,7 @@ impl OverlayBuilder {
         // Reset per-build outputs; each return path sets these as appropriate.
         self.last_linked_bin_offenders = Vec::new();
         self.last_checksum_mismatches = Vec::new();
+        self.last_game_data_reports.clear();
 
         let effective_blocked = self.effective_blocked_wads();
 
@@ -799,6 +811,7 @@ impl OverlayBuilder {
 
         let string_plans =
             self.build_string_patch_plans(&game_index, &target_locales, &mut all_meta)?;
+        self.materialise_game_data(&game_index, &mut all_meta)?;
 
         let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
 
@@ -876,6 +889,7 @@ impl OverlayBuilder {
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
+        state.game_data_reports = self.last_game_data_reports.clone();
         state.wad_layouts =
             collect_wad_layouts(&built, &wads_to_reuse, &all_meta, prev_state.as_ref());
         state.save(&state_path)?;
@@ -982,6 +996,7 @@ impl OverlayBuilder {
 
         self.sweep_unexpected_overlay_files(&state.wad_fingerprints);
         self.last_linked_bin_offenders = state.linked_bin_offenders.clone();
+        self.last_game_data_reports = state.game_data_reports.clone();
         self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
 
         Some(OverlayBuildResult {

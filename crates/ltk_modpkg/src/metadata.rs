@@ -84,6 +84,7 @@ impl DistributorInfo {
 /// en_us_overrides.insert("game_character_displayname_Ahri".to_string(), "Fox Spirit".to_string());
 ///
 /// let layer = ModpkgLayerMetadata {
+///     game_data: None,
 ///     name: "base".to_string(),
 ///     display_name: None,
 ///     priority: 0,
@@ -99,6 +100,10 @@ impl DistributorInfo {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct ModpkgLayerMetadata {
+    /// The layer's versioned executable game-data program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, proptest(value = "None"))]
+    pub game_data: Option<ltk_game_data::Document>,
     /// The name of the layer (e.g. "base", "chroma1").
     pub name: String,
     /// Optional human-readable display name for the layer.
@@ -242,7 +247,7 @@ impl Default for ModpkgMetadata {
 }
 
 /// Current metadata schema version.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 fn default_schema_version() -> u32 {
     CURRENT_SCHEMA_VERSION
@@ -474,6 +479,7 @@ mod tests {
     #[test]
     fn test_layer_string_overrides_roundtrip() {
         let layer = ModpkgLayerMetadata {
+            game_data: None,
             name: "base".to_string(),
             display_name: None,
             priority: 0,
@@ -495,6 +501,7 @@ mod tests {
     #[test]
     fn test_layer_empty_overrides_skipped_in_serialization() {
         let layer = ModpkgLayerMetadata {
+            game_data: None,
             name: "base".to_string(),
             display_name: None,
             priority: 0,
@@ -638,6 +645,7 @@ mod tests {
             champions: vec![],
             maps: vec![],
             layers: vec![ModpkgLayerMetadata {
+                game_data: None,
                 name: "base".to_string(),
                 display_name: None,
                 priority: 0,
@@ -675,6 +683,7 @@ mod tests {
             maps: vec![],
             layers: vec![
                 ModpkgLayerMetadata {
+                    game_data: None,
                     name: "base".to_string(),
                     display_name: None,
                     priority: 0,
@@ -685,6 +694,7 @@ mod tests {
                     )]),
                 },
                 ModpkgLayerMetadata {
+                    game_data: None,
                     name: "chroma1".to_string(),
                     display_name: Some("Pink chroma".to_string()),
                     priority: 10,

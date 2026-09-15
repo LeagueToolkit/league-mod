@@ -6,12 +6,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use camino::{Utf8Path, Utf8PathBuf};
+#[cfg(test)]
+use camino::Utf8Path;
+use camino::Utf8PathBuf;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use crate::builder::{OverrideMeta, is_wad_blocked};
 use crate::game_index::GameIndex;
+#[cfg(test)]
 use crate::utils::resolve_chunk_hash;
 
 /// Upper bound on a bin's declared linked-file count, guarding `Vec` pre-allocation
@@ -98,9 +101,7 @@ pub(crate) fn collect_linked_bin_offenders(
             }
 
             for link in &meta.linked_bins {
-                let Ok(link_hash) = resolve_chunk_hash(Utf8Path::new(link), b"") else {
-                    continue;
-                };
+                let link_hash = WadHash::from(ltk_game_data::path_hash(link));
                 if present.holds(link_hash) {
                     continue;
                 }

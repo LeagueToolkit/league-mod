@@ -13,6 +13,7 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
+ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
 indexmap = { workspace = true }
 zip = "2.4"
 serde = { version = "1.0", features = ["derive"] }

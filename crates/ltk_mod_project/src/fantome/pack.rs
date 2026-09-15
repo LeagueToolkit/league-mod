@@ -454,6 +454,14 @@ fn pack_metadata<W: Write + Seek>(
     let routes = super::convert::fantome_routes(plan.hashtables())?;
 
     let mut info = FantomeInfo::from(plan.project());
+    for planned in plan.layers() {
+        if let Some(program) = planned.game_data() {
+            let layer = info.layers.entry(planned.layer().name.clone()).or_default();
+            layer.name = planned.layer().name.clone();
+            layer.priority = planned.layer().priority;
+            layer.game_data = Some(program.clone());
+        }
+    }
     info.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
 
     let mut written = HashSet::new();

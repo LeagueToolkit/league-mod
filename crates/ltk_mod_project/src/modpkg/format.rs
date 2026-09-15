@@ -408,6 +408,7 @@ impl From<&PlannedLayer> for ModpkgLayerMetadata {
         let layer = planned.layer();
 
         Self {
+            game_data: planned.game_data().cloned(),
             name: layer.name.clone(),
             display_name: layer.display_name.clone(),
             priority: layer.priority,

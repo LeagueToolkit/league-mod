@@ -379,6 +379,37 @@ impl<R: Read + Seek> FantomeContent<R> {
 }
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
+    fn game_data(
+        &mut self,
+        layer: &str,
+    ) -> std::result::Result<Option<ltk_game_data::Program>, ltk_game_data::Error> {
+        let name = self
+            .index
+            .info_entry
+            .as_ref()
+            .ok_or_else(|| ltk_game_data::Error::new(layer, "Fantome info missing"))?;
+        let mut entry = self
+            .archive
+            .by_name(name)
+            .map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        let bytes =
+            read_zip_entry_bytes(&mut entry).map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+        let info: ltk_fantome::FantomeInfo =
+            serde_json::from_slice(bytes).map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        info.layers
+            .iter()
+            .find(|(key, value)| {
+                if value.name.is_empty() {
+                    key.as_str() == layer
+                } else {
+                    value.name == layer
+                }
+            })
+            .and_then(|(_, value)| value.game_data.as_ref())
+            .map(|document| document.program())
+            .transpose()
+    }
     fn mod_project(&mut self) -> Result<ModProject> {
         let info_name = self
             .index

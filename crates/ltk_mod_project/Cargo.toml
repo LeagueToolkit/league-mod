@@ -13,6 +13,7 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
+ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
 camino = { workspace = true }
 ignore = "0.4"
 indexmap = { workspace = true }
