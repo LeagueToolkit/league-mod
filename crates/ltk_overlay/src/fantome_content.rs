@@ -379,10 +379,10 @@ impl<R: Read + Seek> FantomeContent<R> {
 }
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
-    fn game_data(
+    fn game_data_declarations(
         &mut self,
         layer: &str,
-    ) -> std::result::Result<Option<ltk_game_data::Program>, ltk_game_data::Error> {
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         let name = self
             .index
             .info_entry
@@ -407,7 +407,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 }
             })
             .and_then(|(_, value)| value.game_data.as_ref())
-            .map(|document| document.program())
+            .map(|document| document.parse())
             .transpose()
     }
     fn mod_project(&mut self) -> Result<ModProject> {

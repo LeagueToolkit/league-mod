@@ -1,25 +1,43 @@
-//! Declaration target selection, materialisation, and diagnostics.
+//! Declaration target selection, application, and diagnostics.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
-use ltk_game_data::{Module, Origin};
+use ltk_game_data::{DeclarationLocation, Module};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use super::{OverlayBuilder, OverrideMeta, OverrideSource};
 use crate::{error::Result, game_index::GameIndex, strings::read_game_chunk, utils::ContentHash};
 
+/// The category of a declaration diagnostic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum GameDataDiagnosticKind {
+    DeclarationsRejected,
+    TargetSkipped,
+    LinkRemovalUnmatched,
+    /// A missing or unrecognized serialized category.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// A declaration diagnostic. The step index is zero-based.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GameDataReport {
+pub struct GameDataDiagnostic {
+    #[serde(default)]
+    pub kind: GameDataDiagnosticKind,
     pub mod_id: String,
     pub layer: String,
     pub target: Option<String>,
-    pub origin: Option<Origin>,
-    pub step: Option<usize>,
+    #[serde(rename = "origin")]
+    pub location: Option<DeclarationLocation>,
+    #[serde(rename = "step")]
+    pub step_index: Option<usize>,
     pub message: String,
 }
 
@@ -30,25 +48,26 @@ struct Application {
 }
 
 impl Application {
-    fn report(&self, step: Option<usize>, message: impl ToString) -> GameDataReport {
-        GameDataReport {
+    fn diagnostic(
+        &self,
+        kind: GameDataDiagnosticKind,
+        step_index: Option<usize>,
+        message: impl ToString,
+    ) -> GameDataDiagnostic {
+        GameDataDiagnostic {
+            kind,
             mod_id: self.mod_id.clone(),
             layer: self.layer.clone(),
-            target: Some(self.module.target.display_name().to_owned()),
-            origin: Some(self.module.origin.clone()),
-            step,
+            target: Some(self.module.target.as_str().to_owned()),
+            location: Some(self.module.location.clone()),
+            step_index,
             message: message.to_string(),
         }
     }
 }
 
 impl OverlayBuilder {
-    /// Declaration reports from the most recent build, including cached builds.
-    pub fn game_data_reports(&self) -> &[GameDataReport] {
-        &self.last_game_data_reports
-    }
-
-    pub(super) fn materialise_game_data(
+    pub(super) fn apply_game_data(
         &mut self,
         game: &GameIndex,
         metadata: &mut HashMap<WadHash, OverrideMeta>,
@@ -64,20 +83,23 @@ impl OverlayBuilder {
                 if !enabled.is_layer_active(&layer.name) {
                     continue;
                 }
-                let result = enabled.content.game_data(&layer.name).and_then(|program| {
-                    if let Some(program) = &program {
-                        program.validate()?;
-                    }
-                    Ok(program)
-                });
+                let result = enabled
+                    .content
+                    .game_data_declarations(&layer.name)
+                    .and_then(|declarations| {
+                        if let Some(declarations) = &declarations {
+                            declarations.validate()?;
+                        }
+                        Ok(declarations)
+                    });
                 match result {
-                    Ok(Some(program)) => for module in program.modules {
-                        let hash = WadHash::from(module.target.hash().expect("validated program"));
+                    Ok(Some(declarations)) => for module in declarations.modules {
+                        let hash = WadHash::from(module.target.chunk_hash());
                         targets.entry(hash).or_default().push(Application { mod_id: enabled.id.clone(), layer: layer.name.clone(), module });
                     },
                     Ok(None) => {},
-                    Err(error) => self.last_game_data_reports.push(GameDataReport {
-                        mod_id: enabled.id.clone(), layer: layer.name, target: None, origin: None, step: None,
+                    Err(error) => self.last_game_data_diagnostics.push(GameDataDiagnostic {
+                        mod_id: enabled.id.clone(), layer: layer.name, target: None, location: None, step_index: None, kind: GameDataDiagnosticKind::DeclarationsRejected,
                         message: format!("Layer declarations refused: {error}; update the consumer for unsupported bindings"),
                     }),
                 }
@@ -107,37 +129,52 @@ impl OverlayBuilder {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     for application in &applications {
-                        self.last_game_data_reports
-                            .push(application.report(None, &error));
+                        self.last_game_data_diagnostics.push(application.diagnostic(
+                            GameDataDiagnosticKind::TargetSkipped,
+                            None,
+                            &error,
+                        ));
                     }
                     continue;
                 }
             };
             if game.subchunktoc_blocked().contains(&hash) {
                 for application in &applications {
-                    self.last_game_data_reports
-                        .push(application.report(None, "target is a blocked game chunk"));
+                    self.last_game_data_diagnostics.push(application.diagnostic(
+                        GameDataDiagnosticKind::TargetSkipped,
+                        None,
+                        "target is a blocked game chunk",
+                    ));
                 }
                 continue;
             }
             let mut dependencies = Vec::new();
             let mut applied = false;
             for application in &applications {
-                match ltk_game_data::materialise(&bytes, &application.module.steps) {
+                match ltk_game_data::apply(&bytes, &application.module.steps) {
                     Ok(output) => {
-                        for report in output.reports {
-                            self.last_game_data_reports.push(application.report(
-                                Some(report.step),
-                                format!("Link removal is absent: {}", report.path),
+                        for diagnostic in output.diagnostics {
+                            let kind = match diagnostic.kind {
+                                ltk_game_data::ApplyDiagnosticKind::LinkRemovalUnmatched => {
+                                    GameDataDiagnosticKind::LinkRemovalUnmatched
+                                }
+                                _ => GameDataDiagnosticKind::Unknown,
+                            };
+                            self.last_game_data_diagnostics.push(application.diagnostic(
+                                kind,
+                                Some(diagnostic.step_index),
+                                format!("Link removal is absent: {}", diagnostic.path),
                             ));
                         }
                         bytes = output.bytes;
                         dependencies = output.dependencies;
                         applied = true;
                     }
-                    Err(error) => self
-                        .last_game_data_reports
-                        .push(application.report(None, error)),
+                    Err(error) => self.last_game_data_diagnostics.push(application.diagnostic(
+                        GameDataDiagnosticKind::TargetSkipped,
+                        None,
+                        error,
+                    )),
                 }
             }
             if !applied {
@@ -151,7 +188,7 @@ impl OverlayBuilder {
                     uncompressed_size: bytes.len(),
                     source: OverrideSource::GameData {
                         mod_id: owner.mod_id.clone(),
-                        chunk_path: Utf8PathBuf::from(owner.module.target.display_name()),
+                        chunk_path: Utf8PathBuf::from(owner.module.target.as_str()),
                         bytes: Arc::from(bytes),
                     },
                     fallback_wad: original

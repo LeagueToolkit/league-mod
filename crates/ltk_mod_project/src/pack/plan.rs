@@ -101,7 +101,7 @@ impl<'a> PackPlan<'a> {
 pub struct PlannedLayer {
     layer: ModProjectLayer,
     files: Vec<PlannedFile>,
-    game_data: Option<ltk_game_data::Document>,
+    game_data: Option<ltk_game_data::DeclarationDocument>,
 }
 
 impl PlannedLayer {
@@ -113,13 +113,16 @@ impl PlannedLayer {
         }
     }
 
-    pub(crate) fn with_game_data(mut self, program: Option<ltk_game_data::Program>) -> Self {
-        self.game_data = program.map(Into::into);
+    pub(crate) fn with_game_data(
+        mut self,
+        declarations: Option<ltk_game_data::Declarations>,
+    ) -> Self {
+        self.game_data = declarations.map(Into::into);
         self
     }
 
-    /// The compiled layer program, with sources expanded.
-    pub fn game_data(&self) -> Option<&ltk_game_data::Document> {
+    /// The layer declarations, with sources expanded.
+    pub fn game_data(&self) -> Option<&ltk_game_data::DeclarationDocument> {
         self.game_data.as_ref()
     }
 

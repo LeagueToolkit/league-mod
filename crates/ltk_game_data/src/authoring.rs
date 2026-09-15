@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use camino::Utf8Path;
 use serde::{Deserialize, de::DeserializeOwned};
 
-use crate::{Batch, Error, Module, Origin, Program, Target};
+use crate::{DeclarationLocation, Declarations, Error, LinkPath, Module, Step, Target};
 
 pub const MANIFEST_NAMES: [&str; 4] = [
     "game_data.yaml",
@@ -12,7 +12,7 @@ pub const MANIFEST_NAMES: [&str; 4] = [
     "game_data.json",
 ];
 
-/// Discover source references independently of binding validation.
+/// Discovers source references independently of binding validation.
 pub fn referenced_sources(name: &str, text: &str) -> Result<Vec<String>, Error> {
     let document: super::discovery::Node = parse(name, text, false)?;
     Ok(document.sources())
@@ -30,22 +30,22 @@ struct Manifest {
 struct AuthoredModule {
     target: Target,
     source: Option<String>,
-    steps: Option<Vec<Batch>>,
-    #[serde(alias = "+links")]
-    links: Option<Vec<String>>,
+    steps: Option<Vec<Step>>,
+    #[serde(rename = "links", alias = "+links")]
+    add_links: Option<Vec<LinkPath>>,
     #[serde(rename = "-links")]
-    remove_links: Option<Vec<String>>,
+    remove_links: Option<Vec<LinkPath>>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
     version: u32,
-    steps: Option<Vec<Batch>>,
-    #[serde(alias = "+links")]
-    links: Option<Vec<String>>,
+    steps: Option<Vec<Step>>,
+    #[serde(rename = "links", alias = "+links")]
+    add_links: Option<Vec<LinkPath>>,
     #[serde(rename = "-links")]
-    remove_links: Option<Vec<String>>,
+    remove_links: Option<Vec<LinkPath>>,
 }
 
 fn parse<T: DeserializeOwned>(name: &str, text: &str, strict: bool) -> Result<T, Error> {
@@ -78,12 +78,12 @@ fn version(name: &str, value: u32) -> Result<(), Error> {
 
 fn body(
     name: &str,
-    steps: Option<Vec<Batch>>,
-    links: Option<Vec<String>>,
-    remove_links: Option<Vec<String>>,
-) -> Result<Vec<Batch>, Error> {
+    steps: Option<Vec<Step>>,
+    add_links: Option<Vec<LinkPath>>,
+    remove_links: Option<Vec<LinkPath>>,
+) -> Result<Vec<Step>, Error> {
     if let Some(steps) = steps {
-        if links.is_some() || remove_links.is_some() {
+        if add_links.is_some() || remove_links.is_some() {
             return Err(Error::new(
                 name,
                 "steps and compact bindings are mutually exclusive",
@@ -91,34 +91,35 @@ fn body(
         }
         return Ok(steps);
     }
-    if links.is_none() && remove_links.is_none() {
+    if add_links.is_none() && remove_links.is_none() {
         return Err(Error::new(
             name,
             "module requires bindings, steps, or source",
         ));
     }
-    Ok(vec![Batch {
-        links: links.unwrap_or_default(),
+    Ok(vec![Step {
+        add_links: add_links.unwrap_or_default(),
         remove_links: remove_links.unwrap_or_default(),
     }])
 }
 
-/// Compile a manifest and its sources. The reader resolves paths relative to the layer
+/// Loads a manifest and its sources. The reader resolves paths relative to the layer
 /// and enforces containment and input classification.
-pub fn compile(
+pub fn load_declarations(
     manifest_name: &str,
     text: &str,
     mut read_source: impl FnMut(&str) -> Result<String, Error>,
-) -> Result<Program, Error> {
+) -> Result<Declarations, Error> {
     let manifest: Manifest = parse(manifest_name, text, true)?;
     version(manifest_name, manifest.version)?;
     let mut assignments = HashSet::new();
     let mut modules = Vec::new();
     for (index, module) in manifest.modules.into_iter().enumerate() {
-        let hash = module.target.hash()?;
+        let hash = module.target.chunk_hash();
         let location = format!("{manifest_name}: module {index}");
         let steps = if let Some(source) = &module.source {
-            if module.steps.is_some() || module.links.is_some() || module.remove_links.is_some() {
+            if module.steps.is_some() || module.add_links.is_some() || module.remove_links.is_some()
+            {
                 return Err(Error::new(
                     &location,
                     "source and local bindings are mutually exclusive",
@@ -134,26 +135,31 @@ pub fn compile(
             body(
                 source,
                 source_body.steps,
-                source_body.links,
+                source_body.add_links,
                 source_body.remove_links,
             )?
         } else {
-            body(&location, module.steps, module.links, module.remove_links)?
+            body(
+                &location,
+                module.steps,
+                module.add_links,
+                module.remove_links,
+            )?
         };
         modules.push(Module {
             target: module.target,
             steps,
-            origin: Origin {
+            location: DeclarationLocation {
                 manifest: manifest_name.to_owned(),
                 source: module.source,
-                module: index,
+                module_index: index,
             },
         });
     }
-    let program = Program {
+    let declarations = Declarations {
         version: 1,
         modules,
     };
-    program.validate()?;
-    Ok(program)
+    declarations.validate()?;
+    Ok(declarations)
 }

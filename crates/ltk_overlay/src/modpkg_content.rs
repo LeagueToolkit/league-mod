@@ -34,10 +34,10 @@ impl<R: Read + Seek> ModpkgContent<R> {
 }
 
 impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
-    fn game_data(
+    fn game_data_declarations(
         &mut self,
         layer: &str,
-    ) -> std::result::Result<Option<ltk_game_data::Program>, ltk_game_data::Error> {
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         let metadata = self
             .modpkg
             .load_metadata()
@@ -47,7 +47,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             .iter()
             .find(|value| value.name == layer)
             .and_then(|value| value.game_data.as_ref())
-            .map(|document| document.program())
+            .map(|document| document.parse())
             .transpose()
     }
     fn mod_project(&mut self) -> Result<ModProject> {

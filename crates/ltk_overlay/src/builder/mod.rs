@@ -333,6 +333,8 @@ pub struct OverlayBuildResult {
     /// Empty on a build that passed no chunk through, and on one where every
     /// container told the truth.
     pub checksum_mismatches: Vec<ChecksumMismatch>,
+    /// Declaration diagnostics from this build, including cached builds.
+    pub game_data_diagnostics: Vec<crate::game_data::GameDataDiagnostic>,
     /// Wall-clock time for the entire build.
     pub build_time: Duration,
 }
@@ -560,7 +562,7 @@ pub struct OverlayBuilder {
     /// container claimed the wrong checksum for them. Moved into that build's
     /// [`OverlayBuildResult`].
     last_checksum_mismatches: Vec<ChecksumMismatch>,
-    pub(crate) last_game_data_reports: Vec<crate::game_data::GameDataReport>,
+    pub(crate) last_game_data_diagnostics: Vec<crate::game_data::GameDataDiagnostic>,
 }
 
 impl OverlayBuilder {
@@ -586,7 +588,7 @@ impl OverlayBuilder {
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
             last_checksum_mismatches: Vec::new(),
-            last_game_data_reports: Vec::new(),
+            last_game_data_diagnostics: Vec::new(),
         }
     }
 
@@ -700,7 +702,7 @@ impl OverlayBuilder {
         // Reset per-build outputs; each return path sets these as appropriate.
         self.last_linked_bin_offenders = Vec::new();
         self.last_checksum_mismatches = Vec::new();
-        self.last_game_data_reports.clear();
+        self.last_game_data_diagnostics.clear();
 
         let effective_blocked = self.effective_blocked_wads();
 
@@ -773,6 +775,7 @@ impl OverlayBuilder {
                 wads_reused: Vec::new(),
                 conflicts: Vec::new(),
                 checksum_mismatches: Vec::new(),
+                game_data_diagnostics: Vec::new(),
                 build_time: start_time.elapsed(),
             });
         }
@@ -811,7 +814,7 @@ impl OverlayBuilder {
 
         let string_plans =
             self.build_string_patch_plans(&game_index, &target_locales, &mut all_meta)?;
-        self.materialise_game_data(&game_index, &mut all_meta)?;
+        self.apply_game_data(&game_index, &mut all_meta)?;
 
         let mut wad_hash_sets = self.distribute_override_hashes(&all_meta, &game_index);
 
@@ -889,7 +892,7 @@ impl OverlayBuilder {
             new_wad_fingerprints,
         );
         state.linked_bin_offenders = self.last_linked_bin_offenders.clone();
-        state.game_data_reports = self.last_game_data_reports.clone();
+        state.game_data_diagnostics = self.last_game_data_diagnostics.clone();
         state.wad_layouts =
             collect_wad_layouts(&built, &wads_to_reuse, &all_meta, prev_state.as_ref());
         state.save(&state_path)?;
@@ -916,6 +919,7 @@ impl OverlayBuilder {
             wads_reused: reused_paths,
             conflicts: Vec::new(),
             checksum_mismatches: std::mem::take(&mut self.last_checksum_mismatches),
+            game_data_diagnostics: std::mem::take(&mut self.last_game_data_diagnostics),
             build_time: start_time.elapsed(),
         })
     }
@@ -996,7 +1000,6 @@ impl OverlayBuilder {
 
         self.sweep_unexpected_overlay_files(&state.wad_fingerprints);
         self.last_linked_bin_offenders = state.linked_bin_offenders.clone();
-        self.last_game_data_reports = state.game_data_reports.clone();
         self.emit_progress(OverlayProgress::stage(OverlayStage::Complete));
 
         Some(OverlayBuildResult {
@@ -1010,6 +1013,7 @@ impl OverlayBuilder {
             conflicts: Vec::new(),
             // A skipped build read no container, so it has nothing to report.
             checksum_mismatches: Vec::new(),
+            game_data_diagnostics: state.game_data_diagnostics.clone(),
             build_time: start_time.elapsed(),
         })
     }

@@ -45,25 +45,31 @@ fn modpkg_round_trip_preserves_steps_and_excludes_sources_from_chunks() {
     assert!(package.chunk("links.json", Some("base")).is_err());
     assert!(package.chunk("game_data.yaml", Some("base")).is_err());
     let metadata = package.load_metadata().unwrap();
-    let program = metadata.layers[0]
+    let declarations = metadata.layers[0]
         .game_data
         .as_ref()
         .unwrap()
-        .program()
+        .parse()
         .unwrap();
-    assert_eq!(program.modules[0].steps[0].links, ["Added"]);
-    assert_eq!(program.modules[0].steps[1].remove_links, ["Removed"]);
+    assert_eq!(
+        declarations.modules[0].steps[0].add_links[0].as_str(),
+        "Added"
+    );
+    assert_eq!(
+        declarations.modules[0].steps[1].remove_links[0].as_str(),
+        "Removed"
+    );
     let output = root.join("output");
     ProjectImporter::new(output.clone())
         .import(ModpkgImporter::new(archive))
         .unwrap();
     let extracted = load_layer(&output, "base", &ModIgnore::empty(&output))
-        .program
+        .declarations
         .unwrap()
         .unwrap();
     assert_eq!(
         extracted.manifest_json().unwrap(),
-        program.manifest_json().unwrap()
+        declarations.manifest_json().unwrap()
     );
     assert_eq!(
         fs::read_to_string(output.join("content/base/test.wad.client/content.txt")).unwrap(),
@@ -77,7 +83,7 @@ fn fantome_import_uses_the_declared_layer_name() {
     use ltk_mod_project::fantome::FantomeImporter;
     let tmp = tempfile::tempdir().unwrap();
     let output = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
-    let program = ltk_game_data::compile(
+    let declarations = ltk_game_data::load_declarations(
         "game_data.json",
         r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
         |_| unreachable!(),
@@ -89,7 +95,7 @@ fn fantome_import_uses_the_declared_layer_name() {
             "alias".into(),
             FantomeLayerInfo {
                 name: "base".into(),
-                game_data: Some(program.into()),
+                game_data: Some(declarations.into()),
                 ..Default::default()
             },
         )]
@@ -105,11 +111,14 @@ fn fantome_import_uses_the_declared_layer_name() {
         .import(FantomeImporter::new(archive))
         .unwrap();
     assert!(project.layers.iter().any(|layer| layer.name == "base"));
-    let program = load_layer(&output, "base", &ModIgnore::empty(&output))
-        .program
+    let declarations = load_layer(&output, "base", &ModIgnore::empty(&output))
+        .declarations
         .unwrap()
         .unwrap();
-    assert_eq!(program.modules[0].steps[0].links, ["Added"]);
+    assert_eq!(
+        declarations.modules[0].steps[0].add_links[0].as_str(),
+        "Added"
+    );
     assert!(!output.join("content/alias/game_data.json").exists());
 }
 
@@ -127,24 +136,27 @@ fn fantome_round_trip_preserves_compiled_sources() {
     archive.set_position(0);
     let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
     let info = reader.read_info().unwrap();
-    let program = info.layers["base"]
+    let declarations = info.layers["base"]
         .game_data
         .as_ref()
         .unwrap()
-        .program()
+        .parse()
         .unwrap();
-    assert_eq!(program.modules[0].steps[0].links, ["Added"]);
+    assert_eq!(
+        declarations.modules[0].steps[0].add_links[0].as_str(),
+        "Added"
+    );
     let output = root.join("output");
     ProjectImporter::new(output.clone())
         .import(FantomeImporter::new(archive))
         .unwrap();
     let extracted = load_layer(&output, "base", &ModIgnore::empty(&output))
-        .program
+        .declarations
         .unwrap()
         .unwrap();
     assert_eq!(
         extracted.manifest_json().unwrap(),
-        program.manifest_json().unwrap()
+        declarations.manifest_json().unwrap()
     );
     assert!(!output
         .join("content/base/Test.wad.client/links.json")
@@ -200,7 +212,7 @@ fn source_symlinks_cannot_escape_the_layer() {
     )
     .unwrap();
     let error = load_layer(&root, "base", &ModIgnore::empty(&root))
-        .program
+        .declarations
         .unwrap_err();
     assert!(error.to_string().contains("escapes its layer"));
 }
@@ -214,12 +226,12 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
     fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
     let ignore = ModIgnore::empty(&root);
     assert!(load_layer(&root, "base", &ignore)
-        .program
+        .declarations
         .unwrap()
         .is_some());
     fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/links.json\n- target: SHARED\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
     assert!(load_layer(&root, "base", &ignore)
-        .program
+        .declarations
         .unwrap_err()
         .to_string()
         .contains("duplicate canonical"));

@@ -191,7 +191,7 @@ pub enum FantomeLicense {
 pub struct FantomeLayerInfo {
     /// The layer's versioned executable game-data program.
     #[serde(rename = "GameData", default, skip_serializing_if = "Option::is_none")]
-    pub game_data: Option<ltk_game_data::Document>,
+    pub game_data: Option<ltk_game_data::DeclarationDocument>,
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(

@@ -93,11 +93,11 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 /// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
 ///   `u64` values. This is used by packed WAD content where original paths are lost.
 pub trait ModContentProvider: Send + Sync {
-    /// The compiled declarations for a layer. An error refuses that layer's declarations.
-    fn game_data(
+    /// The declarations for a layer. An error refuses that layer's declarations.
+    fn game_data_declarations(
         &mut self,
         _layer: &str,
-    ) -> std::result::Result<Option<ltk_game_data::Program>, ltk_game_data::Error> {
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         Ok(None)
     }
     /// Return the mod's project configuration.
@@ -326,7 +326,7 @@ impl FsModContent {
     fn read_dir_overrides(
         &self,
         dir: &Utf8Path,
-        declarations: &ltk_mod_project::game_data::LayerGameData,
+        declarations: &ltk_mod_project::game_data::LayerDeclarations,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let ignore = self.ignore()?;
 
@@ -336,7 +336,7 @@ impl FsModContent {
                 let (path, source) = error.into_parts();
                 Error::Read { path, source }
             })?;
-            if declarations.is_input(&utf8_path) {
+            if declarations.is_declaration_input(&utf8_path) {
                 continue;
             }
 
@@ -366,14 +366,14 @@ impl FsModContent {
 }
 
 impl ModContentProvider for FsModContent {
-    fn game_data(
+    fn game_data_declarations(
         &mut self,
         layer: &str,
-    ) -> std::result::Result<Option<ltk_game_data::Program>, ltk_game_data::Error> {
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         let ignore = self
             .ignore()
             .map_err(|error| ltk_game_data::Error::new(layer, error))?;
-        ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).program
+        ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).declarations
     }
     fn mod_project(&mut self) -> Result<ModProject> {
         let config_path = self.mod_dir.join("mod.config.json");

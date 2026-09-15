@@ -3,7 +3,7 @@ name = "ltk_game_data"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Game-data declarations and materialisation for League Toolkit mods"
+description = "Game-data declarations and BIN application for League Toolkit mods"
 repository = "https://github.com/LeagueToolkit/league-mod"
 
 [dependencies]

@@ -1,4 +1,4 @@
-use ltk_game_data::{compile, materialise};
+use ltk_game_data::{apply, load_declarations};
 
 #[test]
 fn yaml_requires_strings_for_lookup_paths_and_hashes() {
@@ -14,23 +14,26 @@ fn yaml_requires_strings_for_lookup_paths_and_hashes() {
     ] {
         let text = format!("version: 1\nmodules:\n  - target: {target}\n    links: [shared]\n");
         assert!(
-            compile("game_data.yaml", &text, |_| unreachable!()).is_err(),
+            load_declarations("game_data.yaml", &text, |_| unreachable!()).is_err(),
             "{target}"
         );
     }
-    let program = compile(
+    let declarations = load_declarations(
         "game_data.yaml",
         "version: 1\nmodules:\n  - target: on\n    links: [yes]\n",
         |_| unreachable!(),
     )
     .unwrap();
-    assert_eq!(program.modules[0].steps[0].links, ["yes"]);
+    assert_eq!(
+        declarations.modules[0].steps[0].add_links[0].as_str(),
+        "yes"
+    );
 }
 
 #[test]
 fn duplicate_base_links_keep_the_first_casing() {
     let base = b"PROP\x03\0\0\0\x02\0\0\0\x01\0A\x01\0a\0\0\0\0";
-    let output = materialise(base, &[]).unwrap();
+    let output = apply(base, &[]).unwrap();
     assert_eq!(output.dependencies, ["A"]);
 }
 
@@ -44,6 +47,14 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         (
             "game_data.json",
             r#"{"version":1,"modules":[{"target":"shared","links":[],"steps":[] }]}"#,
+        ),
+        (
+            "game_data.json",
+            r#"{"version":1,"modules":[{"target":"shared","links":[],"+links":[]}]}"#,
+        ),
+        (
+            "game_data.json",
+            r#"{"version":1,"modules":[{"target":"shared","steps":[{"links":[],"+links":[]}]}]}"#,
         ),
         (
             "game_data.json",
@@ -69,7 +80,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
     ];
     for (name, text) in invalid {
         assert!(
-            compile(name, text, |_| panic!(
+            load_declarations(name, text, |_| panic!(
                 "invalid body must not read a source"
             ))
             .is_err(),
@@ -78,26 +89,27 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
     }
     let toml = "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['yes']";
     assert_eq!(
-        compile("game_data.toml", toml, |_| unreachable!())
+        load_declarations("game_data.toml", toml, |_| unreachable!())
             .unwrap()
             .modules[0]
             .steps[0]
-            .links,
-        ["yes"]
+            .add_links[0]
+            .as_str(),
+        "yes"
     );
     for bytes in [
         b"PTCH\x01\0\0\0".as_slice(),
         b"PROP\x01\0\0\0\0\0\0\0",
         b"PROP\x03\0\0\0",
     ] {
-        assert!(materialise(bytes, &[]).is_err());
+        assert!(apply(bytes, &[]).is_err());
     }
 }
 
 #[test]
 fn input_discovery_retains_sources_in_rejected_documents() {
     let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  unknown: !f32 1.0\n  source: one.json\n- source: two.json\n";
-    assert!(compile("game_data.yaml", yaml, |_| unreachable!()).is_err());
+    assert!(load_declarations("game_data.yaml", yaml, |_| unreachable!()).is_err());
     assert_eq!(
         ltk_game_data::referenced_sources("game_data.yaml", yaml).unwrap(),
         ["one.json", "two.json"]
@@ -111,7 +123,7 @@ fn input_discovery_retains_sources_in_rejected_documents() {
 
 #[test]
 fn yaml_sources_and_steps_execute_in_order_without_rewriting_objects() {
-    let program = compile(
+    let declarations = load_declarations(
         "game_data.yaml",
         r#"
 version: 1
@@ -120,33 +132,37 @@ modules:
     source: patches/links.json
   - target: '0123456789abcdef'
     steps:
-      - links: [After]
+      - '+links': [After]
       - '-links': [after]
 "#,
         |source| {
             assert_eq!(source, "patches/links.json");
-            Ok(r#"{"version":1,"links":["Shared","other"],"-links":["MISSING"]}"#.to_owned())
+            Ok(r#"{"version":1,"+links":["Shared","other"],"-links":["MISSING"]}"#.to_owned())
         },
     )
     .unwrap();
-    assert_eq!(program.modules.len(), 2);
+    assert_eq!(declarations.modules.len(), 2);
     assert_eq!(
-        program.modules[0].origin.source.as_deref(),
+        declarations.modules[0].location.source.as_deref(),
         Some("patches/links.json")
     );
     assert_eq!(
-        program.modules[1].target.hash().unwrap(),
+        declarations.modules[1].target.chunk_hash(),
         0x0123456789abcdef
     );
 
     // PROP v2, dependency "shared", one zero-property object of class 2 and path 1.
     let base = b"PROP\x02\0\0\0\x01\0\0\0\x06\0shared\x01\0\0\0\x02\0\0\0\x06\0\0\0\x01\0\0\0\0\0";
-    let output = materialise(base, &program.modules[0].steps).unwrap();
+    let output = apply(base, &declarations.modules[0].steps).unwrap();
     assert_eq!(output.dependencies, ["shared", "other"]);
     assert_eq!(&output.bytes[..8], &base[..8]);
     assert_eq!(&output.bytes[27..], &base[20..]);
-    assert_eq!(output.reports[0].path, "MISSING");
-    assert_eq!(output.reports[0].step, 0);
+    assert_eq!(output.diagnostics[0].path, "MISSING");
+    assert_eq!(
+        output.diagnostics[0].kind,
+        ltk_game_data::ApplyDiagnosticKind::LinkRemovalUnmatched
+    );
+    assert_eq!(output.diagnostics[0].step_index, 0);
 }
 
 #[test]
@@ -175,18 +191,81 @@ fn scalar_targets_preserve_identifier_kind_and_spelling() {
                 format!("version = 1\n[[modules]]\ntarget = '{value}'\nlinks = []\n"),
             ),
         ] {
-            let program = compile(name, &text, |_| unreachable!()).unwrap();
-            let target = &program.modules[0].target;
-            assert_eq!(target.display_name(), value);
-            assert_eq!(*target, ltk_game_data::Target::from(value.to_owned()));
+            let declarations = load_declarations(name, &text, |_| unreachable!()).unwrap();
+            let target = &declarations.modules[0].target;
+            assert_eq!(target.as_str(), value);
+            assert_eq!(
+                *target,
+                ltk_game_data::Target::try_from(value.to_owned()).unwrap()
+            );
             if let Some(hash) = hash {
-                assert_eq!(target.hash().unwrap(), hash);
+                assert_eq!(target.chunk_hash(), hash);
             }
-            let manifest = program.manifest_json().unwrap();
+            let manifest = declarations.manifest_json().unwrap();
             let json: serde_json::Value = serde_json::from_str(&manifest).unwrap();
             assert_eq!(json["modules"][0]["target"], value);
-            let document = ltk_game_data::Document::from(program.clone());
-            assert_eq!(document.program().unwrap(), program);
+            let document = ltk_game_data::DeclarationDocument::from(declarations.clone());
+            assert_eq!(document.parse().unwrap(), declarations);
         }
     }
+}
+
+#[test]
+fn authored_identifiers_enforce_validity_before_application() {
+    use ltk_game_data::{LinkPath, Target};
+    assert!(Target::try_from("").is_err());
+    assert!(serde_json::from_str::<Target>(r#""""#).is_err());
+    let target = Target::try_from("0123456789ABCDEF").unwrap();
+    assert_eq!(target.chunk_hash(), 0x0123456789abcdef);
+    assert_eq!(target.as_str(), "0123456789ABCDEF");
+    assert!(LinkPath::try_from("").is_err());
+    for value in [
+        serde_json::json!(""),
+        serde_json::json!(42),
+        serde_json::json!("a".repeat(65536)),
+    ] {
+        assert!(serde_json::from_value::<LinkPath>(value).is_err());
+    }
+    assert!(LinkPath::try_from("é".repeat(32768)).is_err());
+    let limit = LinkPath::try_from("a".repeat(65535)).unwrap();
+    assert_eq!(limit.as_str().len(), 65535);
+    let literal = LinkPath::try_from("Data/Literal.ltk.bin").unwrap();
+    assert_eq!(literal.as_str(), "Data/Literal.ltk.bin");
+    assert_eq!(
+        serde_json::to_string(&literal).unwrap(),
+        r#""Data/Literal.ltk.bin""#
+    );
+}
+
+#[test]
+fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() {
+    use ltk_game_data::DeclarationDocument;
+    let wire = serde_json::json!({
+        "version": 1,
+        "modules": [{
+            "target": "shared",
+            "steps": [{"links": ["Added"], "-links": ["Removed"]}],
+            "origin": {"manifest": "game_data.yaml", "source": "links.json", "module": 2}
+        }]
+    });
+    let document: DeclarationDocument = serde_json::from_value(wire.clone()).unwrap();
+    let declarations = document.parse().unwrap();
+    assert_eq!(declarations.modules[0].location.module_index, 2);
+    assert_eq!(
+        declarations.modules[0].steps[0].add_links[0].as_str(),
+        "Added"
+    );
+    assert_eq!(
+        serde_json::to_value(DeclarationDocument::from(declarations.clone())).unwrap(),
+        wire
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&declarations.manifest_json().unwrap()).unwrap(),
+        serde_json::json!({"version":1,"modules":[{"target":"shared","steps":[{"links":["Added"],"-links":["Removed"]}]}]})
+    );
+    let mut unsupported = wire;
+    unsupported["modules"][0]["steps"][0]["objects"] = serde_json::json!({});
+    let document: DeclarationDocument = serde_json::from_value(unsupported.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&document).unwrap(), unsupported);
+    assert!(document.parse().is_err());
 }

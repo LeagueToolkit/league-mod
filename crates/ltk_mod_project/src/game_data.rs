@@ -3,19 +3,19 @@
 use std::collections::HashSet;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_game_data::{Error, Program, MANIFEST_NAMES};
+use ltk_game_data::{Declarations, Error, MANIFEST_NAMES};
 
 use crate::{ModIgnore, ModProjectLayer};
 
 /// A layer's declaration result and classified input files.
-pub struct LayerGameData {
-    pub program: Result<Option<Program>, Error>,
+pub struct LayerDeclarations {
+    pub declarations: Result<Option<Declarations>, Error>,
     inputs: HashSet<Utf8PathBuf>,
 }
 
-impl LayerGameData {
+impl LayerDeclarations {
     /// Whether a file is a declaration input rather than game content.
-    pub fn is_input(&self, path: &Utf8Path) -> bool {
+    pub fn is_declaration_input(&self, path: &Utf8Path) -> bool {
         if self.inputs.is_empty() {
             return false;
         }
@@ -26,19 +26,23 @@ impl LayerGameData {
     }
 }
 
-/// Discover and compile one layer. Input classification remains available on declaration errors.
-pub fn load_layer(project_root: &Utf8Path, layer: &str, ignore: &ModIgnore) -> LayerGameData {
+/// Loads declarations and classifies inputs for one layer.
+/// Input classification remains available on declaration errors.
+pub fn load_layer(project_root: &Utf8Path, layer: &str, ignore: &ModIgnore) -> LayerDeclarations {
     let root = ModProjectLayer::content_path(project_root, layer);
     let mut inputs = HashSet::new();
-    let program = load(&root, ignore, &mut inputs);
-    LayerGameData { program, inputs }
+    let declarations = load(&root, ignore, &mut inputs);
+    LayerDeclarations {
+        declarations,
+        inputs,
+    }
 }
 
 fn load(
     root: &Utf8Path,
     ignore: &ModIgnore,
     inputs: &mut HashSet<Utf8PathBuf>,
-) -> Result<Option<Program>, Error> {
+) -> Result<Option<Declarations>, Error> {
     let manifests: Vec<_> = MANIFEST_NAMES
         .iter()
         .map(|name| root.join(name))
@@ -93,34 +97,35 @@ fn load(
     };
     let manifest = &manifests[0];
     let text = read(manifest, inputs)?;
-    let program = ltk_game_data::compile(manifest.file_name().unwrap(), &text, |source| {
-        let path = Utf8Path::new(source);
-        if path.is_absolute() || source.contains('\\') {
-            return Err(Error::new(
-                source,
-                "source requires a layer-relative path with forward slashes",
-            ));
-        }
-        let resolved = root.join(path);
-        let canonical = resolved
-            .canonicalize_utf8()
-            .map_err(|e| Error::new(source, e))?;
-        if manifests
-            .iter()
-            .any(|manifest| manifest.canonicalize_utf8().ok().as_ref() == Some(&canonical))
-        {
-            return Err(Error::new(source, "manifest and source roles conflict"));
-        }
-        read(&resolved, inputs)
-    })?;
+    let declarations =
+        ltk_game_data::load_declarations(manifest.file_name().unwrap(), &text, |source| {
+            let path = Utf8Path::new(source);
+            if path.is_absolute() || source.contains('\\') {
+                return Err(Error::new(
+                    source,
+                    "source requires a layer-relative path with forward slashes",
+                ));
+            }
+            let resolved = root.join(path);
+            let canonical = resolved
+                .canonicalize_utf8()
+                .map_err(|e| Error::new(source, e))?;
+            if manifests
+                .iter()
+                .any(|manifest| manifest.canonicalize_utf8().ok().as_ref() == Some(&canonical))
+            {
+                return Err(Error::new(source, "manifest and source roles conflict"));
+            }
+            read(&resolved, inputs)
+        })?;
     let mut seen = HashSet::new();
-    for module in &program.modules {
-        if let Some(source) = &module.origin.source {
+    for module in &declarations.modules {
+        if let Some(source) = &module.location.source {
             let canonical = root
                 .join(source)
                 .canonicalize_utf8()
                 .map_err(|e| Error::new(source, e))?;
-            if !seen.insert((module.target.hash()?, canonical)) {
+            if !seen.insert((module.target.chunk_hash(), canonical)) {
                 return Err(Error::new(
                     source,
                     "duplicate canonical target/source assignment",
@@ -128,19 +133,19 @@ fn load(
             }
         }
     }
-    Ok(Some(program))
+    Ok(Some(declarations))
 }
 
-/// Reconstruct an archive program as a layer manifest.
+/// Reconstructs an archive's declarations as a layer manifest.
 pub fn write_manifest(
     project_root: &Utf8Path,
     layer: &str,
-    document: &ltk_game_data::Document,
+    document: &ltk_game_data::DeclarationDocument,
 ) -> Result<(), Error> {
     if layer.is_empty() || layer.contains(['/', '\\']) || matches!(layer, "." | "..") {
         return Err(Error::new(layer, "invalid layer name"));
     }
-    let text = document.program()?.manifest_json()?;
+    let text = document.parse()?.manifest_json()?;
     let dir = ModProjectLayer::content_path(project_root, layer);
     std::fs::create_dir_all(&dir).map_err(|e| Error::new(dir.as_str(), e))?;
     let path = dir.join("game_data.json");

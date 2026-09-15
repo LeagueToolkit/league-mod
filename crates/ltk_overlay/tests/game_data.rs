@@ -74,7 +74,7 @@ fn declarations_use_the_highest_precedence_copy_even_when_it_matches_the_game() 
 }
 
 #[test]
-fn refused_programs_keep_sources_out_of_wad_and_raw_content() {
+fn refused_declarations_keep_sources_out_of_wad_and_raw_content() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     let game = root.join("game");
@@ -111,15 +111,19 @@ fn refused_programs_keep_sources_out_of_wad_and_raw_content() {
     enabled.content = Box::new(FsModContent::new(path).with_raw_overrides());
     let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
     builder.set_enabled_mods(vec![enabled]);
-    builder.build().unwrap();
-    assert_eq!(builder.game_data_reports().len(), 1);
+    let result = builder.build().unwrap();
+    assert_eq!(result.game_data_diagnostics.len(), 1);
+    assert_eq!(
+        result.game_data_diagnostics[0].kind,
+        ltk_overlay::game_data::GameDataDiagnosticKind::DeclarationsRejected
+    );
     assert_eq!(chunk(&overlay.join(WAD), "source.json"), b"game source");
     assert_eq!(chunk(&overlay.join(WAD), "raw-source.json"), b"game raw");
     assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["ordinary"]));
 }
 
 #[test]
-fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
+fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() {
     use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
     use ltk_modpkg::{
         Modpkg, ModpkgLayerMetadata, ModpkgMetadata,
@@ -146,7 +150,7 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
                 ("invalid", b"PTCH"),
             ],
         );
-        let program = ltk_game_data::compile(
+        let declarations = ltk_game_data::load_declarations(
             "game_data.json",
             &r#"{"version":1,"modules":[
             {"target":"TARGET","steps":[{"-links":["Absent"]},{"links":["Added"]}]},
@@ -169,7 +173,7 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
                         display_name: None,
                         description: None,
                         string_overrides: Default::default(),
-                        game_data: Some(program.into()),
+                        game_data: Some(declarations.into()),
                     }],
                     ..Default::default()
                 })
@@ -184,7 +188,7 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
                         "base".into(),
                         FantomeLayerInfo {
                             name: "base".into(),
-                            game_data: Some(program.into()),
+                            game_data: Some(declarations.into()),
                             ..Default::default()
                         },
                     )]
@@ -218,18 +222,56 @@ fn archives_patch_game_only_targets_and_preserve_reports_on_cached_builds() {
         let first = builder.build().unwrap();
         assert_eq!(first.wads_built.len(), 1, "{format}");
         assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["Added"]));
-        let reports = builder.game_data_reports().to_vec();
+        let reports = first.game_data_diagnostics;
         assert_eq!(reports.len(), 3, "{reports:?}");
         assert!(reports.iter().all(|report| report.mod_id == "mod"
             && report.layer == "base"
-            && report.origin.is_some()));
+            && report.location.is_some()));
         let cached = builder.build().unwrap();
         assert!(cached.wads_built.is_empty());
         assert_eq!(cached.wads_reused.len(), 1);
-        assert_eq!(builder.game_data_reports(), reports);
-        let saved: serde_json::Value =
+        assert_eq!(cached.game_data_diagnostics, reports);
+        use ltk_overlay::game_data::GameDataDiagnosticKind;
+        assert_eq!(
+            reports
+                .iter()
+                .filter(|d| d.kind == GameDataDiagnosticKind::TargetSkipped)
+                .count(),
+            2
+        );
+        let removal = reports
+            .iter()
+            .find(|d| d.kind == GameDataDiagnosticKind::LinkRemovalUnmatched)
+            .unwrap();
+        assert_eq!(removal.step_index, Some(0));
+        let mut saved: serde_json::Value =
             serde_json::from_slice(&fs::read(state.join("overlay.json")).unwrap()).unwrap();
         assert_eq!(saved["gameDataReports"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            saved["gameDataReports"][0]["origin"]["module"].as_u64(),
+            Some(reports[0].location.as_ref().unwrap().module_index as u64)
+        );
+        assert!(saved.get("gameDataDiagnostics").is_none());
+        // Legacy and future categories retain diagnostic context on exact cache reuse.
+        saved["gameDataReports"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind");
+        saved["gameDataReports"][1]["kind"] = serde_json::json!("futureCategory");
+        fs::write(
+            state.join("overlay.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        let compatible = builder.build().unwrap();
+        assert!(compatible.wads_built.is_empty());
+        assert_eq!(compatible.wads_reused.len(), 1);
+        let mut expected = reports;
+        expected[0].kind = GameDataDiagnosticKind::Unknown;
+        expected[1].kind = GameDataDiagnosticKind::Unknown;
+        assert_eq!(compatible.game_data_diagnostics, expected);
+        builder.set_enabled_mods(Vec::new());
+        assert!(builder.build().unwrap().game_data_diagnostics.is_empty());
     }
 }
 
@@ -317,9 +359,9 @@ fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
     top.enabled_layers = Some(["extras".to_owned()].into());
     let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
     builder.set_enabled_mods(vec![top, bottom]);
-    builder.build().unwrap();
+    let result = builder.build().unwrap();
     assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["second"]));
-    assert!(builder.game_data_reports().is_empty());
+    assert!(result.game_data_diagnostics.is_empty());
     let manifest = path.join("content/extras/game_data.json");
     let text = fs::read_to_string(&manifest)
         .unwrap()

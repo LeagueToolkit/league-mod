@@ -94,8 +94,8 @@ pub struct WadLayoutRecord {
 #[serde(rename_all = "camelCase")]
 pub struct OverlayState {
     /// Declaration diagnostics retained across cached builds.
-    #[serde(default)]
-    pub game_data_reports: Vec<crate::game_data::GameDataReport>,
+    #[serde(default, rename = "gameDataReports")]
+    pub game_data_diagnostics: Vec<crate::game_data::GameDataDiagnostic>,
     /// Schema version. A version mismatch invalidates the saved overlay.
     pub version: u32,
 
@@ -179,7 +179,7 @@ impl Default for OverlayState {
             string_override_locales: Vec::new(),
             wad_fingerprints: BTreeMap::new(),
             linked_bin_offenders: Vec::new(),
-            game_data_reports: Vec::new(),
+            game_data_diagnostics: Vec::new(),
             wad_layouts: BTreeMap::new(),
             dirty_wads: BTreeSet::new(),
         }
@@ -214,7 +214,7 @@ impl OverlayState {
             string_override_locales,
             wad_fingerprints,
             linked_bin_offenders: Vec::new(),
-            game_data_reports: Vec::new(),
+            game_data_diagnostics: Vec::new(),
             wad_layouts: BTreeMap::new(),
             dirty_wads: BTreeSet::new(),
         }

@@ -103,7 +103,7 @@ pub struct ModpkgLayerMetadata {
     /// The layer's versioned executable game-data program.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, proptest(value = "None"))]
-    pub game_data: Option<ltk_game_data::Document>,
+    pub game_data: Option<ltk_game_data::DeclarationDocument>,
     /// The name of the layer (e.g. "base", "chroma1").
     pub name: String,
     /// Optional human-readable display name for the layer.
