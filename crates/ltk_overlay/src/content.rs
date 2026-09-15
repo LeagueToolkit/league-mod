@@ -93,6 +93,13 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
 /// - **Hex-hash filenames** (e.g., `0123456789abcdef.bin`) are parsed directly as
 ///   `u64` values. This is used by packed WAD content where original paths are lost.
 pub trait ModContentProvider: Send + Sync {
+    /// The declarations for a layer. An error refuses that layer's declarations.
+    fn game_data_declarations(
+        &mut self,
+        _layer: &str,
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
+        Ok(None)
+    }
     /// Return the mod's project configuration.
     ///
     /// This provides the mod name, version, description, author list, and - most
@@ -316,7 +323,11 @@ impl FsModContent {
 
     /// Every file under `dir` the ignore filter keeps, each paired with its
     /// path relative to `dir`.
-    fn read_dir_overrides(&self, dir: &Utf8Path) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
+    fn read_dir_overrides(
+        &self,
+        dir: &Utf8Path,
+        declarations: &ltk_mod_project::game_data::LayerDeclarations,
+    ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let ignore = self.ignore()?;
 
         let mut results = Vec::new();
@@ -325,6 +336,9 @@ impl FsModContent {
                 let (path, source) = error.into_parts();
                 Error::Read { path, source }
             })?;
+            if declarations.is_declaration_input(&utf8_path) {
+                continue;
+            }
 
             let rel = utf8_path
                 .strip_prefix(dir)
@@ -352,6 +366,15 @@ impl FsModContent {
 }
 
 impl ModContentProvider for FsModContent {
+    fn game_data_declarations(
+        &mut self,
+        layer: &str,
+    ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
+        let ignore = self
+            .ignore()
+            .map_err(|error| ltk_game_data::Error::new(layer, error))?;
+        ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).declarations
+    }
     fn mod_project(&mut self) -> Result<ModProject> {
         let config_path = self.mod_dir.join("mod.config.json");
         let contents = std::fs::read_to_string(config_path.as_std_path())
@@ -396,7 +419,9 @@ impl ModContentProvider for FsModContent {
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
         let wad_dir = ModProjectLayer::content_path(&self.mod_dir, layer).join(wad_name);
-        self.read_dir_overrides(&wad_dir)
+        let declarations =
+            ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, self.ignore()?);
+        self.read_dir_overrides(&wad_dir, &declarations)
     }
 
     fn read_raw_overrides(&mut self) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
@@ -405,11 +430,30 @@ impl ModContentProvider for FsModContent {
             return Ok(Vec::new());
         }
 
-        self.read_dir_overrides(&raw_dir)
+        let declarations =
+            ltk_mod_project::game_data::load_layer(&self.mod_dir, "base", self.ignore()?);
+        self.read_dir_overrides(&raw_dir, &declarations)
     }
 
     fn content_fingerprint(&self) -> Result<Option<u64>> {
         use xxhash_rust::xxh3::xxh3_64;
+
+        // Declaration targets depend on authored text and game content. Directory
+        // declarations bypass provider metadata caching; WAD output hashes remain cached.
+        let content = self.mod_dir.join(CONTENT_DIR_NAME);
+        if let Ok(layers) = std::fs::read_dir(&content) {
+            for layer in layers.flatten() {
+                let Ok(path) = Utf8PathBuf::from_path_buf(layer.path()) else {
+                    continue;
+                };
+                if ltk_game_data::MANIFEST_NAMES
+                    .iter()
+                    .any(|name| path.join(name).exists())
+                {
+                    return Ok(None);
+                }
+            }
+        }
 
         fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
             meta.modified()

@@ -539,6 +539,7 @@ fn build_modpkg(header: &[(&str, i32)], metadata: ModpkgMetadata) -> Modpkg<Curs
 
 fn layer_metadata(name: &str, priority: i32) -> ModpkgLayerMetadata {
     ModpkgLayerMetadata {
+        game_data: None,
         name: name.to_string(),
         display_name: None,
         priority,
@@ -618,6 +619,7 @@ fn read_project_keeps_the_metadata_a_header_layer_has_no_room_for() {
         &[("base", 0), ("skins", 10)],
         ModpkgMetadata {
             layers: vec![ModpkgLayerMetadata {
+                game_data: None,
                 name: "skins".to_string(),
                 display_name: Some("Skins".to_string()),
                 priority: 10,

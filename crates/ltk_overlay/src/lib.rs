@@ -115,6 +115,7 @@ pub mod content;
 pub mod error;
 pub mod fantome_content;
 pub mod game_index;
+pub use builder::game_data;
 pub mod linked_bins;
 pub mod meta_cache;
 pub mod modpkg_content;

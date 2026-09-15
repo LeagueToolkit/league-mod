@@ -101,11 +101,29 @@ impl<'a> PackPlan<'a> {
 pub struct PlannedLayer {
     layer: ModProjectLayer,
     files: Vec<PlannedFile>,
+    game_data: Option<ltk_game_data::DeclarationDocument>,
 }
 
 impl PlannedLayer {
     pub(crate) fn new(layer: ModProjectLayer, files: Vec<PlannedFile>) -> Self {
-        Self { layer, files }
+        Self {
+            layer,
+            files,
+            game_data: None,
+        }
+    }
+
+    pub(crate) fn with_game_data(
+        mut self,
+        declarations: Option<ltk_game_data::Declarations>,
+    ) -> Self {
+        self.game_data = declarations.map(Into::into);
+        self
+    }
+
+    /// The layer declarations, with sources expanded.
+    pub fn game_data(&self) -> Option<&ltk_game_data::DeclarationDocument> {
+        self.game_data.as_ref()
     }
 
     /// The layer's configuration. For an unconfigured base layer this is the

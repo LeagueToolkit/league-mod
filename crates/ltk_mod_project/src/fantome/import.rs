@@ -22,6 +22,9 @@ use crate::{ImportFormat, ImportReporter, ImportTarget, ModProject, ModProjectLa
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FantomeImportError {
+    /// A declaration cannot be reconstructed as a project manifest.
+    #[error(transparent)]
+    GameData(#[from] ltk_game_data::Error),
     /// The archive could not be read.
     #[error(transparent)]
     Extract(#[from] FantomeExtractError),
@@ -177,6 +180,7 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
 
         let mut reader = FantomeReader::new(reader)?;
         let info = reader.read_info()?;
+        let declarations = info.layers.clone();
         // Where each declared table lands. Computed once, before anything is
         // written: what the routes declare is what the config carries and
         // where the files land, so the files and the manifest cannot
@@ -258,6 +262,16 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         }
 
         write_hashtables(output_dir, &table_routes, &declared_tables)?;
+        for (name, layer) in declarations {
+            if let Some(document) = layer.game_data {
+                let name = if layer.name.is_empty() {
+                    &name
+                } else {
+                    &layer.name
+                };
+                crate::game_data::write_manifest(output_dir, name, &document)?;
+            }
+        }
 
         Ok(mod_project)
     }

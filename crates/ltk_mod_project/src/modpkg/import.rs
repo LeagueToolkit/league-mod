@@ -22,6 +22,9 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ModpkgImportError {
+    /// A declaration cannot be reconstructed as a project manifest.
+    #[error(transparent)]
+    GameData(#[from] ltk_game_data::Error),
     /// The package could not be mounted, read or unpacked.
     #[error(transparent)]
     Modpkg(#[from] ModpkgError),
@@ -96,6 +99,7 @@ impl<R: Read + Seek> ImportFormat for ModpkgImporter<R> {
     ) -> Result<ModProject, Self::Error> {
         let mut modpkg = Modpkg::mount_from_reader(self.reader)?;
         let project = read_project(&mut modpkg)?;
+        let declarations = modpkg.load_metadata()?.layers;
 
         let output_dir = target.output_dir();
         let content_dir = target.content_dir();
@@ -116,6 +120,11 @@ impl<R: Read + Seek> ImportFormat for ModpkgImporter<R> {
         }
         progress.report_writing_metadata();
         extractor.extract_meta(output_dir)?;
+        for layer in declarations {
+            if let Some(document) = layer.game_data {
+                crate::game_data::write_manifest(output_dir, &layer.name, &document)?;
+            }
+        }
 
         Ok(project)
     }

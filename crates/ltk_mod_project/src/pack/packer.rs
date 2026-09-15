@@ -23,6 +23,9 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PackError<E> {
+    /// A layer's declarations cannot be loaded.
+    #[error(transparent)]
+    GameData(#[from] ltk_game_data::Error),
     /// A project directory could not be read during the scan.
     #[error("Failed to scan {path}")]
     Scan {
@@ -279,8 +282,12 @@ impl ProjectPacker {
         let mut planned = Vec::with_capacity(layers.len());
         for (index, layer) in layers.into_iter().enumerate() {
             progress.report_layer(&layer.name, index as u32, layer_count);
-            let files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
-            planned.push(PlannedLayer::new(layer, files));
+            let declarations =
+                crate::game_data::load_layer(&self.project_root, &layer.name, ignore);
+            let mut files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
+            files.retain(|file| !declarations.is_declaration_input(file.source()));
+            let declarations = declarations.declarations?;
+            planned.push(PlannedLayer::new(layer, files).with_game_data(declarations));
         }
 
         progress.set_total(planned.iter().map(|layer| layer.files().len() as u32).sum());

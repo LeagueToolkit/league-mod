@@ -8,6 +8,7 @@ use std::fmt;
 mod cancellation;
 mod config_format;
 pub mod error;
+pub mod game_data;
 pub mod import;
 mod license_file;
 mod modignore;

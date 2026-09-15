@@ -223,6 +223,7 @@ fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLaye
             layers.insert(
                 layer.name.clone(),
                 FantomeLayerInfo {
+                    game_data: None,
                     name: layer.name.clone(),
                     display_name: layer.display_name.clone(),
                     priority: layer.priority,

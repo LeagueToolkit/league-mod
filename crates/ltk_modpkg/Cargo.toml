@@ -13,6 +13,7 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
+ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
 indexmap = { workspace = true }
 thiserror = "1.0.60"
 byteorder = "1.5.0"
