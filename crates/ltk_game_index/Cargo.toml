@@ -1,0 +1,37 @@
+[package]
+name = "ltk_game_index"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Chunk and bin object index of a League of Legends installation"
+repository = "https://github.com/LeagueToolkit/league-mod"
+homepage = "https://github.com/LeagueToolkit/league-mod"
+documentation = "https://github.com/LeagueToolkit/league-mod/wiki"
+keywords = ["league-of-legends", "modding", "gaming", "toolkit"]
+categories = ["game-development"]
+authors = ["LeagueToolkit"]
+
+[features]
+default = ["rayon"]
+# Archives mount in parallel.
+rayon = ["dep:rayon"]
+# The bin object index.
+objects = ["dep:ltk_meta", "dep:ltk_file"]
+
+[dependencies]
+camino = { workspace = true, features = ["serde1"] }
+ltk_hash = { workspace = true, features = ["serde"] }
+ltk_wad = { workspace = true }
+rmp-serde = "1.3"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+walkdir = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
+
+rayon = { version = "1.10", optional = true }
+ltk_meta = { version = "0.8.2", optional = true }
+ltk_file = { version = "0.2.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

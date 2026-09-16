@@ -1427,6 +1427,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ltk_game_index"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "ltk_file",
+ "ltk_hash",
+ "ltk_meta",
+ "ltk_wad",
+ "rayon",
+ "rmp-serde",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "walkdir",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "ltk_hash"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

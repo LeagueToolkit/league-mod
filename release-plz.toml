@@ -47,6 +47,11 @@ name = "ltk_overlay"
 publish = true
 changelog_update = true
 
+[[package]]
+name = "ltk_game_index"
+publish = true
+changelog_update = true
+
 [changelog]
 header = """
 # Changelog

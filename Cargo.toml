@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "crates/ltk_game_data",
+    "crates/ltk_game_index",
     "crates/league-mod",
     "crates/ltk_fantome",
     "crates/ltk_hashtable",
