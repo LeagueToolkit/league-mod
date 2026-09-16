@@ -50,7 +50,10 @@ pub use normalize::{
     FantomeNormalizeError, NormalizeOutcome, normalize_archive, store_packed_wads,
 };
 pub use packed::PackedWadSource;
-pub use reader::{FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry};
+pub use reader::{
+    FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry,
+    game_data_entry_name,
+};
 pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
 pub use writer::FantomeWriter;
 

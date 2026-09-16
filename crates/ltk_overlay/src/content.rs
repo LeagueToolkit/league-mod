@@ -11,7 +11,7 @@
 //! Archive-backed implementations (`.modpkg`, `.fantome`) live in the `ltk-manager`
 //! crate where the archive format dependencies are available.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer};
 use ltk_wad::WadChunkCompression;
@@ -100,6 +100,19 @@ pub trait ModContentProvider: Send + Sync {
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         Ok(None)
     }
+    /// The bytes of the layer's game-data override file at a layer-relative path.
+    ///
+    /// The path is the spelling the layer's declarations name the file by
+    /// (`docs/design/game-data.md` section 5). Override files are build
+    /// resources: they are never enumerated as WAD content.
+    ///
+    /// # Errors
+    ///
+    /// The provider carries no override files, or holds none at that path.
+    fn read_game_data_resource(&mut self, _layer: &str, _path: &str) -> Result<Vec<u8>> {
+        Err(ModContentError::GameDataResourceUnsupported.into())
+    }
+
     /// Return the mod's project configuration.
     ///
     /// This provides the mod name, version, description, author list, and - most
@@ -375,6 +388,22 @@ impl ModContentProvider for FsModContent {
             .map_err(|error| ltk_game_data::Error::new(layer, error))?;
         ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).declarations
     }
+
+    fn read_game_data_resource(&mut self, layer: &str, path: &str) -> Result<Vec<u8>> {
+        let layer_dir = ModProjectLayer::content_path(&self.mod_dir, layer);
+        let file_path = layer_dir.join(path);
+        // The declarations resolved the path inside the layer; the file on disk
+        // has to be there too, symlinks followed.
+        let inside = match (file_path.canonicalize_utf8(), layer_dir.canonicalize_utf8()) {
+            (Ok(file), Ok(dir)) => file.starts_with(&dir),
+            _ => false,
+        };
+        if !inside {
+            return Err(ModContentError::game_data_resource_missing(layer, path));
+        }
+        std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
+    }
+
     fn mod_project(&mut self) -> Result<ModProject> {
         let config_path = self.mod_dir.join("mod.config.json");
         let contents = std::fs::read_to_string(config_path.as_std_path())

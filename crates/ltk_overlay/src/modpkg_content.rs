@@ -5,7 +5,7 @@
 //! extracting to disk.
 
 use crate::content::{ModContentProvider, archive_fingerprint};
-use crate::error::{ModContentError, Result};
+use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_modpkg::{ChunkKey, Modpkg, ModpkgLicense, PathHash, WadIndex};
@@ -50,6 +50,22 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             .map(|document| document.parse())
             .transpose()
     }
+
+    fn read_game_data_resource(&mut self, layer: &str, path: &str) -> Result<Vec<u8>> {
+        // An override file is a chunk of its layer with no WAD, at the
+        // layer-relative path the declarations name (ADR-0013).
+        let bytes = self
+            .modpkg
+            .load_chunk_decompressed_by_path(path, Some(layer))
+            .map_err(|error| match error {
+                ltk_modpkg::ModpkgError::MissingChunk(_) => {
+                    ModContentError::game_data_resource_missing(layer, path)
+                }
+                other => Error::from(other),
+            })?;
+        Ok(bytes.into_vec())
+    }
+
     fn mod_project(&mut self) -> Result<ModProject> {
         let metadata = self.modpkg.load_metadata()?;
 

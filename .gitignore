@@ -24,3 +24,6 @@ nul
 # Vendored third-party agent skills, reinstalled from skills-lock.json
 .agents/skills/
 .claude/worktrees/
+
+# Local tickets and research notes; GitHub issues are rendered from them
+.scratch/

@@ -21,7 +21,7 @@ fn fixture(root: &Utf8Path) -> ModProject {
     fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.json\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
     fs::write(
         root.join("content/base/Test.wad.client/links.json"),
-        r#"{"version":1,"steps":[{"links":["Added"]},{"-links":["Removed"]}]}"#,
+        r#"{"version":1,"edits":[{"links":["Added"]},{"-links":["Removed"]}]}"#,
     )
     .unwrap();
     fs::write(
@@ -39,7 +39,7 @@ fn fixture(root: &Utf8Path) -> ModProject {
 }
 
 #[test]
-fn modpkg_round_trip_preserves_steps_and_excludes_sources_from_chunks() {
+fn modpkg_round_trip_preserves_edits_and_excludes_sources_from_chunks() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     let source = root.join("source");
@@ -243,4 +243,240 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
         .unwrap_err()
         .to_string()
         .contains("duplicate canonical"));
+}
+
+/// A `PTCH` with no records.
+fn empty_ptch() -> Vec<u8> {
+    let mut cursor = Cursor::new(Vec::new());
+    ltk_meta::concrete::BinOverride::new()
+        .to_writer(&mut cursor)
+        .unwrap();
+    cursor.into_inner()
+}
+
+/// A project whose base layer names two override files, one inside a WAD directory and one
+/// through a source in that directory.
+fn override_fixture(root: &Utf8Path) -> ModProject {
+    fs::create_dir_all(root.join("content/base/Test.wad.client")).unwrap();
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [Test.wad.client/inner.ptch]\n  - target: other\n    source: Test.wad.client/links.yaml\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("content/base/Test.wad.client/links.yaml"),
+        "version: 1\noverrides: [../top.ptch]\nlinks: [Added]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("content/base/Test.wad.client/inner.ptch"),
+        empty_ptch(),
+    )
+    .unwrap();
+    fs::write(root.join("content/base/top.ptch"), empty_ptch()).unwrap();
+    fs::write(
+        root.join("content/base/Test.wad.client/content.txt"),
+        "game content",
+    )
+    .unwrap();
+    ModProject {
+        name: "overrides".into(),
+        display_name: "Overrides".into(),
+        version: "1.0.0".into(),
+        layers: vec![ModProjectLayer::base()],
+        ..Default::default()
+    }
+}
+
+fn override_paths(declarations: &ltk_game_data::Declarations) -> Vec<&str> {
+    declarations
+        .modules
+        .iter()
+        .flat_map(edits_of)
+        .flat_map(|edit| edit.overrides.iter().map(|path| path.as_str()))
+        .collect()
+}
+
+#[test]
+fn override_files_are_inputs_and_load_as_layer_relative_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    override_fixture(&root);
+    let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+    let declarations = layer.declarations.as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(
+        override_paths(declarations),
+        ["Test.wad.client/inner.ptch", "top.ptch"]
+    );
+    let files: Vec<&str> = layer
+        .override_files()
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert_eq!(files, ["Test.wad.client/inner.ptch", "top.ptch"]);
+    assert_eq!(
+        layer.override_files()[1].source,
+        root.join("content/base/top.ptch")
+    );
+    for input in [
+        "content/base/Test.wad.client/inner.ptch",
+        "content/base/top.ptch",
+        "content/base/Test.wad.client/links.yaml",
+    ] {
+        assert!(layer.is_declaration_input(&root.join(input)), "{input}");
+    }
+    assert!(!layer.is_declaration_input(&root.join("content/base/Test.wad.client/content.txt")));
+
+    // A rejected manifest still classifies the override files it and its sources name.
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nversion: 1\nmodules:\n  - target: shared\n    overrides: [Test.wad.client/inner.ptch]\n  - target: other\n    source: Test.wad.client/links.yaml\n",
+    )
+    .unwrap();
+    let rejected = load_layer(&root, "base", &ModIgnore::empty(&root));
+    assert!(rejected.declarations.is_err());
+    assert!(rejected.override_files().is_empty());
+    for input in [
+        "content/base/Test.wad.client/inner.ptch",
+        "content/base/top.ptch",
+    ] {
+        assert!(rejected.is_declaration_input(&root.join(input)), "{input}");
+    }
+}
+
+#[test]
+fn missing_ignored_and_non_ptch_override_files_refuse_the_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    override_fixture(&root);
+    fs::write(
+        root.join("content/base/top.ptch"),
+        b"PROP\x03\0\0\0\0\0\0\0\0\0\0\0",
+    )
+    .unwrap();
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+    assert!(error.to_string().contains("top.ptch"), "{error}");
+    assert!(error.to_string().contains("PTCH"), "{error}");
+
+    fs::remove_file(root.join("content/base/top.ptch")).unwrap();
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+    assert!(error.to_string().contains("top.ptch"), "{error}");
+
+    fs::write(root.join("content/base/top.ptch"), empty_ptch()).unwrap();
+    fs::write(root.join("content/.modignore"), "top.ptch\n").unwrap();
+    let ignore = ModIgnore::load(&root).unwrap();
+    let error = load_layer(&root, "base", &ignore).declarations.unwrap_err();
+    assert!(error.to_string().contains("modignore"), "{error}");
+}
+
+#[test]
+fn override_files_round_trip_through_modpkg() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let source = root.join("source");
+    let project = override_fixture(&source);
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::new(project, source)
+        .pack(ModpkgFormat::new(&mut archive))
+        .unwrap();
+    archive.set_position(0);
+    let mut package = Modpkg::mount_from_reader(archive.clone()).unwrap();
+    for path in ["Test.wad.client/inner.ptch", "top.ptch"] {
+        let chunk = *package.chunk(path, Some("base")).unwrap();
+        assert!(chunk.wad().is_none(), "{path}");
+        assert_eq!(
+            &*package
+                .load_chunk_decompressed_by_path(path, Some("base"))
+                .unwrap(),
+            empty_ptch().as_slice()
+        );
+    }
+    assert!(package.chunk("links.yaml", Some("base")).is_err());
+    let declarations = package.load_metadata().unwrap().layers[0]
+        .game_data
+        .as_ref()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        override_paths(&declarations),
+        ["Test.wad.client/inner.ptch", "top.ptch"]
+    );
+    let output = root.join("output");
+    ProjectImporter::new(output.clone())
+        .import(ModpkgImporter::new(archive))
+        .unwrap();
+    let extracted = load_layer(&output, "base", &ModIgnore::empty(&output));
+    let extracted_declarations = extracted.declarations.as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(
+        extracted_declarations.manifest_json().unwrap(),
+        declarations.manifest_json().unwrap()
+    );
+    assert_eq!(extracted.override_files().len(), 2);
+    assert_eq!(
+        fs::read(output.join("content/base/top.ptch")).unwrap(),
+        empty_ptch()
+    );
+    assert_eq!(
+        fs::read(output.join("content/base/Test.wad.client/inner.ptch")).unwrap(),
+        empty_ptch()
+    );
+}
+
+#[test]
+fn override_files_round_trip_through_fantome() {
+    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let source = root.join("source");
+    let project = override_fixture(&source);
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::new(project, source)
+        .pack(FantomeFormat::new(&mut archive))
+        .unwrap();
+    archive.set_position(0);
+    let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
+    let names: Vec<String> = reader
+        .entry_names()
+        .filter(|name| name.contains("game_data"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "META/game_data/base/Test.wad.client/inner.ptch",
+            "META/game_data/base/top.ptch"
+        ]
+    );
+    assert_eq!(
+        reader
+            .read_game_data_resource("base", "top.ptch")
+            .unwrap()
+            .unwrap(),
+        empty_ptch()
+    );
+    assert!(reader
+        .read_game_data_resource("base", "absent.ptch")
+        .unwrap()
+        .is_none());
+    let output = root.join("output");
+    ProjectImporter::new(output.clone())
+        .import(FantomeImporter::new(archive))
+        .unwrap();
+    let extracted = load_layer(&output, "base", &ModIgnore::empty(&output));
+    assert_eq!(
+        override_paths(extracted.declarations.as_ref().unwrap().as_ref().unwrap()),
+        ["Test.wad.client/inner.ptch", "top.ptch"]
+    );
+    assert_eq!(
+        fs::read(output.join("content/base/Test.wad.client/inner.ptch")).unwrap(),
+        empty_ptch()
+    );
+    assert!(!output
+        .join("content/base/Test.wad.client/links.yaml")
+        .exists());
 }

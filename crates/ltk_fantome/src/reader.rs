@@ -524,6 +524,57 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(())
     }
 
+    /// Read the override file `META/game_data/{layer}/{path}`, or `None` when
+    /// the archive holds no such entry.
+    ///
+    /// The name is matched case-insensitively, as every `META/` entry is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be read.
+    pub fn read_game_data_resource(
+        &mut self,
+        layer: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, FantomeExtractError> {
+        let entry_name = game_data_entry_name(layer, path);
+        self.read_matching_entry(|name| name.eq_ignore_ascii_case(&entry_name).then_some(()))
+            .map(|found| found.map(|((), bytes)| bytes))
+    }
+
+    /// Write every `META/game_data/` entry under `content_dir`, at
+    /// `<layer>/<path>`.
+    ///
+    /// An entry whose relative path is absolute or climbs with `..` is
+    /// skipped: the archive names where a file lands, and a name that leaves
+    /// the content directory names nowhere.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive is malformed or a file cannot be written.
+    pub fn extract_game_data(&mut self, content_dir: &Utf8Path) -> Result<(), FantomeExtractError> {
+        for i in 0..self.archive.len() {
+            let mut file = self.archive.by_index(i)?;
+            let file_name = file.name().to_string();
+
+            let Some(FantomeEntry::GameData(relative_path)) = classify_entry(&file_name) else {
+                continue;
+            };
+            let relative = Utf8Path::new(relative_path);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|c| matches!(c, camino::Utf8Component::ParentDir))
+            {
+                continue;
+            }
+
+            extract_entry(&mut file, &content_dir.join(relative))?;
+        }
+
+        Ok(())
+    }
+
     /// Read the `META/README.md` entry, if the archive has one.
     ///
     /// The name is matched case-insensitively, as every `META/` entry is. A
@@ -643,6 +694,10 @@ pub enum FantomeEntry<'a> {
     /// [`FantomeReader::read_hashtables`], which reads the manifest, ever
     /// produces a table for lookup.
     Hashtable(&'a str),
+    /// A file under `META/game_data/`, at `<layer>/<path>` relative to the
+    /// prefix: an override file a layer's game-data declarations name, kept
+    /// at its layer-relative path.
+    GameData(&'a str),
 }
 
 /// Where the file named `entry_name` belongs.
@@ -679,6 +734,10 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
         return (!relative_path.is_empty()).then_some(FantomeEntry::Hashtable(relative_path));
     }
 
+    if let Some(relative_path) = strip_prefix_ci(entry_name, GAME_DATA_DIR) {
+        return (!relative_path.is_empty()).then_some(FantomeEntry::GameData(relative_path));
+    }
+
     if let Some(target) = license_entry_target(entry_name) {
         return Some(FantomeEntry::License(target));
     }
@@ -690,6 +749,15 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
         "meta/info.json" => Some(FantomeEntry::Info),
         _ => None,
     }
+}
+
+/// The `META/` directory override files live under, with its trailing slash.
+pub(crate) const GAME_DATA_DIR: &str = "META/game_data/";
+
+/// The archive entry name of the override file at `path` in `layer`:
+/// `META/game_data/{layer}/{path}`.
+pub fn game_data_entry_name(layer: &str, path: &str) -> String {
+    format!("{GAME_DATA_DIR}{layer}/{path}")
 }
 
 /// Whether the entry named `entry_name` is a whole packed WAD.

@@ -65,6 +65,9 @@ pub(crate) fn project_path(entry_name: &str) -> Option<ProjectPath> {
         FantomeEntry::License(file_name) => Utf8PathBuf::from(file_name),
         FantomeEntry::Image => Utf8PathBuf::from("thumbnail.webp"),
         FantomeEntry::Hashtable(relative_path) => hashes_dir().join(relative_path),
+        FantomeEntry::GameData(relative_path) => {
+            Utf8Path::new(crate::CONTENT_DIR_NAME).join(relative_path)
+        }
         FantomeEntry::Info => return None,
     };
 

@@ -218,6 +218,16 @@ fn a_meta_hashes_entry_classifies_as_a_hashtable() {
     );
     // A directory entry is not a file, and the bare directory places nothing.
     assert_eq!(classify_entry("META/hashes/"), None);
+    assert_eq!(
+        classify_entry("META/game_data/base/Test.wad.client/a.ptch"),
+        Some(FantomeEntry::GameData("base/Test.wad.client/a.ptch"))
+    );
+    assert_eq!(
+        classify_entry("meta/GAME_DATA/base/a.ptch"),
+        Some(FantomeEntry::GameData("base/a.ptch"))
+    );
+    assert_eq!(classify_entry("META/game_data/"), None);
+    assert_eq!(classify_entry("META/game_data/base/"), None);
 }
 
 // The rewrite: raw-copy every entry, merge in harvested names, never touch

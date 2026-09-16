@@ -7,7 +7,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
-use ltk_game_data::{Edit, EntryEdit, EntryName, IndexMap, Module, Origin, Selector};
+use ltk_game_data::{
+    ApplyDiagnosticKind, Edit, EntryEdit, EntryName, IndexMap, Module, Origin, OverridePath,
+    Selector, SkippedRecord,
+};
 use ltk_game_index::{BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
@@ -22,12 +25,18 @@ use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
 pub enum GameDataDiagnosticKind {
     DeclarationsRejected,
     TargetSkipped,
-    /// An entry no game bin declares. Its steps are skipped.
+    /// An entry no game bin declares. Its edits are skipped.
     EntryUnresolved,
     /// An entry several game bins declare. Every one is edited. Informational.
     EntryFanOut,
     /// The object index did not load or build. Every `entries` module is skipped.
     IndexUnavailable,
+    /// An override file the provider cannot supply. The file is skipped.
+    OverrideUnreadable,
+    /// An override file that is not a `PTCH`. The file is skipped.
+    OverrideInvalid,
+    /// One override record that does not apply. The remaining records apply.
+    OverrideRecordSkipped,
     LinkRemovalUnmatched,
     /// A missing or unrecognized serialized category.
     #[default]
@@ -49,9 +58,37 @@ pub struct GameDataDiagnostic {
     #[serde(default)]
     pub chunk: Option<WadHash>,
     pub origin: Option<Origin>,
-    #[serde(rename = "step")]
+    #[serde(rename = "edit")]
     pub edit_index: Option<usize>,
+    /// The record of an `OverrideRecordSkipped` diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<SkippedRecord>,
     pub message: String,
+}
+
+impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
+    fn from(kind: ApplyDiagnosticKind) -> Self {
+        match kind {
+            ApplyDiagnosticKind::LinkRemovalUnmatched => Self::LinkRemovalUnmatched,
+            ApplyDiagnosticKind::OverrideUnreadable => Self::OverrideUnreadable,
+            ApplyDiagnosticKind::OverrideInvalid => Self::OverrideInvalid,
+            ApplyDiagnosticKind::OverrideRecordSkipped => Self::OverrideRecordSkipped,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl GameDataDiagnosticKind {
+    /// The human-readable statement of an application diagnostic about `path`.
+    fn apply_message(self, path: &str) -> String {
+        match self {
+            Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
+            Self::OverrideUnreadable => format!("Override file cannot be read: {path}"),
+            Self::OverrideInvalid => format!("Override file is not a PTCH: {path}"),
+            Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
+            _ => format!("Application diagnostic: {path}"),
+        }
+    }
 }
 
 /// One module's edits bound to one chunk.
@@ -90,6 +127,7 @@ impl Pending {
             chunk: None,
             origin: Some(self.module.origin.clone()),
             edit_index: None,
+            record: None,
             message: message.to_string(),
         }
     }
@@ -121,7 +159,7 @@ fn lower_entries(
             [] => diagnostics.push(pending.diagnostic(
                 GameDataDiagnosticKind::EntryUnresolved,
                 Some(name),
-                "No game bin declares the entry; steps are skipped",
+                "No game bin declares the entry; edits are skipped",
             )),
             [_] => {}
             _ => {
@@ -171,8 +209,57 @@ impl Application {
             chunk: Some(self.chunk),
             origin: Some(self.origin.clone()),
             edit_index,
+            record: None,
             message: message.to_string(),
         }
+    }
+
+    /// The overlay diagnostic of one application diagnostic of this application.
+    fn lower(&self, diagnostic: ltk_game_data::ApplyDiagnostic) -> GameDataDiagnostic {
+        let kind = GameDataDiagnosticKind::from(diagnostic.kind);
+        let mut lowered = self.diagnostic(
+            kind,
+            Some(diagnostic.edit_index),
+            kind.apply_message(&diagnostic.path),
+        );
+        lowered.record = diagnostic.record;
+        lowered
+    }
+}
+
+/// The override files read during one build, shared across the applications naming them.
+#[derive(Default)]
+struct ResourceCache {
+    bytes: HashMap<(String, String, String), Arc<[u8]>>,
+}
+
+impl ResourceCache {
+    /// The bytes of `path` in the layer of `application`, read once per build.
+    fn read(
+        &mut self,
+        enabled_mods: &mut [super::EnabledMod],
+        application: &Application,
+        path: &OverridePath,
+    ) -> std::result::Result<Arc<[u8]>, ltk_game_data::Error> {
+        let key = (
+            application.mod_id.clone(),
+            application.layer.clone(),
+            path.as_str().to_owned(),
+        );
+        if let Some(bytes) = self.bytes.get(&key) {
+            return Ok(Arc::clone(bytes));
+        }
+        let enabled = enabled_mods
+            .iter_mut()
+            .find(|enabled| enabled.id == application.mod_id)
+            .ok_or_else(|| ltk_game_data::Error::new(path.as_str(), "mod is not enabled"))?;
+        let bytes: Arc<[u8]> = enabled
+            .content
+            .read_game_data_resource(&application.layer, path.as_str())
+            .map_err(|error| ltk_game_data::Error::new(path.as_str(), error))?
+            .into();
+        self.bytes.insert(key, Arc::clone(&bytes));
+        Ok(bytes)
     }
 }
 
@@ -219,6 +306,7 @@ impl OverlayBuilder {
                         chunk: None,
                         origin: None,
                         edit_index: None,
+                        record: None,
                         message: format!(
                             "Layer declarations refused: {error}; update the consumer for unsupported bindings"
                         ),
@@ -279,6 +367,7 @@ impl OverlayBuilder {
             }
         }
         let subchunktoc_blocked = game.subchunktoc_blocked();
+        let mut resources = ResourceCache::default();
         for (hash, applications) in targets {
             let original = bases.remove(&hash).or_else(|| metadata.get(&hash).cloned());
             let game_wad = game
@@ -311,21 +400,17 @@ impl OverlayBuilder {
             let mut dependencies = Vec::new();
             let mut applied = false;
             for application in &applications {
-                match ltk_game_data::apply(&bytes, &application.edits) {
+                let enabled_mods = &mut self.enabled_mods;
+                let read_override =
+                    |path: &OverridePath| resources.read(enabled_mods, application, path);
+                match ltk_game_data::apply(&bytes, &application.edits, read_override) {
                     Ok(output) => {
-                        for diagnostic in output.diagnostics {
-                            let kind = match diagnostic.kind {
-                                ltk_game_data::ApplyDiagnosticKind::LinkRemovalUnmatched => {
-                                    GameDataDiagnosticKind::LinkRemovalUnmatched
-                                }
-                                _ => GameDataDiagnosticKind::Unknown,
-                            };
-                            self.last_game_data_diagnostics.push(application.diagnostic(
-                                kind,
-                                Some(diagnostic.edit_index),
-                                format!("Link removal is absent: {}", diagnostic.path),
-                            ));
-                        }
+                        self.last_game_data_diagnostics.extend(
+                            output
+                                .diagnostics
+                                .into_iter()
+                                .map(|diagnostic| application.lower(diagnostic)),
+                        );
                         bytes = output.bytes;
                         dependencies = output.dependencies;
                         applied = true;
