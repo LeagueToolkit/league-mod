@@ -15,20 +15,51 @@ Removes `ltk_overlay::GameIndex` and moves the overlay onto the crate. Breaking 
 // removed
 pub struct ltk_overlay::GameIndex;
 
-// ltk_overlay, functions over ltk_game_index::GameIndex
-pub(crate) fn localized_global_wads(index: &GameIndex) -> Vec<(String, ArchiveId)>;
-pub(crate) fn subchunktoc_blocked(index: &GameIndex) -> HashSet<WadHash>;
-pub(crate) fn compute_content_hashes_batch(index: &GameIndex, hashes: &HashSet<WadHash>) -> HashMap<WadHash, ContentHash>;
+// ltk_overlay::game
+pub struct GameDir(Utf8PathBuf);
+impl GameDir {
+    pub fn new(path: impl Into<Utf8PathBuf>) -> Self;
+    pub fn as_path(&self) -> &Utf8Path;
+    pub fn data_final(&self) -> Result<Utf8PathBuf, GameDirError>;
+    pub fn join(&self, rel_path: impl AsRef<Utf8Path>) -> Utf8PathBuf;
+    pub fn index(&self, state_dir: &StateDir) -> Result<ltk_game_index::GameIndex>;
+}
+pub struct StateDir(Utf8PathBuf);
+impl StateDir {
+    pub fn new(path: impl Into<Utf8PathBuf>) -> Self;
+    pub fn create(&self) -> Result<()>;
+    pub fn game_index_cache(&self) -> Utf8PathBuf;      // game_index.bin
+    pub fn override_meta_cache(&self) -> Utf8PathBuf;   // override_meta.bin
+    pub fn overlay_state(&self) -> Utf8PathBuf;         // overlay.json
+}
+pub struct SkippedGameArchive { pub name: String, pub path: Utf8PathBuf, pub error: String }
+
+// the overlay's rules over the index, as an extension trait
+pub(crate) trait GameIndexExt {
+    fn wad_rel_path(&self, id: ArchiveId) -> Utf8PathBuf;              // DATA/FINAL/<name>
+    fn holder_paths(&self, hash: WadHash) -> impl Iterator<Item = Utf8PathBuf> + '_;
+    fn localized_global_wads(&self) -> Vec<(String, ArchiveId)>;
+    fn subchunktoc_blocked(&self) -> HashSet<WadHash>;
+    fn content_hashes(&self, hashes: &HashSet<WadHash>) -> HashMap<WadHash, ContentHash>;
+    fn skipped_archives(&self) -> Vec<SkippedGameArchive>;
+}
+impl GameIndexExt for ltk_game_index::GameIndex {}
+
+// ltk_overlay::OverlayBuildResult
+pub skipped_archives: Vec<SkippedGameArchive>;
 ```
 
-- `find_wad` becomes `archive_by_file_name`; `AmbiguousWad` maps from
-  `ArchiveLookupError::Ambiguous`. `find_wads_with_hash(h).min()` becomes
+- `OverlayBuilder::new` and `analyze_single_mod` keep their path parameters and wrap them in
+  `GameDir` and `StateDir`.
+- `find_wad` becomes `archive_by_file_name`; `AmbiguousWad` and `WadNotFound` map from
+  `ArchiveLookupError` through `From`. `find_wads_with_hash(h).min()` becomes
   `row(h).map(ChunkRow::first_holder)`. `find_best_matching_wad` becomes `dominant_holder`.
-- `GameDirError::MissingDataFinal` maps from `BuildError::MissingDataFinal`. A nonempty
-  `skipped()` list is reported as build warnings, not an error.
-- `OverlayState` stores `Fingerprint`; `game_index.bin` is read through `load_or_build` and
-  its format version bump invalidates the previous file.
-- `ModWadReport.game_index_fingerprint` keeps its `u64` wire type via `Fingerprint::as_u64`.
+- `GameDirError::MissingDataFinal` maps from `BuildError::MissingDataFinal`; any other
+  `BuildError` is `Error::GameIndex`. A nonempty `skipped()` list is logged at warn and
+  reported on `OverlayBuildResult::skipped_archives`, not an error.
+- `OverlayState`, `OverrideMetaCache` and `ModWadReport` keep the fingerprint as `u64` on the
+  wire through `Fingerprint::as_u64`. `game_index.bin` is read through `load_or_build`, and a
+  file in the previous format is rebuilt.
 
 Blocked by #230.
 

@@ -17,10 +17,10 @@ replaced, and the `entries` selector of game data declarations resolves through 
 
 ## Children
 
-- [ ] #229 Chunk index crate: archives, rows, lookups. Goes first; #230 rests on it.
-- [ ] #230 Fingerprint and cache. Rests on #229.
-- [ ] #231 Object index behind the `objects` feature and the resolver trait. Rests on #230.
-- [ ] #232 Overlay adoption of `ltk_game_index`. Rests on #230; independent of #231.
+- [x] #229 Chunk index crate: archives, rows, lookups. Goes first; #230 rests on it.
+- [x] #230 Fingerprint and cache. Rests on #229.
+- [x] #231 Object index behind the `objects` feature and the resolver trait. Rests on #230.
+- [x] #232 Overlay adoption of `ltk_game_index`. Rests on #230; independent of #231.
 - [ ] #233 `Selector` and `EntryName` in `ltk_game_data`. Depends on nothing here and can land in any order.
 - [ ] #234 Overlay `entries` resolution, diagnostics, lazy object index. Rests on #231, #232, and #233.
 - [ ] #235 Wiki reference page: declaring chunks and diagnostics. Rests on #234.
