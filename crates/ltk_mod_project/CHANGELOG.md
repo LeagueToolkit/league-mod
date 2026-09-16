@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.9.3...ltk_mod_project-v0.10.0) - 2026-09-16
+
+### Added
+
+- *(game_data)* [**breaking**] add overrides binding
+- *(game_data)* [**breaking**] replace module target with selector
+- *(game_data)* simplify declaration targets
+- *(workspace)* scaffold game data declarations
+
+### Other
+
+- *(workspace)* unify toml
+- *(workspace)* share ltk and common dependencies
+- *(workspace)* refine declaration interfaces
+- relicense under Apache-2.0
+
 ## [0.9.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.9.2...ltk_mod_project-v0.9.3) - 2026-09-08
 
 ### Other
