@@ -13,20 +13,20 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
-ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
+ltk_game_data = { workspace = true }
 indexmap = { workspace = true }
-zip = "2.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-semver = "1.0"
-thiserror = "2.0"
-camino = "1.1"
-tempfile = "3.15"
-zstd = "0.13"
+zip = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+semver = { workspace = true }
+thiserror = { workspace = true }
+camino = { workspace = true }
+tempfile = { workspace = true }
+zstd = { workspace = true }
 ltk_wad = { workspace = true }
-ltk_file = "0.2.8"
-ltk_hashtable = { version = "0.1.1", path = "../ltk_hashtable" }
+ltk_file = { workspace = true }
+ltk_hashtable = { workspace = true }
 
 [dev-dependencies]
 ltk_hash = { workspace = true }
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+xxhash-rust = { workspace = true }

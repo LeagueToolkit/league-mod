@@ -16,12 +16,12 @@ authors = ["LeagueToolkit"]
 camino = { workspace = true }
 ltk_hash = { workspace = true }
 ltk_wad = { workspace = true, optional = true }
-serde = { version = "1.0", features = ["derive"] }
-thiserror = "2.0"
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 # The bridge from a merged `game` category to `ltk_wad`'s `PathResolver`.
 wad = ["dep:ltk_wad"]
 
 [dev-dependencies]
-serde_json = "1.0"
+serde_json = { workspace = true }

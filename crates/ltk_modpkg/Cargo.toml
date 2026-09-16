@@ -13,24 +13,21 @@ categories = ["game-development"]
 authors = ["LeagueToolkit"]
 
 [dependencies]
-ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
+ltk_game_data = { workspace = true }
 indexmap = { workspace = true }
-thiserror = "1.0.60"
-byteorder = "1.5.0"
-ltk_io_ext = "0.4.4"
-ltk_hashtable = { version = "0.1.1", path = "../ltk_hashtable" }
-serde = { version = "1.0", features = ["derive"] }
-rmp-serde = "1.3.0"
-binrw = "0.14.1"
+thiserror = { workspace = true }
+byteorder = { workspace = true }
+ltk_io_ext = { workspace = true }
+ltk_hashtable = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+binrw = { workspace = true }
 itertools = "0.14.0"
-zstd = "0.13"
-semver = { version = "1.0.27", features = ["serde"] }
-
-[dependencies.xxhash-rust]
-version = "0.8.15"
-features = ["xxh3", "xxh64"]
+zstd = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.6.0"
 proptest-derive = "0.5.1"
-tempfile = "3.17.1"
+tempfile = { workspace = true }
