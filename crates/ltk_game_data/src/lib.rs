@@ -3,8 +3,9 @@
 //! A layer's [`Declarations`] are modules in execution order. A [`Module`] carries one
 //! [`Selector`], which names what is edited and holds the edits, and its [`Origin`]. An
 //! [`Edit`] is one batch of phased bindings on a chunk; an [`EntryEdit`] is the bindings of one
-//! bin entry, applied in every chunk declaring it. [`apply`] runs edits over a `PROP`; an edit's
-//! override files ([`OverridePath`]) are read through a caller-supplied reader.
+//! bin entry, applied in every chunk declaring it. A [`PropertyEdit`] is one signed property
+//! path with its [`Value`]. [`apply`] runs edits over a `PROP`; an edit's override files
+//! ([`OverridePath`]) are read through a caller-supplied reader.
 //!
 //! The `manifest` module loads the file a layer is edited through and its sources; the
 //! `document` module carries the serialized [`DeclarationDocument`] an archive stores.
@@ -14,6 +15,8 @@ mod discovery;
 mod document;
 mod error;
 mod manifest;
+mod property;
+mod value;
 
 pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use apply::{RecordSkipReason, SkippedRecord};
@@ -21,7 +24,10 @@ pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
 pub use ltk_hash::BinHash;
+pub use ltk_meta::{PropertyKind, path::PropertyPath};
 pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
+pub use property::{PropertyEdit, Sign};
+pub use value::{Value, kind_named, name_of};
 
 use std::fmt;
 
@@ -69,7 +75,7 @@ pub struct Module {
 }
 
 /// What a module edits, with the edits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Selector {
     /// One chunk and the edits applied to it, in order.
@@ -92,25 +98,30 @@ pub struct Origin {
 /// One edit of a chunk: every binding of one batch, applied phase by phase in field order.
 ///
 /// Each edit of a target reads the result of the preceding one. The serialized form is the
-/// compact binding body: `overrides`, `links` (`+links` accepted on input) and `-links`, each
-/// present only when nonempty. A serialized override path is layer-relative.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// compact binding body: `overrides`, one key per entry name holding its property edits,
+/// `links` (`+links` accepted on input) and `-links`, each present only when nonempty. A
+/// serialized override path is layer-relative.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "document::Bindings", into = "document::Bindings")]
 #[non_exhaustive]
 pub struct Edit {
     /// Override files applied in listed order, the first phase.
     pub overrides: Vec<OverridePath>,
+    /// The property edits of each entry of the chunk, in mapping order, the second phase.
+    pub entries: IndexMap<EntryName, Vec<PropertyEdit>>,
     /// Dependency-list edits, the last phase.
     pub links: LinkEdit,
 }
 
 /// The bindings of one bin entry, applied in every chunk declaring it.
 ///
-/// The serialized form is the compact binding body of [`Edit`] without `overrides`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The serialized form is an entry body: signed property keys beside `links` and `-links`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "document::Bindings", into = "document::Bindings")]
 #[non_exhaustive]
 pub struct EntryEdit {
+    /// The entry's property edits, in mapping order.
+    pub properties: Vec<PropertyEdit>,
     /// Dependency-list edits of the declaring chunk.
     pub links: LinkEdit,
 }
@@ -250,6 +261,12 @@ impl EntryName {
         match &self.0 {
             EntryNameKind::Path(value) | EntryNameKind::Hash(value) => value,
         }
+    }
+
+    /// Whether the name is spelled as a hash: `0x` and 8 hexadecimal digits.
+    #[must_use]
+    pub fn is_hash(&self) -> bool {
+        matches!(self.0, EntryNameKind::Hash(_))
     }
 
     /// The bin object hash: FNV-1a over the ASCII-lowercased path, or the spelled hash.

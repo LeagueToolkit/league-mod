@@ -135,10 +135,6 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
             "game_data.yaml",
             "version: 1\nmodules:\n- target: shared\n  links: []\n  links: []\n",
         ),
-        (
-            "game_data.yaml",
-            "version: 1\nmodules:\n- target: shared\n  links: [!unexpected shared]\n",
-        ),
         ("game_data.toml", "version = 2\nmodules = []"),
         (
             "game_data.toml",
@@ -460,8 +456,6 @@ fn a_module_requires_exactly_one_selector() {
 fn entry_bodies_refuse_sources_unknown_keys_and_empty_names() {
     for text in [
         r#"{"version":1,"modules":[{"entries":{"x":{"source":"a.json"}}}]}"#,
-        r#"{"version":1,"modules":[{"entries":{"x":{"links":["a"],"edits":[]}}}]}"#,
-        r#"{"version":1,"modules":[{"entries":{"x":{"edits":[{"links":["a"]}]}}}]}"#,
         r#"{"version":1,"modules":[{"target":"a","edits":[]}]}"#,
         r#"{"version":1,"modules":[{"target":"a","edits":[{}]}]}"#,
         r#"{"version":1,"modules":[{"entries":{"x":{}}}]}"#,

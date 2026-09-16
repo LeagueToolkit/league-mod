@@ -278,6 +278,18 @@ pub enum ErrorKind {
     EditWithoutBindings,
     #[error("module requires bindings, `edits`, or source")]
     ModuleWithoutBindings,
+    /// A body key that is neither a binding keyword nor an entry name.
+    #[error("unsupported binding `{key}`")]
+    UnsupportedBinding { key: String },
+    /// An entry name whose value is not a mapping.
+    #[error("entry body requires a mapping")]
+    EntryBodyShape,
+    /// A property key whose path does not parse. `detail` is the path parser's statement.
+    #[error("invalid property path: {detail}")]
+    InvalidPropertyPath { detail: String },
+    /// A `pointer` or `embed` pin that is not null or a mapping of `class` and `set`.
+    #[error("a pointer or embed pin takes `class` and `set`")]
+    StructPinShape,
     /// An application base that is not a `PROP` version 2 or 3.
     #[error("expected PROP version 2 or 3")]
     UnsupportedBase,

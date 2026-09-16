@@ -224,8 +224,8 @@ pub enum Value {
 `Sign::as_str()` is `""`, `"+"`, or `"-"`. `PropertyEdit::key()` is the signed key as spelled.
 A key's path is parsed by `PropertyPath::new` and a refused path is an error; the sign is not
 part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
-refuses a duplicate key in every format; a YAML integer or float beyond the ranges named is
-an error. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
+refuses a duplicate key in every format; an integer past the ranges named is what the format's
+parser makes of it, a float. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
 loads as `{f32: 1.0}`; a tag whose name is not a type name is an error. `Value::pin()` is the
 type name of a one-key mapping whose key is a type name, or `None`.
 

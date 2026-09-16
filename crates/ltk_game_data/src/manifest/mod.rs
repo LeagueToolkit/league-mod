@@ -20,7 +20,7 @@ use serde::{
 use crate::{
     Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, Origin, OverridePath, Selector,
     Span, Target,
-    document::{Bindings, SelectorKey},
+    document::{Accepts, Bindings, Fields, SelectorKey},
 };
 
 use body::Body;
@@ -41,8 +41,8 @@ enum Format {
     Toml,
 }
 
-/// How a file is read. `Execution` refuses duplicate keys and unsupported tags;
-/// `Discovery` keeps the last of duplicate keys.
+/// How a file is read. `Execution` refuses duplicate keys; `Discovery` keeps the last of
+/// duplicate keys. A local YAML tag is a type pin and is read in both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reading {
     Execution,
@@ -83,7 +83,7 @@ impl Format {
                 let mut options = serde_saphyr::Options::default();
                 options.strict_booleans = true;
                 options.no_schema = true;
-                options.reject_unsupported_tags = strict;
+                options.reject_unsupported_tags = false;
                 options.duplicate_keys = if strict {
                     serde_saphyr::DuplicateKeyPolicy::Error
                 } else {
@@ -235,27 +235,62 @@ pub(crate) struct Manifest {
     modules: Vec<Module>,
 }
 
-/// A manifest module. Unknown keys are refused by the flattened bindings.
-#[derive(Debug, Serialize, Deserialize)]
+/// A manifest module. A key that is not a selector, `source`, `edits`, or a binding is an
+/// entry name.
+#[derive(Debug, Serialize)]
 struct Module {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<Target>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     entries: Option<Entries>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
     #[serde(flatten)]
     body: Body,
 }
 
-/// An entry body: compact bindings and nothing else.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for Module {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let accepts = Accepts {
+            selector: true,
+            source: true,
+            edits: true,
+            version: false,
+        };
+        let fields: Fields<Entries> = deserializer.deserialize_map(Fields::visitor(accepts))?;
+        Ok(Self {
+            target: fields.target,
+            entries: fields.entries,
+            source: fields.source,
+            body: Body {
+                edits: fields.edits,
+                bindings: fields.bindings,
+            },
+        })
+    }
+}
+
+/// An entry body: property edits and link bindings. `source` is read and refused.
+#[derive(Debug, Serialize)]
 struct Entry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
     #[serde(flatten)]
     bindings: Bindings,
+}
+
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let accepts = Accepts {
+            source: true,
+            ..Accepts::default()
+        };
+        let fields: Fields<()> = deserializer.deserialize_map(Fields::visitor(accepts))?;
+        Ok(Self {
+            source: fields.source,
+            bindings: fields.bindings,
+        })
+    }
 }
 
 impl Entry {

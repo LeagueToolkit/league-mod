@@ -1,19 +1,43 @@
 //! The edits a manifest module or a source file carries.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{Edit, Error, ErrorKind, document::Bindings};
+use crate::{
+    Edit, Error, ErrorKind,
+    document::{Accepts, Bindings, Fields},
+};
 
 use super::DocumentPath;
 
 /// The edits of a document body: the edit list under the `edits` key, or compact bindings
 /// as one edit.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize)]
 pub(super) struct Body {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) edits: Option<Vec<Bindings>>,
     #[serde(flatten)]
     pub(super) bindings: Bindings,
+}
+
+impl<'de> Deserialize<'de> for Body {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let accepts = Accepts {
+            edits: true,
+            ..Accepts::default()
+        };
+        deserializer
+            .deserialize_map(Fields::<()>::visitor(accepts))
+            .map(Self::from)
+    }
+}
+
+impl<E> From<Fields<E>> for Body {
+    fn from(fields: Fields<E>) -> Self {
+        Self {
+            edits: fields.edits,
+            bindings: fields.bindings,
+        }
+    }
 }
 
 impl Body {
