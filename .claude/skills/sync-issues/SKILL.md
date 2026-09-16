@@ -132,7 +132,7 @@ Labels follow the existing scheme: `crate:ltk_*` for the crate, `enhancement`/`b
 ## Voice
 
 Everything published to GitHub must read as written by the repo owner. No AI attribution
-of any kind: no "Generated with Claude Code" footers, no Co-Authored-By lines, no session
+of any kind: no "Generated with" footers naming a tool, no Co-Authored-By lines, no session
 links, no mention of agents or assistants — in issue bodies, titles, or comments. Plain
 technical register, matching the specs.
 

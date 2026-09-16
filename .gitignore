@@ -21,3 +21,6 @@ bin
 
 # Windows NUL device artifact
 nul
+# Vendored third-party agent skills, reinstalled from skills-lock.json
+.agents/skills/
+.claude/worktrees/
