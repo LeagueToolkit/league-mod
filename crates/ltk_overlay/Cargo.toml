@@ -13,7 +13,7 @@ authors = ["LeagueToolkit"]
 
 [dependencies]
 ltk_game_data = { workspace = true }
-ltk_game_index = { workspace = true }
+ltk_game_index = { workspace = true, features = ["objects"] }
 
 # LeagueToolkit crates
 ltk_wad = { workspace = true, features = ["serde"] }

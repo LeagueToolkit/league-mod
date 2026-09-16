@@ -622,6 +622,7 @@ impl OverlayBuilder {
         per_wad_work
             .into_par_iter()
             .map(|work| {
+                self.check_called_off()?;
                 let patched = self.patch_one_wad(work)?;
 
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;

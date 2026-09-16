@@ -132,6 +132,8 @@ pub struct StateDir(Utf8PathBuf);
 impl StateDir {
     /// The chunk index cache file name.
     pub const GAME_INDEX_CACHE: &str = "game_index.bin";
+    /// The object index cache file name.
+    pub const OBJECT_INDEX_CACHE: &str = "object_index.bin";
     /// The override metadata cache file name.
     pub const OVERRIDE_META_CACHE: &str = "override_meta.bin";
     /// The overlay state file name.
@@ -162,6 +164,14 @@ impl StateDir {
     #[must_use]
     pub fn game_index_cache(&self) -> Utf8PathBuf {
         self.0.join(Self::GAME_INDEX_CACHE)
+    }
+
+    /// The object index cache, `object_index.bin`.
+    ///
+    /// Written only by a build in which an enabled layer declares an `entries` module.
+    #[must_use]
+    pub fn object_index_cache(&self) -> Utf8PathBuf {
+        self.0.join(Self::OBJECT_INDEX_CACHE)
     }
 
     /// The override metadata cache, `override_meta.bin`.
@@ -382,6 +392,7 @@ mod tests {
     fn a_state_dir_names_its_files() {
         let state = StateDir::new("/tmp/state");
         assert_eq!(state.game_index_cache(), "/tmp/state/game_index.bin");
+        assert_eq!(state.object_index_cache(), "/tmp/state/object_index.bin");
         assert_eq!(state.override_meta_cache(), "/tmp/state/override_meta.bin");
         assert_eq!(state.overlay_state(), "/tmp/state/overlay.json");
         assert_eq!(state.to_string(), "/tmp/state");

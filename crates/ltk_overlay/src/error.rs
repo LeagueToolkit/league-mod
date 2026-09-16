@@ -137,6 +137,14 @@ pub enum Error {
     #[error(transparent)]
     Corrupt(#[from] CorruptionError),
 
+    /// The build was called off through [`OverlayBuilder::with_called_off`].
+    ///
+    /// The state directory is as it was before the build. The next build starts from it.
+    ///
+    /// [`OverlayBuilder::with_called_off`]: crate::OverlayBuilder::with_called_off
+    #[error("the overlay build was called off")]
+    CalledOff,
+
     /// An invariant this crate is supposed to maintain was broken.
     ///
     /// Not reachable from any input a caller controls: getting one means a bug

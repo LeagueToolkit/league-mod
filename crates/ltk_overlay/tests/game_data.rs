@@ -226,7 +226,7 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
         assert_eq!(reports.len(), 3, "{reports:?}");
         assert!(reports.iter().all(|report| report.mod_id == "mod"
             && report.layer == "base"
-            && report.location.is_some()));
+            && report.origin.is_some()));
         let cached = builder.build().unwrap();
         assert!(cached.wads_built.is_empty());
         assert_eq!(cached.wads_reused.len(), 1);
@@ -243,13 +243,14 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
             .iter()
             .find(|d| d.kind == GameDataDiagnosticKind::LinkRemovalUnmatched)
             .unwrap();
-        assert_eq!(removal.step_index, Some(0));
+        assert_eq!(removal.edit_index, Some(0));
+        assert_eq!(removal.chunk, Some(common::hash("shared")));
         let mut saved: serde_json::Value =
             serde_json::from_slice(&fs::read(state.join("overlay.json")).unwrap()).unwrap();
         assert_eq!(saved["gameDataReports"].as_array().unwrap().len(), 3);
         assert_eq!(
             saved["gameDataReports"][0]["origin"]["module"].as_u64(),
-            Some(reports[0].location.as_ref().unwrap().module_index as u64)
+            Some(reports[0].origin.as_ref().unwrap().module_index as u64)
         );
         assert!(saved.get("gameDataDiagnostics").is_none());
         // Legacy and future categories retain diagnostic context on exact cache reuse.
@@ -369,4 +370,220 @@ fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
     fs::write(manifest, text).unwrap();
     builder.build().unwrap();
     assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["edited"]));
+}
+
+/// A PROP v3 with `links` declaring `objects` as `(object, class)` pairs, each without properties.
+fn bin_declaring(links: &[&str], objects: &[(u32, u32)]) -> Vec<u8> {
+    let mut bytes = bin(links);
+    bytes.truncate(bytes.len() - 4);
+    bytes.extend_from_slice(&(objects.len() as u32).to_le_bytes());
+    for &(_, class) in objects {
+        bytes.extend_from_slice(&class.to_le_bytes());
+    }
+    for &(object, _) in objects {
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&object.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+    }
+    bytes
+}
+
+/// The builder with a progress callback recording every stage it reports, in order.
+fn recording_stages(
+    builder: OverlayBuilder,
+) -> (
+    OverlayBuilder,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let stages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = stages.clone();
+    let builder = builder.with_progress(move |progress| {
+        let stage = serde_json::to_value(&progress.stage).unwrap();
+        sink.lock()
+            .unwrap()
+            .push(stage.as_str().unwrap().to_owned());
+    });
+    (builder, stages)
+}
+
+#[test]
+fn entries_edit_every_declaring_chunk_and_report_fan_out_and_unresolved_names() {
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    let skin = ltk_game_data::BinHash::from("Characters/Teemo/Skins/Skin0").0;
+    let other = ltk_game_data::BinHash::from("Characters/Ahri/Skins/Skin0").0;
+    let one = bin_declaring(&["Game"], &[(skin, 1)]);
+    let two = bin_declaring(&[], &[(other, 1), (skin, 1)]);
+    let untouched = bin_declaring(&[], &[(other, 1)]);
+    common::write_game_wad(
+        &game.join(WAD),
+        &[
+            ("data/one.bin", &one),
+            ("data/two.bin", &two),
+            ("data/untouched.bin", &untouched),
+            ("data/tex", b"not a bin"),
+        ],
+    );
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(
+            r#"{"version":1,"modules":[{"entries":{
+                "Characters/TEEMO/Skins/Skin0":{"links":["Added"]},
+                "Characters/Nobody/Skins/Skin0":{"links":["Nope"]}}}]}"#,
+        ),
+    );
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("object_index.bin"), b"unreadable").unwrap();
+    let (mut builder, stages) =
+        recording_stages(OverlayBuilder::new(game, overlay.clone(), state.clone()));
+    builder.set_enabled_mods(vec![top]);
+    let first = builder.build().unwrap();
+    assert_eq!(first.wads_built.len(), 1);
+    assert_ne!(
+        fs::read(state.join("object_index.bin")).unwrap(),
+        b"unreadable"
+    );
+    assert_eq!(
+        stages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|stage| *stage == "indexingObjects")
+            .count(),
+        1
+    );
+    assert_eq!(
+        chunk(&overlay.join(WAD), "data/one.bin"),
+        bin_declaring(&["Game", "Added"], &[(skin, 1)])
+    );
+    assert_eq!(
+        chunk(&overlay.join(WAD), "data/two.bin"),
+        bin_declaring(&["Added"], &[(other, 1), (skin, 1)])
+    );
+    assert_eq!(chunk(&overlay.join(WAD), "data/untouched.bin"), untouched);
+
+    let reports = first.game_data_diagnostics;
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    let fan_out = &reports[0];
+    assert_eq!(fan_out.kind, GameDataDiagnosticKind::EntryFanOut);
+    assert_eq!(
+        fan_out.target.as_deref(),
+        Some("Characters/TEEMO/Skins/Skin0")
+    );
+    assert_eq!(fan_out.origin.as_ref().unwrap().module_index, 0);
+    assert_eq!(fan_out.chunk, None);
+    for name in ["data/one.bin", "data/two.bin"] {
+        let hash = format!("{:016x}", common::hash(name).0);
+        assert!(fan_out.message.contains(&hash), "{}", fan_out.message);
+    }
+    let unresolved = &reports[1];
+    assert_eq!(unresolved.kind, GameDataDiagnosticKind::EntryUnresolved);
+    assert_eq!(
+        unresolved.target.as_deref(),
+        Some("Characters/Nobody/Skins/Skin0")
+    );
+    assert_eq!(unresolved.mod_id, "top");
+    assert_eq!(unresolved.layer, "base");
+
+    stages.lock().unwrap().clear();
+    let cached = builder.build().unwrap();
+    assert!(cached.wads_built.is_empty());
+    assert_eq!(cached.wads_reused.len(), 1);
+    assert_eq!(cached.game_data_diagnostics, reports);
+    assert_eq!(
+        stages
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|stage| *stage == "indexingObjects")
+            .count(),
+        1
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(saved["gameDataReports"][0]["kind"], "entryFanOut");
+    assert_eq!(saved["gameDataReports"][1]["kind"], "entryUnresolved");
+}
+
+#[test]
+fn a_build_without_entries_never_opens_the_object_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    common::write_game_wad(&game.join(WAD), &[("shared", &bin(&["Game"]))]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#),
+    );
+    let (mut builder, stages) =
+        recording_stages(OverlayBuilder::new(game, overlay.clone(), state.clone()));
+    builder.set_enabled_mods(vec![top]);
+    builder.build().unwrap();
+    assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["Game", "Added"]));
+    assert!(!state.join("object_index.bin").exists());
+    assert!(
+        !stages
+            .lock()
+            .unwrap()
+            .contains(&"indexingObjects".to_owned())
+    );
+    assert!(stages.lock().unwrap().contains(&"indexing".to_owned()));
+}
+
+#[test]
+fn a_called_off_build_ends_without_writing_state() {
+    use std::sync::{Arc, Mutex};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    let skin = ltk_game_data::BinHash::from("Characters/Teemo/Skins/Skin0").0;
+    common::write_game_wad(
+        &game.join(WAD),
+        &[("data/one.bin", &bin_declaring(&[], &[(skin, 1)]))],
+    );
+    let manifest = r#"{"version":1,"modules":[{"entries":{"Characters/Teemo/Skins/Skin0":{"links":["Added"]}}}]}"#;
+
+    let mut builder =
+        OverlayBuilder::new(game.clone(), overlay.clone(), state.clone()).with_called_off(|| true);
+    builder.set_enabled_mods(vec![project(&root, "first", None, Some(manifest))]);
+    assert!(matches!(
+        builder.build(),
+        Err(ltk_overlay::Error::CalledOff)
+    ));
+    assert!(!state.join("overlay.json").exists());
+
+    let stages: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = stages.clone();
+    let seen = stages.clone();
+    let mut builder = OverlayBuilder::new(game, overlay, state.clone())
+        .with_progress(move |progress| {
+            let stage = serde_json::to_value(&progress.stage).unwrap();
+            sink.lock()
+                .unwrap()
+                .push(stage.as_str().unwrap().to_owned());
+        })
+        .with_called_off(move || seen.lock().unwrap().contains(&"indexingObjects".to_owned()));
+    builder.set_enabled_mods(vec![project(&root, "second", None, Some(manifest))]);
+    assert!(matches!(
+        builder.build(),
+        Err(ltk_overlay::Error::CalledOff)
+    ));
+    assert_eq!(
+        stages.lock().unwrap().last().map(String::as_str),
+        Some("indexingObjects")
+    );
+    assert!(!state.join("object_index.bin").exists());
+    assert!(!state.join("overlay.json").exists());
 }

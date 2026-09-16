@@ -1,16 +1,19 @@
-//! Declaration target selection, application, and diagnostics.
+//! Declaration selector resolution, target application, and diagnostics.
+//!
+//! A `target` module binds to one chunk by hash. An `entries` module binds each entry to every
+//! chunk declaring it, through the object index (`docs/design/game-data.md` section 6).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
-use ltk_game_data::{DeclarationLocation, Module};
+use ltk_game_data::{Edit, EntryEdit, EntryName, IndexMap, Module, Origin, Selector};
+use ltk_game_index::{BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
-use super::{OverlayBuilder, OverrideMeta, OverrideSource};
+use super::{OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource};
 use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
-use ltk_game_index::GameIndex;
 
 /// The category of a declaration diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +22,12 @@ use ltk_game_index::GameIndex;
 pub enum GameDataDiagnosticKind {
     DeclarationsRejected,
     TargetSkipped,
+    /// An entry no game bin declares. Its steps are skipped.
+    EntryUnresolved,
+    /// An entry several game bins declare. Every one is edited. Informational.
+    EntryFanOut,
+    /// The object index did not load or build. Every `entries` module is skipped.
+    IndexUnavailable,
     LinkRemovalUnmatched,
     /// A missing or unrecognized serialized category.
     #[default]
@@ -26,7 +35,7 @@ pub enum GameDataDiagnosticKind {
     Unknown,
 }
 
-/// A declaration diagnostic. The step index is zero-based.
+/// A declaration diagnostic. The edit index is zero-based.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameDataDiagnostic {
@@ -34,34 +43,134 @@ pub struct GameDataDiagnostic {
     pub kind: GameDataDiagnosticKind,
     pub mod_id: String,
     pub layer: String,
+    /// The authored target or entry name.
     pub target: Option<String>,
-    #[serde(rename = "origin")]
-    pub location: Option<DeclarationLocation>,
+    /// The chunk the diagnostic is about.
+    #[serde(default)]
+    pub chunk: Option<WadHash>,
+    pub origin: Option<Origin>,
     #[serde(rename = "step")]
-    pub step_index: Option<usize>,
+    pub edit_index: Option<usize>,
     pub message: String,
 }
 
+/// One module's edits bound to one chunk.
 struct Application {
+    mod_id: String,
+    layer: String,
+    /// The authored target or entry name, as diagnostics report it.
+    target: String,
+    /// The chunk as the override source names it: the authored target, or the hex hash of a
+    /// declaring chunk.
+    chunk_path: String,
+    chunk: WadHash,
+    edits: Vec<Edit>,
+    origin: Origin,
+}
+
+/// A module of one enabled layer, in precedence order.
+struct Pending {
     mod_id: String,
     layer: String,
     module: Module,
 }
 
-impl Application {
+impl Pending {
     fn diagnostic(
         &self,
         kind: GameDataDiagnosticKind,
-        step_index: Option<usize>,
+        target: Option<&EntryName>,
         message: impl ToString,
     ) -> GameDataDiagnostic {
         GameDataDiagnostic {
             kind,
             mod_id: self.mod_id.clone(),
             layer: self.layer.clone(),
-            target: Some(self.module.target.as_str().to_owned()),
-            location: Some(self.module.location.clone()),
-            step_index,
+            target: target.map(|name| name.as_str().to_owned()),
+            chunk: None,
+            origin: Some(self.module.origin.clone()),
+            edit_index: None,
+            message: message.to_string(),
+        }
+    }
+}
+
+/// The diagnostic of an `entries` module skipped for want of an object index.
+fn index_unavailable(pending: &Pending, error: &ObjectBuildError) -> GameDataDiagnostic {
+    pending.diagnostic(
+        GameDataDiagnosticKind::IndexUnavailable,
+        None,
+        format!("Object index is unavailable: {error}; entries are skipped"),
+    )
+}
+
+/// Lowers the entries of `pending` to one application per declaring chunk, in mapping order.
+fn lower_entries(
+    pending: &Pending,
+    entries: &IndexMap<EntryName, EntryEdit>,
+    index: &ObjectIndex,
+    game: &GameIndex,
+    targets: &mut BTreeMap<WadHash, Vec<Application>>,
+    diagnostics: &mut Vec<GameDataDiagnostic>,
+) {
+    for (name, edit) in entries {
+        let declarations = index.declarations(name.object_hash());
+        let mut chunks: Vec<WadHash> = declarations.iter().map(|d| d.chunk).collect();
+        chunks.dedup();
+        match chunks.as_slice() {
+            [] => diagnostics.push(pending.diagnostic(
+                GameDataDiagnosticKind::EntryUnresolved,
+                Some(name),
+                "No game bin declares the entry; steps are skipped",
+            )),
+            [_] => {}
+            _ => {
+                let named: Vec<String> = declarations
+                    .iter()
+                    .map(|d| format!("{:016x} ({})", d.chunk.0, game.archive(d.archive).name))
+                    .collect();
+                diagnostics.push(pending.diagnostic(
+                    GameDataDiagnosticKind::EntryFanOut,
+                    Some(name),
+                    format!(
+                        "Entry is declared in {} chunks, each edited: {}",
+                        chunks.len(),
+                        named.join(", ")
+                    ),
+                ));
+            }
+        }
+        for chunk in chunks {
+            let mut chunk_edit = Edit::default();
+            chunk_edit.links = edit.links.clone();
+            targets.entry(chunk).or_default().push(Application {
+                mod_id: pending.mod_id.clone(),
+                layer: pending.layer.clone(),
+                target: name.as_str().to_owned(),
+                chunk_path: format!("{:016x}", chunk.0),
+                chunk,
+                edits: vec![chunk_edit],
+                origin: pending.module.origin.clone(),
+            });
+        }
+    }
+}
+
+impl Application {
+    fn diagnostic(
+        &self,
+        kind: GameDataDiagnosticKind,
+        edit_index: Option<usize>,
+        message: impl ToString,
+    ) -> GameDataDiagnostic {
+        GameDataDiagnostic {
+            kind,
+            mod_id: self.mod_id.clone(),
+            layer: self.layer.clone(),
+            target: Some(self.target.clone()),
+            chunk: Some(self.chunk),
+            origin: Some(self.origin.clone()),
+            edit_index,
             message: message.to_string(),
         }
     }
@@ -73,7 +182,7 @@ impl OverlayBuilder {
         game: &GameIndex,
         metadata: &mut HashMap<WadHash, OverrideMeta>,
     ) -> Result<()> {
-        let mut targets: BTreeMap<WadHash, Vec<Application>> = BTreeMap::new();
+        let mut pending: Vec<Pending> = Vec::new();
         for enabled in self.enabled_mods.iter_mut().rev() {
             let mut layers = enabled.content.mod_project()?.layers;
             if !layers.iter().any(|layer| layer.is_base()) {
@@ -94,16 +203,67 @@ impl OverlayBuilder {
                         Ok(declarations)
                     });
                 match result {
-                    Ok(Some(declarations)) => for module in declarations.modules {
-                        let hash = WadHash::from(module.target.chunk_hash());
-                        targets.entry(hash).or_default().push(Application { mod_id: enabled.id.clone(), layer: layer.name.clone(), module });
-                    },
-                    Ok(None) => {},
+                    Ok(Some(declarations)) => {
+                        pending.extend(declarations.modules.into_iter().map(|module| Pending {
+                            mod_id: enabled.id.clone(),
+                            layer: layer.name.clone(),
+                            module,
+                        }));
+                    }
+                    Ok(None) => {}
                     Err(error) => self.last_game_data_diagnostics.push(GameDataDiagnostic {
-                        mod_id: enabled.id.clone(), layer: layer.name, target: None, location: None, step_index: None, kind: GameDataDiagnosticKind::DeclarationsRejected,
-                        message: format!("Layer declarations refused: {error}; update the consumer for unsupported bindings"),
+                        kind: GameDataDiagnosticKind::DeclarationsRejected,
+                        mod_id: enabled.id.clone(),
+                        layer: layer.name,
+                        target: None,
+                        chunk: None,
+                        origin: None,
+                        edit_index: None,
+                        message: format!(
+                            "Layer declarations refused: {error}; update the consumer for unsupported bindings"
+                        ),
                     }),
                 }
+            }
+        }
+
+        let object_index = pending
+            .iter()
+            .any(|pending| matches!(pending.module.selector, Selector::Entries(_)))
+            .then(|| self.load_object_index(game));
+        if matches!(object_index, Some(Err(_))) {
+            self.check_called_off()?;
+        }
+        let mut targets: BTreeMap<WadHash, Vec<Application>> = BTreeMap::new();
+        for pending in pending {
+            match &pending.module.selector {
+                Selector::Target { target, edits } => {
+                    let hash = WadHash::from(target.chunk_hash());
+                    targets.entry(hash).or_default().push(Application {
+                        mod_id: pending.mod_id,
+                        layer: pending.layer,
+                        target: target.as_str().to_owned(),
+                        chunk_path: target.as_str().to_owned(),
+                        chunk: hash,
+                        edits: edits.clone(),
+                        origin: pending.module.origin,
+                    });
+                }
+                Selector::Entries(entries) => match &object_index {
+                    Some(Ok(index)) => lower_entries(
+                        &pending,
+                        entries,
+                        index,
+                        game,
+                        &mut targets,
+                        &mut self.last_game_data_diagnostics,
+                    ),
+                    Some(Err(error)) => self
+                        .last_game_data_diagnostics
+                        .push(index_unavailable(&pending, error)),
+                    None => unreachable!("an entries module loads the object index"),
+                },
+                _ => unreachable!("the overlay lowers every selector of its `ltk_game_data`"),
             }
         }
 
@@ -151,7 +311,7 @@ impl OverlayBuilder {
             let mut dependencies = Vec::new();
             let mut applied = false;
             for application in &applications {
-                match ltk_game_data::apply(&bytes, &application.module.steps) {
+                match ltk_game_data::apply(&bytes, &application.edits) {
                     Ok(output) => {
                         for diagnostic in output.diagnostics {
                             let kind = match diagnostic.kind {
@@ -162,7 +322,7 @@ impl OverlayBuilder {
                             };
                             self.last_game_data_diagnostics.push(application.diagnostic(
                                 kind,
-                                Some(diagnostic.step_index),
+                                Some(diagnostic.edit_index),
                                 format!("Link removal is absent: {}", diagnostic.path),
                             ));
                         }
@@ -188,7 +348,7 @@ impl OverlayBuilder {
                     uncompressed_size: bytes.len(),
                     source: OverrideSource::GameData {
                         mod_id: owner.mod_id.clone(),
-                        chunk_path: Utf8PathBuf::from(owner.module.target.as_str()),
+                        chunk_path: Utf8PathBuf::from(owner.chunk_path.as_str()),
                         bytes: Arc::from(bytes),
                     },
                     fallback_wad: original
@@ -201,6 +361,34 @@ impl OverlayBuilder {
             );
         }
         Ok(())
+    }
+
+    /// Loads the object index cached in the state directory, or builds it and writes the cache.
+    ///
+    /// Reported as [`OverlayStage::IndexingObjects`]. A failure is logged at warn.
+    fn load_object_index(
+        &self,
+        game: &GameIndex,
+    ) -> std::result::Result<ObjectIndex, ObjectBuildError> {
+        self.emit_progress(OverlayProgress::stage(OverlayStage::IndexingObjects));
+        let path = self.state_dir.object_index_cache();
+        let called_off = || self.is_called_off();
+        let mut options = BuildOptions::default();
+        options.called_off = Some(&called_off);
+        match ObjectIndex::load_or_build_with(game, &path, &options) {
+            Ok(index) => {
+                tracing::info!(
+                    "Object index holds {} objects from {} bins",
+                    index.len(),
+                    index.stats().bins
+                );
+                Ok(index)
+            }
+            Err(error) => {
+                tracing::warn!("Object index is unavailable: {error}; entries modules are skipped");
+                Err(error)
+            }
+        }
     }
 
     fn read_declaration_base(
@@ -238,5 +426,69 @@ impl OverlayBuilder {
         self.game_dir
             .read_chunk(wad, hash)
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::game_index_with_hashes;
+
+    fn pending(entries: &[&str]) -> (Pending, IndexMap<EntryName, EntryEdit>) {
+        let entries: IndexMap<EntryName, EntryEdit> = entries
+            .iter()
+            .map(|name| (EntryName::try_from(*name).unwrap(), EntryEdit::default()))
+            .collect();
+        let pending = Pending {
+            mod_id: "mod".into(),
+            layer: "base".into(),
+            module: Module {
+                selector: Selector::Entries(entries.clone()),
+                origin: Origin {
+                    manifest: "game_data.yaml".into(),
+                    source: None,
+                    module_index: 3,
+                },
+            },
+        };
+        (pending, entries)
+    }
+
+    #[test]
+    fn an_unavailable_object_index_is_one_diagnostic_per_entries_module() {
+        let (pending, _entries) = pending(&["Characters/Teemo/Skins/Skin0", "Characters/Ahri"]);
+        let diagnostic = index_unavailable(&pending, &ObjectBuildError::CalledOff);
+        assert_eq!(diagnostic.kind, GameDataDiagnosticKind::IndexUnavailable);
+        assert_eq!(diagnostic.target, None);
+        assert_eq!(diagnostic.mod_id, "mod");
+        assert_eq!(diagnostic.origin.as_ref().unwrap().module_index, 3);
+        assert_eq!(diagnostic.chunk, None);
+        assert!(diagnostic.message.contains("called off"));
+    }
+
+    #[test]
+    fn an_empty_object_index_leaves_every_entry_unresolved_in_mapping_order() {
+        let (_fixture, game) =
+            game_index_with_hashes(&[("DATA/FINAL/Champions/Aatrox.wad.client", &[WadHash(1)])]);
+        let index = ObjectIndex::build(&game).unwrap();
+        let (pending, entries) = pending(&["Characters/Zed", "Characters/Ahri"]);
+        let mut targets = BTreeMap::new();
+        let mut diagnostics = Vec::new();
+        lower_entries(
+            &pending,
+            &entries,
+            &index,
+            &game,
+            &mut targets,
+            &mut diagnostics,
+        );
+        assert!(targets.is_empty());
+        let targets: Vec<Option<&str>> = diagnostics.iter().map(|d| d.target.as_deref()).collect();
+        assert_eq!(targets, [Some("Characters/Zed"), Some("Characters/Ahri")]);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.kind == GameDataDiagnosticKind::EntryUnresolved)
+        );
     }
 }

@@ -295,12 +295,17 @@ impl OverlayProgress {
 
 /// Stages of the overlay build pipeline.
 ///
-/// Emitted in order: `Indexing` -> `CollectingOverrides` -> `PatchingWad` (repeated) -> `Complete`.
+/// Emitted in order: `Indexing` -> `CollectingOverrides` -> `IndexingObjects` (only for a build
+/// with an `entries` module) -> `PatchingWad` (repeated) -> `Complete`.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum OverlayStage {
     /// Scanning the game directory and building the [`GameIndex`].
     Indexing,
+    /// Reading every game bin for the objects it declares. Reported once per build in which
+    /// an enabled layer declares an `entries` module.
+    IndexingObjects,
     /// Reading override files from all enabled mods.
     CollectingOverrides,
     /// Building a patched WAD file in the overlay directory.
@@ -488,6 +493,9 @@ pub struct ModContribution {
 
 pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 
+/// Polled between the units of a build. `true` calls the build off.
+pub(crate) type CalledOff = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// The layout records to persist for every WAD the overlay now holds.
 ///
 /// Freshly written WADs get a record built from what the writer reported;
@@ -550,6 +558,7 @@ pub struct OverlayBuilder {
     blocked_wads: HashSet<String>,
     string_override_mode: StringOverrideMode,
     progress_callback: Option<ProgressCallback>,
+    called_off: Option<CalledOff>,
     /// Per-mod WAD reports captured during the most recent successful
     /// [`build`](Self::build), drained via [`take_mod_wad_reports`](Self::take_mod_wad_reports).
     last_mod_wad_reports: Vec<ModWadReport>,
@@ -587,6 +596,7 @@ impl OverlayBuilder {
             blocked_wads: HashSet::new(),
             string_override_mode: StringOverrideMode::Disabled,
             progress_callback: None,
+            called_off: None,
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
             last_checksum_mismatches: Vec::new(),
@@ -644,6 +654,33 @@ impl OverlayBuilder {
             fingerprint,
             &game_index,
         ))
+    }
+
+    /// Registers a cancellation poll.
+    ///
+    /// `called_off` is polled before the chunk index loads, before overrides are collected,
+    /// between the archives of an object index build, and before each WAD is patched. A poll
+    /// returning `true` ends [`build`](Self::build) with [`Error::CalledOff`]; the state
+    /// directory is as it was before the build.
+    pub fn with_called_off<F>(mut self, called_off: F) -> Self
+    where
+        F: Fn() -> bool + Send + Sync + 'static,
+    {
+        self.called_off = Some(Arc::new(called_off));
+        self
+    }
+
+    /// Whether the cancellation poll asks for the build to stop.
+    pub(crate) fn is_called_off(&self) -> bool {
+        self.called_off.as_ref().is_some_and(|poll| poll())
+    }
+
+    /// [`Error::CalledOff`] when the cancellation poll asks for the build to stop.
+    pub(crate) fn check_called_off(&self) -> Result<()> {
+        if self.is_called_off() {
+            return Err(Error::CalledOff);
+        }
+        Ok(())
     }
 
     /// Register a progress callback.
@@ -709,6 +746,7 @@ impl OverlayBuilder {
         tracing::debug!("Blocked WADs: {:?}", effective_blocked);
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::Indexing));
+        self.check_called_off()?;
 
         std::fs::create_dir_all(self.overlay_root.as_std_path())
             .map_err(|source| Error::write(&self.overlay_root, source))?;
@@ -796,6 +834,7 @@ impl OverlayBuilder {
         }
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::CollectingOverrides));
+        self.check_called_off()?;
 
         let (mut all_meta, mod_wad_reports) =
             self.collect_all_override_metadata(&game_index, &fingerprints)?;
