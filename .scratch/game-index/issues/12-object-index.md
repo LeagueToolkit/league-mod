@@ -6,8 +6,8 @@ labels: enhancement
 
 Part of #228 (design: [`docs/design/game-index.md`](https://github.com/LeagueToolkit/league-mod/blob/main/docs/design/game-index.md)
 [section 8](https://github.com/LeagueToolkit/league-mod/blob/main/docs/design/game-index.md#s8) and [section 9](https://github.com/LeagueToolkit/league-mod/blob/main/docs/design/game-index.md#s9)). Adds the
-`ResolveWadPath` trait, the `hashtable` feature implementing it for `ltk_hashtable` resolvers,
-and the `ObjectIndex` behind the `objects` feature, ported from LTK Manager's
+`ResolveWadPath` trait, implemented by every `ltk_wad::PathResolver`, and the `ObjectIndex`
+behind the `objects` feature, ported from LTK Manager's
 `object_index/build.rs`.
 
 ## Proposed surface
@@ -16,8 +16,7 @@ and the `ObjectIndex` behind the `objects` feature, ported from LTK Manager's
 pub trait ResolveWadPath {
     fn for_each_named(&self, hashes: &[WadHash], visit: &mut dyn FnMut(usize, &str));
 }
-#[cfg(feature = "hashtable")]
-impl<T: ltk_hashtable::PathResolver> ResolveWadPath for T {}
+impl<T: ltk_wad::PathResolver + ?Sized> ResolveWadPath for T {}
 
 pub struct Declaration { pub object: BinHash, pub class: BinHash, pub chunk: WadHash, pub archive: ArchiveId }
 pub struct BuildOptions<'a> {
@@ -56,7 +55,7 @@ pub enum ObjectBuildError { CalledOff }
 
 Blocked by #230.
 
-- [ ] `cargo build -p ltk_game_index --features objects,hashtable` and `--no-default-features --features objects`
+- [ ] `cargo build -p ltk_game_index --features objects` and `--no-default-features --features objects`
 - [ ] A `PROP` fixture named `x.bin` and an unnamed copy of a `PTCH` fixture both contribute declarations; a named `.dds` chunk is never read
 - [ ] `declarations(object)` for an object in two chunks lists both in archive id order; `chunk_declarations` inverts it
 - [ ] `build_with` and a `called_off` returning `true` is `CalledOff`

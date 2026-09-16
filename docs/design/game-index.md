@@ -46,9 +46,8 @@ The crate does not use **file** for a chunk, **WAD** for an archive, **entry** f
 
 `ltk_game_index` owns archive enumeration, the chunk table, the fingerprint, the cache format, the
 object rows, and the resolver trait. It depends on `ltk_wad`, `ltk_hash`, `camino`, `serde`,
-`rmp-serde`, `thiserror`, `tracing`, and `walkdir`. The `objects` feature adds `ltk_meta` and
-`ltk_file`. The `hashtable` feature adds `ltk_hashtable`. The `rayon` feature, on by default, adds
-`rayon`.
+`rmp-serde`, `thiserror`, `tracing`, `walkdir`, and `xxhash-rust`. The `objects` feature adds
+`ltk_meta` and `ltk_file`. The `rayon` feature, on by default, adds `rayon`.
 
 Outside the crate:
 
@@ -64,7 +63,7 @@ Outside the crate:
 ltk_game_index
 |-- GameIndex            chunk table, archives, fingerprint, cache
 |-- ObjectIndex          [objects] declarations, cache
-|-- ResolveWadPath       resolver trait, [hashtable] impl for ltk_hashtable resolvers
+|-- ResolveWadPath       resolver trait, implemented by every ltk_wad::PathResolver
 |-- errors               BuildError, CacheError, ArchiveLookupError, ArchiveReadError,
                          ObjectBuildError
 ```
@@ -79,6 +78,7 @@ pub struct ArchiveId(u32);
 impl ArchiveId {
     pub fn index(self) -> usize;
 }
+impl fmt::Display for ArchiveId { /* `#` and the ordinal */ }
 
 /// One `.wad.client` of the installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,16 +222,18 @@ pub enum BuildError {
     Metadata { path: Utf8PathBuf, #[source] source: std::io::Error },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ArchiveReadError {
-    #[error("cannot open the archive")]
-    Open(#[source] std::io::Error),
-    #[error("cannot mount the archive")]
-    Mount(#[source] ltk_wad::WadError),
+    /// The message of the `std::io::Error`.
+    #[error("cannot open the archive: {0}")]
+    Open(String),
+    /// The message of the `ltk_wad::WadError`.
+    #[error("cannot mount the archive: {0}")]
+    Mount(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SkippedArchive {
     pub archive: ArchiveId,
@@ -249,6 +251,8 @@ pub enum ArchiveLookupError {
 ```
 
 `BuildError` covers enumeration and metadata. Per-archive read failures never fail a build.
+A skipped archive is part of the index: it survives the cache and takes part in index equality.
+`ArchiveReadError` carries the message of the failure, not the source error.
 
 ## <a id="s7"></a>7. Fingerprint and cache
 
@@ -268,9 +272,11 @@ The fingerprint is XXH3-64 over the sorted archive names, each followed by its f
 modification time in nanoseconds since the Unix epoch. Skipped archives contribute their metadata.
 `fingerprint_of(game_dir)` computes it without mounting an archive.
 
-A cache is a MessagePack document with a leading format version, the fingerprint, and the index
-body. The chunk index format version is a crate constant, bumped on any change to `Archive`,
-`ChunkRow`, or the container layout. Ids and rows serialize as integers.
+A cache is a MessagePack document of three consecutive values: the format version, the
+fingerprint, and the index body. The chunk index format version is the public constant
+`CACHE_FORMAT_VERSION`, bumped on any change to `Archive`, `ChunkRow`, `SkippedArchive`, or the
+container layout. Ids and rows serialize positionally, as integers. The version is read first. A
+foreign version is reported without decoding the body.
 
 - `load(path)` returns the cached index regardless of fingerprint. `CacheError::Version` reports a
   format version other than the crate's.
@@ -300,6 +306,11 @@ pub enum CacheError {
     #[error(transparent)]
     Build(#[from] BuildError),
 }
+
+impl CacheError {
+    /// Whether the error is a `Read` of a file that does not exist.
+    pub fn is_missing_file(&self) -> bool;
+}
 ```
 
 ## <a id="s8"></a>8. Resolver
@@ -315,9 +326,9 @@ pub trait ResolveWadPath {
 The batch shape lets a disk-backed table answer one query per slice. The chunk index never takes a
 resolver. The object build takes an optional one ([section 9.2](#s9.2)).
 
-With the `hashtable` feature, every `T: ltk_hashtable::PathResolver` implements `ResolveWadPath`
-by resolving each hash in turn. `ltk_hashtable::GameResolver` is the implementation this
-workspace uses. LTK Manager implements the trait over its layered hash database.
+Every `T: ltk_wad::PathResolver` implements `ResolveWadPath` through `resolve_all`, one answer
+per hash. `ltk_hashtable::GameResolver` is the implementation this workspace uses. LTK Manager
+implements the trait over its layered hash database.
 
 ## <a id="s9"></a>9. Object index
 
@@ -349,6 +360,7 @@ unnamed chunks. One object declared twice in one chunk contributes two declarati
 #[derive(Debug)]
 pub struct ObjectIndex { /* declarations, by_object, by_chunk, stats, skipped, fingerprint */ }
 
+/// Built as `BuildOptions::default()` with fields assigned.
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct BuildOptions<'a> {
@@ -439,8 +451,11 @@ archive that cannot be opened or mounted is a skipped archive, as in the chunk b
 
 The object index's fingerprint is its chunk index's. `load_for(path, game)` returns
 `CacheError::Stale` when the cached fingerprint differs from `game.fingerprint()`. The object
-cache has its own format version constant. `load_or_build_with` follows the chunk index's
-load-or-build rule ([section 7](#s7)).
+cache has its own format version, the public constant `OBJECT_CACHE_FORMAT_VERSION`.
+`load_or_build_with` follows the chunk index's load-or-build rule ([section 7](#s7)).
+
+An archive skipped by the object build counts its chunks in `skipped_chunks`. `sniffed` counts
+every chunk decoded to its magic, bare-named and unnamed alike.
 
 ## <a id="s10"></a>10. Consumers
 
