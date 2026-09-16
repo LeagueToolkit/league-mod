@@ -85,6 +85,36 @@ impl CacheError {
     }
 }
 
+/// The cached value when `load` succeeds, and a fresh `build` otherwise.
+///
+/// A missing cache is logged at debug and any other cache error at warn. The built value is
+/// saved best-effort through `save`, with a warn on failure.
+pub(crate) fn load_or_build<T, E>(
+    what: &str,
+    cache_path: &Utf8Path,
+    load: impl FnOnce() -> Result<T, CacheError>,
+    build: impl FnOnce() -> Result<T, E>,
+    save: impl FnOnce(&T) -> Result<(), CacheError>,
+) -> Result<T, E> {
+    match load() {
+        Ok(value) => {
+            tracing::info!("{what} loaded from {cache_path}");
+            return Ok(value);
+        }
+        Err(error) if error.is_missing_file() => {
+            tracing::debug!("No {what} cache at {cache_path}");
+        }
+        Err(error) => {
+            tracing::warn!("Rebuilding {what}: {error}");
+        }
+    }
+    let value = build()?;
+    if let Err(error) = save(&value) {
+        tracing::warn!("{what} cache not saved: {error}");
+    }
+    Ok(value)
+}
+
 /// A cache file's header and body.
 #[derive(Debug)]
 pub(crate) struct Document<T> {
@@ -126,8 +156,8 @@ pub(crate) fn read<T: DeserializeOwned>(
 
 /// Writes `body` to `path` under `version` and `fingerprint`, atomically.
 ///
-/// The bytes go to a sibling temporary file, which is renamed over `path`. A failure leaves
-/// no partial file at `path`.
+/// The parent directory is created. The bytes go to a sibling temporary file, which is
+/// renamed over `path`. A failure leaves no partial file at `path`.
 ///
 /// # Errors
 ///

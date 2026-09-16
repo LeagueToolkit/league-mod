@@ -184,15 +184,7 @@ pub enum GameDirError {
     #[error("{path} is not a League installation: it has no DATA/FINAL directory")]
     MissingDataFinal { path: Utf8PathBuf },
 
-    /// A WAD the build resolved lies outside the game directory.
-    #[error("WAD {wad} is not under the game directory {game_dir}")]
-    WadOutsideGameDir {
-        game_dir: Utf8PathBuf,
-        wad: Utf8PathBuf,
-    },
-
-    /// A stringtable chunk the build expected is not in the game WAD, which is
-    /// what a game update that moved or renamed it looks like.
+    /// A game WAD lacks the chunk a stringtable or declaration base reads from.
     #[error("game WAD {wad} does not hold stringtable chunk {chunk_hash:016x}")]
     StringtableChunkMissing {
         wad: Utf8PathBuf,

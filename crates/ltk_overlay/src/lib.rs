@@ -78,7 +78,7 @@
 //! and the trust rules.
 //!
 //! The game index (`ltk_game_index::GameIndex`) is cached in the state directory
-//! under the installation's fingerprint, so an unpatched game mounts no WAD twice.
+//! under the installation's fingerprint. An unpatched game mounts no WAD twice.
 //!
 //! # Example
 //!

@@ -80,17 +80,14 @@ fn index_archives(archives: Vec<Archive>) -> Result<GameIndex, BuildError> {
     let mut skipped = Vec::new();
     let mut listed: Vec<Listed> = Vec::new();
     for (index, outcome) in mounted.into_iter().enumerate() {
-        let id = ArchiveId(index as u32);
         match outcome {
-            Ok(chunks) => listed.extend(chunks.into_iter().map(|(hash, size, checksum)| Listed {
-                hash,
-                archive: id,
-                size,
-                checksum,
-            })),
+            Ok(chunks) => listed.extend(chunks),
             Err(error) => {
                 tracing::warn!("Skipping archive {}: {error}", archives[index].name);
-                skipped.push(SkippedArchive { archive: id, error });
+                skipped.push(SkippedArchive {
+                    archive: ArchiveId(index as u32),
+                    error,
+                });
             }
         }
     }
@@ -127,34 +124,34 @@ fn index_archives(archives: Vec<Archive>) -> Result<GameIndex, BuildError> {
     ))
 }
 
-type MountOutcome = Result<Vec<(WadHash, u64, u64)>, ArchiveReadError>;
+type MountOutcome = Result<Vec<Listed>, ArchiveReadError>;
 
-/// Mounts every archive, in parallel with the `rayon` feature.
+/// Mounts every archive, in parallel with the `rayon` feature. Outcomes are in id order.
 fn mount_all(archives: &[Archive]) -> Vec<MountOutcome> {
+    let mount_at = |(index, archive): (usize, &Archive)| mount(ArchiveId(index as u32), archive);
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
-        archives.par_iter().map(mount).collect()
+        archives.par_iter().enumerate().map(mount_at).collect()
     }
     #[cfg(not(feature = "rayon"))]
     {
-        archives.iter().map(mount).collect()
+        archives.iter().enumerate().map(mount_at).collect()
     }
 }
 
-/// The table of contents of one archive as `(hash, size, checksum)` triples.
-fn mount(archive: &Archive) -> MountOutcome {
+/// The table of contents of the archive `id`, one [`Listed`] per chunk.
+fn mount(id: ArchiveId, archive: &Archive) -> MountOutcome {
     let file = File::open(archive.path.as_std_path()).map_err(|e| ArchiveReadError::open(&e))?;
     let wad = Wad::mount(BufReader::new(file)).map_err(|e| ArchiveReadError::mount(&e))?;
     Ok(wad
         .chunks()
         .iter()
-        .map(|chunk| {
-            (
-                chunk.path_hash,
-                chunk.uncompressed_size as u64,
-                chunk.checksum,
-            )
+        .map(|chunk| Listed {
+            hash: chunk.path_hash,
+            archive: id,
+            size: chunk.uncompressed_size as u64,
+            checksum: chunk.checksum,
         })
         .collect())
 }

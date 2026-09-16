@@ -148,7 +148,7 @@ fn named_bins_and_sniffed_chunks_contribute_and_other_named_chunks_are_never_rea
     let stats = index.stats();
     assert_eq!(stats.archives, 1);
     // x.bin named, scene and patch sniffed as bins.
-    assert_eq!(stats.files, 3);
+    assert_eq!(stats.bins, 3);
     // scene (bare) and the two unnamed chunks.
     assert_eq!(stats.sniffed, 3);
     assert_eq!(stats.sniffed_bins, 2);
@@ -256,18 +256,27 @@ fn an_object_in_two_chunks_lists_both_in_archive_id_order_and_chunk_lookup_inver
     assert!(!index.is_empty());
 }
 
+/// A `PROP` declaring object 1 twice: object 2's hash is rewritten to 1 in the bytes.
+fn prop_with_duplicate() -> Vec<u8> {
+    let mut bytes = prop(&[(1, 10), (2, 11)]);
+    let needle = 2u32.to_le_bytes();
+    let at = bytes
+        .windows(4)
+        .rposition(|window| window == needle)
+        .expect("object 2 is in the body");
+    bytes[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+    bytes
+}
+
 #[test]
 fn an_object_declared_twice_in_one_chunk_contributes_two_declarations() {
     let install = Installation::new();
-    // A PTCH keys objects by hash, so only a PROP can hold a duplicate. Bin::new dedups by
-    // hash too; two chunks declaring the same object cover the same lookup path.
-    install.write_archive(
-        "A.wad.client",
-        &[("x.bin", &prop(&[(1, 10)])), ("y.bin", &prop(&[(1, 11)]))],
-    );
+    install.write_archive("A.wad.client", &[("x.bin", &prop_with_duplicate())]);
     let game = GameIndex::build(install.game_dir()).unwrap();
     let index = ObjectIndex::build(&game).unwrap();
-    assert_eq!(pairs(index.declarations(BinHash(1))).len(), 2);
+    assert_eq!(pairs(index.declarations(BinHash(1))), [(1, 10), (1, 11)]);
+    assert_eq!(index.chunk_declarations(chunk_hash("x.bin")).count(), 2);
+    assert_eq!(index.len(), 1);
 }
 
 #[test]
@@ -284,7 +293,7 @@ fn a_chunk_that_does_not_parse_is_counted_and_declares_nothing() {
 
     let index = ObjectIndex::build_with(&game, &options(Some(&names), None, None)).unwrap();
     assert_eq!(index.stats().skipped_chunks, 1);
-    assert_eq!(index.stats().files, 2);
+    assert_eq!(index.stats().bins, 2);
     assert!(!index.declares(BinHash(1)));
     assert!(index.declares(BinHash(2)));
 }
@@ -386,6 +395,18 @@ fn one_worker_and_many_workers_produce_equal_declarations() {
     }
     assert_eq!(one.stats().workers, 1);
     assert_eq!(many.stats().workers, 4);
+
+    // The same fixed content under every feature set: archive order, then hash order.
+    let a = game.archive_by_file_name("A.wad.client").unwrap();
+    let first: Vec<(u32, u32)> = many
+        .chunk_declarations(chunk_hash("A/one.bin"))
+        .map(|d| (d.object.0, d.class.0))
+        .collect();
+    assert_eq!(first, [(6501, 1), (6502, 2)]);
+    assert!(
+        many.chunk_declarations(chunk_hash("A/one.bin"))
+            .all(|d| d.archive == a)
+    );
 }
 
 #[test]
@@ -397,6 +418,7 @@ fn an_archive_that_does_not_mount_after_the_chunk_index_is_skipped() {
     std::fs::write(a.as_std_path(), b"gone bad").unwrap();
 
     let index = ObjectIndex::build(&game).unwrap();
+    assert_eq!(index.stats().archives, 1);
     assert_eq!(index.skipped().len(), 1);
     assert_eq!(
         index.skipped()[0].archive,

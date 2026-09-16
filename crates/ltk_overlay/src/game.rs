@@ -63,7 +63,7 @@ impl GameDir {
         self.0.join(rel_path)
     }
 
-    /// Loads the chunk index cached under `state_dir`, or builds and caches it.
+    /// Loads the chunk index cached under `state_dir`, or builds it and writes the cache.
     ///
     /// Every skipped archive is logged at warn. A build never fails on one.
     ///
@@ -71,7 +71,7 @@ impl GameDir {
     ///
     /// [`GameDirError::MissingDataFinal`] when the layout is wrong, and
     /// [`Error::GameIndex`] when the archives cannot be enumerated.
-    pub fn index(&self, state_dir: &StateDir) -> Result<GameIndex> {
+    pub fn load_or_build_index(&self, state_dir: &StateDir) -> Result<GameIndex> {
         let index = GameIndex::load_or_build(&self.0, &state_dir.game_index_cache())?;
         for skipped in index.skipped() {
             let archive = index.archive(skipped.archive);
@@ -294,8 +294,9 @@ impl GameIndexExt for GameIndex {
         self.archives()
             .iter()
             .filter_map(|archive| {
-                let stem = archive.name.strip_suffix(".client")?;
-                let toc_path = format!("{ARCHIVE_ROOT}/{stem}.SubChunkTOC").to_lowercase();
+                let name = archive.name.to_ascii_lowercase();
+                let stem = name.strip_suffix(".client")?;
+                let toc_path = format!("{ARCHIVE_ROOT}/{stem}.subchunktoc").to_lowercase();
                 Some(WadHash(xxh64(toc_path.as_bytes(), 0)))
             })
             .collect()
@@ -389,7 +390,7 @@ mod tests {
     #[test]
     fn subchunktoc_blocked_hashes_every_archive_toc_path() {
         let (_fixture, index) = game_index_with_hashes(&[
-            ("DATA/FINAL/Champions/Aatrox.wad.client", &[WadHash(1)]),
+            ("DATA/FINAL/Champions/Aatrox.WAD.CLIENT", &[WadHash(1)]),
             ("DATA/FINAL/Maps/Map11.wad.client", &[WadHash(2)]),
         ]);
 
@@ -484,13 +485,13 @@ mod tests {
         let state = StateDir::new(fixture.game_dir.join("state"));
         state.create().unwrap();
 
-        let index = fixture.game().index(&state).unwrap();
+        let index = fixture.game().load_or_build_index(&state).unwrap();
         let skipped = index.skipped_archives();
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].name, "B.wad.client");
         assert!(state.game_index_cache().exists());
 
-        let again = fixture.game().index(&state).unwrap();
+        let again = fixture.game().load_or_build_index(&state).unwrap();
         assert_eq!(again.skipped_archives(), skipped);
     }
 }

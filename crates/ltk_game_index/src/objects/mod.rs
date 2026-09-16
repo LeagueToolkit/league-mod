@@ -43,7 +43,7 @@ pub struct ObjectStats {
     /// Archives with at least one chunk read or sniffed.
     pub archives: u32,
     /// Bin chunks read, named or sniffed, readable or not.
-    pub files: u32,
+    pub bins: u32,
     /// Chunks decoded to their magic.
     pub sniffed: u32,
     /// Sniffed chunks whose magic is a bin's.
@@ -104,7 +104,7 @@ struct Body {
 /// Declarations are stored in archive id order, and within one archive in the order the
 /// build read its bin chunks: named `.bin` chunks in ascending chunk hash order, then
 /// bare-named chunks, then unnamed chunks.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectIndex {
     /// Storage order.
     declarations: Vec<Declaration>,
@@ -239,26 +239,13 @@ impl ObjectIndex {
         cache_path: &Utf8Path,
         options: &BuildOptions<'_>,
     ) -> Result<Self, ObjectBuildError> {
-        match Self::load_for(cache_path, game) {
-            Ok(index) => {
-                tracing::info!(
-                    "Object index loaded from {cache_path} (fingerprint {})",
-                    index.fingerprint
-                );
-                return Ok(index);
-            }
-            Err(error) if error.is_missing_file() => {
-                tracing::debug!("No object index cache at {cache_path}");
-            }
-            Err(error) => {
-                tracing::warn!("Rebuilding object index: {error}");
-            }
-        }
-        let index = Self::build_with(game, options)?;
-        if let Err(error) = index.save(cache_path) {
-            tracing::warn!("Object index cache not saved: {error}");
-        }
-        Ok(index)
+        cache::load_or_build(
+            "object index",
+            cache_path,
+            || Self::load_for(cache_path, game),
+            || Self::build_with(game, options),
+            |index| index.save(cache_path),
+        )
     }
 
     /// Whether any chunk declares `object`.

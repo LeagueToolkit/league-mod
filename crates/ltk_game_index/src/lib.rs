@@ -1,9 +1,10 @@
 //! Index of one League of Legends installation.
 //!
-//! The chunk index, [`GameIndex`], holds every chunk of every archive under `Game/DATA/FINAL`
-//! with every archive holding it. The object index, `ObjectIndex`, behind the `objects`
-//! feature, holds every bin object those chunks declare. The object build takes an optional
-//! [`ResolveWadPath`] to name chunks. Without one it sniffs every chunk. Both are keyed by hash and carry no
+//! The chunk index, [`GameIndex`], holds every chunk of every archive under
+//! `Game/DATA/FINAL` with every archive holding it. The object index, `ObjectIndex`,
+//! behind the `objects` feature, holds every bin object those chunks declare. The object
+//! build takes an optional [`ResolveWadPath`] to name chunks. Without one it sniffs every
+//! chunk. Both are keyed by hash and carry no
 //! display names. Consumers resolve names through their own tables.
 //!
 //! A [`Fingerprint`] identifies an installation's archive set by size and modification time.

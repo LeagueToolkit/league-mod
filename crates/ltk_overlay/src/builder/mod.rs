@@ -632,9 +632,8 @@ impl OverlayBuilder {
     ) -> Result<ModWadReport> {
         let game_dir = GameDir::new(game_dir);
         let state_dir = StateDir::new(state_dir);
-        game_dir.data_final()?;
         state_dir.create()?;
-        let game_index = game_dir.index(&state_dir)?;
+        let game_index = game_dir.load_or_build_index(&state_dir)?;
 
         let fingerprint = enabled_mod.cache_fingerprint();
         let mod_meta = metadata::collect_single_mod_metadata(enabled_mod, &game_index)?;
@@ -711,13 +710,11 @@ impl OverlayBuilder {
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::Indexing));
 
-        self.game_dir.data_final()?;
-
         std::fs::create_dir_all(self.overlay_root.as_std_path())
             .map_err(|source| Error::write(&self.overlay_root, source))?;
         self.state_dir.create()?;
 
-        let game_index = self.game_dir.index(&self.state_dir)?;
+        let game_index = self.game_dir.load_or_build_index(&self.state_dir)?;
         self.last_skipped_archives = game_index.skipped_archives();
         let game_fingerprint = game_index.fingerprint().as_u64();
 

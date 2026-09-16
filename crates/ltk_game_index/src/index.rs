@@ -172,26 +172,13 @@ impl GameIndex {
     ///
     /// Everything [`build`](Self::build) reports.
     pub fn load_or_build(game_dir: &Utf8Path, cache_path: &Utf8Path) -> Result<Self, BuildError> {
-        match Self::load_for(cache_path, game_dir) {
-            Ok(index) => {
-                tracing::info!(
-                    "Game index loaded from {cache_path} (fingerprint {})",
-                    index.fingerprint
-                );
-                return Ok(index);
-            }
-            Err(error) if error.is_missing_file() => {
-                tracing::debug!("No game index cache at {cache_path}");
-            }
-            Err(error) => {
-                tracing::warn!("Rebuilding game index: {error}");
-            }
-        }
-        let index = Self::build(game_dir)?;
-        if let Err(error) = index.save(cache_path) {
-            tracing::warn!("Game index cache not saved: {error}");
-        }
-        Ok(index)
+        cache::load_or_build(
+            "game index",
+            cache_path,
+            || Self::load_for(cache_path, game_dir),
+            || Self::build(game_dir),
+            |index| index.save(cache_path),
+        )
     }
 
     /// The fingerprint of the installation the index was built from.

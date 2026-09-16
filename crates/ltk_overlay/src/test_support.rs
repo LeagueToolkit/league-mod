@@ -125,6 +125,12 @@ pub(crate) fn game_index_with_hashes(
     for (rel_path, hashes) in wads {
         fixture.write_wad_with_hashes(rel_path, hashes);
     }
-    let index = ltk_game_index::GameIndex::build(&fixture.game_dir).expect("fixture index builds");
+    let root = fixture.game_dir.join("DATA/FINAL");
+    let paths: Vec<camino::Utf8PathBuf> = wads
+        .iter()
+        .map(|(rel_path, _)| fixture.game_dir.join(rel_path))
+        .collect();
+    let index = ltk_game_index::GameIndex::build_from_archives(&root, &paths)
+        .expect("fixture index builds");
     (fixture, index)
 }

@@ -25,9 +25,9 @@ struct Job<'a> {
 
 /// What one job read.
 #[derive(Debug, Default)]
-struct Read {
+struct JobRead {
     declarations: Vec<Declaration>,
-    files: u32,
+    bins: u32,
     sniffed: u32,
     sniffed_bins: u32,
     skipped_chunks: u32,
@@ -50,14 +50,14 @@ impl Job<'_> {
     /// Mounts the archive and reads every chunk of the job for its declarations.
     ///
     /// Named chunks first, then bare and unnamed chunks that sniff as a bin.
-    fn read(&self) -> Result<Read, ArchiveReadError> {
+    fn read(&self) -> Result<JobRead, ArchiveReadError> {
         let file =
             File::open(self.archive.path.as_std_path()).map_err(|e| ArchiveReadError::open(&e))?;
         let mut wad = Wad::mount(BufReader::new(file)).map_err(|e| ArchiveReadError::mount(&e))?;
-        let mut read = Read::default();
+        let mut read = JobRead::default();
 
         for &hash in &self.named {
-            read.files += 1;
+            read.bins += 1;
             self.read_chunk(&mut wad, hash, &mut read);
         }
 
@@ -68,7 +68,7 @@ impl Job<'_> {
                 continue;
             }
             read.sniffed_bins += 1;
-            read.files += 1;
+            read.bins += 1;
             self.read_chunk(&mut wad, hash, &mut read);
         }
         Ok(read)
@@ -91,7 +91,7 @@ impl Job<'_> {
     /// Reads `hash` whole and pushes a declaration for every object it declares.
     ///
     /// A chunk that is missing or does not read is counted in `skipped_chunks`.
-    fn read_chunk(&self, wad: &mut MountedArchive, hash: WadHash, read: &mut Read) {
+    fn read_chunk(&self, wad: &mut MountedArchive, hash: WadHash, read: &mut JobRead) {
         let bytes = match wad.chunks().get(hash).copied() {
             Some(chunk) => wad.load_chunk_decompressed(&chunk),
             None => {
@@ -201,7 +201,7 @@ fn run_jobs(
     jobs: &[Job<'_>],
     workers: usize,
     called_off: &(dyn Fn() -> bool + Sync),
-) -> Vec<Option<Result<Read, ArchiveReadError>>> {
+) -> Vec<Option<Result<JobRead, ArchiveReadError>>> {
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
@@ -247,7 +247,6 @@ pub(super) fn build(
     let mut built = Built {
         declarations: Vec::new(),
         stats: ObjectStats {
-            archives: jobs.len() as u32,
             workers: workers as u32,
             ..ObjectStats::default()
         },
@@ -259,7 +258,8 @@ pub(super) fn build(
         };
         match outcome {
             Ok(read) => {
-                built.stats.files += read.files;
+                built.stats.archives += 1;
+                built.stats.bins += read.bins;
                 built.stats.sniffed += read.sniffed;
                 built.stats.sniffed_bins += read.sniffed_bins;
                 built.stats.declarations += read.declarations.len() as u32;
@@ -280,7 +280,7 @@ pub(super) fn build(
     built.stats.elapsed = started.elapsed();
     tracing::info!(
         archives = built.stats.archives,
-        files = built.stats.files,
+        bins = built.stats.bins,
         sniffed = built.stats.sniffed,
         sniffed_bins = built.stats.sniffed_bins,
         declarations = built.stats.declarations,

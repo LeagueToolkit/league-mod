@@ -282,7 +282,8 @@ foreign version is reported without decoding the body.
   format version other than the crate's.
 - `load_for(path, game_dir)` computes `fingerprint_of(game_dir)` and returns `CacheError::Stale`
   when it differs from the cached one.
-- `save(path)` writes atomically: to a sibling temporary file, then renamed over `path`.
+- `save(path)` creates the parent directory and writes atomically: to a sibling temporary
+  file, then renamed over `path`.
 - `load_or_build(game_dir, cache_path)` returns `load_for` on success. On any `CacheError` it logs
   at debug for a missing file and at warn otherwise, builds, saves best-effort with a warn on
   failure, and returns the built index.
@@ -357,7 +358,7 @@ unnamed chunks. One object declared twice in one chunk contributes two declarati
 
 ```rust
 /// Every bin object of an installation, keyed by object hash, with every declaring chunk.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectIndex { /* declarations, by_object, by_chunk, stats, skipped, fingerprint */ }
 
 /// Built as `BuildOptions::default()` with fields assigned.
@@ -410,7 +411,7 @@ pub struct ObjectStats {
     /// Archives with at least one chunk read or sniffed.
     pub archives: u32,
     /// Bin chunks read, named or sniffed, readable or not.
-    pub files: u32,
+    pub bins: u32,
     /// Chunks decoded to their magic.
     pub sniffed: u32,
     /// Sniffed chunks whose magic is a bin's.
@@ -439,7 +440,8 @@ The build partitions the chunk index's rows by first holder, one job per archive
 A named chunk whose last segment has no extension is bare-named and is sniffed. An unnamed chunk is
 sniffed. Any other named chunk is not read. Without a resolver every chunk is sniffed.
 
-Sniffing decodes the chunk up to `ltk_file::MAX_MAGIC_SIZE` bytes and reads it whole when
+Sniffing decodes the chunk up to `ltk_file::MAX_MAGIC_SIZE` bytes from a raw prefix of 16 KiB,
+retried at 256 KiB when the first block is cut short, and reads it whole when
 `LeagueFileKind::identify_from_bytes` reports `PropertyBin` or `PropertyBinOverride`. A `PROP`
 is read through `ltk_meta::stream::BinStream::entries`, which yields object and class hashes
 without decoding values. A `PTCH` is read through `ltk_meta::BinOverride::from_reader`. A chunk
