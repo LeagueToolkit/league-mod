@@ -46,6 +46,7 @@ slug = "0.1"
 sysinfo = "0.32"
 tempfile = "3.15"
 thiserror = "2"
+toml = "1.1"
 tracing = "0.1"
 walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }

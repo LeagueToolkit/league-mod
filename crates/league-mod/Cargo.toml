@@ -16,7 +16,7 @@ authors = ["LeagueToolkit"]
 clap = { version = "4.5.20", features = ["derive"] }
 miette = { version = "7", features = ["fancy"] }
 thiserror = { workspace = true }
-toml = "0.8.19"
+toml = { workspace = true }
 ltk_mod_project = { workspace = true, features = ["modpkg", "fantome"] }
 ltk_mod_core = { workspace = true }
 regex = "1.11.1"

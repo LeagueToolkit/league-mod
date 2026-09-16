@@ -19,7 +19,7 @@ ignore = "0.4"
 indexmap = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-toml = "0.8.19"
+toml = { workspace = true }
 serde_json = { workspace = true }
 ltk_hashtable = { workspace = true }
 
