@@ -58,7 +58,7 @@ impl Declarations {
     pub fn manifest_json(&self) -> Result<String, Error> {
         self.validate()?;
         serde_json::to_string_pretty(&manifest::Manifest::from(self)).map_err(|error| {
-            Error::new(ErrorKind::Syntax {
+            Error::new(ErrorKind::Serialize {
                 detail: error.to_string(),
             })
         })

@@ -91,8 +91,8 @@ impl Format {
                 };
                 serde_saphyr::from_str_with_options(text, options).map_err(|e| {
                     let span = e.location().map(|at| {
-                        let (line, column) = (at.line(), at.column());
-                        Span::at_line_column(text, line as usize, column as usize)
+                        let clamp = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+                        Span::at_line_column(text, clamp(at.line()), clamp(at.column()))
                     });
                     syntax(&e, span)
                 })

@@ -13,7 +13,7 @@ use ltk_meta::{
     concrete::{Bin, BinObject, values},
     path::PropertyPath,
     property::NoMeta,
-    property::values::Embedded,
+    property::values::{Embedded, UnorderedContainer},
 };
 
 fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
@@ -74,6 +74,17 @@ impl TestSchema {
             (field("C", "iconAvatar"), Shape::bare(K::WadChunkLink)),
             (field("C", "extras"), list(K::U16)),
             (field("C", "wide"), Shape::bare(K::I64)),
+            (field("C", "id"), Shape::bare(K::Hash)),
+            (field("C", "mesh2"), Shape::bare(K::Embedded)),
+            (
+                field("C", "tags2"),
+                Shape {
+                    kind: K::UnorderedContainer,
+                    key: None,
+                    item: Some(K::Hash),
+                },
+            ),
+            (field("C", "names"), list(K::Hash)),
             (field("E", "texture"), Shape::bare(K::String)),
             (field("E", "scale"), Shape::bare(K::F32)),
         ]);
@@ -137,6 +148,17 @@ fn base_bin() -> Vec<u8> {
         .property(h("ptr"), values::Struct::default())
         .property(h("opt"), values::Optional::empty(K::U32).unwrap())
         .property(h("flag"), values::BitBool::new(false))
+        .property(
+            h("tags2"),
+            UnorderedContainer(
+                values::Container::new(K::Hash, vec![values::Hash::new(h("a")).into()]).unwrap(),
+            ),
+        )
+        .property(
+            h("names"),
+            values::Container::new(K::String, vec![values::String::new("n".into()).into()])
+                .unwrap(),
+        )
         .build();
     let bin = Bin::builder().object(object).build();
     let mut cursor = Cursor::new(Vec::new());
@@ -322,6 +344,35 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             .into(),
         ),
         ("ptr: null", "ptr", values::Struct::default().into()),
+        ("ptr: !pointer {}", "ptr", values::Struct::default().into()),
+        (
+            "opt: !option {}",
+            "opt",
+            values::Optional::empty(K::U32).unwrap().into(),
+        ),
+        ("id: Foo", "id", values::Hash::new(h("Foo")).into()),
+        (
+            "tags2: [b]",
+            "tags2",
+            UnorderedContainer(
+                values::Container::new(K::Hash, vec![values::Hash::new(h("b")).into()]).unwrap(),
+            )
+            .into(),
+        ),
+        (
+            "resources: {q: !link null}",
+            "resources",
+            values::Map::new(
+                K::Hash,
+                K::ObjectLink,
+                vec![(
+                    values::Hash::new(h("q")).into(),
+                    values::ObjectLink::new(BinHash(0)).into(),
+                )],
+            )
+            .unwrap()
+            .into(),
+        ),
         (
             "ptr: !pointer {class: E, set: {texture: v, scale: 2}}",
             "ptr",
@@ -372,6 +423,12 @@ fn every_coercion_row_passes_and_every_reason_fails() {
         ("-tags: [zzz]", "-tags", Reason::RemovalUnmatched),
         ("-extras: [1]", "-extras", Reason::ContainerAbsent),
         ("ptr: {texture: v}", "ptr", Reason::NullPointer),
+        ("ptr: {}", "ptr", Reason::NullPointer),
+        ("opt: {}", "opt", Reason::KindMismatch),
+        ("mesh2: {texture: q}", "mesh2", Reason::KindMismatch),
+        ("mesh2: !string q", "mesh2", Reason::KindMismatch),
+        ("+names: [x]", "+names", Reason::TypeMismatch),
+        ("-names: [n]", "-names", Reason::TypeMismatch),
         ("ptr: !pointer {class: Nope}", "ptr", Reason::UnknownClass),
         (
             "ptr: !pointer {class: E, set: {nope: 1}}",

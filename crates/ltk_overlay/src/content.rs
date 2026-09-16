@@ -383,14 +383,9 @@ impl ModContentProvider for FsModContent {
         &mut self,
         layer: &str,
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
-        let ignore = self.ignore().map_err(|error| {
-            ltk_game_data::Error::in_document(
-                ltk_game_data::ErrorKind::Io {
-                    detail: error.to_string(),
-                },
-                layer,
-            )
-        })?;
+        let ignore = self
+            .ignore()
+            .map_err(|error| ltk_game_data::Error::io(layer, &error))?;
         ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).declarations
     }
 

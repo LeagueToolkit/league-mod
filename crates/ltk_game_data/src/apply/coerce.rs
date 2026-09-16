@@ -43,7 +43,7 @@ impl Coercer<'_> {
                     self.struct_pin(inner, shape.kind, base)
                 }
                 "pointer" | "embed" => Err(Reason::PinMismatch),
-                _ => Err(Reason::Untypable),
+                _ => Err(Reason::KindMismatch),
             },
             K::Container | K::UnorderedContainer | K::Map => {
                 if Some(pin) != shape.item {
@@ -51,7 +51,10 @@ impl Coercer<'_> {
                 }
                 self.bare(inner, shape)
             }
-            K::Optional if name == "option" => self.optional(inner, shape),
+            K::Optional if name == "option" => match inner {
+                Value::Mapping(fields) if fields.is_empty() => self.optional(&Value::Null, shape),
+                inner => self.optional(inner, shape),
+            },
             K::Optional if Some(pin) == shape.item => {
                 self.optional(&Value::List(vec![inner.clone()]), shape)
             }
@@ -125,14 +128,9 @@ impl Coercer<'_> {
             K::Map => self.map(value, shape)?,
             K::Struct => match value {
                 Value::Null => null_pointer(),
-                Value::Mapping(fields) if fields.is_empty() => null_pointer(),
-                Value::Mapping(_) => return Err(Reason::Untypable),
                 _ => return Err(Reason::KindMismatch),
             },
-            K::Embedded => match value {
-                Value::Mapping(_) => return Err(Reason::Untypable),
-                _ => return Err(Reason::KindMismatch),
-            },
+            K::Embedded => return Err(Reason::KindMismatch),
         })
     }
 
@@ -154,12 +152,11 @@ impl Coercer<'_> {
         })
     }
 
-    /// Reads null, an empty mapping, a list of zero or one element, or one value as an option.
+    /// Reads null, a list of zero or one element, or one value as an option.
     fn optional(&self, value: &Value, shape: Shape) -> Coerced {
         let item = shape.item.ok_or(Reason::Untypable)?;
         let content = match value {
             Value::Null => None,
-            Value::Mapping(fields) if fields.is_empty() => None,
             Value::List(items) => match items.as_slice() {
                 [] => None,
                 [one] => Some(self.coerce(one, Shape::bare(item), None)?),
@@ -280,11 +277,15 @@ fn class_hash(name: &str) -> BinHash {
 
 /// The hash `0x` and exactly 8 hexadecimal digits spell.
 fn hex32(text: &str) -> Option<BinHash> {
-    let digits = text.strip_prefix("0x")?;
-    (digits.len() == 8 && digits.bytes().all(|c| c.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(digits, 16).ok())
+    hex(text, 8).and_then(|hash| u32::try_from(hash).ok().map(BinHash))
+}
+
+/// The hash `0x` and exactly `digits` hexadecimal digits spell.
+fn hex(text: &str, digits: usize) -> Option<u64> {
+    let spelled = text.strip_prefix("0x")?;
+    (spelled.len() == digits && spelled.bytes().all(|c| c.is_ascii_hexdigit()))
+        .then(|| u64::from_str_radix(spelled, 16).ok())
         .flatten()
-        .map(BinHash)
 }
 
 /// An integer in the range of `T`.
@@ -339,17 +340,7 @@ fn hash64(value: &Value) -> Result<WadHash, Reason> {
     match value {
         Value::Null => Ok(WadHash(0)),
         Value::String(text) if text.is_empty() => Ok(WadHash(0)),
-        Value::String(text) => {
-            let spelled = text.strip_prefix("0x").filter(|digits| {
-                digits.len() == 16 && digits.bytes().all(|c| c.is_ascii_hexdigit())
-            });
-            Ok(
-                match spelled.and_then(|digits| u64::from_str_radix(digits, 16).ok()) {
-                    Some(hash) => WadHash(hash),
-                    None => WadHash(path_hash(text)),
-                },
-            )
-        }
+        Value::String(text) => Ok(WadHash(hex(text, 16).unwrap_or_else(|| path_hash(text)))),
         _ => Err(Reason::KindMismatch),
     }
 }

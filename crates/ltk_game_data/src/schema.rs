@@ -53,6 +53,7 @@ impl<S: Schema + ?Sized> Schema for Arc<S> {
 /// A property type: a kind, and the kinds a container carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Shape {
+    /// The property's kind.
     pub kind: PropertyKind,
     /// A map's key kind.
     pub key: Option<PropertyKind>,

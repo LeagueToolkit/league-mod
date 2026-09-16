@@ -290,8 +290,8 @@ impl Bindings {
                 let name = EntryName::try_from(key.as_str())?;
                 if !name.as_str().contains('/') && !name.is_hash() {
                     return Err(Error::at_key(
-                        ErrorKind::UnsupportedBinding { key },
-                        "binding",
+                        ErrorKind::UnsupportedBinding { key: key.clone() },
+                        key,
                     ));
                 }
                 let Value::Mapping(body) = value else {

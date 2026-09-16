@@ -97,6 +97,8 @@ pub struct Shape {
 pub struct NoSchema;
 ```
 
+`Schema` is implemented for `&S`, `Box<S>`, and `Arc<S>` of any `S: Schema + ?Sized`.
+
 `PropertyKind` is `ltk_meta::PropertyKind`; `PropertyPath` is `ltk_meta::path::PropertyPath`;
 both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, and
 `Shape::bare(kind)` is the shape with no key and no item. `NoSchema` implements `Schema` with
@@ -227,12 +229,16 @@ part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`
 refuses a duplicate key in every format; an integer past the ranges named is what the format's
 parser makes of it, a float. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
 loads as `{f32: 1.0}`; a tag whose name is not a type name is an error. `Value::pin()` is the
-type name of a one-key mapping whose key is a type name, or `None`.
+type name of a one-key mapping whose key is a type name, or `None`; `Value::is_struct_pin()`
+is whether that name is `pointer` or `embed`; `Value::check_pins()` is the struct-pin check
+loading runs; `Value` implements `Display` as a JSON-like rendering. `kind_named(name)` and
+`name_of(kind)` map type names to `PropertyKind` and back. `EntryName::is_hash()` is whether
+the name is spelled as a hash.
 
 Loading checks the structure of every value. A one-key mapping keyed `pointer` or `embed`,
-anywhere in a value, is a struct pin: its value is null (`pointer` only), or a mapping whose
-keys are `class`, a string, and `set`, a mapping, with at least one of the two; any other
-shape is an error. Every other mapping is read at apply time by the property's type
+anywhere in a value, is a struct pin: its value is null or the empty mapping (`pointer`
+only, the null pointer), or a mapping whose keys are `class`, a string, and `set`, a mapping,
+with at least one of the two; any other shape is an error. Every other mapping is read at apply time by the property's type
 ([section 6](#s6)). A mapping on a struct property descends into it (block nesting): each key
 of the mapping is itself a signed property path relative to the struct, in any format; the
 dotted form `a.b: 1` and the block form `a: {b: 1}` are one edit. An index stays a path
@@ -374,29 +380,31 @@ field name of the pinned class typed by the schema; a nested struct is a nested 
 | null | `option` | The empty option |
 | list | `list`, `list2` | Each element to the item kind |
 | list | `option` | Zero or one element to the item kind, else `ArityMismatch` |
+| any other value | `option` | The one element, to the item kind |
 | list | `vec2`, `vec3`, `vec4`, `mtx44` | Exactly 2, 3, 4, or 16 numbers to `f32`, else `ArityMismatch` |
 | list | `rgba` | Exactly 4 integers from 0 to 255, else `ArityMismatch` or `OutOfRange` |
 | mapping | `map` | Each key, a string, to the key kind by the string rules; each value to the value kind |
 | mapping | `pointer`, `embed` | A struct pin constructs the struct; any other mapping descends ([section 4](#s4)) |
-| `{}` | `pointer`, `option` | Inside a struct pin or an `option` pin, the null pointer or the empty option |
+| `{}` | `pointer`, `option` | Inside a struct pin or an `option` pin only, the null pointer or the empty option |
 
 A type pin on a value fixes the shape: a pin whose type name is not the property's kind is
-`PinMismatch`, and the pinned value coerces by the row of that kind. On a signed key the pin
-names the item kind. A pin on a map value pins its values. A one-key mapping on a `pointer`
+`PinMismatch`, and the pinned value coerces by the row of that kind. On a list, an option, or
+a map, signed or not, a pin names the item kind. A pin on a map value pins its values. A one-key mapping on a `pointer`
 or `embed` property whose key is a type name other than `pointer` or `embed` descends. An
 `option` pin wraps one bare or pinned value, or null.
 
 **Additions and removals.** `+` on a list appends each element, coerced to the item kind, to
 the base's elements; on a map it adds or replaces by key; on a property the base omits it
 creates the container with the schema's shape, or is `Untypable`. `-` on a property the base
-omits is `ContainerAbsent`. `-` on a list removes by value where the item kind is a number,
-boolean, string, `hash`, `link`, `file`, or `flag`: each removal coerces to the item kind and
-removes every equal element; a removal that matches nothing is `RemovalUnmatched`. Where the
-item kind is `pointer` or `embed`, `-` removes by index: each removal is an integer index into
+omits is `ContainerAbsent`. `-` on a list removes by value where the item kind is not `pointer` or
+`embed`: each removal coerces to the item kind and removes every equal element; a removal
+that matches nothing is `RemovalUnmatched`. Where the item kind is `pointer` or `embed`, `-`
+removes by index: each removal is an integer index into
 the base's list, and one out of range is `RemovalUnmatched`. `-` on a map removes by key; a
 key the base lacks is `RemovalUnmatched`. A report on any of a key's operations skips the
 key: its set, removals, and additions together. The diagnostic's `path` carries the sign of
-the operation that failed.
+the operation that failed; a base container whose kinds are not the schema's shape, and a
+value `Bin::patch` refuses, are `TypeMismatch` under the sign of the key's first operation.
 
 Removals compare ASCII-lowercased paths; missing removals produce diagnostics. Additions
 retain written casing and order and omit case-insensitive duplicates. The overlay reads each

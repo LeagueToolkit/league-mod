@@ -18,8 +18,8 @@ Property edits add error sites for path grammar, sign legality, pin names, and p
 Every one of them is a condition the manager's editor names to the author.
 
 An error's place is a manifest or source file, a module index, an edit index, an entry
-name, and a binding key or property path. The manager's editor positions a cursor from
-these parts.
+name, a binding key or property path, and a byte span of the document where a parser
+reports one. The manager's editor positions a cursor from these parts.
 
 ## Decision drivers
 
@@ -44,8 +44,9 @@ these parts.
 [section 3](../design/game-data.md#s3) states the shape and
 [section 4](../design/game-data.md#s4) states the codes a loader reports.
 
-A `Location` names the document, module index, edit index, entry name, and key that apply;
-every field is optional. An error constructed at an inner site gains its outer context
+A `Location` names the document, module index, edit index, entry name, key, and byte span
+that apply; every field is optional. A parser's syntax error carries the span of its
+reported position. An error constructed at an inner site gains its outer context
 through builder methods that fill an unset field and leave a set one alone. `Display`
 renders the location and the code's statement for logs; the statement is not the
 interface.
@@ -59,8 +60,8 @@ interface.
   `RoleConflict`, `OverrideNotPtch`) are part of the library's vocabulary.
 - **Negative:** `ErrorKind` grows with every new validation; a consumer matching it
   exhaustively cannot, the enum is `#[non_exhaustive]`.
-- **Revisit when:** a consumer needs a location the five fields do not express, such as a
-  byte offset inside a source file.
+- **Revisit when:** a consumer needs a location the six fields do not express, or a span on
+  an error a parser does not position.
 
 ## Pros and cons of the options
 

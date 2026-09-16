@@ -96,12 +96,20 @@ impl Group {
     }
 }
 
+/// Where a property's shape comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Typing {
+    /// The schema's answer for the field.
+    Schema,
+    /// The base value's shape, the schema saying nothing.
+    Base,
+}
+
 /// Where a leaf edit lands: the property's shape and its base value.
 struct Site {
     shape: Shape,
     base: Option<V>,
-    /// Whether the shape is the base's, the schema saying nothing.
-    fallback: bool,
+    typing: Typing,
 }
 
 struct Phase<'a> {
@@ -237,7 +245,7 @@ impl Phase<'_> {
             return Ok(Site {
                 shape: Shape::of(element),
                 base: Some(element.clone()),
-                fallback: false,
+                typing: Typing::Schema,
             });
         }
         let base = properties.get(&field);
@@ -245,13 +253,13 @@ impl Phase<'_> {
             Some(shape) => Ok(Site {
                 shape,
                 base: base.cloned(),
-                fallback: false,
+                typing: Typing::Schema,
             }),
             None => match base {
                 Some(value) => Ok(Site {
                     shape: Shape::of(value),
                     base: Some(value.clone()),
-                    fallback: true,
+                    typing: Typing::Base,
                 }),
                 None => Err(Reason::Untypable),
             },
@@ -263,7 +271,7 @@ impl Phase<'_> {
         let site = self
             .locate(hash, &group.path)
             .map_err(|reason| (group.first_sign(), reason))?;
-        if site.fallback {
+        if site.typing == Typing::Base {
             self.outcome.reports.push(Report {
                 kind: ApplyDiagnosticKind::SchemaFallback,
                 path: group.path.as_str().to_owned(),
@@ -280,6 +288,9 @@ impl Phase<'_> {
         }
         if !group.removals.is_empty() || !group.additions.is_empty() {
             let mut contained = match Contained::of(current, site.shape) {
+                Ok(Some(contained)) if contained.shape() != site.shape => {
+                    return Err((group.first_sign(), Reason::TypeMismatch));
+                }
                 Ok(Some(contained)) => contained,
                 Ok(None) if group.removals.is_empty() => {
                     Contained::empty(site.shape).map_err(|reason| (Sign::Add, reason))?
@@ -302,7 +313,7 @@ impl Phase<'_> {
         let value = current.expect("a group has a set, a removal, or an addition");
         self.bin
             .patch(hash, &group.path, value)
-            .map_err(|error| (Sign::Set, Reason::from(&error)))?;
+            .map_err(|error| (group.first_sign(), Reason::from(&error)))?;
         Ok(())
     }
 }
@@ -346,6 +357,28 @@ impl Contained {
             },
             Some(_) => return Err(Reason::SignOnScalar),
         }))
+    }
+
+    /// The shape the container holds.
+    fn shape(&self) -> Shape {
+        match self {
+            Self::List {
+                unordered, item, ..
+            } => Shape {
+                kind: if *unordered {
+                    K::UnorderedContainer
+                } else {
+                    K::Container
+                },
+                key: None,
+                item: Some(*item),
+            },
+            Self::Map { key, item, .. } => Shape {
+                kind: K::Map,
+                key: Some(*key),
+                item: Some(*item),
+            },
+        }
     }
 
     /// The empty container of `shape`, for `+` on a property the base omits.

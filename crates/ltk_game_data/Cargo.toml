@@ -17,5 +17,5 @@ ltk_meta = { workspace = true }
 ltk_hash = { workspace = true, features = ["serde"] }
 indexmap = { workspace = true }
 xxhash-rust = { workspace = true }
-glam = "0.27"
-ltk_primitives = "0.3"
+glam = { workspace = true }
+ltk_primitives = { workspace = true }

@@ -16,6 +16,8 @@ members = [
 [workspace.dependencies]
 # LeagueToolkit crates
 ltk_hash = "0.4"
+ltk_primitives = "0.3"
+glam = "0.27"
 ltk_wad = "0.5.4"
 ltk_file = "0.2.11"
 ltk_meta = "0.8.2"

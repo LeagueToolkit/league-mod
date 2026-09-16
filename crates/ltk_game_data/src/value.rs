@@ -19,12 +19,15 @@ use crate::ErrorKind;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Value {
+    /// `null` in YAML and JSON. TOML has no null.
     Null,
     Bool(bool),
     /// An integer of the union of the `i64` and `u64` ranges.
     Integer(i128),
+    /// A float, or an integer past the integer ranges.
     Float(f64),
     String(String),
+    /// A list in spelled order.
     List(Vec<Value>),
     /// A mapping in spelled order. A duplicate key does not deserialize.
     Mapping(IndexMap<String, Value>),
@@ -81,14 +84,7 @@ impl Value {
     /// The build reads such a mapping as a pin on every property whose type is not a struct.
     #[must_use]
     pub fn pin(&self) -> Option<&str> {
-        match self {
-            Self::Mapping(mapping) if mapping.len() == 1 => mapping
-                .keys()
-                .next()
-                .map(String::as_str)
-                .filter(|key| kind_named(key).is_some()),
-            _ => None,
-        }
+        self.pinned().map(|(name, _)| name)
     }
 
     /// The pinned value of a one-key mapping whose key is a type name.
@@ -112,8 +108,9 @@ impl Value {
 
     /// Checks every struct pin in the value.
     ///
-    /// A `pointer` pin's value is null or a mapping; an `embed` pin's value is a mapping. The
-    /// mapping holds `class`, a string, or `set`, a mapping, or both, and nothing else.
+    /// A `pointer` pin's value is null, the empty mapping, or a mapping; an `embed` pin's
+    /// value is a mapping. The mapping holds `class`, a string, or `set`, a mapping, or both,
+    /// and nothing else. The empty mapping is the null pointer.
     ///
     /// # Errors
     ///
@@ -125,7 +122,7 @@ impl Value {
                 Some((name @ ("pointer" | "embed"), value)) => match value {
                     Self::Null if name == "pointer" => Ok(()),
                     Self::Mapping(fields) => {
-                        if fields.is_empty()
+                        if (fields.is_empty() && name == "embed")
                             || fields
                                 .keys()
                                 .any(|key| !matches!(key.as_str(), "class" | "set"))
@@ -269,18 +266,14 @@ impl<'de> Visitor<'de> for ValueVisitor {
         if i64::try_from(value).is_ok() || u64::try_from(value).is_ok() {
             Ok(Value::Integer(value))
         } else {
-            Err(de::Error::custom(format!(
-                "integer {value} is outside the i64 and u64 ranges"
-            )))
+            Ok(Value::Float(value as f64))
         }
     }
 
     fn visit_u128<E: de::Error>(self, value: u128) -> Result<Value, E> {
         match u64::try_from(value) {
             Ok(value) => Ok(Value::Integer(value.into())),
-            Err(_) => Err(de::Error::custom(format!(
-                "integer {value} is outside the i64 and u64 ranges"
-            ))),
+            Err(_) => Ok(Value::Float(value as f64)),
         }
     }
 
@@ -322,14 +315,14 @@ mod tests {
     #[test]
     fn struct_pins_are_checked_anywhere_in_a_value() {
         let ok: Value = serde_json::from_str(
-            r#"{"a": [{"pointer": null}, {"pointer": {"class": "X"}}], "b": {"embed": {"set": {"c": {"pointer": {"class": "Y", "set": {}}}}}}}"#,
+            r#"{"a": [{"pointer": null}, {"pointer": {}}, {"pointer": {"class": "X"}}], "b": {"embed": {"set": {"c": {"pointer": {"class": "Y", "set": {}}}}}}}"#,
         )
         .unwrap();
         ok.check_pins().unwrap();
         for text in [
             r#"{"pointer": 5}"#,
             r#"{"embed": null}"#,
-            r#"{"pointer": {}}"#,
+            r#"{"embed": {}}"#,
             r#"{"pointer": {"class": 1}}"#,
             r#"{"pointer": {"set": []}}"#,
             r#"{"pointer": {"class": "X", "extra": 1}}"#,

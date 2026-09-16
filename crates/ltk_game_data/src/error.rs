@@ -8,7 +8,9 @@ use std::fmt;
 /// renders both for a log line. The location is boxed; an `Err` stays small.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub struct Error {
+    /// The code.
     pub kind: ErrorKind,
+    /// The place.
     pub location: Box<Location>,
 }
 
@@ -34,9 +36,9 @@ impl Error {
         Self::new(kind).document(name)
     }
 
-    /// An I/O failure at the document `name`.
+    /// An I/O failure at the document `name`. `error` is the platform's or the reader's statement.
     #[must_use]
-    pub fn io(name: impl Into<String>, error: &std::io::Error) -> Self {
+    pub fn io(name: impl Into<String>, error: &dyn fmt::Display) -> Self {
         Self::in_document(
             ErrorKind::Io {
                 detail: error.to_string(),
@@ -200,9 +202,15 @@ pub enum ErrorKind {
     /// A document the parser refuses. `detail` is the parser's statement.
     #[error("{detail}")]
     Syntax { detail: String },
-    /// A file that cannot be read or written. `detail` is the platform's statement.
+    /// A file that cannot be read or written. `detail` is the platform's or the reader's statement.
     #[error("{detail}")]
     Io { detail: String },
+    /// An archive's layer metadata that cannot be read. `detail` is the archive reader's statement.
+    #[error("{detail}")]
+    Metadata { detail: String },
+    /// Declarations that cannot be written. `detail` is the writer's statement.
+    #[error("{detail}")]
+    Serialize { detail: String },
     /// A referenced input that does not exist.
     #[error("input is missing")]
     InputMissing,
@@ -227,55 +235,79 @@ pub enum ErrorKind {
     /// A layer name that is not a directory name.
     #[error("invalid layer name")]
     InvalidLayerName,
+    /// A target that is the empty string.
     #[error("expected a nonempty target")]
     EmptyTarget,
+    /// An entry name that is the empty string.
     #[error("expected a nonempty entry name")]
     EmptyEntryName,
+    /// A link path that is empty or longer than the header's limit.
     #[error("link paths require 1 to 65535 UTF-8 bytes")]
     LinkPathLength,
+    /// An override path that is the empty string.
     #[error("expected a nonempty override path")]
     EmptyOverridePath,
+    /// An override path with a backslash.
     #[error("override paths use forward slashes")]
     OverridePathBackslash,
+    /// An override path that starts with a slash.
     #[error("override paths are relative")]
     OverridePathAbsolute,
+    /// An override path with an empty, `.`, or `..` segment.
     #[error("override paths contain no empty, `.`, or `..` segment")]
     OverridePathSegment,
+    /// An override path whose file is not `.ptch`.
     #[error("override files require the `.ptch` extension")]
     OverridePathExtension,
     /// A `.rito` override path. The text form needs a `PTCH` text parser.
     #[error("`.rito` override files are unsupported; convert the file to `.ptch`")]
     OverridePathRito,
+    /// An override path whose `..` segments resolve above the layer.
     #[error("override path leaves the layer")]
     OverridePathEscapes,
+    /// A module with neither `target` nor `entries`.
     #[error("module requires target or entries")]
     SelectorMissing,
+    /// A module with both `target` and `entries`.
     #[error("target and entries are mutually exclusive")]
     SelectorConflict,
+    /// A document module with `target` and no `edits`.
     #[error("target requires `edits`")]
     TargetWithoutEdits,
+    /// A document module with both `entries` and `edits`.
     #[error("entries and `edits` are mutually exclusive")]
     EntriesWithEdits,
+    /// An `entries` module with `source`, `edits`, or a binding beside the mapping.
     #[error("entries takes no other bindings")]
     EntriesWithBindings,
+    /// An `entries` mapping with no entry.
     #[error("entries requires at least one entry")]
     EntriesEmpty,
+    /// An entry body with a `source` key.
     #[error("source is not permitted inside entries")]
     SourceInEntry,
+    /// An entry body with no key.
     #[error("entry requires at least one binding")]
     EntryWithoutBindings,
+    /// An entry body with an `overrides` key.
     #[error("overrides is not permitted inside entries")]
     OverridesInEntry,
+    /// A module with `source` and a local binding.
     #[error("source and local bindings are mutually exclusive")]
     SourceWithBindings,
+    /// A target and source pair a manifest names twice.
     #[error("duplicate target/source assignment")]
     DuplicateAssignment,
+    /// A body with `edits` and a compact binding.
     #[error("`edits` and compact bindings are mutually exclusive")]
     MixedBodies,
+    /// An `edits` list with no edit.
     #[error("`edits` requires at least one edit")]
     EditsEmpty,
+    /// An edit with no key.
     #[error("edit requires at least one binding")]
     EditWithoutBindings,
+    /// A target module with no binding, no `edits`, and no `source`.
     #[error("module requires bindings, `edits`, or source")]
     ModuleWithoutBindings,
     /// A body key that is neither a binding keyword nor an entry name.

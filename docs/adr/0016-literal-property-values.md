@@ -58,8 +58,8 @@ type. Every mapping refuses a duplicate key in every format.
 - **Negative:** a YAML tag on a struct-typed property is read as a descent into a field named
   by the type name, the same as the one-key mapping. The reference's distinction between the
   two spellings on a struct is not preserved; both are a report.
-- **Negative:** a local tag anywhere else in a YAML manifest is no longer refused by the
-  parser; only a tag on a value is validated.
+- **Negative:** the parser accepts a local tag anywhere in a YAML manifest; only a tag on a
+  value is validated.
 - **Revisit when:** a declaration document format carries tags, or a consumer needs to
   distinguish a pinned value from a one-key mapping after loading.
 

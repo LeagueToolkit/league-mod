@@ -47,8 +47,11 @@ impl Sign {
 /// spelled; a mapping on a struct-typed property descends into it at apply time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyEdit {
+    /// The property path, without the sign.
     pub path: PropertyPath,
+    /// The operation.
     pub sign: Sign,
+    /// The literal as spelled.
     pub value: Value,
 }
 

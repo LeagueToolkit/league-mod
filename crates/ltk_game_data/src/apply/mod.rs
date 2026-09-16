@@ -25,6 +25,7 @@ pub enum ApplyDiagnosticKind {
     OverrideInvalid,
     /// One override record that does not apply to the target. The remaining records apply.
     OverrideRecordSkipped,
+    /// A `-links` path the target's dependency list does not hold. The edit continues.
     LinkRemovalUnmatched,
     /// One property key whose edit does not apply. The remaining keys apply.
     PropertyEditSkipped,
@@ -65,20 +66,26 @@ pub enum RecordSkipReason {
     Unknown,
 }
 
+impl From<ResolveErrorKind> for RecordSkipReason {
+    fn from(kind: ResolveErrorKind) -> Self {
+        match kind {
+            ResolveErrorKind::MissingObject(_) => Self::MissingObject,
+            ResolveErrorKind::MissingProperty(_) => Self::MissingProperty,
+            ResolveErrorKind::NullPointer => Self::NullPointer,
+            ResolveErrorKind::CannotDescend(_) => Self::CannotDescend,
+            ResolveErrorKind::NotIndexable(_) => Self::NotIndexable,
+            ResolveErrorKind::IndexOutOfRange { .. } => Self::IndexOutOfRange,
+            ResolveErrorKind::InvalidKey(_) => Self::InvalidKey,
+            ResolveErrorKind::KeyNotFound => Self::KeyNotFound,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 impl From<&PatchError> for RecordSkipReason {
     fn from(error: &PatchError) -> Self {
         match error {
-            PatchError::Resolve(error) => match error.kind() {
-                ResolveErrorKind::MissingObject(_) => Self::MissingObject,
-                ResolveErrorKind::MissingProperty(_) => Self::MissingProperty,
-                ResolveErrorKind::NullPointer => Self::NullPointer,
-                ResolveErrorKind::CannotDescend(_) => Self::CannotDescend,
-                ResolveErrorKind::NotIndexable(_) => Self::NotIndexable,
-                ResolveErrorKind::IndexOutOfRange { .. } => Self::IndexOutOfRange,
-                ResolveErrorKind::InvalidKey(_) => Self::InvalidKey,
-                ResolveErrorKind::KeyNotFound => Self::KeyNotFound,
-                _ => Self::Unknown,
-            },
+            PatchError::Resolve(error) => error.kind().into(),
             PatchError::TypeMismatch { .. } => Self::TypeMismatch,
             _ => Self::Unknown,
         }
@@ -140,29 +147,32 @@ pub enum PropertySkipReason {
     Unknown,
 }
 
-impl From<ResolveErrorKind> for PropertySkipReason {
-    fn from(kind: ResolveErrorKind) -> Self {
-        match kind {
-            ResolveErrorKind::MissingObject(_) => Self::MissingObject,
-            ResolveErrorKind::MissingProperty(_) => Self::MissingProperty,
-            ResolveErrorKind::NullPointer => Self::NullPointer,
-            ResolveErrorKind::CannotDescend(_) => Self::CannotDescend,
-            ResolveErrorKind::NotIndexable(_) => Self::NotIndexable,
-            ResolveErrorKind::IndexOutOfRange { .. } => Self::IndexOutOfRange,
-            ResolveErrorKind::InvalidKey(_) => Self::InvalidKey,
-            ResolveErrorKind::KeyNotFound => Self::KeyNotFound,
+impl From<RecordSkipReason> for PropertySkipReason {
+    fn from(reason: RecordSkipReason) -> Self {
+        match reason {
+            RecordSkipReason::MissingObject => Self::MissingObject,
+            RecordSkipReason::MissingProperty => Self::MissingProperty,
+            RecordSkipReason::NullPointer => Self::NullPointer,
+            RecordSkipReason::CannotDescend => Self::CannotDescend,
+            RecordSkipReason::NotIndexable => Self::NotIndexable,
+            RecordSkipReason::IndexOutOfRange => Self::IndexOutOfRange,
+            RecordSkipReason::InvalidKey => Self::InvalidKey,
+            RecordSkipReason::KeyNotFound => Self::KeyNotFound,
+            RecordSkipReason::TypeMismatch => Self::TypeMismatch,
             _ => Self::Unknown,
         }
     }
 }
 
+impl From<ResolveErrorKind> for PropertySkipReason {
+    fn from(kind: ResolveErrorKind) -> Self {
+        RecordSkipReason::from(kind).into()
+    }
+}
+
 impl From<&PatchError> for PropertySkipReason {
     fn from(error: &PatchError) -> Self {
-        match error {
-            PatchError::Resolve(error) => error.kind().into(),
-            PatchError::TypeMismatch { .. } => Self::TypeMismatch,
-            _ => Self::Unknown,
-        }
+        RecordSkipReason::from(error).into()
     }
 }
 
@@ -207,10 +217,15 @@ pub struct ApplyDiagnostic {
     pub property: Option<SkippedProperty>,
 }
 
+/// The outcome of one application: the target's bytes, its dependency list, and every
+/// nonfatal outcome.
 #[derive(Debug)]
 pub struct ApplyResult {
+    /// The target after every edit, a `PROP`.
     pub bytes: Vec<u8>,
+    /// The dependency spellings of `bytes`, retained base entries included.
     pub dependencies: Vec<String>,
+    /// Every diagnostic in apply order.
     pub diagnostics: Vec<ApplyDiagnostic>,
 }
 
