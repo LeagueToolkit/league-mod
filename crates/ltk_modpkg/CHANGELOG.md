@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.9.2...ltk_modpkg-v0.10.0) - 2026-09-16
+
+### Added
+
+- *(workspace)* scaffold game data declarations
+
+### Other
+
+- *(workspace)* share ltk and common dependencies
+- *(workspace)* refine declaration interfaces
+- relicense under Apache-2.0
+
 ## [0.9.2](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.9.1...ltk_modpkg-v0.9.2) - 2026-08-30
 
 ### Other
