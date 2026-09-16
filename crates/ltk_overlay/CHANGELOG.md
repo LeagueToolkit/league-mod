@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.9.8...ltk_overlay-v0.10.0) - 2026-09-16
+
+### Added
+
+- *(overlay)* [**breaking**] apply property edits
+- *(game_data)* [**breaking**] apply property edits
+- *(game_data)* [**breaking**] add overrides binding
+- *(overlay)* [**breaking**] resolve entries through the object index
+- *(overlay)* [**breaking**] adopt ltk_game_index
+- *(game_data)* simplify declaration targets
+- *(workspace)* scaffold game data declarations
+
+### Fixed
+
+- *(game_data)* settle property edit review findings
+
+### Other
+
+- *(game_data)* [**breaking**] code errors
+- *(workspace)* share ltk and common dependencies
+- *(game_index)* apply review findings
+- *(workspace)* refine declaration interfaces
+- relicense under Apache-2.0
+
 ## [0.9.8](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.9.7...ltk_overlay-v0.9.8) - 2026-09-08
 
 ### Fixed

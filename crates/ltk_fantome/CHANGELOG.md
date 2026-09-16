@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.11.1...ltk_fantome-v0.12.0) - 2026-09-16
+
+### Added
+
+- *(game_data)* [**breaking**] add overrides binding
+- *(workspace)* scaffold game data declarations
+
+### Other
+
+- *(workspace)* share ltk and common dependencies
+- *(modpkg)* specify generator key
+- *(workspace)* refine declaration interfaces
+- relicense under Apache-2.0
+- Merge pull request #220 from LeagueToolkit/release-plz-2026-09-08T09-30-42Z
+- rewrite workspace readme
+
 ## [0.11.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.11.0...ltk_fantome-v0.11.1) - 2026-09-08
 
 ### Fixed
