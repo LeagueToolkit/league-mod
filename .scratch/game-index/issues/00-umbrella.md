@@ -21,6 +21,6 @@ replaced, and the `entries` selector of game data declarations resolves through 
 - [x] #230 Fingerprint and cache. Rests on #229.
 - [x] #231 Object index behind the `objects` feature and the resolver trait. Rests on #230.
 - [x] #232 Overlay adoption of `ltk_game_index`. Rests on #230; independent of #231.
-- [ ] #233 `Selector` and `EntryName` in `ltk_game_data`. Depends on nothing here and can land in any order.
-- [ ] #234 Overlay `entries` resolution, diagnostics, lazy object index. Rests on #231, #232, and #233.
-- [ ] #235 Wiki reference page: declaring chunks and diagnostics. Rests on #234.
+- [x] #233 `Selector` and `EntryName` in `ltk_game_data`. Depends on nothing here and can land in any order.
+- [x] #234 Overlay `entries` resolution, diagnostics, lazy object index. Rests on #231, #232, and #233.
+- [x] #235 Wiki reference page: declaring chunks and diagnostics. Rests on #234.
