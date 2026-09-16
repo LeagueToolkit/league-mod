@@ -22,10 +22,13 @@ impl GameDir {
     pub fn as_path(&self) -> &Utf8Path;
     pub fn data_final(&self) -> Result<Utf8PathBuf, GameDirError>;
     pub fn join(&self, rel_path: impl AsRef<Utf8Path>) -> Utf8PathBuf;
-    pub fn index(&self, state_dir: &StateDir) -> Result<ltk_game_index::GameIndex>;
+    pub fn load_or_build_index(&self, state_dir: &StateDir) -> Result<ltk_game_index::GameIndex>;
 }
 pub struct StateDir(Utf8PathBuf);
 impl StateDir {
+    pub const GAME_INDEX_CACHE: &str;   // "game_index.bin"
+    pub const OVERRIDE_META_CACHE: &str;
+    pub const OVERLAY_STATE: &str;
     pub fn new(path: impl Into<Utf8PathBuf>) -> Self;
     pub fn create(&self) -> Result<()>;
     pub fn game_index_cache(&self) -> Utf8PathBuf;      // game_index.bin
@@ -37,6 +40,7 @@ pub struct SkippedGameArchive { pub name: String, pub path: Utf8PathBuf, pub err
 // the overlay's rules over the index, as an extension trait
 pub(crate) trait GameIndexExt {
     fn wad_rel_path(&self, id: ArchiveId) -> Utf8PathBuf;              // DATA/FINAL/<name>
+    fn is_wad_rel_path(&self, id: ArchiveId, path: &Utf8Path) -> bool;
     fn holder_paths(&self, hash: WadHash) -> impl Iterator<Item = Utf8PathBuf> + '_;
     fn localized_global_wads(&self) -> Vec<(String, ArchiveId)>;
     fn subchunktoc_blocked(&self) -> HashSet<WadHash>;
@@ -52,7 +56,9 @@ pub skipped_archives: Vec<SkippedGameArchive>;
 - `OverlayBuilder::new` and `analyze_single_mod` keep their path parameters and wrap them in
   `GameDir` and `StateDir`.
 - `find_wad` becomes `archive_by_file_name`; `AmbiguousWad` and `WadNotFound` map from
-  `ArchiveLookupError` through `From`. `find_wads_with_hash(h).min()` becomes
+  `ArchiveLookupError` through `From`, with `Error::ArchiveLookup` for any further variant of
+  the non-exhaustive enum. `GameDirError::WadOutsideGameDir` is removed: every archive path
+  comes from the index. `find_wads_with_hash(h).min()` becomes
   `row(h).map(ChunkRow::first_holder)`. `find_best_matching_wad` becomes `dominant_holder`.
 - `GameDirError::MissingDataFinal` maps from `BuildError::MissingDataFinal`; any other
   `BuildError` is `Error::GameIndex`. A nonempty `skipped()` list is logged at warn and
