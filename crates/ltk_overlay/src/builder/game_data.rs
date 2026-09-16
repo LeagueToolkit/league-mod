@@ -9,7 +9,7 @@ use std::sync::Arc;
 use camino::Utf8PathBuf;
 use ltk_game_data::{
     ApplyDiagnosticKind, Edit, EntryEdit, EntryName, IndexMap, Module, Origin, OverridePath,
-    Selector, SkippedRecord,
+    Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_wad::WadHash;
@@ -38,6 +38,10 @@ pub enum GameDataDiagnosticKind {
     /// One override record that does not apply. The remaining records apply.
     OverrideRecordSkipped,
     LinkRemovalUnmatched,
+    /// One property key whose edit does not apply. The remaining keys apply.
+    PropertyEditSkipped,
+    /// A property typed from the base, the schema saying nothing. Informational.
+    SchemaFallback,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -63,6 +67,9 @@ pub struct GameDataDiagnostic {
     /// The record of an `OverrideRecordSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<SkippedRecord>,
+    /// The property of a `PropertyEditSkipped` diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<SkippedProperty>,
     pub message: String,
 }
 
@@ -73,6 +80,8 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::OverrideUnreadable => Self::OverrideUnreadable,
             ApplyDiagnosticKind::OverrideInvalid => Self::OverrideInvalid,
             ApplyDiagnosticKind::OverrideRecordSkipped => Self::OverrideRecordSkipped,
+            ApplyDiagnosticKind::PropertyEditSkipped => Self::PropertyEditSkipped,
+            ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
             _ => Self::Unknown,
         }
     }
@@ -86,6 +95,8 @@ impl GameDataDiagnosticKind {
             Self::OverrideUnreadable => format!("Override file cannot be read: {path}"),
             Self::OverrideInvalid => format!("Override file is not a PTCH: {path}"),
             Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
+            Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
+            Self::SchemaFallback => format!("Property is typed from the base: {path}"),
             _ => format!("Application diagnostic: {path}"),
         }
     }
@@ -128,6 +139,7 @@ impl Pending {
             origin: Some(self.module.origin.clone()),
             edit_index: None,
             record: None,
+            property: None,
             message: message.to_string(),
         }
     }
@@ -180,6 +192,9 @@ fn lower_entries(
         }
         for chunk in chunks {
             let mut chunk_edit = Edit::default();
+            chunk_edit
+                .entries
+                .insert(name.clone(), edit.properties.clone());
             chunk_edit.links = edit.links.clone();
             targets.entry(chunk).or_default().push(Application {
                 mod_id: pending.mod_id.clone(),
@@ -210,6 +225,7 @@ impl Application {
             origin: Some(self.origin.clone()),
             edit_index,
             record: None,
+            property: None,
             message: message.to_string(),
         }
     }
@@ -223,6 +239,7 @@ impl Application {
             kind.apply_message(&diagnostic.path),
         );
         lowered.record = diagnostic.record;
+        lowered.property = diagnostic.property;
         lowered
     }
 }
@@ -322,6 +339,7 @@ impl OverlayBuilder {
                         origin: None,
                         edit_index: None,
                         record: None,
+                        property: None,
                         message: format!(
                             "Layer declarations refused: {error}; update the consumer for unsupported bindings"
                         ),
@@ -418,12 +436,8 @@ impl OverlayBuilder {
                 let enabled_mods = &mut self.enabled_mods;
                 let read_override =
                     |path: &OverridePath| resources.read(enabled_mods, application, path);
-                match ltk_game_data::apply(
-                    &bytes,
-                    &application.edits,
-                    read_override,
-                    &ltk_game_data::NoSchema,
-                ) {
+                let schema = &self.game_data_schema;
+                match ltk_game_data::apply(&bytes, &application.edits, read_override, schema) {
                     Ok(output) => {
                         self.last_game_data_diagnostics.extend(
                             output

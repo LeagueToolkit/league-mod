@@ -888,3 +888,161 @@ fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
         );
     }
 }
+
+/// A schema typing `speed` as `f32` and `iconAvatar` as `file` on class `2`.
+struct TestSchema;
+
+impl ltk_game_data::Schema for TestSchema {
+    fn expected(
+        &self,
+        class: ltk_game_data::BinHash,
+        field: ltk_game_data::BinHash,
+    ) -> Option<ltk_game_data::Shape> {
+        use ltk_game_data::{BinHash, PropertyKind, Shape};
+        if class != BinHash(2) {
+            return None;
+        }
+        if field == BinHash::from("speed") {
+            Some(Shape::bare(PropertyKind::F32))
+        } else if field == BinHash::from("iconAvatar") {
+            Some(Shape::bare(PropertyKind::WadChunkLink))
+        } else {
+            None
+        }
+    }
+
+    fn has_class(&self, class: ltk_game_data::BinHash) -> bool {
+        class == ltk_game_data::BinHash(2)
+    }
+}
+
+#[test]
+fn declared_property_edits_apply_with_and_without_a_schema() {
+    use ltk_game_data::{PropertySkipReason, SkippedProperty};
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    // The signed edit sits in its own batch: a report on a key skips the whole key.
+    let manifest = "version: 1\nmodules:\n  - target: shared\n    edits:\n      - '0x00000001':\n          speed: 2.5\n          iconAvatar: assets/a.tex\n      - '0x00000001':\n          +speed: [1]\n";
+    for with_schema in [true, false] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let game = root.join("game");
+        let overlay = root.join("overlay");
+        let state = root.join("state");
+        common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+        let top = project(&root, "top", None, None);
+        fs::write(root.join("top/content/base/game_data.yaml"), manifest).unwrap();
+        let mut builder = OverlayBuilder::new(game, overlay.clone(), state.clone());
+        if with_schema {
+            builder = builder.with_game_data_schema(TestSchema);
+        }
+        builder.set_enabled_mods(vec![top]);
+        let result = builder.build().unwrap();
+        let (speed, _) = speed_and_links(&chunk(&overlay.join(WAD), "shared"));
+        assert_eq!(speed, 2.5, "with_schema={with_schema}");
+        let kinds: Vec<_> = result
+            .game_data_diagnostics
+            .iter()
+            .map(|d| (d.kind, d.message.clone()))
+            .collect();
+        let sign = result
+            .game_data_diagnostics
+            .iter()
+            .find(|d| {
+                d.kind == GameDataDiagnosticKind::PropertyEditSkipped
+                    && d.message.contains("+speed")
+            })
+            .unwrap_or_else(|| panic!("{kinds:?}"));
+        assert_eq!(sign.chunk, Some(common::hash("shared")));
+        assert_eq!(sign.edit_index, Some(1));
+        assert_eq!(sign.origin.as_ref().unwrap().module_index, 0);
+        assert_eq!(
+            sign.property,
+            Some(SkippedProperty {
+                entry: "0x00000001".try_into().unwrap(),
+                reason: PropertySkipReason::SignOnScalar,
+            })
+        );
+        let others: Vec<_> = result
+            .game_data_diagnostics
+            .iter()
+            .filter(|d| !std::ptr::eq(*d, sign))
+            .map(|d| (d.kind, d.property.as_ref().map(|p| p.reason)))
+            .collect();
+        if with_schema {
+            assert!(others.is_empty(), "{others:?}");
+        } else {
+            assert_eq!(
+                others,
+                [
+                    (GameDataDiagnosticKind::SchemaFallback, None),
+                    (
+                        GameDataDiagnosticKind::PropertyEditSkipped,
+                        Some(PropertySkipReason::Untypable)
+                    ),
+                    (GameDataDiagnosticKind::SchemaFallback, None),
+                ]
+            );
+        }
+        // A cached build replays the property diagnostics with their typed fields.
+        let cached = builder.build().unwrap();
+        assert!(cached.wads_built.is_empty());
+        assert_eq!(cached.game_data_diagnostics, result.game_data_diagnostics);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(state.join("overlay.json")).unwrap()).unwrap();
+        let reports = saved["gameDataReports"].as_array().unwrap();
+        assert!(
+            reports.iter().any(|r| r["kind"] == "propertyEditSkipped"
+                && r["property"]["reason"] == "signOnScalar"
+                && r["property"]["entry"] == "0x00000001"),
+            "{reports:?}"
+        );
+    }
+}
+
+#[test]
+fn entries_property_edits_reach_every_declaring_chunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    let skin = ltk_game_data::BinHash::from("Characters/Teemo/Skins/Skin0").0;
+    let one = bin_declaring(&[], &[(skin, 2)]);
+    let two = bin_declaring(&[], &[(7, 2), (skin, 2)]);
+    common::write_game_wad(
+        &game.join(WAD),
+        &[("data/one.bin", &one), ("data/two.bin", &two)],
+    );
+    let top = project(&root, "top", None, None);
+    fs::write(
+        root.join("top/content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - entries:\n      Characters/Teemo/Skins/Skin0:\n        speed: 4\n        links: [Added]\n",
+    )
+    .unwrap();
+    let mut builder =
+        OverlayBuilder::new(game, overlay.clone(), state).with_game_data_schema(TestSchema);
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    assert!(
+        result
+            .game_data_diagnostics
+            .iter()
+            .all(|d| d.kind == GameDataDiagnosticKind::EntryFanOut),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    for name in ["data/one.bin", "data/two.bin"] {
+        use ltk_meta::{concrete::Bin, path::PropertyPath};
+        let bin = Bin::from_reader(&mut Cursor::new(chunk(&overlay.join(WAD), name))).unwrap();
+        let speed = bin.objects[&ltk_game_data::BinHash(skin)]
+            .resolve(&PropertyPath::new("speed").unwrap())
+            .unwrap();
+        assert_eq!(
+            *speed,
+            ltk_meta::concrete::values::F32::new(4.0).into(),
+            "{name}"
+        );
+        assert_eq!(bin.dependencies, ["Added"], "{name}");
+    }
+}

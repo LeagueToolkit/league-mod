@@ -559,6 +559,8 @@ pub struct OverlayBuilder {
     string_override_mode: StringOverrideMode,
     progress_callback: Option<ProgressCallback>,
     called_off: Option<CalledOff>,
+    /// The class schema of the installed patch, applied to game-data property edits.
+    game_data_schema: Arc<dyn ltk_game_data::Schema + Send + Sync>,
     /// Per-mod WAD reports captured during the most recent successful
     /// [`build`](Self::build), drained via [`take_mod_wad_reports`](Self::take_mod_wad_reports).
     last_mod_wad_reports: Vec<ModWadReport>,
@@ -597,6 +599,7 @@ impl OverlayBuilder {
             string_override_mode: StringOverrideMode::Disabled,
             progress_callback: None,
             called_off: None,
+            game_data_schema: Arc::new(ltk_game_data::NoSchema),
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
             last_checksum_mismatches: Vec::new(),
@@ -681,6 +684,18 @@ impl OverlayBuilder {
             return Err(Error::CalledOff);
         }
         Ok(())
+    }
+
+    /// Registers the class schema of the installed patch.
+    ///
+    /// Game-data property edits are typed from it (`docs/design/game-data.md` section 6). A
+    /// builder without one types every property from the base and reports the fallback.
+    pub fn with_game_data_schema<S>(mut self, schema: S) -> Self
+    where
+        S: ltk_game_data::Schema + Send + Sync + 'static,
+    {
+        self.game_data_schema = Arc::new(schema);
+        self
     }
 
     /// Register a progress callback.

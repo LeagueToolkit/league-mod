@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// incompatibly, or when build semantics change such that WADs on disk may no
 /// longer match what a fresh build would produce - any state file with a
 /// different version triggers a full rebuild.
-const CURRENT_VERSION: u32 = 7;
+const CURRENT_VERSION: u32 = 8;
 
 /// What one overlay WAD on disk is, so a later build can rebuild it in place.
 ///
@@ -58,11 +58,11 @@ pub struct WadLayoutRecord {
 /// Used to determine whether the existing overlay can be reused, incrementally
 /// updated, or needs a full rebuild.
 ///
-/// # JSON format (v7)
+/// # JSON format (v8)
 ///
 /// ```json
 /// {
-///   "version": 7,
+///   "version": 8,
 ///   "enabledMods": ["mod-a", "mod-b"],
 ///   "modFingerprints": {
 ///     "mod-a": 1122334455,
@@ -274,7 +274,7 @@ impl OverlayState {
     /// Check if this state is an exact match for the current configuration.
     ///
     /// Returns `true` if:
-    /// - Version matches the state schema (7)
+    /// - Version matches the state schema (8)
     /// - No WAD is marked dirty by an interrupted rewrite
     /// - Enabled mods list matches exactly (same IDs, same order)
     /// - Per-mod content fingerprints match exactly
@@ -716,7 +716,7 @@ mod tests {
         );
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("\"version\":7"));
+        assert!(json.contains("\"version\":8"));
         assert!(json.contains("\"enabledMods\""));
         assert!(json.contains("\"modFingerprints\""));
         assert!(json.contains("\"gameFingerprint\""));

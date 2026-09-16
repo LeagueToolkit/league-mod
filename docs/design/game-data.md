@@ -443,7 +443,7 @@ until compression. This memory cost scales with declared targets. Directory decl
 disable provider metadata caching and exact-match skipping; final content hashes permit
 unchanged WAD reuse. Archive providers retain fingerprint-based exact-match skipping.
 Base selection reads unfiltered mod metadata; game-identical copies remain candidates.
-Missing final dependencies use `LinkedBinOffender`. Overlay state uses schema version 7.
+Missing final dependencies use `LinkedBinOffender`. Overlay state uses schema version 8.
 
 `OverlayBuilder::with_called_off(poll)` registers a cancellation poll. The build polls it before
 the chunk index loads, before overrides are collected, between the archives of an object index
