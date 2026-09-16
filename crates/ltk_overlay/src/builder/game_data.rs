@@ -9,7 +9,8 @@ use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use super::{OverlayBuilder, OverrideMeta, OverrideSource};
-use crate::{error::Result, game_index::GameIndex, strings::read_game_chunk, utils::ContentHash};
+use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
+use ltk_game_index::GameIndex;
 
 /// The category of a declaration diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,8 +110,7 @@ impl OverlayBuilder {
         let mut bases = HashMap::new();
         if !targets.is_empty() {
             for enabled in self.enabled_mods.iter_mut().rev() {
-                for (hash, meta) in
-                    super::metadata::collect_unfiltered_mod_metadata(enabled, game, &self.game_dir)?
+                for (hash, meta) in super::metadata::collect_unfiltered_mod_metadata(enabled, game)?
                 {
                     if targets.contains_key(&hash) {
                         bases.insert(hash, meta);
@@ -118,12 +118,12 @@ impl OverlayBuilder {
                 }
             }
         }
+        let subchunktoc_blocked = game.subchunktoc_blocked();
         for (hash, applications) in targets {
             let original = bases.remove(&hash).or_else(|| metadata.get(&hash).cloned());
             let game_wad = game
-                .find_wads_with_hash(hash)
-                .and_then(|paths| paths.iter().min())
-                .cloned();
+                .row(hash)
+                .map(|row| game.wad_rel_path(row.first_holder()));
             let base = self.read_declaration_base(hash, original.as_ref(), game_wad.as_ref());
             let mut bytes = match base {
                 Ok(bytes) => bytes,
@@ -138,7 +138,7 @@ impl OverlayBuilder {
                     continue;
                 }
             };
-            if game.subchunktoc_blocked().contains(&hash) {
+            if subchunktoc_blocked.contains(&hash) {
                 for application in &applications {
                     self.last_game_data_diagnostics.push(application.diagnostic(
                         GameDataDiagnosticKind::TargetSkipped,
@@ -235,6 +235,8 @@ impl OverlayBuilder {
         }
         let wad = game_wad
             .ok_or_else(|| "target is absent from enabled content and the game index".to_owned())?;
-        read_game_chunk(&self.game_dir, wad, hash).map_err(|e| e.to_string())
+        self.game_dir
+            .read_chunk(wad, hash)
+            .map_err(|e| e.to_string())
     }
 }

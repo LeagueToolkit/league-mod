@@ -6,6 +6,7 @@
 use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
+use ltk_game_index::ArchiveLookupError;
 
 /// Collect override metadata from a single mod (pass 1).
 ///
@@ -24,10 +25,9 @@ use crate::utils::resolve_chunk_hash;
 pub(crate) fn collect_single_mod_metadata(
     enabled_mod: &mut EnabledMod,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) -> Result<HashMap<WadHash, OverrideMeta>> {
-    let mut mod_meta = collect_unfiltered_mod_metadata(enabled_mod, game_index, game_dir)?;
-    filter_override_metadata(&mut mod_meta, game_index, game_dir);
+    let mut mod_meta = collect_unfiltered_mod_metadata(enabled_mod, game_index)?;
+    filter_override_metadata(&mut mod_meta, game_index);
     Ok(mod_meta)
 }
 
@@ -35,7 +35,6 @@ pub(crate) fn collect_single_mod_metadata(
 pub(super) fn collect_unfiltered_mod_metadata(
     enabled_mod: &mut EnabledMod,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) -> Result<HashMap<WadHash, OverrideMeta>> {
     tracing::info!("Processing mod id={}", enabled_mod.id);
 
@@ -46,13 +45,7 @@ pub(super) fn collect_unfiltered_mod_metadata(
     let mut mod_meta: HashMap<WadHash, OverrideMeta> = HashMap::new();
 
     for layer in &layers {
-        collect_layer_metadata(
-            enabled_mod,
-            &layer.name,
-            game_index,
-            game_dir,
-            &mut mod_meta,
-        )?;
+        collect_layer_metadata(enabled_mod, &layer.name, game_index, &mut mod_meta)?;
     }
 
     collect_raw_metadata(enabled_mod, &mut mod_meta)?;
@@ -90,7 +83,6 @@ fn collect_layer_metadata(
     enabled_mod: &mut EnabledMod,
     layer_name: &str,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
     mod_meta: &mut HashMap<WadHash, OverrideMeta>,
 ) -> Result<()> {
     if !enabled_mod.is_layer_active(layer_name) {
@@ -115,14 +107,7 @@ fn collect_layer_metadata(
     tracing::info!("Mod={} layer='{}'", enabled_mod.id, layer_name);
 
     for wad_name in &wad_names {
-        collect_wad_dir_metadata(
-            enabled_mod,
-            layer_name,
-            wad_name,
-            game_index,
-            game_dir,
-            mod_meta,
-        )?;
+        collect_wad_dir_metadata(enabled_mod, layer_name, wad_name, game_index, mod_meta)?;
     }
 
     Ok(())
@@ -134,7 +119,6 @@ fn collect_wad_dir_metadata(
     layer_name: &str,
     wad_name: &str,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
     mod_meta: &mut HashMap<WadHash, OverrideMeta>,
 ) -> Result<()> {
     let before = mod_meta.len();
@@ -158,13 +142,7 @@ fn collect_wad_dir_metadata(
         })?;
 
     let path_hashes: Vec<WadHash> = entries.iter().map(|(path_hash, _)| *path_hash).collect();
-    let fallback = resolve_fallback_wad(
-        &enabled_mod.id,
-        wad_name,
-        &path_hashes,
-        game_index,
-        game_dir,
-    )?;
+    let fallback = resolve_fallback_wad(&enabled_mod.id, wad_name, &path_hashes, game_index)?;
 
     for (path_hash, mut meta) in entries {
         meta.fallback_wad = fallback.wad.clone();
@@ -209,31 +187,27 @@ fn resolve_fallback_wad(
     wad_name: &str,
     path_hashes: &[WadHash],
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) -> Result<FallbackTargets> {
-    match game_index.find_wad(wad_name) {
-        Ok(original_wad_path) => {
-            let relative_game_path = original_wad_path
-                .strip_prefix(game_dir)
-                .map_err(|_| GameDirError::WadOutsideGameDir {
-                    game_dir: game_dir.to_path_buf(),
-                    wad: original_wad_path.to_path_buf(),
-                })?
-                .to_path_buf();
+    match game_index.archive_by_file_name(wad_name) {
+        Ok(id) => {
+            let relative_game_path = game_index.wad_rel_path(id);
 
             tracing::info!(
                 "WAD='{}' resolved original={} relative={}",
                 wad_name,
-                original_wad_path,
+                game_index.archive(id).path,
                 relative_game_path
             );
 
             Ok(FallbackTargets {
                 wad: Some(relative_game_path),
-                unlocalized: resolve_unlocalized_wad(mod_id, wad_name, game_index, game_dir),
+                unlocalized: resolve_unlocalized_wad(mod_id, wad_name, game_index),
             })
         }
-        Err(Error::WadNotFound(_)) => match game_index.find_best_matching_wad(path_hashes) {
+        Err(ArchiveLookupError::Absent { .. }) => match game_index
+            .dominant_holder(path_hashes)
+            .map(|id| game_index.wad_rel_path(id))
+        {
             Some(best_wad) => {
                 tracing::info!(
                     "Mod='{}' WAD '{}' not found in game; \
@@ -259,7 +233,7 @@ fn resolve_fallback_wad(
                 Ok(FallbackTargets::default())
             }
         },
-        Err(other) => Err(other),
+        Err(ambiguous) => Err(ambiguous.into()),
     }
 }
 
@@ -273,15 +247,9 @@ fn resolve_unlocalized_wad(
     mod_id: &str,
     wad_name: &str,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) -> Option<Utf8PathBuf> {
     let sibling = unlocalized_wad_name(wad_name)?;
-    let relative = game_index
-        .find_wad(&sibling)
-        .ok()?
-        .strip_prefix(game_dir)
-        .ok()?
-        .to_path_buf();
+    let relative = game_index.wad_rel_path(game_index.archive_by_file_name(&sibling).ok()?);
 
     tracing::info!(
         "Mod='{}' declared localized WAD '{}'; also routing new chunks to '{}'",
@@ -294,7 +262,7 @@ fn resolve_unlocalized_wad(
 }
 
 /// `Graves.en_US.wad.client` -> `graves.wad.client`, or `None` when `wad_name`
-/// carries no locale tag. Lowercase, which [`GameIndex::find_wad`] accepts.
+/// carries no locale tag. Lowercase, which [`GameIndex::archive_by_file_name`] accepts.
 fn unlocalized_wad_name(wad_name: &str) -> Option<String> {
     const SUFFIX: &str = ".wad.client";
 
@@ -374,7 +342,10 @@ fn route_unroutable_to_dominant_wad(
     }
 
     let all_hashes: Vec<WadHash> = mod_meta.keys().copied().collect();
-    let Some(dominant_wad) = game_index.find_best_matching_wad(&all_hashes) else {
+    let Some(dominant_wad) = game_index
+        .dominant_holder(&all_hashes)
+        .map(|id| game_index.wad_rel_path(id))
+    else {
         return;
     };
 
@@ -411,7 +382,6 @@ fn route_unroutable_to_dominant_wad(
 pub(crate) fn filter_override_metadata(
     all_meta: &mut HashMap<WadHash, OverrideMeta>,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) {
     if all_meta.is_empty() {
         return;
@@ -455,7 +425,7 @@ pub(crate) fn filter_override_metadata(
     // asset from another WAD so it is loadable from its own target WAD). Those
     // are kept and routed like modified overrides.
     let override_hashes: HashSet<WadHash> = all_meta.keys().copied().collect();
-    let content_hashes = game_index.compute_content_hashes_batch(game_dir, &override_hashes);
+    let content_hashes = game_index.content_hashes(&override_hashes);
 
     let mut lazy_count = 0usize;
     let mut import_count = 0usize;
@@ -505,7 +475,6 @@ fn collect_or_cache_mod_metadata(
     fingerprint: Option<u64>,
     meta_cache: &mut OverrideMetaCache,
     game_index: &GameIndex,
-    game_dir: &Utf8Path,
 ) -> Result<HashMap<WadHash, OverrideMeta>> {
     // Cache hit - reconstruct from cached data without reading any files.
     if let Some(fp) = fingerprint
@@ -523,7 +492,7 @@ fn collect_or_cache_mod_metadata(
 
     // Cache miss - collect fresh metadata from mod content.
     tracing::info!("Mod={} cache miss, reading files", enabled_mod.id);
-    let mod_meta = collect_single_mod_metadata(enabled_mod, game_index, game_dir)?;
+    let mod_meta = collect_single_mod_metadata(enabled_mod, game_index)?;
 
     // Persist to cache for next build.
     if let Some(fp) = fingerprint {
@@ -551,9 +520,8 @@ impl OverlayBuilder {
     ) -> Result<(HashMap<WadHash, OverrideMeta>, Vec<ModWadReport>)> {
         debug_assert_eq!(fingerprints.len(), self.enabled_mods.len());
 
-        let game_dir = &self.game_dir;
-        let meta_cache_path = self.state_dir.join("override_meta.bin");
-        let game_fp = game_index.game_fingerprint();
+        let meta_cache_path = self.state_dir.override_meta_cache();
+        let game_fp = game_index.fingerprint().as_u64();
 
         // Load persistent metadata cache (invalidated when game is patched)
         let mut meta_cache = OverrideMetaCache::load(&meta_cache_path, game_fp)
@@ -569,7 +537,6 @@ impl OverlayBuilder {
                 fingerprints[idx],
                 &mut meta_cache,
                 game_index,
-                game_dir,
             )?);
         }
 
@@ -626,6 +593,7 @@ impl OverlayBuilder {
 mod tests {
     use super::*;
     use crate::meta_cache::CachedOverride;
+    use crate::test_support::{GameFixture, game_index_with_hashes};
     use indexmap::IndexMap;
     use ltk_mod_project::{ModProject, ModProjectLayer};
     use std::sync::{Arc, Mutex};
@@ -701,12 +669,8 @@ mod tests {
     fn test_enabled_layers_filters_correctly() {
         let queried = Arc::new(Mutex::new(Vec::new()));
 
-        // Build an empty GameIndex from a temp directory with DATA/FINAL
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-        let game_index = GameIndex::build(game_dir).unwrap();
+        // An empty game index from a temporary directory with a DATA/FINAL.
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
 
         // With enabled_layers = None, all layers should be queried
         let mut mod_all = EnabledMod {
@@ -717,7 +681,7 @@ mod tests {
             }),
             enabled_layers: None,
         };
-        let _ = collect_single_mod_metadata(&mut mod_all, &game_index, game_dir);
+        let _ = collect_single_mod_metadata(&mut mod_all, &game_index);
         let all_queried: Vec<String> = queried.lock().unwrap().drain(..).collect();
         assert_eq!(all_queried, vec!["base", "high_res", "extras"]); // sorted by priority then name
 
@@ -731,7 +695,7 @@ mod tests {
             }),
             enabled_layers: Some(HashSet::from(["extras".to_string()])),
         };
-        let _ = collect_single_mod_metadata(&mut mod_filtered, &game_index, game_dir);
+        let _ = collect_single_mod_metadata(&mut mod_filtered, &game_index);
         let filtered_queried: Vec<String> = queried.lock().unwrap().drain(..).collect();
         assert_eq!(filtered_queried, vec!["base", "extras"]);
         // "high_res" should NOT appear, but "base" is always included
@@ -794,25 +758,13 @@ mod tests {
 
     #[test]
     fn test_unknown_wad_uses_overlap_fallback() {
-        let mut hash_index = HashMap::new();
-        for h in [WadHash(0xAAAA), WadHash(0xBBBB)] {
-            hash_index
-                .entry(h)
-                .or_insert_with(Vec::new)
-                .push(Utf8PathBuf::from("DATA/FINAL/Maps/MapA.wad.client"));
-        }
-
-        hash_index
-            .entry(WadHash(0xAAAA))
-            .or_insert_with(Vec::new)
-            .push(Utf8PathBuf::from("DATA/FINAL/Maps/MapB.wad.client"));
-
-        let game_index = GameIndex {
-            wad_index: HashMap::new(),
-            hash_index,
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let (_fixture, game_index) = game_index_with_hashes(&[
+            (
+                "DATA/FINAL/Maps/MapA.wad.client",
+                &[WadHash(0xAAAA), WadHash(0xBBBB)],
+            ),
+            ("DATA/FINAL/Maps/MapB.wad.client", &[WadHash(0xAAAA)]),
+        ]);
 
         let mut wad_overrides = HashMap::new();
         wad_overrides.insert(
@@ -829,11 +781,6 @@ mod tests {
             ],
         );
 
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-
         let mut enabled_mod = EnabledMod {
             id: "overlap-mod".to_string(),
             content: Box::new(OverrideMockContent {
@@ -843,7 +790,7 @@ mod tests {
             enabled_layers: None,
         };
 
-        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
         assert_eq!(meta.len(), 2);
 
         let entry = &meta[&WadHash(0xAAAA)];
@@ -862,23 +809,13 @@ mod tests {
 
     #[test]
     fn test_unknown_wad_no_overlap_sets_fallback_none() {
-        let game_index = GameIndex {
-            wad_index: HashMap::new(),
-            hash_index: HashMap::new(),
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
 
         let mut wad_overrides = HashMap::new();
         wad_overrides.insert(
             "Nonexistent.wad.client".to_string(),
             vec![(Utf8PathBuf::from("000000000000cccc.bin"), b"data".to_vec())],
         );
-
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
 
         let mut enabled_mod = EnabledMod {
             id: "no-overlap-mod".to_string(),
@@ -889,7 +826,7 @@ mod tests {
             enabled_layers: None,
         };
 
-        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
 
         assert_eq!(meta.len(), 1);
         assert!(
@@ -901,17 +838,8 @@ mod tests {
     #[test]
     fn test_unroutable_override_routed_to_dominant_wad() {
         // Game has one chunk (0xAAAA) living in Ahri.wad.
-        let mut hash_index = HashMap::new();
-        hash_index.insert(
-            WadHash(0xAAAA),
-            vec![Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client")],
-        );
-        let game_index = GameIndex {
-            wad_index: HashMap::new(),
-            hash_index,
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let (_fixture, game_index) =
+            game_index_with_hashes(&[("DATA/FINAL/Champions/Ahri.wad.client", &[WadHash(0xAAAA)])]);
 
         // The mod overrides a known chunk (0xAAAA, maps to Ahri.wad) and ships a brand-new
         // asset (0xCCCC) under an unknown WAD that overlaps nothing on its own.
@@ -925,11 +853,6 @@ mod tests {
             vec![(Utf8PathBuf::from("000000000000cccc.bin"), b"c".to_vec())],
         );
 
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-
         let mut enabled_mod = EnabledMod {
             id: "dominant-mod".to_string(),
             content: Box::new(OverrideMockContent {
@@ -939,7 +862,7 @@ mod tests {
             enabled_layers: None,
         };
 
-        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
 
         let ahri = Utf8Path::new("DATA/FINAL/Champions/Ahri.wad.client");
         assert_eq!(meta[&WadHash(0xAAAA)].fallback_wad.as_deref(), Some(ahri));
@@ -952,19 +875,10 @@ mod tests {
 
     #[test]
     fn test_filter_rejects_mod_shipped_stringtable_chunks() {
-        let mut wad_index = HashMap::new();
-        wad_index.insert(
-            "global.en_us.wad.client".to_string(),
-            vec![Utf8PathBuf::from(
-                "DATA/FINAL/Localized/Global.en_US.wad.client",
-            )],
-        );
-        let game_index = GameIndex {
-            wad_index,
-            hash_index: HashMap::new(),
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let (_fixture, game_index) = game_index_with_hashes(&[(
+            "DATA/FINAL/Localized/Global.en_US.wad.client",
+            &[WadHash(0x1)],
+        )]);
 
         let raw_meta = |rel_path: &str| OverrideMeta {
             content_hash: ContentHash(1),
@@ -986,12 +900,7 @@ mod tests {
         );
         all_meta.insert(WadHash(0xAAAA), raw_meta("assets/other.bin"));
 
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-
-        filter_override_metadata(&mut all_meta, &game_index, game_dir);
+        filter_override_metadata(&mut all_meta, &game_index);
 
         assert!(
             !all_meta.contains_key(&stringtable_hash),
@@ -1002,19 +911,15 @@ mod tests {
 
     #[test]
     fn test_collect_single_mod_metadata_returns_filtered_overrides() {
-        let mut hash_index = HashMap::new();
-        for h in [WadHash(0xAAAA), WadHash(0xB10C)] {
-            hash_index
-                .entry(h)
-                .or_insert_with(Vec::new)
-                .push(Utf8PathBuf::from("DATA/FINAL/Maps/MapA.wad.client"));
-        }
-        let game_index = GameIndex {
-            wad_index: HashMap::new(),
-            hash_index,
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::from([WadHash(0xB10C)]),
-        };
+        // The SubChunkTOC hash of MapA is derived from its archive name.
+        let toc_hash = WadHash(xxhash_rust::xxh64::xxh64(
+            b"data/final/maps/mapa.wad.subchunktoc",
+            0,
+        ));
+        let (_fixture, game_index) = game_index_with_hashes(&[(
+            "DATA/FINAL/Maps/MapA.wad.client",
+            &[WadHash(0xAAAA), toc_hash],
+        )]);
 
         let mut wad_overrides = HashMap::new();
         wad_overrides.insert(
@@ -1022,16 +927,11 @@ mod tests {
             vec![
                 (Utf8PathBuf::from("000000000000aaaa.bin"), b"keep".to_vec()),
                 (
-                    Utf8PathBuf::from("000000000000b10c.bin"),
+                    Utf8PathBuf::from(format!("{:016x}.bin", toc_hash.0)),
                     b"subchunktoc".to_vec(),
                 ),
             ],
         );
-
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        std::fs::create_dir_all(game_dir_std.join("DATA").join("FINAL")).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
 
         let mut enabled_mod = EnabledMod {
             id: "filtered-mod".to_string(),
@@ -1042,7 +942,7 @@ mod tests {
             enabled_layers: None,
         };
 
-        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
 
         assert_eq!(
             meta.keys().copied().collect::<Vec<_>>(),
@@ -1054,64 +954,27 @@ mod tests {
 
     #[test]
     fn test_lazy_filter_keeps_cross_wad_imports() {
-        use ltk_wad::{WadBuilder, WadChunkBuilder, WadChunkCompression};
-        use std::io::{Cursor, Write};
-
         const IMPORT_PATH: &str = "assets/characters/ahri/vfx.tex";
         const LAZY_PATH: &str = "assets/characters/ahri/vfx2.tex";
         let import_hash = resolve_chunk_hash(Utf8Path::new(IMPORT_PATH), b"").unwrap();
         let lazy_hash = resolve_chunk_hash(Utf8Path::new(LAZY_PATH), b"").unwrap();
 
-        // Real game WAD on disk (the lazy filter decompresses originals from it).
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        let champions_std = game_dir_std.join("DATA").join("FINAL").join("Champions");
-        std::fs::create_dir_all(&champions_std).unwrap();
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-
-        let mut cursor = Cursor::new(Vec::new());
-        WadBuilder::default()
-            .with_chunk(
-                WadChunkBuilder::default()
-                    .with_path(IMPORT_PATH)
-                    .with_force_compression(WadChunkCompression::None),
-            )
-            .with_chunk(
-                WadChunkBuilder::default()
-                    .with_path(LAZY_PATH)
-                    .with_force_compression(WadChunkCompression::None),
-            )
-            .build_to_writer(&mut cursor, |hash, writer| {
-                writer.write_all(if hash == import_hash {
-                    b"IMPORT_ORIGINAL"
-                } else {
-                    b"LAZY_ORIGINALX"
-                })?;
-                Ok(())
-            })
-            .unwrap();
-        std::fs::write(champions_std.join("Ahri.wad.client"), cursor.into_inner()).unwrap();
-
+        // Real game WADs on disk (the lazy filter decompresses originals from them).
         let ahri_rel = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox_rel = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
-        let mut wad_index = HashMap::new();
-        wad_index.insert(
-            "ahri.wad.client".to_string(),
-            vec![game_dir.join(&ahri_rel)],
+        let fixture = GameFixture::new();
+        fixture.write_wad(
+            ahri_rel.as_str(),
+            &[
+                (IMPORT_PATH, b"IMPORT_ORIGINAL"),
+                (LAZY_PATH, b"LAZY_ORIGINALX"),
+            ],
         );
-        wad_index.insert(
-            "aatrox.wad.client".to_string(),
-            vec![game_dir.join(&aatrox_rel)],
+        fixture.write_wad(
+            aatrox_rel.as_str(),
+            &[("assets/characters/aatrox/a.tex", b"A")],
         );
-        let mut hash_index = HashMap::new();
-        hash_index.insert(import_hash, vec![ahri_rel.clone()]);
-        hash_index.insert(lazy_hash, vec![ahri_rel.clone()]);
-        let game_index = GameIndex {
-            wad_index,
-            hash_index,
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let game_index = GameIndex::build(&fixture.game_dir).unwrap();
 
         // The mod ships byte-identical copies of both Ahri originals: one under
         // the Aatrox WAD dir (cross-WAD import), one under Ahri's own dir (lazy).
@@ -1134,7 +997,7 @@ mod tests {
             enabled_layers: None,
         };
 
-        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index, game_dir).unwrap();
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
 
         assert!(
             !meta.contains_key(&lazy_hash),
@@ -1146,7 +1009,7 @@ mod tests {
         assert_eq!(import.fallback_wad.as_deref(), Some(aatrox_rel.as_path()));
         assert_eq!(
             import.route_targets(import_hash, &game_index),
-            vec![ahri_rel.as_path(), aatrox_rel.as_path()],
+            vec![ahri_rel.clone(), aatrox_rel.clone()],
             "an identical import must fan out to the declared WAD and every WAD \
              holding the chunk, so all copies share one compressed checksum"
         );
@@ -1228,33 +1091,26 @@ mod tests {
         assert_eq!(unlocalized_wad_name("Graves.en_U5.wad.client"), None);
     }
 
-    /// A game index holding `wad_name -> <champions>/<file>` for each entry.
-    fn champion_wad_index(champions: &Utf8Path, files: &[&str]) -> GameIndex {
-        GameIndex {
-            wad_index: files
-                .iter()
-                .map(|file| (file.to_ascii_lowercase(), vec![champions.join(file)]))
-                .collect(),
-            hash_index: HashMap::new(),
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        }
+    /// A game index holding one archive at `DATA/FINAL/Champions/<file>` for each entry.
+    fn champion_archives(files: &[&str]) -> (GameFixture, GameIndex) {
+        let paths: Vec<String> = files
+            .iter()
+            .map(|file| format!("DATA/FINAL/Champions/{file}"))
+            .collect();
+        let wads: Vec<(&str, &[WadHash])> = paths
+            .iter()
+            .map(|path| (path.as_str(), &[WadHash(1)][..]))
+            .collect();
+        game_index_with_hashes(&wads)
     }
 
     #[test]
     fn declaring_a_localized_wad_resolves_both_targets() {
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-        let champions = game_dir.join("DATA/FINAL/Champions");
-        let game_index = champion_wad_index(
-            &champions,
-            &["Graves.wad.client", "Graves.en_US.wad.client"],
-        );
+        let (_fixture, game_index) =
+            champion_archives(&["Graves.wad.client", "Graves.en_US.wad.client"]);
 
         let localized =
-            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index, game_dir)
-                .unwrap();
+            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index).unwrap();
         assert_eq!(
             localized.wad.as_deref(),
             Some(Utf8Path::new(
@@ -1267,8 +1123,7 @@ mod tests {
         );
 
         // A mod that placed its content correctly gets no second target.
-        let plain =
-            resolve_fallback_wad("m", "Graves.wad.client", &[], &game_index, game_dir).unwrap();
+        let plain = resolve_fallback_wad("m", "Graves.wad.client", &[], &game_index).unwrap();
         assert_eq!(
             plain.wad.as_deref(),
             Some(Utf8Path::new("DATA/FINAL/Champions/Graves.wad.client"))
@@ -1278,15 +1133,10 @@ mod tests {
 
     #[test]
     fn a_sibling_the_game_does_not_ship_is_not_invented() {
-        let tmp = tempfile::tempdir().unwrap();
-        let game_dir_std = tmp.path().join("Game");
-        let game_dir = Utf8Path::from_path(&game_dir_std).unwrap();
-        let champions = game_dir.join("DATA/FINAL/Champions");
-        let game_index = champion_wad_index(&champions, &["Graves.en_US.wad.client"]);
+        let (_fixture, game_index) = champion_archives(&["Graves.en_US.wad.client"]);
 
         let resolved =
-            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index, game_dir)
-                .unwrap();
+            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index).unwrap();
         assert_eq!(resolved.unlocalized, None);
     }
 }

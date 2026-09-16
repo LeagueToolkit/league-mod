@@ -77,8 +77,8 @@
 //! rather than a wrong one. See `docs/overlay-builder-design.md` for the layout
 //! and the trust rules.
 //!
-//! The game index (`GameIndex`) is also cached to disk to avoid re-mounting every
-//! WAD file on subsequent builds when the game hasn't been patched.
+//! The game index (`ltk_game_index::GameIndex`) is cached in the state directory
+//! under the installation's fingerprint, so an unpatched game mounts no WAD twice.
 //!
 //! # Example
 //!
@@ -114,7 +114,7 @@ pub mod builder;
 pub mod content;
 pub mod error;
 pub mod fantome_content;
-pub mod game_index;
+pub mod game;
 pub use builder::game_data;
 pub mod linked_bins;
 pub mod meta_cache;
@@ -138,7 +138,7 @@ pub use error::{
     WadLimitError, WadRegion,
 };
 pub use fantome_content::FantomeContent;
-pub use game_index::GameIndex;
+pub use game::{GameDir, SkippedGameArchive, StateDir};
 pub use linked_bins::LinkedBinOffender;
 pub use modpkg_content::ModpkgContent;
 pub use state::OverlayState;

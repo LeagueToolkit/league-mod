@@ -1568,6 +1568,7 @@ dependencies = [
  "ltk_fantome",
  "ltk_file",
  "ltk_game_data",
+ "ltk_game_index",
  "ltk_mod_project",
  "ltk_modpkg",
  "ltk_rst",

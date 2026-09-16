@@ -6,7 +6,7 @@
 //! # Two-Pass Build Algorithm
 //!
 //! 1. Validate that `game_dir/DATA/FINAL` exists.
-//! 2. Build (or load from cache) a [`GameIndex`] from all `.wad.client` files.
+//! 2. Build (or load from cache) a [`GameIndex`] from every `.wad.client` file.
 //! 3. Load the saved [`OverlayState`] and choose a build strategy:
 //!    - **Skip**: mod list, per-mod content fingerprints, and game fingerprint
 //!      all match, no WAD is marked dirty, and every overlay WAD file still
@@ -39,13 +39,14 @@ mod resolve;
 
 use crate::builder::incremental::PreviousOverlay;
 use crate::content::ModContentProvider;
-use crate::error::{Error, GameDirError, Result};
-use crate::game_index::GameIndex;
+use crate::error::{Error, Result};
+use crate::game::{GameDir, GameIndexExt, SkippedGameArchive, StateDir};
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
 use crate::state::{OverlayState, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
 use crate::utils::ContentHash;
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_game_index::GameIndex;
 use ltk_wad::WadHash;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -138,11 +139,9 @@ impl OverrideMeta {
         let Some(fallback) = self.fallback_wad.as_deref() else {
             return false;
         };
-        game_index
-            .find_wads_with_hash(path_hash)
-            .unwrap_or_default()
-            .iter()
-            .all(|wad| wad != fallback)
+        !game_index
+            .holders(path_hash)
+            .any(|holder| game_index.is_wad_rel_path(holder, fallback))
     }
 
     /// The game-relative WAD paths this override routes to.
@@ -160,25 +159,21 @@ impl OverrideMeta {
     /// dropped. This is the single source of truth shared by
     /// [`OverlayBuilder::distribute_override_hashes`] and
     /// [`ModWadReport::from_meta`] so build routing and mod reports agree.
-    pub(crate) fn route_targets<'a>(
-        &'a self,
+    pub(crate) fn route_targets(
+        &self,
         path_hash: WadHash,
-        game_index: &'a GameIndex,
-    ) -> Vec<&'a Utf8Path> {
-        let matched = game_index
-            .find_wads_with_hash(path_hash)
-            .unwrap_or_default();
-
-        let mut targets: Vec<&Utf8Path> = matched.iter().map(Utf8PathBuf::as_path).collect();
+        game_index: &GameIndex,
+    ) -> Vec<Utf8PathBuf> {
+        let mut targets: Vec<Utf8PathBuf> = game_index.holder_paths(path_hash).collect();
 
         if let Some(fallback) = self.fallback_wad.as_deref()
             && (targets.is_empty() || self.is_cross_wad_import(path_hash, game_index))
         {
-            targets.push(fallback);
+            targets.push(fallback.to_path_buf());
             if let Some(unlocalized) = self.unlocalized_wad.as_deref()
-                && !targets.contains(&unlocalized)
+                && !targets.iter().any(|target| target == unlocalized)
             {
-                targets.push(unlocalized);
+                targets.push(unlocalized.to_path_buf());
             }
         }
 
@@ -335,6 +330,10 @@ pub struct OverlayBuildResult {
     pub checksum_mismatches: Vec<ChecksumMismatch>,
     /// Declaration diagnostics from this build, including cached builds.
     pub game_data_diagnostics: Vec<crate::game_data::GameDataDiagnostic>,
+    /// Game archives the index build could not read, in archive order.
+    ///
+    /// The warnings of the build. Empty when every archive indexed.
+    pub skipped_archives: Vec<SkippedGameArchive>,
     /// Wall-clock time for the entire build.
     pub build_time: Duration,
 }
@@ -449,7 +448,7 @@ impl ModWadReport {
         content_fingerprint: Option<u64>,
         game_index: &GameIndex,
     ) -> Self {
-        let mut counts: BTreeMap<&Utf8Path, u32> = BTreeMap::new();
+        let mut counts: BTreeMap<Utf8PathBuf, u32> = BTreeMap::new();
         for (path_hash, meta) in mod_meta {
             for wad_path in meta.route_targets(*path_hash, game_index) {
                 *counts.entry(wad_path).or_insert(0) += 1;
@@ -467,7 +466,7 @@ impl ModWadReport {
                 .collect(),
             override_count: mod_meta.len() as u32,
             content_fingerprint,
-            game_index_fingerprint: game_index.game_fingerprint(),
+            game_index_fingerprint: game_index.fingerprint().as_u64(),
         }
     }
 }
@@ -542,11 +541,11 @@ fn collect_wad_layouts(
 /// during the build. After building, the same builder instance can be reconfigured
 /// and built again.
 pub struct OverlayBuilder {
-    game_dir: Utf8PathBuf,
+    game_dir: GameDir,
     overlay_root: Utf8PathBuf,
     /// Directory for `overlay.json` and `game_index.bin`
     /// (typically the parent profile directory, e.g. `profiles/default/`).
-    state_dir: Utf8PathBuf,
+    state_dir: StateDir,
     enabled_mods: Vec<EnabledMod>,
     blocked_wads: HashSet<String>,
     string_override_mode: StringOverrideMode,
@@ -562,6 +561,9 @@ pub struct OverlayBuilder {
     /// container claimed the wrong checksum for them. Moved into that build's
     /// [`OverlayBuildResult`].
     last_checksum_mismatches: Vec<ChecksumMismatch>,
+    /// Game archives the most recent [`build`](Self::build) could not index.
+    /// Moved into that build's [`OverlayBuildResult`].
+    last_skipped_archives: Vec<SkippedGameArchive>,
     pub(crate) last_game_data_diagnostics: Vec<crate::game_data::GameDataDiagnostic>,
 }
 
@@ -578,9 +580,9 @@ impl OverlayBuilder {
     ///   (e.g. the profile folder `profiles/default/`).
     pub fn new(game_dir: Utf8PathBuf, overlay_root: Utf8PathBuf, state_dir: Utf8PathBuf) -> Self {
         Self {
-            game_dir,
+            game_dir: GameDir::new(game_dir),
             overlay_root,
-            state_dir,
+            state_dir: StateDir::new(state_dir),
             enabled_mods: Vec::new(),
             blocked_wads: HashSet::new(),
             string_override_mode: StringOverrideMode::Disabled,
@@ -588,6 +590,7 @@ impl OverlayBuilder {
             last_mod_wad_reports: Vec::new(),
             last_linked_bin_offenders: Vec::new(),
             last_checksum_mismatches: Vec::new(),
+            last_skipped_archives: Vec::new(),
             last_game_data_diagnostics: Vec::new(),
         }
     }
@@ -627,21 +630,14 @@ impl OverlayBuilder {
         state_dir: &Utf8Path,
         enabled_mod: &mut EnabledMod,
     ) -> Result<ModWadReport> {
-        let data_final_dir = game_dir.join("DATA").join("FINAL");
-        if !data_final_dir.as_std_path().exists() {
-            return Err(GameDirError::MissingDataFinal {
-                path: game_dir.to_path_buf(),
-            }
-            .into());
-        }
-
-        std::fs::create_dir_all(state_dir.as_std_path())
-            .map_err(|source| Error::write(state_dir, source))?;
-        let cache_path = state_dir.join("game_index.bin");
-        let game_index = GameIndex::load_or_build(game_dir, &cache_path)?;
+        let game_dir = GameDir::new(game_dir);
+        let state_dir = StateDir::new(state_dir);
+        game_dir.data_final()?;
+        state_dir.create()?;
+        let game_index = game_dir.index(&state_dir)?;
 
         let fingerprint = enabled_mod.cache_fingerprint();
-        let mod_meta = metadata::collect_single_mod_metadata(enabled_mod, &game_index, game_dir)?;
+        let mod_meta = metadata::collect_single_mod_metadata(enabled_mod, &game_index)?;
 
         Ok(ModWadReport::from_meta(
             enabled_mod.id.clone(),
@@ -702,6 +698,7 @@ impl OverlayBuilder {
         // Reset per-build outputs; each return path sets these as appropriate.
         self.last_linked_bin_offenders = Vec::new();
         self.last_checksum_mismatches = Vec::new();
+        self.last_skipped_archives = Vec::new();
         self.last_game_data_diagnostics.clear();
 
         let effective_blocked = self.effective_blocked_wads();
@@ -714,28 +711,22 @@ impl OverlayBuilder {
 
         self.emit_progress(OverlayProgress::stage(OverlayStage::Indexing));
 
-        let data_final_dir = self.game_dir.join("DATA").join("FINAL");
-        if !data_final_dir.as_std_path().exists() {
-            return Err(GameDirError::MissingDataFinal {
-                path: self.game_dir.clone(),
-            }
-            .into());
-        }
+        self.game_dir.data_final()?;
 
         std::fs::create_dir_all(self.overlay_root.as_std_path())
             .map_err(|source| Error::write(&self.overlay_root, source))?;
-        std::fs::create_dir_all(self.state_dir.as_std_path())
-            .map_err(|source| Error::write(&self.state_dir, source))?;
+        self.state_dir.create()?;
 
-        let cache_path = self.state_dir.join("game_index.bin");
-        let game_index = GameIndex::load_or_build(&self.game_dir, &cache_path)?;
+        let game_index = self.game_dir.index(&self.state_dir)?;
+        self.last_skipped_archives = game_index.skipped_archives();
+        let game_fingerprint = game_index.fingerprint().as_u64();
 
         // Resolved locale targets are part of the build configuration: they enter
         // the state comparison so toggling the mode invalidates the exact-match skip.
         let target_locales = self.string_override_mode.resolve_locales(&game_index);
 
         // Load previous state
-        let state_path = self.state_dir.join("overlay.json");
+        let state_path = self.state_dir.overlay_state();
         let enabled_ids: Vec<String> = self.enabled_mods.iter().map(|m| m.id.clone()).collect();
 
         // A state file that will not parse is treated as no state at all, which
@@ -760,7 +751,7 @@ impl OverlayBuilder {
             let state = OverlayState::new(
                 Vec::new(),
                 BTreeMap::new(),
-                game_index.game_fingerprint(),
+                game_fingerprint,
                 effective_blocked.clone(),
                 target_locales.clone(),
                 BTreeMap::new(),
@@ -776,6 +767,7 @@ impl OverlayBuilder {
                 conflicts: Vec::new(),
                 checksum_mismatches: Vec::new(),
                 game_data_diagnostics: Vec::new(),
+                skipped_archives: std::mem::take(&mut self.last_skipped_archives),
                 build_time: start_time.elapsed(),
             });
         }
@@ -786,7 +778,7 @@ impl OverlayBuilder {
             prev_state.as_ref(),
             &enabled_ids,
             mod_fingerprints.as_ref(),
-            game_index.game_fingerprint(),
+            game_fingerprint,
             &effective_blocked,
             &target_locales,
             start_time,
@@ -797,7 +789,7 @@ impl OverlayBuilder {
         // Determine if incremental build is possible
         let can_incremental = prev_state
             .as_ref()
-            .is_some_and(|s| s.supports_incremental(game_index.game_fingerprint()));
+            .is_some_and(|s| s.supports_incremental(game_fingerprint));
 
         if !can_incremental {
             tracing::info!(
@@ -886,7 +878,7 @@ impl OverlayBuilder {
         let mut state = OverlayState::new(
             enabled_ids,
             mod_fingerprints.unwrap_or_default(),
-            game_index.game_fingerprint(),
+            game_fingerprint,
             effective_blocked,
             target_locales,
             new_wad_fingerprints,
@@ -920,6 +912,7 @@ impl OverlayBuilder {
             conflicts: Vec::new(),
             checksum_mismatches: std::mem::take(&mut self.last_checksum_mismatches),
             game_data_diagnostics: std::mem::take(&mut self.last_game_data_diagnostics),
+            skipped_archives: std::mem::take(&mut self.last_skipped_archives),
             build_time: start_time.elapsed(),
         })
     }
@@ -930,7 +923,7 @@ impl OverlayBuilder {
     /// the overlay is out of date for reasons the state file cannot track.
     pub fn rebuild_all(&mut self) -> Result<OverlayBuildResult> {
         // Remove previous state so build() sees no match
-        let state_path = self.state_dir.join("overlay.json");
+        let state_path = self.state_dir.overlay_state();
         if state_path.as_std_path().exists() {
             std::fs::remove_file(state_path.as_std_path())
                 .map_err(|source| Error::write(&state_path, source))?;
@@ -1014,6 +1007,7 @@ impl OverlayBuilder {
             // A skipped build read no container, so it has nothing to report.
             checksum_mismatches: Vec::new(),
             game_data_diagnostics: state.game_data_diagnostics.clone(),
+            skipped_archives: std::mem::take(&mut self.last_skipped_archives),
             build_time: start_time.elapsed(),
         })
     }
@@ -1048,9 +1042,9 @@ impl OverlayBuilder {
 
         for (locale, overrides) in per_locale {
             let wad_name = format!("Global.{locale}.wad.client");
-            let wad_abs_path = match game_index.find_wad(&wad_name) {
-                Ok(path) => path.clone(),
-                Err(Error::WadNotFound(_)) => {
+            let wad_rel_path = match game_index.archive_by_file_name(&wad_name) {
+                Ok(id) => game_index.wad_rel_path(id),
+                Err(ltk_game_index::ArchiveLookupError::Absent { .. }) => {
                     tracing::warn!(
                         "String overrides target locale '{}' but the game has no '{}'; skipping",
                         locale,
@@ -1058,15 +1052,8 @@ impl OverlayBuilder {
                     );
                     continue;
                 }
-                Err(other) => return Err(other),
+                Err(ambiguous) => return Err(ambiguous.into()),
             };
-            let wad_rel_path = wad_abs_path
-                .strip_prefix(&self.game_dir)
-                .map_err(|_| GameDirError::WadOutsideGameDir {
-                    game_dir: self.game_dir.clone(),
-                    wad: wad_abs_path.clone(),
-                })?
-                .to_path_buf();
 
             let chunk_hash = strings::stringtable_chunk_hash(&locale);
 
@@ -1275,9 +1262,9 @@ mod tests {
             Utf8PathBuf::from("/profile"),
         );
 
-        assert_eq!(builder.game_dir, Utf8PathBuf::from("/game"));
+        assert_eq!(builder.game_dir, GameDir::new("/game"));
         assert_eq!(builder.overlay_root, Utf8PathBuf::from("/profile/overlay"));
-        assert_eq!(builder.state_dir, Utf8PathBuf::from("/profile"));
+        assert_eq!(builder.state_dir, StateDir::new("/profile"));
         assert_eq!(builder.enabled_mods.len(), 0);
     }
 
@@ -1333,13 +1320,15 @@ mod tests {
         }
     }
 
-    fn game_index_with_hashes(hashes: HashMap<WadHash, Vec<Utf8PathBuf>>) -> GameIndex {
-        GameIndex {
-            wad_index: HashMap::new(),
-            hash_index: hashes,
-            game_fingerprint: 7,
-            subchunktoc_blocked: HashSet::new(),
-        }
+    /// A game index over fixture archives, each holding the given chunk hashes.
+    fn game_index_with_hashes(
+        wads: &[(&Utf8PathBuf, &[WadHash])],
+    ) -> (crate::test_support::GameFixture, GameIndex) {
+        let wads: Vec<(&str, &[WadHash])> = wads
+            .iter()
+            .map(|(path, hashes)| (path.as_str(), *hashes))
+            .collect();
+        crate::test_support::game_index_with_hashes(&wads)
     }
 
     #[test]
@@ -1350,13 +1339,11 @@ mod tests {
 
         // 0xBA5E is a champion base chunk the game duplicates into both map WADs
         // (spillover); 0x5C1 (a skin chunk) lives only in the champion WAD.
-        let mut hash_index: HashMap<WadHash, Vec<Utf8PathBuf>> = HashMap::new();
-        hash_index.insert(
-            WadHash(0xBA5E),
-            vec![aatrox.clone(), map11.clone(), map12.clone()],
-        );
-        hash_index.insert(WadHash(0x5C1), vec![aatrox.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[
+            (&aatrox, &[WadHash(0xBA5E), WadHash(0x5C1)]),
+            (&map11, &[WadHash(0xBA5E)]),
+            (&map12, &[WadHash(0xBA5E)]),
+        ]);
 
         let mut mod_meta: HashMap<WadHash, OverrideMeta> = HashMap::new();
         mod_meta.insert(WadHash(0xBA5E), dummy_meta());
@@ -1392,16 +1379,17 @@ mod tests {
         );
         // override_count is distinct overrides, not the per-WAD sum (which is 4).
         assert_eq!(report.override_count, 2);
-        assert_eq!(report.game_index_fingerprint, 7);
+        assert_eq!(
+            report.game_index_fingerprint,
+            game_index.fingerprint().as_u64()
+        );
     }
 
     #[test]
     fn route_targets_adds_declared_wad_for_cross_wad_import() {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
-        let mut hash_index = HashMap::new();
-        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[(&ahri, &[WadHash(0xA881)])]);
 
         // A copy of an Ahri chunk shipped under the Aatrox WAD dir (cross-WAD
         // import, identical or modified alike): route to Ahri (hash match) AND
@@ -1411,7 +1399,7 @@ mod tests {
         meta.fallback_wad = Some(aatrox.clone());
         assert_eq!(
             meta.route_targets(WadHash(0xA881), &game_index),
-            vec![ahri.as_path(), aatrox.as_path()]
+            vec![ahri.clone(), aatrox.clone()]
         );
 
         // Declared WAD already among the hash matches: no extra target.
@@ -1419,7 +1407,7 @@ mod tests {
         meta.fallback_wad = Some(ahri.clone());
         assert_eq!(
             meta.route_targets(WadHash(0xA881), &game_index),
-            vec![ahri.as_path()]
+            vec![ahri.clone()]
         );
     }
 
@@ -1427,7 +1415,7 @@ mod tests {
     fn route_targets_carries_a_localized_declaration_to_its_sibling() {
         let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
         let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
-        let game_index = game_index_with_hashes(HashMap::new());
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
 
         // A brand-new asset declared into the localized WAD. Only that WAD would
         // hold it, which no other locale installs and the integrity scan never
@@ -1437,7 +1425,7 @@ mod tests {
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
             meta.route_targets(WadHash(0xF00D), &game_index),
-            vec![graves_en.as_path(), graves.as_path()]
+            vec![graves_en.clone(), graves.clone()]
         );
     }
 
@@ -1445,9 +1433,7 @@ mod tests {
     fn route_targets_leaves_localized_content_in_its_own_wad() {
         let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
         let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
-        let mut hash_index = HashMap::new();
-        hash_index.insert(WadHash(0x1_0CA1), vec![graves_en.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[(&graves_en, &[WadHash(0x1_0CA1)])]);
 
         // Genuinely localized content hash-matches the localized WAD, so it never
         // reaches the fallback and the sibling stays out of it.
@@ -1456,7 +1442,7 @@ mod tests {
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
             meta.route_targets(WadHash(0x1_0CA1), &game_index),
-            vec![graves_en.as_path()]
+            vec![graves_en.clone()]
         );
     }
 
@@ -1464,9 +1450,7 @@ mod tests {
     fn route_targets_never_repeats_the_sibling() {
         let graves = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.wad.client");
         let graves_en = Utf8PathBuf::from("DATA/FINAL/Champions/Graves.en_US.wad.client");
-        let mut hash_index = HashMap::new();
-        hash_index.insert(WadHash(0xBA5E), vec![graves.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[(&graves, &[WadHash(0xBA5E)])]);
 
         // An existing asset misplaced into the localized WAD: the hash match
         // already names the sibling, so only the declared WAD is added.
@@ -1475,7 +1459,7 @@ mod tests {
         meta.unlocalized_wad = Some(graves.clone());
         assert_eq!(
             meta.route_targets(WadHash(0xBA5E), &game_index),
-            vec![graves.as_path(), graves_en.as_path()]
+            vec![graves.clone(), graves_en.clone()]
         );
     }
 
@@ -1483,9 +1467,7 @@ mod tests {
     fn route_targets_ignores_heuristic_fallback_for_raw_sources() {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
-        let mut hash_index = HashMap::new();
-        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[(&ahri, &[WadHash(0xA881)])]);
 
         // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
         // declared placement - hash matches must not be widened by it.
@@ -1502,12 +1484,12 @@ mod tests {
         };
         assert_eq!(
             meta.route_targets(WadHash(0xA881), &game_index),
-            vec![ahri.as_path()]
+            vec![ahri.clone()]
         );
         // ...but it still routes brand-new hashes.
         assert_eq!(
             meta.route_targets(WadHash(0xF00D), &game_index),
-            vec![aatrox.as_path()]
+            vec![aatrox.clone()]
         );
     }
 
@@ -1515,9 +1497,7 @@ mod tests {
     fn from_meta_counts_cross_wad_import_in_declared_wad() {
         let ahri = Utf8PathBuf::from("DATA/FINAL/Champions/Ahri.wad.client");
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
-        let mut hash_index = HashMap::new();
-        hash_index.insert(WadHash(0xA881), vec![ahri.clone()]);
-        let game_index = game_index_with_hashes(hash_index);
+        let (_fixture, game_index) = game_index_with_hashes(&[(&ahri, &[WadHash(0xA881)])]);
 
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(aatrox.clone());
@@ -1544,7 +1524,7 @@ mod tests {
     #[test]
     fn from_meta_uses_fallback_wad_when_no_game_match() {
         let custom = Utf8PathBuf::from("DATA/FINAL/Champions/NewChamp.wad.client");
-        let game_index = game_index_with_hashes(HashMap::new());
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
 
         let mut meta = dummy_meta();
         meta.fallback_wad = Some(custom.clone());

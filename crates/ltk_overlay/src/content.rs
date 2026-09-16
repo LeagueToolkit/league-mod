@@ -110,7 +110,7 @@ pub trait ModContentProvider: Send + Sync {
     ///
     /// Returns WAD filenames such as `"Aatrox.wad.client"` or `"Map11.wad.client"`.
     /// The builder uses these names to look up the corresponding game WAD via
-    /// [`GameIndex::find_wad`](crate::game_index::GameIndex::find_wad).
+    /// `ltk_game_index::GameIndex::archive_by_file_name`.
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>>;
 
     /// Read all override files for a WAD in a layer.
@@ -153,7 +153,7 @@ pub trait ModContentProvider: Send + Sync {
     /// RAW overrides are files identified by their game asset path (e.g.,
     /// `assets/characters/aatrox/skin0.bin`) rather than being pre-organized
     /// into WAD target directories. These files are routed to the correct WADs
-    /// at overlay build time using the GameIndex hash lookup.
+    /// at overlay build time through the game index's chunk rows.
     ///
     /// Returns `(relative_path, file_bytes)` pairs where the relative path is
     /// the game asset path used to compute the chunk path hash.

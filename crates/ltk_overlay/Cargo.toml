@@ -13,6 +13,7 @@ authors = ["LeagueToolkit"]
 
 [dependencies]
 ltk_game_data = { version = "0.1.0", path = "../ltk_game_data" }
+ltk_game_index = { version = "0.1.0", path = "../ltk_game_index" }
 # LeagueToolkit crates
 ltk_wad = { workspace = true, features = ["serde"] }
 ltk_file = "0.2.8"

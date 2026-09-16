@@ -10,12 +10,12 @@ use crate::builder::{
 };
 use crate::content::ModContentProvider;
 use crate::error::{Error, Invariant, Result};
-use crate::game_index::GameIndex;
 use crate::state::OverlayState;
-use crate::strings::{self, StringPatchPlan};
+use crate::strings::StringPatchPlan;
 use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
 use crate::wad_builder::{OverrideEncoding as _, PatchedWadStats, build_patched_wad};
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_game_index::GameIndex;
 use ltk_wad::{EncodedChunk, WadHash, WadRebasePlan};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -300,7 +300,7 @@ impl OverlayBuilder {
         all_meta: &HashMap<WadHash, OverrideMeta>,
         game_index: &GameIndex,
     ) -> BTreeMap<Utf8PathBuf, HashSet<WadHash>> {
-        let mut wad_hash_sets: BTreeMap<&Utf8Path, HashSet<WadHash>> = BTreeMap::new();
+        let mut wad_hash_sets: BTreeMap<Utf8PathBuf, HashSet<WadHash>> = BTreeMap::new();
         let mut new_entry_count = 0usize;
         let mut cross_import_count = 0usize;
         let mut dropped_count = 0usize;
@@ -319,7 +319,7 @@ impl OverlayBuilder {
                 continue;
             }
 
-            if game_index.find_wads_with_hash(path_hash).is_none() {
+            if !game_index.contains(path_hash) {
                 new_entry_count += 1;
             } else if meta.is_cross_wad_import(path_hash, game_index) {
                 cross_import_count += 1;
@@ -356,9 +356,6 @@ impl OverlayBuilder {
         );
 
         wad_hash_sets
-            .into_iter()
-            .map(|(path, hashes)| (path.to_path_buf(), hashes))
-            .collect()
     }
 
     /// Compute per-WAD fingerprints from metadata and partition into rebuild vs reuse.
@@ -559,9 +556,10 @@ impl OverlayBuilder {
             let plan = string_plans
                 .get(&path_hash)
                 .ok_or(Error::Bug(Invariant::StringPatchWithoutPlan))?;
-            let patched =
-                strings::read_game_chunk(&self.game_dir, &plan.wad_rel_path, plan.chunk_hash)
-                    .and_then(|base_bytes| plan.apply(&base_bytes));
+            let patched = self
+                .game_dir
+                .read_chunk(&plan.wad_rel_path, plan.chunk_hash)
+                .and_then(|base_bytes| plan.apply(&base_bytes));
             match patched {
                 Ok(bytes) => {
                     preparer.supply(path_hash, Arc::from(bytes))?;

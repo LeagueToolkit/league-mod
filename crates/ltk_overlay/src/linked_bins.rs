@@ -6,16 +6,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-#[cfg(test)]
-use camino::Utf8Path;
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use crate::builder::{OverrideMeta, is_wad_blocked};
-use crate::game_index::GameIndex;
 #[cfg(test)]
 use crate::utils::resolve_chunk_hash;
+use ltk_game_index::GameIndex;
 
 /// Upper bound on a bin's declared linked-file count, guarding `Vec` pre-allocation
 /// against corrupt/garbage input. Real bins declare at most a handful.
@@ -68,10 +66,12 @@ impl<'a> PresentSet<'a> {
     /// Whether any archive the game mounts will offer `path_hash`.
     fn holds(&self, path_hash: WadHash) -> bool {
         self.routed.contains(&path_hash)
-            || self
-                .game_index
-                .find_wads_with_hash(path_hash)
-                .is_some_and(|wads| wads.iter().any(|wad| !is_wad_blocked(wad, self.blocked)))
+            || self.game_index.holders(path_hash).any(|holder| {
+                !is_wad_blocked(
+                    Utf8Path::new(self.game_index.archive(holder).file_name()),
+                    self.blocked,
+                )
+            })
     }
 }
 
@@ -179,6 +179,7 @@ pub(crate) fn parse_linked_bins(bytes: &[u8]) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use crate::builder::OverrideSource;
+    use crate::test_support::game_index_with_hashes;
     use byteorder::{LE, WriteBytesExt};
     use std::io::Write;
 
@@ -309,7 +310,7 @@ mod tests {
         let mut wad_hash_sets = BTreeMap::new();
         wad_hash_sets.insert(wad, HashSet::from([bin_hash, dep_hash]));
 
-        let game_index = GameIndex::new();
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
         assert!(offenders.is_empty());
@@ -331,7 +332,7 @@ mod tests {
         let mut wad_hash_sets = BTreeMap::new();
         wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
 
-        let game_index = GameIndex::new();
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
 
@@ -362,8 +363,7 @@ mod tests {
         wad_hash_sets.insert(wad.clone(), HashSet::from([bin_hash]));
 
         // The dependency is a vanilla chunk of this WAD.
-        let mut game_index = GameIndex::new();
-        game_index.hash_index.insert(dep_hash, vec![wad]);
+        let (_fixture, game_index) = game_index_with_hashes(&[(wad.as_str(), &[dep_hash])]);
 
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
@@ -387,8 +387,7 @@ mod tests {
         let mut wad_hash_sets = BTreeMap::new();
         wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
 
-        let mut game_index = GameIndex::new();
-        game_index.hash_index.insert(dep_hash, vec![other_wad]);
+        let (_fixture, game_index) = game_index_with_hashes(&[(other_wad.as_str(), &[dep_hash])]);
 
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
@@ -414,8 +413,7 @@ mod tests {
         wad_hash_sets.insert(base.clone(), HashSet::from([bin_hash]));
         wad_hash_sets.insert(localized, HashSet::from([bin_hash]));
 
-        let mut game_index = GameIndex::new();
-        game_index.hash_index.insert(dep_hash, vec![base]);
+        let (_fixture, game_index) = game_index_with_hashes(&[(base.as_str(), &[dep_hash])]);
 
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
@@ -441,7 +439,7 @@ mod tests {
         wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
         wad_hash_sets.insert(other_wad, HashSet::from([dep_hash]));
 
-        let game_index = GameIndex::new();
+        let (_fixture, game_index) = game_index_with_hashes(&[]);
         let offenders =
             collect_linked_bin_offenders(&all_meta, &wad_hash_sets, &game_index, &HashSet::new());
         assert!(offenders.is_empty(), "{offenders:?}");
@@ -466,8 +464,7 @@ mod tests {
         let mut wad_hash_sets = BTreeMap::new();
         wad_hash_sets.insert(wad, HashSet::from([bin_hash]));
 
-        let mut game_index = GameIndex::new();
-        game_index.hash_index.insert(dep_hash, vec![blocked_wad]);
+        let (_fixture, game_index) = game_index_with_hashes(&[(blocked_wad.as_str(), &[dep_hash])]);
 
         let blocked = HashSet::from(["global.wad.client".to_string()]);
         let offenders =

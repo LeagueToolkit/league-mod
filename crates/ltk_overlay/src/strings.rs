@@ -36,11 +36,12 @@
 //! for entries whose plaintext name is unknown.
 
 use crate::builder::{EnabledMod, OverrideMeta, OverrideSource};
-use crate::error::{CorruptionError, Error, GameDirError, ModContentError, Result};
-use crate::game_index::GameIndex;
+use crate::error::{CorruptionError, ModContentError, Result};
+use crate::game::GameIndexExt;
 use crate::utils::ContentHash;
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use indexmap::IndexMap;
+use ltk_game_index::GameIndex;
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -308,32 +309,11 @@ fn canonicalize_key(key: &str, mod_id: &str, layer_name: &str) -> Option<String>
     Some(key.to_lowercase())
 }
 
-/// Read and decompress a single chunk from a game WAD.
-pub(crate) fn read_game_chunk(
-    game_dir: &Utf8Path,
-    wad_rel_path: &Utf8Path,
-    chunk_hash: WadHash,
-) -> Result<Vec<u8>> {
-    let abs_path = game_dir.join(wad_rel_path);
-    let file = std::fs::File::open(abs_path.as_std_path())
-        .map_err(|source| Error::read(&abs_path, source))?;
-    let mut wad = ltk_wad::Wad::mount(file)?;
-
-    let chunk =
-        *wad.chunks()
-            .get(chunk_hash)
-            .ok_or_else(|| GameDirError::StringtableChunkMissing {
-                wad: wad_rel_path.to_path_buf(),
-                chunk_hash,
-            })?;
-
-    Ok(wad.load_chunk_decompressed(&chunk)?.to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::content::ModContentProvider;
+    use camino::Utf8Path;
     use ltk_mod_project::{ModProject, ModProjectLayer};
     use std::collections::HashSet;
 
@@ -689,24 +669,12 @@ mod tests {
 
     #[test]
     fn resolve_locales_modes() {
-        let mut wad_index: HashMap<String, Vec<Utf8PathBuf>> = HashMap::new();
-        for name in [
-            "global.en_us.wad.client",
-            "global.ko_kr.wad.client",
-            "global.wad.client",
-            "aatrox.wad.client",
-        ] {
-            wad_index.insert(
-                name.to_string(),
-                vec![Utf8PathBuf::from(format!("DATA/FINAL/{name}"))],
-            );
-        }
-        let game_index = GameIndex {
-            wad_index,
-            hash_index: HashMap::new(),
-            game_fingerprint: 0,
-            subchunktoc_blocked: HashSet::new(),
-        };
+        let (_fixture, game_index) = crate::test_support::game_index_with_hashes(&[
+            ("DATA/FINAL/global.en_us.wad.client", &[WadHash(1)]),
+            ("DATA/FINAL/global.ko_kr.wad.client", &[WadHash(2)]),
+            ("DATA/FINAL/global.wad.client", &[WadHash(3)]),
+            ("DATA/FINAL/aatrox.wad.client", &[WadHash(4)]),
+        ]);
 
         assert!(
             StringOverrideMode::Disabled

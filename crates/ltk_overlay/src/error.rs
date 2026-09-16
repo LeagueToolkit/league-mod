@@ -108,6 +108,19 @@ pub enum Error {
     #[error(transparent)]
     GameDir(#[from] GameDirError),
 
+    /// The game index could not be built.
+    ///
+    /// A missing `DATA/FINAL` is [`GameDirError::MissingDataFinal`] instead.
+    #[error(transparent)]
+    GameIndex(ltk_game_index::BuildError),
+
+    /// A WAD name lookup that is neither absent nor ambiguous.
+    ///
+    /// [`WadNotFound`](Self::WadNotFound) and [`AmbiguousWad`](Self::AmbiguousWad) carry the
+    /// two outcomes the index defines.
+    #[error(transparent)]
+    ArchiveLookup(ltk_game_index::ArchiveLookupError),
+
     /// A mod's content could not be used.
     #[error(transparent)]
     ModContent(#[from] ModContentError),
@@ -414,6 +427,35 @@ pub enum CacheError {
 // Kept as a `From` impl so `?` and `Error::cache_write` work across both cache
 // writers. The conversion names `rmp_serde`, but the variant does not, so
 // matching on an encode failure never forces a caller to depend on it.
+impl From<ltk_game_index::BuildError> for Error {
+    fn from(source: ltk_game_index::BuildError) -> Self {
+        match source {
+            ltk_game_index::BuildError::MissingDataFinal { path } => {
+                GameDirError::MissingDataFinal { path }.into()
+            }
+            other => Self::GameIndex(other),
+        }
+    }
+}
+
+impl From<ltk_game_index::ArchiveLookupError> for Error {
+    fn from(source: ltk_game_index::ArchiveLookupError) -> Self {
+        match source {
+            ltk_game_index::ArchiveLookupError::Absent { file_name } => {
+                Self::WadNotFound(Utf8PathBuf::from(file_name))
+            }
+            ltk_game_index::ArchiveLookupError::Ambiguous {
+                file_name,
+                candidates,
+            } => Self::AmbiguousWad {
+                name: file_name,
+                count: candidates.len(),
+            },
+            other => Self::ArchiveLookup(other),
+        }
+    }
+}
+
 impl From<rmp_serde::encode::Error> for CacheError {
     fn from(error: rmp_serde::encode::Error) -> Self {
         Self::Encode(Box::new(error))
