@@ -326,6 +326,7 @@ fn writer_reader_round_trip() {
         maps: vec![],
         layers: Default::default(),
         hashtables: vec![],
+        generator: None,
         extra: Default::default(),
     };
 
