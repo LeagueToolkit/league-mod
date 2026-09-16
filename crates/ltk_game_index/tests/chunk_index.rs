@@ -12,10 +12,13 @@ use ltk_hash::Hash as _;
 #[test]
 fn archives_sort_by_name_in_byte_order_and_ids_are_dense() {
     let install = Installation::new();
+    // A case-only twin shares one file on a case-insensitive filesystem, so the twin
+    // lives in another directory. Byte order puts `Zed` before `aatrox`.
     install.write_archive("Maps/Map11.wad.client", &[("a", b"1")]);
     install.write_archive("Champions/Aatrox.wad.client", &[("b", b"2")]);
-    install.write_archive("Champions/aatrox.wad.client", &[("c", b"3")]);
-    install.write_archive("Global.wad.client", &[("d", b"4")]);
+    install.write_archive("Legacy/aatrox.wad.client", &[("c", b"3")]);
+    install.write_archive("Champions/Zed.wad.client", &[("d", b"4")]);
+    install.write_archive("Global.wad.client", &[("e", b"5")]);
 
     let index = GameIndex::build(install.game_dir()).unwrap();
 
@@ -24,8 +27,9 @@ fn archives_sort_by_name_in_byte_order_and_ids_are_dense() {
         names,
         [
             "Champions/Aatrox.wad.client",
-            "Champions/aatrox.wad.client",
+            "Champions/Zed.wad.client",
             "Global.wad.client",
+            "Legacy/aatrox.wad.client",
             "Maps/Map11.wad.client",
         ]
     );
