@@ -16,10 +16,11 @@ mod document;
 mod error;
 mod manifest;
 mod property;
+mod schema;
 mod value;
 
 pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
-pub use apply::{RecordSkipReason, SkippedRecord};
+pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
 pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
@@ -27,6 +28,7 @@ pub use ltk_hash::BinHash;
 pub use ltk_meta::{PropertyKind, path::PropertyPath};
 pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
 pub use property::{PropertyEdit, Sign};
+pub use schema::{NoSchema, Schema, Shape};
 pub use value::{Value, kind_named, name_of};
 
 use std::fmt;

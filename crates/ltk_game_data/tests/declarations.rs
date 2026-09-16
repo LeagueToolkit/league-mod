@@ -1,5 +1,5 @@
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, OverridePath,
+    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, NoSchema, OverridePath,
     RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply, load_declarations,
 };
 use ltk_meta::{
@@ -100,7 +100,7 @@ fn yaml_requires_strings_for_lookup_paths_and_hashes() {
 #[test]
 fn duplicate_base_links_keep_the_first_casing() {
     let base = b"PROP\x03\0\0\0\x02\0\0\0\x01\0A\x01\0a\0\0\0\0";
-    let output = apply(base, &[], no_override).unwrap();
+    let output = apply(base, &[], no_override, &NoSchema).unwrap();
     assert_eq!(output.dependencies, ["A"]);
 }
 
@@ -168,7 +168,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         b"PROP\x01\0\0\0\0\0\0\0",
         b"PROP\x03\0\0\0",
     ] {
-        assert!(apply(bytes, &[], no_override).is_err());
+        assert!(apply(bytes, &[], no_override, &NoSchema).is_err());
     }
 }
 
@@ -223,7 +223,13 @@ modules:
 
     // PROP v2, dependency "shared", one zero-property object of class 2 and path 1.
     let base = b"PROP\x02\0\0\0\x01\0\0\0\x06\0shared\x01\0\0\0\x02\0\0\0\x06\0\0\0\x01\0\0\0\0\0";
-    let output = apply(base, target_of(&declarations.modules[0]).1, no_override).unwrap();
+    let output = apply(
+        base,
+        target_of(&declarations.modules[0]).1,
+        no_override,
+        &NoSchema,
+    )
+    .unwrap();
     assert_eq!(output.dependencies, ["shared", "other"]);
     assert_eq!(&output.bytes[..8], &base[..8]);
     assert_eq!(&output.bytes[27..], &base[20..]);
@@ -635,15 +641,20 @@ fn overrides_rewrite_objects_and_report_skipped_records() {
     )
     .unwrap();
     let mut reads = Vec::new();
-    let output = apply(&v2, target_of(&declarations.modules[0]).1, |path| {
-        reads.push(path.as_str().to_owned());
-        Ok(match path.as_str() {
-            "first.ptch" => ptch(1, 2.0),
-            "second.ptch" => ptch(9, 3.0),
-            "third.ptch" => ptch(1, 4.0),
-            other => panic!("{other}"),
-        })
-    })
+    let output = apply(
+        &v2,
+        target_of(&declarations.modules[0]).1,
+        |path| {
+            reads.push(path.as_str().to_owned());
+            Ok(match path.as_str() {
+                "first.ptch" => ptch(1, 2.0),
+                "second.ptch" => ptch(9, 3.0),
+                "third.ptch" => ptch(1, 4.0),
+                other => panic!("{other}"),
+            })
+        },
+        &NoSchema,
+    )
     .unwrap();
     assert_eq!(reads, ["first.ptch", "second.ptch", "third.ptch"]);
     assert_eq!(&output.bytes[..8], b"PROP\x03\0\0\0");
@@ -687,6 +698,7 @@ fn unavailable_overrides_are_reported_and_links_still_apply() {
             )),
             _ => Ok(base_bin()),
         },
+        &NoSchema,
     )
     .unwrap();
     assert_eq!(output.dependencies, ["shared", "Added"]);

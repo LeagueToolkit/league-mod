@@ -394,7 +394,9 @@ boolean, string, `hash`, `link`, `file`, or `flag`: each removal coerces to the 
 removes every equal element; a removal that matches nothing is `RemovalUnmatched`. Where the
 item kind is `pointer` or `embed`, `-` removes by index: each removal is an integer index into
 the base's list, and one out of range is `RemovalUnmatched`. `-` on a map removes by key; a
-key the base lacks is `RemovalUnmatched`. Any report skips the whole signed edit.
+key the base lacks is `RemovalUnmatched`. A report on any of a key's operations skips the
+key: its set, removals, and additions together. The diagnostic's `path` carries the sign of
+the operation that failed.
 
 Removals compare ASCII-lowercased paths; missing removals produce diagnostics. Additions
 retain written casing and order and omit case-insensitive duplicates. The overlay reads each
@@ -420,10 +422,11 @@ key the diagnostic is about, a block's inner key joined to its outer path. Its n
 `Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)). `SkippedProperty` contains
 `entry`, an `EntryName`, and `reason`; the non-exhaustive `PropertySkipReason` distinguishes
 `MissingObject`, `MissingProperty`, `NullPointer`, `CannotDescend`, `NotIndexable`,
-`IndexOutOfRange`, `InvalidKey`, `KeyNotFound`, `TypeMismatch`, `Untypable`, `UnknownClass`,
-`PinMismatch`, `SignOnScalar`, `ContainerAbsent`, `RemovalUnmatched`, `KindMismatch`,
-`OutOfRange`, `PrecisionLoss`, `ArityMismatch`, and `Unknown`. The first nine are the
-`RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch` refuses.
+`IndexOutOfRange`, `InvalidKey`, `KeyNotFound`, `TypeMismatch`, `InvalidPath`, `Untypable`,
+`UnknownClass`, `PinMismatch`, `SignOnScalar`, `ContainerAbsent`, `RemovalUnmatched`,
+`KindMismatch`, `OutOfRange`, `PrecisionLoss`, `ArityMismatch`, and `Unknown`. The first nine
+are the `RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch`
+refuses; `InvalidPath` is a key inside a block or a `set` that is not a property path.
 `SkippedRecord` contains `index`, `object` (a `BinHash`), `property`, and `reason`; the
 non-exhaustive `RecordSkipReason` distinguishes `MissingObject`, `MissingProperty`,
 `NullPointer`, `CannotDescend`, `NotIndexable`, `IndexOutOfRange`, `InvalidKey`,

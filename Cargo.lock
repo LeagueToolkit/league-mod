@@ -1417,9 +1417,11 @@ name = "ltk_game_data"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "glam",
  "indexmap",
  "ltk_hash",
  "ltk_meta",
+ "ltk_primitives",
  "serde",
  "serde-saphyr",
  "serde_json",

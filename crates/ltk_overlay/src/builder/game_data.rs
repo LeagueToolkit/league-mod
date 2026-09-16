@@ -418,7 +418,12 @@ impl OverlayBuilder {
                 let enabled_mods = &mut self.enabled_mods;
                 let read_override =
                     |path: &OverridePath| resources.read(enabled_mods, application, path);
-                match ltk_game_data::apply(&bytes, &application.edits, read_override) {
+                match ltk_game_data::apply(
+                    &bytes,
+                    &application.edits,
+                    read_override,
+                    &ltk_game_data::NoSchema,
+                ) {
                     Ok(output) => {
                         self.last_game_data_diagnostics.extend(
                             output

@@ -1,3 +1,8 @@
+//! Application of edits over a `PROP`: override files, entry edits, then link edits.
+
+mod coerce;
+mod entries;
+
 use std::{collections::HashSet, io::Cursor};
 
 use ltk_meta::{
@@ -7,7 +12,7 @@ use ltk_meta::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{BinHash, Edit, Error, ErrorKind, OverridePath};
+use crate::{BinHash, Edit, EntryName, Error, ErrorKind, OverridePath, Schema};
 
 /// The category of an application diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +26,10 @@ pub enum ApplyDiagnosticKind {
     /// One override record that does not apply to the target. The remaining records apply.
     OverrideRecordSkipped,
     LinkRemovalUnmatched,
+    /// One property key whose edit does not apply. The remaining keys apply.
+    PropertyEditSkipped,
+    /// A property typed from the base, the schema saying nothing. Informational.
+    SchemaFallback,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -76,6 +85,97 @@ impl From<&PatchError> for RecordSkipReason {
     }
 }
 
+/// Why a property edit does not apply.
+///
+/// The first nine codes are the [`RecordSkipReason`] codes of a path that does not resolve
+/// or a value the tree refuses; the rest are the typing, pin, sign, container, and coercion
+/// rules of `docs/design/game-data.md` section 6.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum PropertySkipReason {
+    /// The target has no object with the entry's hash.
+    MissingObject,
+    /// A path segment names a property the value does not have.
+    MissingProperty,
+    /// A path segment descends through a null pointer.
+    NullPointer,
+    /// A path segment descends into a value that is not a pointer or an embed.
+    CannotDescend,
+    /// A subscript on a value that is not a list, option, or map.
+    NotIndexable,
+    /// A list or option index past the end.
+    IndexOutOfRange,
+    /// A map key that does not convert to the map's key kind.
+    InvalidKey,
+    /// A map key no entry has.
+    KeyNotFound,
+    /// The coerced value's shape is not the base value's shape.
+    TypeMismatch,
+    /// A key inside a block or a `set` that is not a property path.
+    InvalidPath,
+    /// The property has no type: the base omits it and the schema says nothing.
+    Untypable,
+    /// A struct pin's class the schema does not know.
+    UnknownClass,
+    /// A pin whose type name is not the property's kind.
+    PinMismatch,
+    /// A `+` or `-` on a property that is not a list or a map.
+    SignOnScalar,
+    /// A `-` on a container the base omits.
+    ContainerAbsent,
+    /// A removal that matches no element, index, or key.
+    RemovalUnmatched,
+    /// A value of a kind no coercion row accepts for the property's shape.
+    KindMismatch,
+    /// An integer outside the range of the property's kind.
+    OutOfRange,
+    /// An integer an `f32` does not represent exactly.
+    PrecisionLoss,
+    /// A list whose length is not the shape's.
+    ArityMismatch,
+    /// A reason this crate does not name.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<ResolveErrorKind> for PropertySkipReason {
+    fn from(kind: ResolveErrorKind) -> Self {
+        match kind {
+            ResolveErrorKind::MissingObject(_) => Self::MissingObject,
+            ResolveErrorKind::MissingProperty(_) => Self::MissingProperty,
+            ResolveErrorKind::NullPointer => Self::NullPointer,
+            ResolveErrorKind::CannotDescend(_) => Self::CannotDescend,
+            ResolveErrorKind::NotIndexable(_) => Self::NotIndexable,
+            ResolveErrorKind::IndexOutOfRange { .. } => Self::IndexOutOfRange,
+            ResolveErrorKind::InvalidKey(_) => Self::InvalidKey,
+            ResolveErrorKind::KeyNotFound => Self::KeyNotFound,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<&PatchError> for PropertySkipReason {
+    fn from(error: &PatchError) -> Self {
+        match error {
+            PatchError::Resolve(error) => error.kind().into(),
+            PatchError::TypeMismatch { .. } => Self::TypeMismatch,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// One property edit that does not apply. The diagnostic's `path` is its signed key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedProperty {
+    /// The entry the edit addresses, as spelled.
+    pub entry: EntryName,
+    /// Why the edit does not apply.
+    pub reason: PropertySkipReason,
+}
+
 /// One override record that does not apply. The record index is zero-based within its file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,11 +197,14 @@ pub struct ApplyDiagnostic {
     pub kind: ApplyDiagnosticKind,
     #[serde(rename = "edit")]
     pub edit_index: usize,
-    /// The link path or override path the diagnostic is about.
+    /// The link path, the override path, or the signed property key the diagnostic is about.
     pub path: String,
     /// The record of an `OverrideRecordSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<SkippedRecord>,
+    /// The property of a `PropertyEditSkipped` diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<SkippedProperty>,
 }
 
 #[derive(Debug)]
@@ -116,9 +219,10 @@ pub struct ApplyResult {
 /// Each edit runs its phases in field order and reads the result of the preceding edit.
 /// `read_override` supplies the bytes of an override file by its path, once per listed path
 /// in apply order, in any byte container; a caller sharing one file across several targets
-/// hands over an `Arc<[u8]>`. A target with an applied override file is written from the
-/// decoded tree at PROP version 3; a target without one keeps its object bytes and header
-/// version.
+/// hands over an `Arc<[u8]>`. `schema` types every property edit; a caller with no schema
+/// passes `&NoSchema`. A target with an applied override file or an applied property edit is
+/// written from the decoded tree at PROP version 3; a target with neither keeps its object
+/// bytes and header version.
 ///
 /// # Errors
 ///
@@ -127,6 +231,7 @@ pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     mut read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
+    schema: &dyn Schema,
 ) -> Result<ApplyResult, Error> {
     let stream = BinStream::mount(Cursor::new(base)).map_err(|e| bin_error(&e))?;
     if !matches!(stream.version(), 2 | 3) {
@@ -152,6 +257,7 @@ pub fn apply<B: AsRef<[u8]>>(
                     edit_index: index,
                     path: path.as_str().to_owned(),
                     record,
+                    property: None,
                 });
             };
             let Ok(bytes) = read_override(path) else {
@@ -176,6 +282,15 @@ pub fn apply<B: AsRef<[u8]>>(
             }
             rewritten = true;
         }
+        let outcome = entries::run(&mut bin, schema, &edit.entries);
+        rewritten |= outcome.patched;
+        diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
+            kind: report.kind,
+            edit_index: index,
+            path: report.path,
+            record: None,
+            property: report.property,
+        }));
         for path in &edit.links.remove {
             let count = bin.dependencies.len();
             bin.dependencies
@@ -186,6 +301,7 @@ pub fn apply<B: AsRef<[u8]>>(
                     edit_index: index,
                     path: path.as_str().to_owned(),
                     record: None,
+                    property: None,
                 });
             }
         }
