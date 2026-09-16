@@ -10,10 +10,13 @@ The supported bindings are `links`, `+links`, and `-links`. Other bindings are e
 
 - **Declarations:** The versioned, ordered modules belonging to one layer.
 - **Declaration document:** Preserved serialized declarations, including unsupported fields.
-- **Module:** An explicit chunk target and ordered steps with diagnostic provenance.
+- **Module:** One selector and its steps with diagnostic provenance.
+- **Selector:** What a module edits: a chunk target with steps, or a mapping of entry names to steps.
 - **Step:** Link removals followed by additions.
 - **Declaration location:** A manifest, optional source, and zero-based module index.
 - **Target:** A nonempty literal game path or bare chunk hash.
+- **Entry name:** A nonempty bin object path. Its object hash is the FNV-1a of its ASCII-lowercased spelling.
+- **Declaring chunk:** A game bin chunk containing an entry, reported by the object index.
 - **Link path:** An authored dependency path containing 1 to 65535 UTF-8 bytes.
 - **Diagnostic:** One nonfatal declaration or application outcome, with a typed category.
 - **Build resource:** A manifest or referenced source excluded from game content.
@@ -24,8 +27,9 @@ The supported bindings are `links`, `+links`, and `-links`. Other bindings are e
 ([ADR-0004](../adr/0004-game-data-engine.md), [ADR-0006](../adr/0006-declaration-interfaces.md)).
 The project crate resolves layer-relative files and enforces `.modignore`. Archive crates
 carry declaration documents as layer metadata. Providers expose the same declarations for
-directories and archives. The overlay owns target resolution, mod precedence, WAD distribution,
-and persisted diagnostics.
+directories and archives. The overlay owns selector resolution through `ltk_game_index`
+(`game-index.md` [section 10](game-index.md#s10)), mod precedence, WAD distribution, and
+persisted diagnostics. `ltk_game_data` has no dependency on `ltk_game_index`.
 
 The library owns standard binding semantics. Binding implementations are private. The public
 substitution seams are `ModContentProvider` and the source-reading callback accepted by
@@ -64,7 +68,9 @@ types ([section 4](#s4)). `apply()` returns bytes and leaves its input unchanged
 
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 `game_data.json`. The manifest requires integer `version: 1` and a `modules` array.
-A module contains one `target` and a compact binding body, `steps`, or `source`.
+A module contains one selector. A `target` selector takes a compact binding body, `steps`, or
+`source`. An `entries` selector is a mapping of entry names to compact binding bodies or `steps`,
+and takes nothing else. A module with both keys, or neither, is an error.
 A target is one nonempty string. Exactly 16 ASCII hexadecimal characters identify a chunk
 hash without a prefix; every other spelling identifies a literal path. Hash-shaped spellings
 are reserved and cannot identify literal paths. Objects and non-string values are errors.
@@ -77,7 +83,13 @@ classify the spelling and reject empty strings. `chunk_hash()` returns an infall
 traits and enforces its UTF-8 byte-length limit. Serde deserialization enforces these invariants
 ([ADR-0007](../adr/0007-validated-declaration-identifiers.md)).
 
-`Module` contains `target`, `steps: Vec<Step>`, and `location: DeclarationLocation`.
+An entry name is one nonempty string. `EntryName` has the same construction and string-access
+traits as `Target`; `object_hash()` returns its `BinHash`.
+
+`Module` contains `selector: Selector` and `location: DeclarationLocation`.
+`Selector::Target { target: Target, steps: Vec<Step> }` edits one chunk.
+`Selector::Entries(IndexMap<EntryName, Vec<Step>>)` edits each named entry in every declaring
+chunk, in mapping order.
 `Step` contains `add_links: Vec<LinkPath>` and `remove_links: Vec<LinkPath>`.
 `DeclarationLocation` contains `manifest`, optional `source`, and `module_index`.
 
@@ -108,6 +120,8 @@ Rust names and serialized names have the following mapping:
 | --- | --- |
 | `Step::add_links` | `links` (`+links` accepted on input) |
 | `Step::remove_links` | `-links` |
+| `Selector::Target` | `target` and `steps` |
+| `Selector::Entries` | `entries` |
 | `Module::location` | `origin` |
 | `DeclarationLocation::module_index` | `module` |
 | Diagnostic `location` | `origin` |
@@ -121,7 +135,17 @@ Its default is `Ok(None)`. Filesystem, modpkg, and Fantome providers load declar
 
 Modules execute from lowest to highest mod precedence, ascending layer priority with name
 as a tie-breaker, module order, and step order. The highest-precedence enabled mod copy is
-the target base; the game supplies a base absent from mod content.
+the target base; the game supplies a base absent from mod content. The game copy is the first
+holder in `ltk_game_index` archive order.
+
+An `entries` selector lowers to one chunk application per declaring chunk of each entry,
+in mapping order, before base selection. `ObjectIndex::declarations` supplies the declaring
+chunks. An entry with several declaring chunks is edited in every one; an `EntryFanOut`
+diagnostic names them. An entry with no declaring chunk produces `EntryUnresolved` and its
+steps are skipped. The overlay loads or builds the object index only for a build in which an
+enabled layer declares an `entries` module, from `object_index.bin` beside `game_index.bin`,
+under the `IndexingObjects` build stage. An object index that fails to load and build produces
+`IndexUnavailable` for every `entries` module and a build warning; the build continues.
 The target must be PROP version 2 or 3. Invalid declarations refuse the layer's declarations;
 ordinary content remains available. Missing or invalid targets produce diagnostics and retain
 their original bytes. Removals compare ASCII-lowercased paths; missing removals produce diagnostics.
@@ -133,7 +157,8 @@ untouched object bytes and the PROP version remain identical.
 including cached builds ([ADR-0008](../adr/0008-build-declaration-diagnostics.md)). Each diagnostic
 contains `kind`, `mod_id`, `layer`, optional `target`, optional `location`, optional `step_index`,
 and a human-readable `message`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
-`DeclarationsRejected`, `TargetSkipped`, `LinkRemovalUnmatched`, and `Unknown`.
+`DeclarationsRejected`, `TargetSkipped`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
+`LinkRemovalUnmatched`, and `Unknown`. `EntryFanOut` is informational.
 `ApplyDiagnostic` contains `kind`, `step_index`, and `path`; its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `LinkRemovalUnmatched` and `Unknown`.
 
@@ -166,3 +191,7 @@ diagnostics, and cached builds with missing or unknown diagnostic kinds.
 | D4 | Rust names describe declarations | Compiler vocabulary | Types describe contents | [ADR-0006](../adr/0006-declaration-interfaces.md) |
 | D5 | Identifier construction enforces local validity | Execution-time string checks | Invalid identifiers are unconstructible | [ADR-0007](../adr/0007-validated-declaration-identifiers.md) |
 | D6 | Build results contain typed diagnostics | Separate free-text builder reports | Consumers inspect one result | [ADR-0008](../adr/0008-build-declaration-diagnostics.md) |
+| D7 | A module has one selector: `target` or `entries` | Entry names inside `target` | An entry name and a chunk path share a spelling | [section 4](#s4) |
+| D8 | The overlay resolves selectors through `ltk_game_index` | Index access in `ltk_game_data` | The library applies edits without an installation | [section 3](#s3), [ADR-0009](../adr/0009-game-index-crate.md) |
+| D9 | Every declaring chunk of an entry is edited | First declaring chunk only | The client loads copies by load order | [section 6](#s6) |
+| D10 | The object index is built only for a build with an `entries` module | Every build | A full bin read is paid only when used | [section 6](#s6) |
