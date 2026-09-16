@@ -33,6 +33,7 @@ The `info.json` file contains metadata in the format expected by Fantome:
   "Author": "Author Name",
   "Version": "1.0.0",
   "Description": "Mod description",
+  "Generator": "ltk_mod_project 0.9.2",   # the packing tool and its version (LeagueToolkit extension, optional)
   "Layers": {                        
 	"base": {                     # "WAD" folder (required)
 	  "Name": "base",
