@@ -9,9 +9,11 @@ repository = "https://github.com/LeagueToolkit/league-mod"
 [dependencies]
 camino = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
-toml = { workspace = true }
+toml = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 ltk_meta = { workspace = true }
+ltk_hash = { workspace = true }
+indexmap = { workspace = true }
 xxhash-rust = { workspace = true }

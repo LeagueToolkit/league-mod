@@ -1,9 +1,16 @@
 use std::collections::HashSet;
 
 use camino::Utf8Path;
-use serde::{Deserialize, de::DeserializeOwned};
+use indexmap::IndexMap;
+use serde::{
+    Deserialize, Deserializer,
+    de::{DeserializeOwned, MapAccess, Visitor},
+};
 
-use crate::{DeclarationLocation, Declarations, Error, LinkPath, Module, Step, Target};
+use crate::{
+    BindingsWire, Declarations, Edit, EntryEdit, EntryName, Error, Module, Origin, Selector,
+    SelectorKey, Target, one_selector,
+};
 
 pub const MANIFEST_NAMES: [&str; 4] = [
     "game_data.yaml",
@@ -28,24 +35,57 @@ struct Manifest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredModule {
-    target: Target,
+    target: Option<Target>,
+    entries: Option<AuthoredEntries>,
     source: Option<String>,
-    steps: Option<Vec<Step>>,
-    #[serde(rename = "links", alias = "+links")]
-    add_links: Option<Vec<LinkPath>>,
-    #[serde(rename = "-links")]
-    remove_links: Option<Vec<LinkPath>>,
+    steps: Option<Vec<BindingsWire>>,
+    #[serde(flatten)]
+    bindings: BindingsWire,
+}
+
+/// An entry body: compact bindings and nothing else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredEntry {
+    source: Option<String>,
+    #[serde(flatten)]
+    bindings: BindingsWire,
+}
+
+/// An `entries` mapping in authored order. A repeated name is an error in every format.
+struct AuthoredEntries(IndexMap<EntryName, AuthoredEntry>);
+
+impl<'de> Deserialize<'de> for AuthoredEntries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntriesVisitor;
+        impl<'de> Visitor<'de> for EntriesVisitor {
+            type Value = AuthoredEntries;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a mapping of entry names to bindings")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = IndexMap::new();
+                while let Some((name, body)) = map.next_entry::<EntryName, AuthoredEntry>()? {
+                    if entries.insert(name.clone(), body).is_some() {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate entry name `{name}`"
+                        )));
+                    }
+                }
+                Ok(AuthoredEntries(entries))
+            }
+        }
+        deserializer.deserialize_map(EntriesVisitor)
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Source {
     version: u32,
-    steps: Option<Vec<Step>>,
-    #[serde(rename = "links", alias = "+links")]
-    add_links: Option<Vec<LinkPath>>,
-    #[serde(rename = "-links")]
-    remove_links: Option<Vec<LinkPath>>,
+    steps: Option<Vec<BindingsWire>>,
+    #[serde(flatten)]
+    bindings: BindingsWire,
 }
 
 fn parse<T: DeserializeOwned>(name: &str, text: &str, strict: bool) -> Result<T, Error> {
@@ -76,31 +116,97 @@ fn version(name: &str, value: u32) -> Result<(), Error> {
     }
 }
 
+/// The edits of a body: its `steps`, or its compact bindings as one edit. Every step
+/// carries at least one binding.
 fn body(
     name: &str,
-    steps: Option<Vec<Step>>,
-    add_links: Option<Vec<LinkPath>>,
-    remove_links: Option<Vec<LinkPath>>,
-) -> Result<Vec<Step>, Error> {
+    steps: Option<Vec<BindingsWire>>,
+    bindings: BindingsWire,
+) -> Result<Vec<Edit>, Error> {
     if let Some(steps) = steps {
-        if add_links.is_some() || remove_links.is_some() {
+        if bindings.is_present() {
             return Err(Error::new(
                 name,
                 "steps and compact bindings are mutually exclusive",
             ));
         }
-        return Ok(steps);
+        if steps.is_empty() {
+            return Err(Error::new(name, "steps requires at least one step"));
+        }
+        return steps
+            .into_iter()
+            .enumerate()
+            .map(|(index, step)| {
+                if !step.is_present() {
+                    return Err(Error::new(
+                        format!("{name}: step {index}"),
+                        "step requires at least one binding",
+                    ));
+                }
+                Ok(Edit::from(step))
+            })
+            .collect();
     }
-    if add_links.is_none() && remove_links.is_none() {
+    if !bindings.is_present() {
         return Err(Error::new(
             name,
             "module requires bindings, steps, or source",
         ));
     }
-    Ok(vec![Step {
-        add_links: add_links.unwrap_or_default(),
-        remove_links: remove_links.unwrap_or_default(),
-    }])
+    Ok(vec![Edit::from(bindings)])
+}
+
+/// The edits of a `target` module: its local body or its source's body.
+fn target_body(
+    read_source: &mut impl FnMut(&str) -> Result<String, Error>,
+    assignments: &mut HashSet<(u64, String)>,
+    location: &str,
+    target: &Target,
+    source: Option<&str>,
+    steps: Option<Vec<BindingsWire>>,
+    bindings: BindingsWire,
+) -> Result<Vec<Edit>, Error> {
+    let Some(source) = source else {
+        return body(location, steps, bindings);
+    };
+    if steps.is_some() || bindings.is_present() {
+        return Err(Error::new(
+            location,
+            "source and local bindings are mutually exclusive",
+        ));
+    }
+    if !assignments.insert((target.chunk_hash(), source.to_ascii_lowercase())) {
+        return Err(Error::new(location, "duplicate target/source assignment"));
+    }
+    let text = read_source(source).map_err(|error| Error::new(location, error))?;
+    let source_body: Source =
+        parse(source, &text, true).map_err(|error| Error::new(location, error))?;
+    version(source, source_body.version)?;
+    body(source, source_body.steps, source_body.bindings)
+}
+
+/// The edit of every entry of an `entries` module, in mapping order.
+fn entries_body(
+    location: &str,
+    entries: AuthoredEntries,
+) -> Result<IndexMap<EntryName, EntryEdit>, Error> {
+    if entries.0.is_empty() {
+        return Err(Error::new(location, "entries requires at least one entry"));
+    }
+    entries
+        .0
+        .into_iter()
+        .map(|(name, entry)| {
+            let at = format!("{location}: entry {name}");
+            if entry.source.is_some() {
+                return Err(Error::new(at, "source is not permitted inside entries"));
+            }
+            if !entry.bindings.is_present() {
+                return Err(Error::new(at, "entry requires at least one binding"));
+            }
+            Ok((name, EntryEdit::from(entry.bindings)))
+        })
+        .collect()
 }
 
 /// Loads a manifest and its sources. The reader resolves paths relative to the layer
@@ -115,43 +221,39 @@ pub fn load_declarations(
     let mut assignments = HashSet::new();
     let mut modules = Vec::new();
     for (index, module) in manifest.modules.into_iter().enumerate() {
-        let hash = module.target.chunk_hash();
         let location = format!("{manifest_name}: module {index}");
-        let steps = if let Some(source) = &module.source {
-            if module.steps.is_some() || module.add_links.is_some() || module.remove_links.is_some()
-            {
-                return Err(Error::new(
+        let AuthoredModule {
+            target,
+            entries,
+            source,
+            steps,
+            bindings,
+        } = module;
+        let selector = match one_selector(&location, target, entries)? {
+            SelectorKey::Target(target) => {
+                let edits = target_body(
+                    &mut read_source,
+                    &mut assignments,
                     &location,
-                    "source and local bindings are mutually exclusive",
-                ));
+                    &target,
+                    source.as_deref(),
+                    steps,
+                    bindings,
+                )?;
+                Selector::Target { target, edits }
             }
-            if !assignments.insert((hash, source.to_ascii_lowercase())) {
-                return Err(Error::new(&location, "duplicate target/source assignment"));
+            SelectorKey::Entries(entries) => {
+                if source.is_some() || steps.is_some() || bindings.is_present() {
+                    return Err(Error::new(&location, "entries takes no other bindings"));
+                }
+                Selector::Entries(entries_body(&location, entries)?)
             }
-            let text = read_source(source).map_err(|error| Error::new(&location, error))?;
-            let source_body: Source =
-                parse(source, &text, true).map_err(|error| Error::new(&location, error))?;
-            version(source, source_body.version)?;
-            body(
-                source,
-                source_body.steps,
-                source_body.add_links,
-                source_body.remove_links,
-            )?
-        } else {
-            body(
-                &location,
-                module.steps,
-                module.add_links,
-                module.remove_links,
-            )?
         };
         modules.push(Module {
-            target: module.target,
-            steps,
-            location: DeclarationLocation {
+            selector,
+            origin: Origin {
                 manifest: manifest_name.to_owned(),
-                source: module.source,
+                source,
                 module_index: index,
             },
         });

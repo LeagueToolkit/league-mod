@@ -120,12 +120,14 @@ fn load(
         })?;
     let mut seen = HashSet::new();
     for module in &declarations.modules {
-        if let Some(source) = &module.location.source {
+        if let (Some(source), ltk_game_data::Selector::Target { target, .. }) =
+            (&module.origin.source, &module.selector)
+        {
             let canonical = root
                 .join(source)
                 .canonicalize_utf8()
                 .map_err(|e| Error::new(source, e))?;
-            if !seen.insert((module.target.chunk_hash(), canonical)) {
+            if !seen.insert((target.chunk_hash(), canonical)) {
                 return Err(Error::new(
                     source,
                     "duplicate canonical target/source assignment",

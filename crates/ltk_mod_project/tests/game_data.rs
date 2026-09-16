@@ -8,6 +8,14 @@ use ltk_mod_project::{
 use ltk_modpkg::Modpkg;
 use std::{fs, io::Cursor};
 
+/// The edits of a `target` module.
+fn edits_of(module: &ltk_game_data::Module) -> &[ltk_game_data::Edit] {
+    match &module.selector {
+        ltk_game_data::Selector::Target { edits, .. } => edits,
+        _ => panic!("expected a target selector"),
+    }
+}
+
 fn fixture(root: &Utf8Path) -> ModProject {
     fs::create_dir_all(root.join("content/base/Test.wad.client")).unwrap();
     fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.json\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
@@ -52,11 +60,11 @@ fn modpkg_round_trip_preserves_steps_and_excludes_sources_from_chunks() {
         .parse()
         .unwrap();
     assert_eq!(
-        declarations.modules[0].steps[0].add_links[0].as_str(),
+        edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
         "Added"
     );
     assert_eq!(
-        declarations.modules[0].steps[1].remove_links[0].as_str(),
+        edits_of(&declarations.modules[0])[1].links.remove[0].as_str(),
         "Removed"
     );
     let output = root.join("output");
@@ -116,7 +124,7 @@ fn fantome_import_uses_the_declared_layer_name() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        declarations.modules[0].steps[0].add_links[0].as_str(),
+        edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
         "Added"
     );
     assert!(!output.join("content/alias/game_data.json").exists());
@@ -143,7 +151,7 @@ fn fantome_round_trip_preserves_compiled_sources() {
         .parse()
         .unwrap();
     assert_eq!(
-        declarations.modules[0].steps[0].add_links[0].as_str(),
+        edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
         "Added"
     );
     let output = root.join("output");

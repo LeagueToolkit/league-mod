@@ -1,4 +1,9 @@
 //! Ordered game-data declarations shared by projects, archives, and overlay consumers.
+//!
+//! A layer's [`Declarations`] are modules in execution order. A [`Module`] carries one
+//! [`Selector`], which names what is edited and holds the edits, and its [`Origin`]. An
+//! [`Edit`] is one batch of phased bindings on a chunk; an [`EntryEdit`] is the bindings of one
+//! bin entry, applied in every chunk declaring it. [`apply`] runs edits over a `PROP`.
 
 mod apply;
 mod authoring;
@@ -6,6 +11,10 @@ mod discovery;
 
 pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use authoring::{MANIFEST_NAMES, load_declarations, referenced_sources};
+pub use indexmap::IndexMap;
+pub use ltk_hash::BinHash;
+
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -72,31 +81,241 @@ impl Declarations {
         let modules: Vec<_> = self
             .modules
             .iter()
-            .map(|module| serde_json::json!({"target": module.target, "steps": module.steps}))
+            .map(|module| match &module.selector {
+                Selector::Target { target, edits } => {
+                    let steps: Vec<_> = edits.iter().map(|edit| body_json(&edit.links)).collect();
+                    serde_json::json!({"target": target, "steps": steps})
+                }
+                Selector::Entries(entries) => {
+                    let entries: IndexMap<&str, _> = entries
+                        .iter()
+                        .map(|(name, edit)| (name.as_str(), body_json(&edit.links)))
+                        .collect();
+                    serde_json::json!({"entries": entries})
+                }
+            })
             .collect();
         serde_json::to_string_pretty(&serde_json::json!({"version": 1, "modules": modules}))
             .map_err(|error| Error::new("game_data", error))
     }
 }
 
-/// One target and its ordered steps.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Module {
-    pub target: Target,
-    pub steps: Vec<Step>,
-    #[serde(rename = "origin")]
-    pub location: DeclarationLocation,
+/// The authoring body of one edit. `links` is always written; an authored step carries at
+/// least one binding.
+fn body_json(links: &LinkEdit) -> serde_json::Value {
+    let mut body = serde_json::json!({"links": links.add});
+    if !links.remove.is_empty() {
+        body["-links"] = serde_json::json!(links.remove);
+    }
+    body
 }
 
-/// An authored location. Indices are zero-based.
+/// One selector with its edits and its authored origin.
+///
+/// The serialized shape is `target` with `steps`, or `entries`, beside `origin`. A module
+/// with both selector keys, or neither, does not deserialize.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ModuleWire", into = "ModuleWire")]
+pub struct Module {
+    pub selector: Selector,
+    pub origin: Origin,
+}
+
+/// What a module edits, with the edits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Selector {
+    /// One chunk and the edits applied to it, in order.
+    Target { target: Target, edits: Vec<Edit> },
+    /// Entry names in mapping order, each with its edits. Every declaring chunk of an entry
+    /// is edited.
+    Entries(IndexMap<EntryName, EntryEdit>),
+}
+
+/// The serialized form of [`Module`]. The selector keys match the JSON manifest.
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DeclarationLocation {
+struct ModuleWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target: Option<Target>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<Edit>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entries: Option<IndexMap<EntryName, EntryEdit>>,
+    origin: Origin,
+}
+
+impl TryFrom<ModuleWire> for Module {
+    type Error = Error;
+
+    fn try_from(wire: ModuleWire) -> Result<Self, Error> {
+        let at = format!(
+            "{}: module {}",
+            wire.origin.manifest, wire.origin.module_index
+        );
+        let selector = match (one_selector(&at, wire.target, wire.entries)?, wire.steps) {
+            (SelectorKey::Target(target), Some(edits)) => Selector::Target { target, edits },
+            (SelectorKey::Target(_), None) => {
+                return Err(Error::new(at, "target requires steps"));
+            }
+            (SelectorKey::Entries(entries), None) => Selector::Entries(entries),
+            (SelectorKey::Entries(_), Some(_)) => {
+                return Err(Error::new(at, "entries and steps are mutually exclusive"));
+            }
+        };
+        Ok(Self {
+            selector,
+            origin: wire.origin,
+        })
+    }
+}
+
+impl From<Module> for ModuleWire {
+    fn from(module: Module) -> Self {
+        let (target, steps, entries) = match module.selector {
+            Selector::Target { target, edits } => (Some(target), Some(edits), None),
+            Selector::Entries(entries) => (None, None, Some(entries)),
+        };
+        Self {
+            target,
+            steps,
+            entries,
+            origin: module.origin,
+        }
+    }
+}
+
+/// The one selector key a module carries.
+pub(crate) enum SelectorKey<T, E> {
+    Target(T),
+    Entries(E),
+}
+
+/// Exactly one of `target` and `entries`, or the error for a module `at`.
+pub(crate) fn one_selector<T, E>(
+    at: &str,
+    target: Option<T>,
+    entries: Option<E>,
+) -> Result<SelectorKey<T, E>, Error> {
+    match (target, entries) {
+        (Some(target), None) => Ok(SelectorKey::Target(target)),
+        (None, Some(entries)) => Ok(SelectorKey::Entries(entries)),
+        (Some(_), Some(_)) => Err(Error::new(at, "target and entries are mutually exclusive")),
+        (None, None) => Err(Error::new(at, "module requires target or entries")),
+    }
+}
+
+/// Where a module was authored. Indices are zero-based.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Origin {
     pub manifest: String,
     pub source: Option<String>,
     #[serde(rename = "module")]
     pub module_index: usize,
+}
+
+/// One edit of a chunk: every binding of one batch, applied phase by phase in field order.
+///
+/// Each edit of a target reads the result of the preceding one. The serialized form is the
+/// compact binding body: `links` (`+links` accepted on input) and `-links`, each present
+/// only when nonempty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "BindingsWire", into = "BindingsWire")]
+#[non_exhaustive]
+pub struct Edit {
+    /// Dependency-list edits, the last phase.
+    pub links: LinkEdit,
+}
+
+/// The bindings of one bin entry, applied in every chunk declaring it.
+///
+/// The serialized form is the same compact binding body as [`Edit`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "BindingsWire", into = "BindingsWire")]
+#[non_exhaustive]
+pub struct EntryEdit {
+    /// Dependency-list edits of the declaring chunk.
+    pub links: LinkEdit,
+}
+
+/// Link removals followed by link additions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkEdit {
+    pub add: Vec<LinkPath>,
+    pub remove: Vec<LinkPath>,
+}
+
+impl LinkEdit {
+    /// Whether the edit adds or removes nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+/// The compact binding body shared by [`Edit`] and [`EntryEdit`].
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BindingsWire {
+    #[serde(
+        default,
+        rename = "links",
+        alias = "+links",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) add_links: Option<Vec<LinkPath>>,
+    #[serde(default, rename = "-links", skip_serializing_if = "Option::is_none")]
+    pub(crate) remove_links: Option<Vec<LinkPath>>,
+}
+
+impl BindingsWire {
+    /// Whether any binding key is written, empty or not.
+    pub(crate) fn is_present(&self) -> bool {
+        self.add_links.is_some() || self.remove_links.is_some()
+    }
+
+    fn into_links(self) -> LinkEdit {
+        LinkEdit {
+            add: self.add_links.unwrap_or_default(),
+            remove: self.remove_links.unwrap_or_default(),
+        }
+    }
+
+    fn from_links(links: LinkEdit) -> Self {
+        Self {
+            add_links: (!links.add.is_empty()).then_some(links.add),
+            remove_links: (!links.remove.is_empty()).then_some(links.remove),
+        }
+    }
+}
+
+impl From<BindingsWire> for Edit {
+    fn from(wire: BindingsWire) -> Self {
+        Self {
+            links: wire.into_links(),
+        }
+    }
+}
+
+impl From<Edit> for BindingsWire {
+    fn from(edit: Edit) -> Self {
+        Self::from_links(edit.links)
+    }
+}
+
+impl From<BindingsWire> for EntryEdit {
+    fn from(wire: BindingsWire) -> Self {
+        Self {
+            links: wire.into_links(),
+        }
+    }
+}
+
+impl From<EntryEdit> for BindingsWire {
+    fn from(edit: EntryEdit) -> Self {
+        Self::from_links(edit.links)
+    }
 }
 
 /// A nonempty game lookup path or bare 16-digit hexadecimal chunk hash.
@@ -161,6 +380,77 @@ impl Target {
     }
 }
 
+/// A nonempty bin object path, or its hash as `0x` and exactly 8 hexadecimal digits.
+/// Construction classifies the spelling and preserves it verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EntryName(EntryNameKind);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EntryNameKind {
+    Path(String),
+    Hash(String),
+}
+
+impl TryFrom<String> for EntryName {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self, Error> {
+        if value.is_empty() {
+            return Err(Error::new("entries", "expected a nonempty entry name"));
+        }
+        let hash_form = value.strip_prefix("0x").is_some_and(|digits| {
+            digits.len() == 8 && digits.bytes().all(|c| c.is_ascii_hexdigit())
+        });
+        Ok(Self(if hash_form {
+            EntryNameKind::Hash(value)
+        } else {
+            EntryNameKind::Path(value)
+        }))
+    }
+}
+
+impl TryFrom<&str> for EntryName {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Error> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+impl From<EntryName> for String {
+    fn from(name: EntryName) -> Self {
+        match name.0 {
+            EntryNameKind::Path(value) | EntryNameKind::Hash(value) => value,
+        }
+    }
+}
+
+impl fmt::Display for EntryName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl EntryName {
+    /// The name's authored spelling.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            EntryNameKind::Path(value) | EntryNameKind::Hash(value) => value,
+        }
+    }
+
+    /// The bin object hash: FNV-1a over the ASCII-lowercased path, or the spelled hash.
+    pub fn object_hash(&self) -> BinHash {
+        match &self.0 {
+            EntryNameKind::Path(path) => BinHash::from(path.as_str()),
+            EntryNameKind::Hash(hash) => {
+                BinHash(u32::from_str_radix(&hash[2..], 16).expect("validated hex"))
+            }
+        }
+    }
+}
+
 /// An authored dependency path containing 1 to 65535 UTF-8 bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -199,21 +489,6 @@ impl LinkPath {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
-
-/// Link removals followed by link additions.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Step {
-    #[serde(
-        default,
-        rename = "links",
-        alias = "+links",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub add_links: Vec<LinkPath>,
-    #[serde(default, rename = "-links", skip_serializing_if = "Vec::is_empty")]
-    pub remove_links: Vec<LinkPath>,
 }
 
 /// The game's chunk-path hash. File suffixes and separators are preserved.
