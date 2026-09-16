@@ -38,10 +38,14 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
         &mut self,
         layer: &str,
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
-        let metadata = self
-            .modpkg
-            .load_metadata()
-            .map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        let metadata = self.modpkg.load_metadata().map_err(|e| {
+            ltk_game_data::Error::in_document(
+                ltk_game_data::ErrorKind::Syntax {
+                    detail: e.to_string(),
+                },
+                layer,
+            )
+        })?;
         metadata
             .layers
             .iter()

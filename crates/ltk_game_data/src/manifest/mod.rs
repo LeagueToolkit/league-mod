@@ -8,7 +8,7 @@
 mod body;
 mod source;
 
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt};
 
 use camino::Utf8Path;
 use indexmap::IndexMap;
@@ -18,7 +18,8 @@ use serde::{
 };
 
 use crate::{
-    Declarations, Edit, EntryEdit, EntryName, Error, Origin, OverridePath, Selector, Target,
+    Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, Origin, OverridePath, Selector,
+    Span, Target,
     document::{Bindings, SelectorKey},
 };
 
@@ -54,7 +55,7 @@ impl Format {
             Some("yaml" | "yml") => Ok(Self::Yaml),
             Some("json") => Ok(Self::Json),
             Some("toml") => Ok(Self::Toml),
-            _ => Err(Error::new(name, "expected YAML, TOML, or JSON")),
+            _ => Err(Error::in_document(ErrorKind::UnknownFormat, name)),
         }
     }
 
@@ -64,6 +65,18 @@ impl Format {
         text: &str,
         reading: Reading,
     ) -> Result<T, Error> {
+        let syntax = |error: &dyn fmt::Display, span: Option<Span>| {
+            let error = Error::in_document(
+                ErrorKind::Syntax {
+                    detail: error.to_string(),
+                },
+                name,
+            );
+            match span {
+                Some(span) => error.span(span),
+                None => error,
+            }
+        };
         match self {
             Self::Yaml => {
                 let strict = reading == Reading::Execution;
@@ -76,10 +89,25 @@ impl Format {
                 } else {
                     serde_saphyr::DuplicateKeyPolicy::LastWins
                 };
-                serde_saphyr::from_str_with_options(text, options).map_err(|e| Error::new(name, e))
+                serde_saphyr::from_str_with_options(text, options).map_err(|e| {
+                    let span = e.location().map(|at| {
+                        let (line, column) = (at.line(), at.column());
+                        Span::at_line_column(text, line as usize, column as usize)
+                    });
+                    syntax(&e, span)
+                })
             }
-            Self::Json => serde_json::from_str(text).map_err(|e| Error::new(name, e)),
-            Self::Toml => toml::from_str(text).map_err(|e| Error::new(name, e)),
+            Self::Json => serde_json::from_str(text).map_err(|e| {
+                let span = Span::at_line_column(text, e.line(), e.column());
+                syntax(&e, Some(span))
+            }),
+            Self::Toml => toml::from_str(text).map_err(|e| {
+                let span = e.span().map(|range| Span {
+                    start: range.start,
+                    end: range.end,
+                });
+                syntax(&e, span)
+            }),
         }
     }
 }
@@ -117,13 +145,10 @@ impl<'a> DocumentPath<'a> {
     /// [`OverridePath`].
     pub(crate) fn resolve_override(&self, path: &str) -> Result<OverridePath, Error> {
         if path.is_empty() {
-            return Err(Error::new("overrides", "expected a nonempty override path"));
+            return Err(Error::at_key(ErrorKind::EmptyOverridePath, "overrides"));
         }
         if path.starts_with('/') {
-            return Err(Error::new(
-                "overrides",
-                "override paths are relative to the file naming them",
-            ));
+            return Err(Error::at_key(ErrorKind::OverridePathAbsolute, "overrides"));
         }
         let mut segments: Vec<&str> = self
             .directory()
@@ -135,10 +160,7 @@ impl<'a> DocumentPath<'a> {
                 "" | "." => {}
                 ".." => {
                     if segments.pop().is_none() {
-                        return Err(Error::new(
-                            "overrides",
-                            format!("override path leaves the layer: {path}"),
-                        ));
+                        return Err(Error::at_key(ErrorKind::OverridePathEscapes, "overrides"));
                     }
                 }
                 other => segments.push(other),
@@ -194,7 +216,7 @@ impl TryFrom<u32> for Version {
         if value == Self::SUPPORTED {
             Ok(Self)
         } else {
-            Err(Error::new("version", "unsupported declaration version"))
+            Err(Error::at_key(ErrorKind::UnsupportedVersion, "version"))
         }
     }
 }
@@ -236,28 +258,34 @@ struct Entry {
     bindings: Bindings,
 }
 
+impl Entry {
+    fn into_edit(self) -> Result<EntryEdit, Error> {
+        if self.source.is_some() {
+            return Err(Error::new(ErrorKind::SourceInEntry));
+        }
+        if !self.bindings.is_present() {
+            return Err(Error::new(ErrorKind::EntryWithoutBindings));
+        }
+        EntryEdit::try_from(self.bindings)
+    }
+}
+
 /// An `entries` mapping in spelled order. A repeated name is an error in every format.
 #[derive(Debug)]
 struct Entries(IndexMap<EntryName, Entry>);
 
 impl Entries {
-    /// The edit of every entry, in mapping order.
-    fn into_edits(self, at: &str) -> Result<IndexMap<EntryName, EntryEdit>, Error> {
+    /// The edit of every entry, in mapping order. An error names its entry.
+    fn into_edits(self) -> Result<IndexMap<EntryName, EntryEdit>, Error> {
         if self.0.is_empty() {
-            return Err(Error::new(at, "entries requires at least one entry"));
+            return Err(Error::new(ErrorKind::EntriesEmpty));
         }
         self.0
             .into_iter()
             .map(|(name, entry)| {
-                let at = format!("{at}: entry {name}");
-                if entry.source.is_some() {
-                    return Err(Error::new(at, "source is not permitted inside entries"));
-                }
-                if !entry.bindings.is_present() {
-                    return Err(Error::new(at, "entry requires at least one binding"));
-                }
-                let edit =
-                    EntryEdit::try_from(entry.bindings).map_err(|error| Error::new(at, error))?;
+                let edit = entry
+                    .into_edit()
+                    .map_err(|error| error.entry(name.as_str()))?;
                 Ok((name, edit))
             })
             .collect()
@@ -305,50 +333,58 @@ impl<R: FnMut(&str) -> Result<String, Error>> Loading<'_, R> {
     /// The edits of a `target` module: its local body or its source's body.
     fn target_edits(
         &mut self,
-        at: &str,
         target: &Target,
         source: Option<&str>,
         body: Body,
     ) -> Result<Vec<Edit>, Error> {
         let Some(source) = source else {
-            return body.into_edits(at, self.manifest);
+            return body.into_edits(self.manifest);
         };
         if body.is_present() {
-            return Err(Error::new(
-                at,
-                "source and local bindings are mutually exclusive",
-            ));
+            return Err(Error::new(ErrorKind::SourceWithBindings));
         }
         if !self
             .assignments
             .insert((target.chunk_hash(), source.to_ascii_lowercase()))
         {
-            return Err(Error::new(at, "duplicate target/source assignment"));
+            return Err(Error::new(ErrorKind::DuplicateAssignment));
         }
-        let text = (self.read_source)(source).map_err(|error| Error::new(at, error))?;
-        Source::load(DocumentPath::new(source), &text, at)
+        let text = (self.read_source)(source).map_err(|error| error.document(source))?;
+        Source::load(DocumentPath::new(source), &text)
+    }
+
+    /// The selector of a module. An error carries no module context.
+    fn selector(
+        &mut self,
+        target: Option<Target>,
+        entries: Option<Entries>,
+        source: Option<&str>,
+        body: Body,
+    ) -> Result<Selector, Error> {
+        Ok(match SelectorKey::one(target, entries)? {
+            SelectorKey::Target(target) => {
+                let edits = self.target_edits(&target, source, body)?;
+                Selector::Target { target, edits }
+            }
+            SelectorKey::Entries(entries) => {
+                if source.is_some() || body.is_present() {
+                    return Err(Error::new(ErrorKind::EntriesWithBindings));
+                }
+                Selector::Entries(entries.into_edits()?)
+            }
+        })
     }
 
     fn module(&mut self, index: usize, module: Module) -> Result<crate::Module, Error> {
-        let at = format!("{}: module {index}", self.manifest.as_str());
         let Module {
             target,
             entries,
             source,
             body,
         } = module;
-        let selector = match SelectorKey::one(&at, target, entries)? {
-            SelectorKey::Target(target) => {
-                let edits = self.target_edits(&at, &target, source.as_deref(), body)?;
-                Selector::Target { target, edits }
-            }
-            SelectorKey::Entries(entries) => {
-                if source.is_some() || body.is_present() {
-                    return Err(Error::new(&at, "entries takes no other bindings"));
-                }
-                Selector::Entries(entries.into_edits(&at)?)
-            }
-        };
+        let selector = self
+            .selector(target, entries, source.as_deref(), body)
+            .map_err(|error| error.document(self.manifest.as_str()).module(index))?;
         Ok(crate::Module {
             selector,
             origin: Origin {

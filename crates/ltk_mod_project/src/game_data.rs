@@ -4,7 +4,7 @@ use std::{collections::HashSet, io::Cursor};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_data::{
-    Declarations, Error, OverridePath, ReferencedInputs, Selector, MANIFEST_NAMES,
+    Declarations, Error, ErrorKind, OverridePath, ReferencedInputs, Selector, MANIFEST_NAMES,
 };
 
 use crate::{ModIgnore, ModProjectLayer};
@@ -147,26 +147,20 @@ impl<'a> Loader<'a> {
         self.inputs.insert(path.to_owned());
         let canonical = path
             .canonicalize_utf8()
-            .map_err(|e| Error::new(path.as_str(), e))?;
+            .map_err(|e| input_error(path.as_str(), &e))?;
         if !canonical.starts_with(root_canonical) {
-            return Err(Error::new(
-                path.as_str(),
-                "declaration input escapes its layer",
-            ));
+            return Err(Error::in_document(ErrorKind::InputEscapes, path.as_str()));
         }
         self.inputs.insert(canonical.clone());
         if self.ignore.is_ignored(path, false) {
-            return Err(Error::new(
-                path.as_str(),
-                "required declaration input is excluded by .modignore",
-            ));
+            return Err(Error::in_document(ErrorKind::InputIgnored, path.as_str()));
         }
         Ok(canonical)
     }
 
     fn read_text(&mut self, path: &Utf8Path, root_canonical: &Utf8Path) -> Result<String, Error> {
         self.required(path, root_canonical)?;
-        std::fs::read_to_string(path).map_err(|e| Error::new(path.as_str(), e))
+        std::fs::read_to_string(path).map_err(|e| input_error(path.as_str(), &e))
     }
 
     /// Reads and checks one override file and records it, once per distinct path.
@@ -180,9 +174,9 @@ impl<'a> Loader<'a> {
         }
         let source = self.root.join(path.as_str());
         self.required(&source, root_canonical)?;
-        let bytes = std::fs::read(&source).map_err(|e| Error::new(path.as_str(), e))?;
+        let bytes = std::fs::read(&source).map_err(|e| input_error(path.as_str(), &e))?;
         ltk_meta::BinOverride::from_reader(&mut Cursor::new(bytes))
-            .map_err(|e| Error::new(path.as_str(), format!("override file is not a PTCH: {e}")))?;
+            .map_err(|_| Error::in_document(ErrorKind::OverrideNotPtch, path.as_str()))?;
         self.override_files.push(OverrideFile {
             path: path.clone(),
             source,
@@ -198,15 +192,15 @@ impl<'a> Loader<'a> {
             return Ok(None);
         }
         if manifests.len() != 1 {
-            return Err(Error::new(
+            return Err(Error::in_document(
+                ErrorKind::MultipleManifests,
                 self.root.as_str(),
-                "multiple game-data manifests",
             ));
         }
         let root_canonical = self
             .root
             .canonicalize_utf8()
-            .map_err(|e| Error::new(self.root.as_str(), e))?;
+            .map_err(|e| input_error(self.root.as_str(), &e))?;
         let manifest = &manifests[0];
         let text = self.read_text(manifest, &root_canonical)?;
         let root = self.root.clone();
@@ -214,20 +208,17 @@ impl<'a> Loader<'a> {
             ltk_game_data::load_declarations(manifest.file_name().unwrap(), &text, |source| {
                 let path = Utf8Path::new(source);
                 if path.is_absolute() || source.contains('\\') {
-                    return Err(Error::new(
-                        source,
-                        "source requires a layer-relative path with forward slashes",
-                    ));
+                    return Err(Error::in_document(ErrorKind::SourcePathInvalid, source));
                 }
                 let resolved = root.join(path);
                 let canonical = resolved
                     .canonicalize_utf8()
-                    .map_err(|e| Error::new(source, e))?;
+                    .map_err(|e| input_error(source, &e))?;
                 if manifests
                     .iter()
                     .any(|manifest| manifest.canonicalize_utf8().ok().as_ref() == Some(&canonical))
                 {
-                    return Err(Error::new(source, "manifest and source roles conflict"));
+                    return Err(Error::in_document(ErrorKind::RoleConflict, source));
                 }
                 self.read_text(&resolved, &root_canonical)
             })?;
@@ -241,12 +232,9 @@ impl<'a> Loader<'a> {
                     .root
                     .join(source)
                     .canonicalize_utf8()
-                    .map_err(|e| Error::new(source, e))?;
+                    .map_err(|e| input_error(source, &e))?;
                 if !seen.insert((target.chunk_hash(), canonical)) {
-                    return Err(Error::new(
-                        source,
-                        "duplicate canonical target/source assignment",
-                    ));
+                    return Err(Error::in_document(ErrorKind::DuplicateAssignment, source));
                 }
             }
             for edit in edits {
@@ -259,6 +247,15 @@ impl<'a> Loader<'a> {
     }
 }
 
+/// The error of an input that cannot be read: missing, or a platform failure.
+fn input_error(name: &str, error: &std::io::Error) -> Error {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        Error::in_document(ErrorKind::InputMissing, name)
+    } else {
+        Error::io(name, error)
+    }
+}
+
 /// Reconstructs an archive's declarations as a layer manifest.
 pub fn write_manifest(
     project_root: &Utf8Path,
@@ -266,18 +263,18 @@ pub fn write_manifest(
     document: &ltk_game_data::DeclarationDocument,
 ) -> Result<(), Error> {
     if layer.is_empty() || layer.contains(['/', '\\']) || matches!(layer, "." | "..") {
-        return Err(Error::new(layer, "invalid layer name"));
+        return Err(Error::in_document(ErrorKind::InvalidLayerName, layer));
     }
     let text = document.parse()?.manifest_json()?;
     let dir = ModProjectLayer::content_path(project_root, layer);
-    std::fs::create_dir_all(&dir).map_err(|e| Error::new(dir.as_str(), e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| Error::io(dir.as_str(), &e))?;
     let path = dir.join("game_data.json");
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&path)
-        .map_err(|e| Error::new(path.as_str(), e))?;
+        .map_err(|e| Error::io(path.as_str(), &e))?;
     file.write_all(text.as_bytes())
-        .map_err(|e| Error::new(path.as_str(), e))
+        .map_err(|e| Error::io(path.as_str(), &e))
 }

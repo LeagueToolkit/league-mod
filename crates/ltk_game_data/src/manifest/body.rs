@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Edit, Error, document::Bindings};
+use crate::{Edit, Error, ErrorKind, document::Bindings};
 
 use super::DocumentPath;
 
@@ -23,46 +23,30 @@ impl Body {
     }
 
     /// The body's edits, with override paths resolved against `document`. Every edit carries
-    /// at least one binding.
-    pub(super) fn into_edits(
-        self,
-        at: &str,
-        document: DocumentPath<'_>,
-    ) -> Result<Vec<Edit>, Error> {
+    /// at least one binding. An error names its edit index and no document.
+    pub(super) fn into_edits(self, document: DocumentPath<'_>) -> Result<Vec<Edit>, Error> {
         let resolve = |path: &str| document.resolve_override(path);
         if let Some(edits) = self.edits {
             if self.bindings.is_present() {
-                return Err(Error::new(
-                    at,
-                    "`edits` and compact bindings are mutually exclusive",
-                ));
+                return Err(Error::new(ErrorKind::MixedBodies));
             }
             if edits.is_empty() {
-                return Err(Error::new(at, "`edits` requires at least one edit"));
+                return Err(Error::new(ErrorKind::EditsEmpty));
             }
             return edits
                 .into_iter()
                 .enumerate()
                 .map(|(index, edit)| {
-                    let at = format!("{at}: edit {index}");
                     if !edit.is_present() {
-                        return Err(Error::new(at, "edit requires at least one binding"));
+                        return Err(Error::new(ErrorKind::EditWithoutBindings).edit(index));
                     }
-                    edit.into_edit(resolve)
-                        .map_err(|error| Error::new(at, error))
+                    edit.into_edit(resolve).map_err(|error| error.edit(index))
                 })
                 .collect();
         }
         if !self.bindings.is_present() {
-            return Err(Error::new(
-                at,
-                "module requires bindings, `edits`, or source",
-            ));
+            return Err(Error::new(ErrorKind::ModuleWithoutBindings));
         }
-        Ok(vec![
-            self.bindings
-                .into_edit(resolve)
-                .map_err(|error| Error::new(at, error))?,
-        ])
+        Ok(vec![self.bindings.into_edit(resolve)?])
     }
 }

@@ -687,7 +687,10 @@ fn unavailable_overrides_are_reported_and_links_still_apply() {
         &base,
         target_of(&declarations.modules[0]).1,
         |path| match path.as_str() {
-            "missing.ptch" => Err(ltk_game_data::Error::new(path.as_str(), "not found")),
+            "missing.ptch" => Err(ltk_game_data::Error::in_document(
+                ltk_game_data::ErrorKind::InputMissing,
+                path.as_str(),
+            )),
             _ => Ok(base_bin()),
         },
     )
@@ -829,4 +832,65 @@ fn a_written_manifest_loads_to_the_same_declarations() {
     );
     let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
     assert_eq!(reloaded, declarations);
+}
+
+#[test]
+fn errors_carry_codes_and_typed_locations() {
+    use ltk_game_data::{ErrorKind, Location, Span};
+
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    entries: {}\n";
+    let error = load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::SelectorConflict);
+    assert_eq!(
+        *error.location,
+        Location {
+            document: Some("game_data.yaml".into()),
+            module: Some(0),
+            ..Location::default()
+        }
+    );
+
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    source: shared.yaml\n";
+    let error = load_declarations("game_data.yaml", text, |source| {
+        Ok(match source {
+            "shared.yaml" => "version: 1\nedits:\n  - links: [x]\n  - {}\n".to_owned(),
+            _ => unreachable!(),
+        })
+    })
+    .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::EditWithoutBindings);
+    assert_eq!(error.location.document.as_deref(), Some("shared.yaml"));
+    assert_eq!(error.location.module, Some(0));
+    assert_eq!(error.location.edit, Some(1));
+    assert_eq!(
+        error.to_string(),
+        "shared.yaml: module 0: edit 1: edit requires at least one binding"
+    );
+
+    let error = load_declarations(
+        "game_data.yaml",
+        "version: 1\nmodules: [",
+        |_| unreachable!(),
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::Syntax { .. }), "{error}");
+    assert!(error.location.span.is_some(), "{error}");
+    let error = load_declarations(
+        "game_data.json",
+        r#"{"version": 1, "modules": [}"#,
+        |_| unreachable!(),
+    )
+    .unwrap_err();
+    assert_eq!(error.location.span, Some(Span { start: 27, end: 28 }));
+    let error = load_declarations(
+        "game_data.toml",
+        "version = 1\nmodules = [",
+        |_| unreachable!(),
+    )
+    .unwrap_err();
+    assert!(error.location.span.is_some(), "{error}");
+
+    let error = Target::try_from("").unwrap_err();
+    assert_eq!(error.kind, ErrorKind::EmptyTarget);
+    assert_eq!(error.location.key.as_deref(), Some("target"));
 }

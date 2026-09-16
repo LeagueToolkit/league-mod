@@ -8,8 +8,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Declarations, Edit, EntryEdit, EntryName, Error, LinkEdit, LinkPath, Origin, OverridePath,
-    Selector, Target,
+    Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, LinkEdit, LinkPath, Origin,
+    OverridePath, Selector, Target,
 };
 
 /// An archive's versioned declarations, including fields an older consumer cannot execute.
@@ -20,8 +20,12 @@ pub struct DeclarationDocument(serde_json::Value);
 impl DeclarationDocument {
     /// Validates the complete layer declarations before execution.
     pub fn parse(&self) -> Result<Declarations, Error> {
-        let declarations: Declarations = serde_json::from_value(self.0.clone())
-            .map_err(|error| Error::new("game_data", error))?;
+        let declarations: Declarations =
+            serde_json::from_value(self.0.clone()).map_err(|error| {
+                Error::new(ErrorKind::Syntax {
+                    detail: error.to_string(),
+                })
+            })?;
         declarations.validate()?;
         Ok(declarations)
     }
@@ -53,21 +57,23 @@ impl TryFrom<Module> for crate::Module {
     type Error = Error;
 
     fn try_from(module: Module) -> Result<Self, Error> {
-        let at = format!(
-            "{}: module {}",
-            module.origin.manifest, module.origin.module_index
-        );
+        let origin = &module.origin;
+        let at = |error: Error| {
+            error
+                .document(origin.manifest.clone())
+                .module(origin.module_index)
+        };
         let selector = match (
-            SelectorKey::one(&at, module.target, module.entries)?,
+            SelectorKey::one(module.target, module.entries).map_err(at)?,
             module.edits,
         ) {
             (SelectorKey::Target(target), Some(edits)) => Selector::Target { target, edits },
             (SelectorKey::Target(_), None) => {
-                return Err(Error::new(at, "target requires `edits`"));
+                return Err(at(Error::new(ErrorKind::TargetWithoutEdits)));
             }
             (SelectorKey::Entries(entries), None) => Selector::Entries(entries),
             (SelectorKey::Entries(_), Some(_)) => {
-                return Err(Error::new(at, "entries and `edits` are mutually exclusive"));
+                return Err(at(Error::new(ErrorKind::EntriesWithEdits)));
             }
         };
         Ok(Self {
@@ -100,13 +106,13 @@ pub(crate) enum SelectorKey<T, E> {
 }
 
 impl<T, E> SelectorKey<T, E> {
-    /// Exactly one of `target` and `entries`, or the error for a module `at`.
-    pub(crate) fn one(at: &str, target: Option<T>, entries: Option<E>) -> Result<Self, Error> {
+    /// Exactly one of `target` and `entries`. The error carries no location.
+    pub(crate) fn one(target: Option<T>, entries: Option<E>) -> Result<Self, Error> {
         match (target, entries) {
             (Some(target), None) => Ok(Self::Target(target)),
             (None, Some(entries)) => Ok(Self::Entries(entries)),
-            (Some(_), Some(_)) => Err(Error::new(at, "target and entries are mutually exclusive")),
-            (None, None) => Err(Error::new(at, "module requires target or entries")),
+            (Some(_), Some(_)) => Err(Error::new(ErrorKind::SelectorConflict)),
+            (None, None) => Err(Error::new(ErrorKind::SelectorMissing)),
         }
     }
 }
@@ -195,10 +201,7 @@ impl TryFrom<Bindings> for EntryEdit {
 
     fn try_from(bindings: Bindings) -> Result<Self, Error> {
         if bindings.overrides.is_some() {
-            return Err(Error::new(
-                "entries",
-                "overrides is not permitted inside entries",
-            ));
+            return Err(Error::at_key(ErrorKind::OverridesInEntry, "overrides"));
         }
         Ok(Self {
             links: bindings.into_links(),

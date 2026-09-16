@@ -65,6 +65,37 @@ pub struct ApplyResult {
 }
 ```
 
+`Error` is a code with a typed place ([ADR-0014](../adr/0014-coded-declaration-errors.md)):
+
+```rust
+pub struct Error {
+    pub kind: ErrorKind,
+    pub location: Box<Location>,
+}
+
+#[non_exhaustive]
+pub enum ErrorKind { /* one code per condition; `Syntax` and `Io` carry the source's statement as `detail` */ }
+
+pub struct Location {
+    pub document: Option<String>,
+    pub module: Option<usize>,
+    pub edit: Option<usize>,
+    pub entry: Option<String>,
+    pub key: Option<String>,
+    pub span: Option<Span>,
+}
+
+pub struct Span { pub start: usize, pub end: usize }
+```
+
+`Error::new(kind)` has no place; `Error::at_key(kind, key)` and `Error::in_document(kind, name)`
+set one part; `Error::io(name, error)` is the `Io` code at a document. The methods `document`,
+`module`, `edit`, `entry`, `key`, and `span` fill an unset part and leave a set one alone; an
+error raised at an inner site keeps its own parts and gains its outer context. A `Syntax` error
+from a parser carries the byte `span` of the reported position; a `Location` with every part
+unset displays as the code's statement alone. `Display` is a log rendering; a consumer matches
+`kind` and navigates by `location`.
+
 `load_declarations()` expands source files and validates the declarations. `parse()` interprets
 a contained document and validates the result. `Declarations` exposes mutable `version` and
 `modules` fields; `validate()` checks supported declaration versions. `manifest_json()` validates
@@ -280,3 +311,4 @@ and override files round-tripping through both archives.
 | D14 | A target with an applied override is rewritten from the eager tree | A patched byte splice | The published `ltk_meta` owns matching and skipping | ADR-0012 |
 | D15 | `overrides` binds a `target`; an entry body refuses it | `overrides` inside `entries` | An override names its objects itself | [section 4](#s4) |
 | D16 | An override file is `.ptch`; `.rito` is an error naming the extension | Silent acceptance | A text override needs a `PTCH` text parser | [section 4](#s4) |
+| D17 | An error is a code with a typed location | A location string and a message | The consumer matches the code and navigates by the place | [ADR-0014](../adr/0014-coded-declaration-errors.md) |

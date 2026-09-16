@@ -222,7 +222,7 @@ fn source_symlinks_cannot_escape_the_layer() {
     let error = load_layer(&root, "base", &ModIgnore::empty(&root))
         .declarations
         .unwrap_err();
-    assert!(error.to_string().contains("escapes its layer"));
+    assert_eq!(error.kind, ltk_game_data::ErrorKind::InputEscapes);
 }
 
 #[test]
@@ -238,11 +238,13 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
         .unwrap()
         .is_some());
     fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/links.json\n- target: SHARED\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
-    assert!(load_layer(&root, "base", &ignore)
-        .declarations
-        .unwrap_err()
-        .to_string()
-        .contains("duplicate canonical"));
+    assert_eq!(
+        load_layer(&root, "base", &ignore)
+            .declarations
+            .unwrap_err()
+            .kind,
+        ltk_game_data::ErrorKind::DuplicateAssignment
+    );
 }
 
 /// A `PTCH` with no records.

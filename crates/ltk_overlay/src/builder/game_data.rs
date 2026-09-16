@@ -252,11 +252,26 @@ impl ResourceCache {
         let enabled = enabled_mods
             .iter_mut()
             .find(|enabled| enabled.id == application.mod_id)
-            .ok_or_else(|| ltk_game_data::Error::new(path.as_str(), "mod is not enabled"))?;
+            .ok_or_else(|| {
+                ltk_game_data::Error::in_document(
+                    ltk_game_data::ErrorKind::InputMissing,
+                    path.as_str(),
+                )
+            })?;
         let bytes: Arc<[u8]> = enabled
             .content
             .read_game_data_resource(&application.layer, path.as_str())
-            .map_err(|error| ltk_game_data::Error::new(path.as_str(), error))?
+            .map_err(|error| {
+                let kind = match &error {
+                    crate::Error::ModContent(crate::ModContentError::GameDataResourceMissing {
+                        ..
+                    }) => ltk_game_data::ErrorKind::InputMissing,
+                    other => ltk_game_data::ErrorKind::Io {
+                        detail: other.to_string(),
+                    },
+                };
+                ltk_game_data::Error::in_document(kind, path.as_str())
+            })?
             .into();
         self.bytes.insert(key, Arc::clone(&bytes));
         Ok(bytes)

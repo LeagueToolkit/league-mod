@@ -12,11 +12,13 @@
 mod apply;
 mod discovery;
 mod document;
+mod error;
 mod manifest;
 
 pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use apply::{RecordSkipReason, SkippedRecord};
 pub use document::DeclarationDocument;
+pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
 pub use ltk_hash::BinHash;
 pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
@@ -24,23 +26,6 @@ pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-
-/// A declaration that cannot be loaded or applied.
-#[derive(Debug, thiserror::Error)]
-#[error("{location}: {message}")]
-pub struct Error {
-    pub location: String,
-    pub message: String,
-}
-
-impl Error {
-    pub fn new(location: impl Into<String>, message: impl ToString) -> Self {
-        Self {
-            location: location.into(),
-            message: message.to_string(),
-        }
-    }
-}
 
 /// A layer's modules in execution order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,7 +38,7 @@ pub struct Declarations {
 impl Declarations {
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 {
-            return Err(Error::new("game_data", "unsupported declarations version"));
+            return Err(Error::new(ErrorKind::UnsupportedVersion));
         }
         Ok(())
     }
@@ -64,8 +49,11 @@ impl Declarations {
     /// carries `links`, empty or not.
     pub fn manifest_json(&self) -> Result<String, Error> {
         self.validate()?;
-        serde_json::to_string_pretty(&manifest::Manifest::from(self))
-            .map_err(|error| Error::new("game_data", error))
+        serde_json::to_string_pretty(&manifest::Manifest::from(self)).map_err(|error| {
+            Error::new(ErrorKind::Syntax {
+                detail: error.to_string(),
+            })
+        })
     }
 }
 
@@ -159,7 +147,7 @@ impl TryFrom<String> for Target {
 
     fn try_from(value: String) -> Result<Self, Error> {
         if value.is_empty() {
-            return Err(Error::new("target", "expected a nonempty target string"));
+            return Err(Error::at_key(ErrorKind::EmptyTarget, "target"));
         }
         Ok(Self(
             if value.len() == 16 && value.bytes().all(|c| c.is_ascii_hexdigit()) {
@@ -221,7 +209,7 @@ impl TryFrom<String> for EntryName {
 
     fn try_from(value: String) -> Result<Self, Error> {
         if value.is_empty() {
-            return Err(Error::new("entries", "expected a nonempty entry name"));
+            return Err(Error::at_key(ErrorKind::EmptyEntryName, "entries"));
         }
         let hash_form = value.strip_prefix("0x").is_some_and(|digits| {
             digits.len() == 8 && digits.bytes().all(|c| c.is_ascii_hexdigit())
@@ -285,10 +273,7 @@ impl TryFrom<String> for LinkPath {
 
     fn try_from(value: String) -> Result<Self, Error> {
         if value.is_empty() || value.len() > u16::MAX as usize {
-            return Err(Error::new(
-                "links",
-                "link paths require 1 to 65535 UTF-8 bytes",
-            ));
+            return Err(Error::at_key(ErrorKind::LinkPathLength, "links"));
         }
         Ok(Self(value))
     }
@@ -329,28 +314,19 @@ impl TryFrom<String> for OverridePath {
 
     fn try_from(value: String) -> Result<Self, Error> {
         if value.is_empty() {
-            return Err(Error::new("overrides", "expected a nonempty override path"));
+            return Err(Error::at_key(ErrorKind::EmptyOverridePath, "overrides"));
         }
         if value.contains('\\') {
-            return Err(Error::new(
-                "overrides",
-                "override paths use forward slashes",
-            ));
+            return Err(Error::at_key(ErrorKind::OverridePathBackslash, "overrides"));
         }
         if value.starts_with('/') {
-            return Err(Error::new(
-                "overrides",
-                "override paths are relative to the layer",
-            ));
+            return Err(Error::at_key(ErrorKind::OverridePathAbsolute, "overrides"));
         }
         if value
             .split('/')
             .any(|segment| matches!(segment, "" | "." | ".."))
         {
-            return Err(Error::new(
-                "overrides",
-                "override paths contain no empty, `.`, or `..` segment",
-            ));
+            return Err(Error::at_key(ErrorKind::OverridePathSegment, "overrides"));
         }
         let file_name = value.rsplit('/').next().unwrap_or(&value);
         match file_name.rsplit_once('.') {
@@ -359,14 +335,10 @@ impl TryFrom<String> for OverridePath {
             {
                 Ok(Self(value))
             }
-            Some((_, extension)) if extension.eq_ignore_ascii_case("rito") => Err(Error::new(
-                "overrides",
-                "`.rito` override files are unsupported; convert the file to `.ptch`",
-            )),
-            _ => Err(Error::new(
-                "overrides",
-                "override files require the `.ptch` extension",
-            )),
+            Some((_, extension)) if extension.eq_ignore_ascii_case("rito") => {
+                Err(Error::at_key(ErrorKind::OverridePathRito, "overrides"))
+            }
+            _ => Err(Error::at_key(ErrorKind::OverridePathExtension, "overrides")),
         }
     }
 }

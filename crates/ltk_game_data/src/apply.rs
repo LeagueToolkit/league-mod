@@ -7,7 +7,7 @@ use ltk_meta::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{BinHash, Edit, Error, OverridePath};
+use crate::{BinHash, Edit, Error, ErrorKind, OverridePath};
 
 /// The category of an application diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,9 +128,9 @@ pub fn apply<B: AsRef<[u8]>>(
     edits: &[Edit],
     mut read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
 ) -> Result<ApplyResult, Error> {
-    let stream = BinStream::mount(Cursor::new(base)).map_err(|e| Error::new("target", e))?;
+    let stream = BinStream::mount(Cursor::new(base)).map_err(|e| bin_error(&e))?;
     if !matches!(stream.version(), 2 | 3) {
-        return Err(Error::new("target", "expected PROP version 2 or 3"));
+        return Err(Error::new(ErrorKind::UnsupportedBase));
     }
     let body_offset = 12
         + stream
@@ -138,7 +138,7 @@ pub fn apply<B: AsRef<[u8]>>(
             .iter()
             .map(|path| 2 + path.len())
             .sum::<usize>();
-    let mut bin: Bin = stream.into_bin().map_err(|e| Error::new("target", e))?;
+    let mut bin: Bin = stream.into_bin().map_err(|e| bin_error(&e))?;
     let mut seen = HashSet::new();
     bin.dependencies
         .retain(|path| seen.insert(path.as_str().to_ascii_lowercase()));
@@ -202,8 +202,7 @@ pub fn apply<B: AsRef<[u8]>>(
     }
     let bytes = if rewritten {
         let mut cursor = Cursor::new(Vec::new());
-        bin.to_writer(&mut cursor)
-            .map_err(|e| Error::new("target", e))?;
+        bin.to_writer(&mut cursor).map_err(|e| bin_error(&e))?;
         cursor.into_inner()
     } else {
         header_rewrite(base, body_offset, &bin.dependencies)?
@@ -215,17 +214,26 @@ pub fn apply<B: AsRef<[u8]>>(
     })
 }
 
+/// The error of a base or output `ltk_meta` refuses.
+fn bin_error(error: &dyn std::fmt::Display) -> Error {
+    Error::new(ErrorKind::Bin {
+        detail: error.to_string(),
+    })
+}
+
 /// The base with its dependency header replaced and its object table copied byte for byte.
 fn header_rewrite(
     base: &[u8],
     body_offset: usize,
     dependencies: &[String],
 ) -> Result<Vec<u8>, Error> {
-    let count = u32::try_from(dependencies.len()).map_err(|e| Error::new("links", e))?;
+    let count = u32::try_from(dependencies.len())
+        .map_err(|_| Error::at_key(ErrorKind::DependencyOverflow, "links"))?;
     let mut bytes = base[..8].to_vec();
     bytes.extend_from_slice(&count.to_le_bytes());
     for path in dependencies {
-        let length = u16::try_from(path.len()).map_err(|e| Error::new("links", e))?;
+        let length = u16::try_from(path.len())
+            .map_err(|_| Error::at_key(ErrorKind::DependencyOverflow, "links"))?;
         bytes.extend_from_slice(&length.to_le_bytes());
         bytes.extend_from_slice(path.as_bytes());
     }

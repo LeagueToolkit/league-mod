@@ -383,20 +383,28 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         &mut self,
         layer: &str,
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
-        let name = self
-            .index
-            .info_entry
-            .as_ref()
-            .ok_or_else(|| ltk_game_data::Error::new(layer, "Fantome info missing"))?;
-        let mut entry = self
-            .archive
-            .by_name(name)
-            .map_err(|e| ltk_game_data::Error::new(layer, e))?;
-        let bytes =
-            read_zip_entry_bytes(&mut entry).map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        let name = self.index.info_entry.as_ref().ok_or_else(|| {
+            ltk_game_data::Error::in_document(ltk_game_data::ErrorKind::InputMissing, layer)
+        })?;
+        let io = |e: &dyn std::fmt::Display| {
+            ltk_game_data::Error::in_document(
+                ltk_game_data::ErrorKind::Io {
+                    detail: e.to_string(),
+                },
+                layer,
+            )
+        };
+        let mut entry = self.archive.by_name(name).map_err(|e| io(&e))?;
+        let bytes = read_zip_entry_bytes(&mut entry).map_err(|e| io(&e))?;
         let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-        let info: ltk_fantome::FantomeInfo =
-            serde_json::from_slice(bytes).map_err(|e| ltk_game_data::Error::new(layer, e))?;
+        let info: ltk_fantome::FantomeInfo = serde_json::from_slice(bytes).map_err(|e| {
+            ltk_game_data::Error::in_document(
+                ltk_game_data::ErrorKind::Syntax {
+                    detail: e.to_string(),
+                },
+                layer,
+            )
+        })?;
         info.layers
             .iter()
             .find(|(key, value)| {

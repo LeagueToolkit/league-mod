@@ -17,14 +17,12 @@ pub(super) struct Source {
 }
 
 impl Source {
-    /// The edits of the source at `path`, reported against the module `at` that names it.
-    pub(super) fn load(path: DocumentPath<'_>, text: &str, at: &str) -> Result<Vec<Edit>, Error> {
-        let source: Self = path
-            .parse(text, Reading::Execution)
-            .map_err(|error| Error::new(at, error))?;
+    /// The edits of the source at `path`. An error names the source as its document.
+    pub(super) fn load(path: DocumentPath<'_>, text: &str) -> Result<Vec<Edit>, Error> {
+        let source: Self = path.parse(text, Reading::Execution)?;
         source
             .body
-            .into_edits(path.as_str(), path)
-            .map_err(|error| Error::new(at, error))
+            .into_edits(path)
+            .map_err(|error| error.document(path.as_str()))
     }
 }
