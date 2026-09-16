@@ -5,9 +5,27 @@ use std::collections::HashMap;
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_wad::WadHash;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
-    Archive, ArchiveId, ArchiveLookupError, BuildError, ChunkRow, SkippedArchive, build, chunk_hash,
+    Archive, ArchiveId, ArchiveLookupError, BuildError, CacheError, ChunkRow, Fingerprint,
+    SkippedArchive, build, cache, chunk_hash, fingerprint,
 };
+
+/// The cache format version of the chunk index.
+///
+/// Bumped on any change to [`Archive`], [`ChunkRow`], [`SkippedArchive`], or the container
+/// layout.
+pub const CACHE_FORMAT_VERSION: u32 = 1;
+
+/// The cached body of a chunk index. The file-name index is rebuilt on load.
+#[derive(Serialize, Deserialize)]
+struct Body {
+    archives: Vec<Archive>,
+    hashes: Vec<WadHash>,
+    rows: Vec<ChunkRow>,
+    skipped: Vec<SkippedArchive>,
+}
 
 /// Every chunk of an installation, keyed by chunk hash, with every holder.
 ///
@@ -22,6 +40,7 @@ pub struct GameIndex {
     hashes: Vec<WadHash>,
     rows: Vec<ChunkRow>,
     skipped: Vec<SkippedArchive>,
+    fingerprint: Fingerprint,
 }
 
 impl GameIndex {
@@ -30,6 +49,7 @@ impl GameIndex {
         hashes: Vec<WadHash>,
         rows: Vec<ChunkRow>,
         skipped: Vec<SkippedArchive>,
+        fingerprint: Fingerprint,
     ) -> Self {
         debug_assert_eq!(hashes.len(), rows.len());
         let mut by_file_name: HashMap<String, Vec<ArchiveId>> = HashMap::new();
@@ -45,6 +65,7 @@ impl GameIndex {
             hashes,
             rows,
             skipped,
+            fingerprint,
         }
     }
 
@@ -73,6 +94,110 @@ impl GameIndex {
         archives: &[Utf8PathBuf],
     ) -> Result<Self, BuildError> {
         build::build_from_archives(root, archives)
+    }
+
+    /// The fingerprint of the installation at `game_dir`, without mounting an archive.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError::MissingDataFinal`], [`BuildError::Enumerate`] and
+    /// [`BuildError::Metadata`].
+    pub fn fingerprint_of(game_dir: &Utf8Path) -> Result<Fingerprint, BuildError> {
+        fingerprint::of_game_dir(game_dir)
+    }
+
+    /// Reads the cache at `cache_path`, whatever fingerprint it carries.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Read`], [`CacheError::Decode`], and [`CacheError::Version`] for a
+    /// format version other than [`CACHE_FORMAT_VERSION`].
+    pub fn load(cache_path: &Utf8Path) -> Result<Self, CacheError> {
+        let cache::Document { fingerprint, body } =
+            cache::read::<Body>(cache_path, CACHE_FORMAT_VERSION)?;
+        Ok(Self::from_parts(
+            body.archives,
+            body.hashes,
+            body.rows,
+            body.skipped,
+            fingerprint,
+        ))
+    }
+
+    /// Reads the cache at `cache_path` for the installation at `game_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`load`](Self::load) reports, [`CacheError::Build`] when the installation's
+    /// fingerprint does not compute, and [`CacheError::Stale`] when it differs from the
+    /// cached one.
+    pub fn load_for(cache_path: &Utf8Path, game_dir: &Utf8Path) -> Result<Self, CacheError> {
+        let index = Self::load(cache_path)?;
+        let current = Self::fingerprint_of(game_dir)?;
+        if index.fingerprint != current {
+            return Err(CacheError::Stale {
+                path: cache_path.to_path_buf(),
+                cached: index.fingerprint,
+                current,
+            });
+        }
+        Ok(index)
+    }
+
+    /// Writes the index to `cache_path` atomically.
+    ///
+    /// The bytes go to a sibling temporary file, which is renamed over `cache_path`.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Write`] and [`CacheError::Encode`].
+    pub fn save(&self, cache_path: &Utf8Path) -> Result<(), CacheError> {
+        let body = Body {
+            archives: self.archives.clone(),
+            hashes: self.hashes.clone(),
+            rows: self.rows.clone(),
+            skipped: self.skipped.clone(),
+        };
+        cache::write(cache_path, CACHE_FORMAT_VERSION, self.fingerprint, &body)?;
+        tracing::debug!("Game index cache saved to {cache_path}");
+        Ok(())
+    }
+
+    /// The cached index when it matches the installation, and a fresh build otherwise.
+    ///
+    /// A missing cache is logged at debug and any other cache error at warn. The built index
+    /// is saved best-effort, with a warn on failure.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`build`](Self::build) reports.
+    pub fn load_or_build(game_dir: &Utf8Path, cache_path: &Utf8Path) -> Result<Self, BuildError> {
+        match Self::load_for(cache_path, game_dir) {
+            Ok(index) => {
+                tracing::info!(
+                    "Game index loaded from {cache_path} (fingerprint {})",
+                    index.fingerprint
+                );
+                return Ok(index);
+            }
+            Err(error) if error.is_missing_file() => {
+                tracing::debug!("No game index cache at {cache_path}");
+            }
+            Err(error) => {
+                tracing::warn!("Rebuilding game index: {error}");
+            }
+        }
+        let index = Self::build(game_dir)?;
+        if let Err(error) = index.save(cache_path) {
+            tracing::warn!("Game index cache not saved: {error}");
+        }
+        Ok(index)
+    }
+
+    /// The fingerprint of the installation the index was built from.
+    #[must_use]
+    pub fn fingerprint(&self) -> Fingerprint {
+        self.fingerprint
     }
 
     /// Every archive, in id order.

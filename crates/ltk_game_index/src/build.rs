@@ -8,7 +8,7 @@ use ltk_wad::{Wad, WadHash};
 
 use crate::{
     Archive, ArchiveId, ArchiveReadError, BuildError, ChunkCopy, ChunkRow, GameIndex,
-    SkippedArchive, archive,
+    SkippedArchive, archive, fingerprint,
 };
 
 /// One chunk as one archive's table of contents lists it.
@@ -58,7 +58,7 @@ pub(crate) fn archives_under(
 pub(crate) fn build(game_dir: &Utf8Path) -> Result<GameIndex, BuildError> {
     tracing::info!("Building game index from {game_dir}");
     let archives = enumerate_archives(game_dir)?;
-    Ok(index_archives(archives))
+    index_archives(archives)
 }
 
 pub(crate) fn build_from_archives(
@@ -66,11 +66,15 @@ pub(crate) fn build_from_archives(
     paths: &[Utf8PathBuf],
 ) -> Result<GameIndex, BuildError> {
     let archives = archives_under(root, paths)?;
-    Ok(index_archives(archives))
+    index_archives(archives)
 }
 
-/// Mounts every archive and merges the tables of contents into rows.
-pub(crate) fn index_archives(archives: Vec<Archive>) -> GameIndex {
+/// Fingerprints and mounts every archive and merges the tables of contents into rows.
+///
+/// The fingerprint is taken before any archive is mounted. A cache carries the state of the
+/// files as they were read.
+fn index_archives(archives: Vec<Archive>) -> Result<GameIndex, BuildError> {
+    let fingerprint = fingerprint::of_archives(&archives)?;
     let mounted = mount_all(&archives);
 
     let mut skipped = Vec::new();
@@ -109,12 +113,18 @@ pub(crate) fn index_archives(archives: Vec<Archive>) -> GameIndex {
     }
 
     tracing::info!(
-        "Game index built: {} archives, {} skipped, {} chunks",
+        "Game index built: {} archives, {} skipped, {} chunks, fingerprint {fingerprint}",
         archives.len(),
         skipped.len(),
         rows.len()
     );
-    GameIndex::from_parts(archives, hashes, rows, skipped)
+    Ok(GameIndex::from_parts(
+        archives,
+        hashes,
+        rows,
+        skipped,
+        fingerprint,
+    ))
 }
 
 type MountOutcome = Result<Vec<(WadHash, u64, u64)>, ArchiveReadError>;
