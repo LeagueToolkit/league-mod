@@ -482,3 +482,110 @@ fn override_files_round_trip_through_fantome() {
         .join("content/base/Test.wad.client/links.yaml")
         .exists());
 }
+
+/// A project whose manifest holds a target body of property edits and an `entries` body
+/// mixing links and property edits.
+fn property_fixture(root: &Utf8Path) -> ModProject {
+    fs::create_dir_all(root.join("content/base")).unwrap();
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: data/characters/teemo/skins/skin0.bin\n    Characters/Teemo/Skins/Skin0:\n      skinMeshProperties:\n        selfIllumination: !f32 1.0\n        +tagEventList: [Jade_Teemo]\n      healthBarData.unitHealthBarStyle: 12\n      ptr: !pointer {class: X, set: {a: 1}}\n  - entries:\n      Characters/Teemo/Skins/Skin0/Resources:\n        links: [x.bin]\n        +resourceMap:\n          Teemo_R_Mis: !link Characters/Jade_Teemo/Particles/R_Mis\n          Teemo_R_Debuff: null\n",
+    )
+    .unwrap();
+    ModProject {
+        name: "properties".into(),
+        display_name: "Properties".into(),
+        version: "1.0.0".into(),
+        layers: vec![ModProjectLayer::base()],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn entry_bodies_round_trip_through_both_archives() {
+    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
+    for format in ["modpkg", "fantome"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let source = root.join("source");
+        let project = property_fixture(&source);
+        let authored = load_layer(&source, "base", &ModIgnore::empty(&source))
+            .declarations
+            .unwrap()
+            .unwrap();
+        let mut archive = Cursor::new(Vec::new());
+        let packer = ProjectPacker::new(project, source);
+        if format == "modpkg" {
+            packer.pack(ModpkgFormat::new(&mut archive)).unwrap();
+        } else {
+            packer.pack(FantomeFormat::new(&mut archive)).unwrap();
+        }
+        archive.set_position(0);
+        let document = if format == "modpkg" {
+            let mut package = Modpkg::mount_from_reader(archive.clone()).unwrap();
+            package.load_metadata().unwrap().layers[0].game_data.clone()
+        } else {
+            let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
+            reader.read_info().unwrap().layers["base"].game_data.clone()
+        };
+        let declarations = document.unwrap().parse().unwrap();
+        assert_eq!(declarations, authored, "{format}");
+        let json = serde_json::to_string(&declarations).unwrap();
+        assert!(json.contains(r#""selfIllumination":{"f32":1.0}"#), "{json}");
+        assert!(json.contains(r#""Teemo_R_Debuff":null"#), "{json}");
+        let output = root.join("output");
+        let importer = ProjectImporter::new(output.clone());
+        if format == "modpkg" {
+            importer.import(ModpkgImporter::new(archive)).unwrap();
+        } else {
+            importer.import(FantomeImporter::new(archive)).unwrap();
+        }
+        let extracted = load_layer(&output, "base", &ModIgnore::empty(&output))
+            .declarations
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            extracted.manifest_json().unwrap(),
+            declarations.manifest_json().unwrap(),
+            "{format}"
+        );
+        let modules: Vec<_> = extracted.modules.iter().map(|m| &m.selector).collect();
+        let authored: Vec<_> = authored.modules.iter().map(|m| &m.selector).collect();
+        assert_eq!(modules, authored, "{format}");
+    }
+}
+
+#[test]
+fn invalid_entry_bodies_refuse_the_layer_with_typed_kinds() {
+    type Expected = fn(&ltk_game_data::ErrorKind) -> bool;
+    let cases: [(&str, Expected); 3] = [
+        (
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      'a[': 1\n",
+            |kind: &ltk_game_data::ErrorKind| {
+                matches!(kind, ltk_game_data::ErrorKind::InvalidPropertyPath { .. })
+            },
+        ),
+        (
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: !widget 1\n",
+            |kind: &ltk_game_data::ErrorKind| {
+                matches!(kind, ltk_game_data::ErrorKind::Syntax { .. })
+            },
+        ),
+        (
+            "version: 1\nmodules:\n  - target: a.bin\n    objects: {}\n",
+            |kind: &ltk_game_data::ErrorKind| {
+                matches!(kind, ltk_game_data::ErrorKind::UnsupportedBinding { .. })
+            },
+        ),
+    ];
+    for (manifest, expected) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        property_fixture(&root);
+        fs::write(root.join("content/base/game_data.yaml"), manifest).unwrap();
+        let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+        assert!(layer.is_declaration_input(&root.join("content/base/game_data.yaml")));
+        let error = layer.declarations.unwrap_err();
+        assert!(expected(&error.kind), "{manifest}: {error}");
+    }
+}
