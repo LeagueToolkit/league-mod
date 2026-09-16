@@ -1,5 +1,9 @@
 //! Packing a mod project into an archive.
 //!
+//! Every archive a pack writes names this crate and its version as the
+//! writer: `generator` in a modpkg metadata document, `Generator` in a
+//! Fantome `info.json`.
+//!
 //! Packing is split between a format-neutral driver and per-format backends:
 //!
 //! - [`ProjectPacker`] is the single entry point. It loads the config,
@@ -63,6 +67,10 @@ pub use options::{IgnoreMode, PackOptions};
 pub use packer::{PackError, PackReport, ProjectPacker};
 pub use plan::{PackPlan, PlannedFile, PlannedHashtable, PlannedLayer, PlannedLicense};
 pub use progress::{PackProgress, PackReporter, PackStage};
+
+/// What this crate writes as the archive's generator: its name, one space,
+/// its version.
+pub(crate) const GENERATOR: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
 /// An archive format [`ProjectPacker`] can pack a project into.
 ///

@@ -113,6 +113,23 @@ fn pack_writes_license_file_and_field() {
 }
 
 #[test]
+fn pack_names_this_crate_as_the_generator() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    let buffer = pack(&test_project(None), &root);
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    let info = reader.read_info().unwrap();
+    assert_eq!(
+        info.generator.as_deref(),
+        Some(concat!("ltk_mod_project ", env!("CARGO_PKG_VERSION")))
+    );
+    assert!(!info.extra.contains_key("Generator"));
+}
+
+#[test]
 fn pack_omits_license_entry_when_project_has_none() {
     let tmp = tempfile::tempdir().unwrap();
     let root = utf8_dir(&tmp);
