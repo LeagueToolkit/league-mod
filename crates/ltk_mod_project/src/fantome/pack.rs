@@ -461,6 +461,17 @@ fn pack_metadata<W: Write + Seek>(
             layer.priority = planned.layer().priority;
             layer.game_data = Some(program.clone());
         }
+        for override_file in planned.override_files() {
+            let mut file = File::open(&override_file.source)
+                .map_err(|source| FantomePackError::read(&override_file.source, source))?;
+            writer
+                .write_game_data_resource(
+                    &planned.layer().name,
+                    override_file.path.as_str(),
+                    &mut file,
+                )
+                .map_err(|error| attribute_write_error(error, &override_file.source))?;
+        }
     }
     info.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
 

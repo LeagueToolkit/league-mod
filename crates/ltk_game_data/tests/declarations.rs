@@ -1,4 +1,55 @@
-use ltk_game_data::{Edit, Module, Selector, Target, apply, load_declarations};
+use ltk_game_data::{
+    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, OverridePath,
+    RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply, load_declarations,
+};
+use ltk_meta::{
+    BinOverride,
+    concrete::{Bin, BinObject, values},
+    path::PropertyPath,
+};
+use std::io::Cursor;
+
+/// An override reader for edits without overrides.
+fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
+    unreachable!("no override is read: {path}")
+}
+
+/// A PROP v3 with one dependency and one object `1` of class `2` whose `speed` is 1.0.
+fn base_bin() -> Vec<u8> {
+    let bin = Bin::builder()
+        .dependency("shared")
+        .object(
+            BinObject::builder(1u32, 2u32)
+                .property(BinHash::from("speed"), values::F32::new(1.0))
+                .build(),
+        )
+        .build();
+    let mut cursor = Cursor::new(Vec::new());
+    bin.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+/// A PTCH setting `speed` on `object` to `speed`.
+fn ptch(object: u32, speed: f32) -> Vec<u8> {
+    let patch = BinOverride::builder()
+        .set(
+            object,
+            PropertyPath::new("speed").unwrap(),
+            values::F32::new(speed),
+        )
+        .build();
+    let mut cursor = Cursor::new(Vec::new());
+    patch.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+fn speed_of(bytes: &[u8]) -> f32 {
+    let bin = Bin::from_reader(&mut Cursor::new(bytes)).unwrap();
+    match bin.objects[&BinHash(1)].resolve(&PropertyPath::new("speed").unwrap()) {
+        Ok(ltk_meta::PropertyValueEnum::F32(value)) => value.value,
+        other => panic!("unexpected speed: {other:?}"),
+    }
+}
 
 /// The entry names of an `entries` module, in mapping order.
 fn entry_names(module: &Module) -> Vec<&str> {
@@ -49,7 +100,7 @@ fn yaml_requires_strings_for_lookup_paths_and_hashes() {
 #[test]
 fn duplicate_base_links_keep_the_first_casing() {
     let base = b"PROP\x03\0\0\0\x02\0\0\0\x01\0A\x01\0a\0\0\0\0";
-    let output = apply(base, &[]).unwrap();
+    let output = apply(base, &[], no_override).unwrap();
     assert_eq!(output.dependencies, ["A"]);
 }
 
@@ -62,7 +113,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         ),
         (
             "game_data.json",
-            r#"{"version":1,"modules":[{"target":"shared","links":[],"steps":[] }]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","links":[],"edits":[] }]}"#,
         ),
         (
             "game_data.json",
@@ -70,7 +121,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         ),
         (
             "game_data.json",
-            r#"{"version":1,"modules":[{"target":"shared","steps":[{"links":[],"+links":[]}]}]}"#,
+            r#"{"version":1,"modules":[{"target":"shared","edits":[{"links":[],"+links":[]}]}]}"#,
         ),
         (
             "game_data.json",
@@ -91,7 +142,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         ("game_data.toml", "version = 2\nmodules = []"),
         (
             "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = 'shared'\noverrides = ['a.ptch']",
+            "version = 1\n[[modules]]\ntarget = 'shared'\nmodes = ['Map11/ARAM']",
         ),
     ];
     for (name, text) in invalid {
@@ -121,7 +172,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         b"PROP\x01\0\0\0\0\0\0\0",
         b"PROP\x03\0\0\0",
     ] {
-        assert!(apply(bytes, &[]).is_err());
+        assert!(apply(bytes, &[], no_override).is_err());
     }
 }
 
@@ -130,18 +181,22 @@ fn input_discovery_retains_sources_in_rejected_documents() {
     let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  unknown: !f32 1.0\n  source: one.json\n- source: two.json\n";
     assert!(load_declarations("game_data.yaml", yaml, |_| unreachable!()).is_err());
     assert_eq!(
-        ltk_game_data::referenced_sources("game_data.yaml", yaml).unwrap(),
+        ReferencedInputs::discover("game_data.yaml", yaml)
+            .unwrap()
+            .sources,
         ["one.json", "two.json"]
     );
     let json = r#"{"version":1,"modules":[{"source":"one.json","source":"two.json"}]}"#;
     assert_eq!(
-        ltk_game_data::referenced_sources("game_data.json", json).unwrap(),
+        ReferencedInputs::discover("game_data.json", json)
+            .unwrap()
+            .sources,
         ["one.json", "two.json"]
     );
 }
 
 #[test]
-fn yaml_sources_and_steps_execute_in_order_without_rewriting_objects() {
+fn yaml_sources_and_edits_execute_in_order_without_rewriting_objects() {
     let declarations = load_declarations(
         "game_data.yaml",
         r#"
@@ -150,7 +205,7 @@ modules:
   - target: shared
     source: patches/links.json
   - target: '0123456789abcdef'
-    steps:
+    edits:
       - '+links': [After]
       - '-links': [after]
 "#,
@@ -172,7 +227,7 @@ modules:
 
     // PROP v2, dependency "shared", one zero-property object of class 2 and path 1.
     let base = b"PROP\x02\0\0\0\x01\0\0\0\x06\0shared\x01\0\0\0\x02\0\0\0\x06\0\0\0\x01\0\0\0\0\0";
-    let output = apply(base, target_of(&declarations.modules[0]).1).unwrap();
+    let output = apply(base, target_of(&declarations.modules[0]).1, no_override).unwrap();
     assert_eq!(output.dependencies, ["shared", "other"]);
     assert_eq!(&output.bytes[..8], &base[..8]);
     assert_eq!(&output.bytes[27..], &base[20..]);
@@ -263,7 +318,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         "version": 1,
         "modules": [{
             "target": "shared",
-            "steps": [{"links": ["Added"], "-links": ["Removed"]}],
+            "edits": [{"links": ["Added"], "-links": ["Removed"]}],
             "origin": {"manifest": "game_data.yaml", "source": "links.json", "module": 2}
         }]
     });
@@ -279,7 +334,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         wire
     );
     let mut empty = wire.clone();
-    empty["modules"][0]["steps"][0] = serde_json::json!({});
+    empty["modules"][0]["edits"][0] = serde_json::json!({});
     let document: DeclarationDocument = serde_json::from_value(empty).unwrap();
     assert!(
         target_of(&document.parse().unwrap().modules[0]).1[0]
@@ -288,10 +343,10 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&declarations.manifest_json().unwrap()).unwrap(),
-        serde_json::json!({"version":1,"modules":[{"target":"shared","steps":[{"links":["Added"],"-links":["Removed"]}]}]})
+        serde_json::json!({"version":1,"modules":[{"target":"shared","edits":[{"links":["Added"],"-links":["Removed"]}]}]})
     );
     let mut unsupported = wire;
-    unsupported["modules"][0]["steps"][0]["objects"] = serde_json::json!({});
+    unsupported["modules"][0]["edits"][0]["objects"] = serde_json::json!({});
     let document: DeclarationDocument = serde_json::from_value(unsupported.clone()).unwrap();
     assert_eq!(serde_json::to_value(&document).unwrap(), unsupported);
     assert!(document.parse().is_err());
@@ -372,7 +427,7 @@ links = ["Shared"]
 fn a_module_requires_exactly_one_selector() {
     for text in [
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"target":"shared","entries":{"x":{"links":["a"]}}}]}"#,
-        r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"steps":[]}]}"#,
+        r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"edits":[]}]}"#,
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"entries":{"x":{"links":["a"]}},"links":["a"]}]}"#,
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"entries":{"x":{"links":["a"]}},"source":"a.json"}]}"#,
     ] {
@@ -393,7 +448,7 @@ fn a_module_requires_exactly_one_selector() {
     for module in [
         serde_json::json!({"origin": {"manifest": "game_data.yaml", "source": null, "module": 0}}),
         serde_json::json!({"target": "shared", "origin": {"manifest": "game_data.yaml", "source": null, "module": 0}}),
-        serde_json::json!({"entries": {"x": {"links": ["a"]}}, "steps": [], "origin": {"manifest": "game_data.yaml", "source": null, "module": 0}}),
+        serde_json::json!({"entries": {"x": {"links": ["a"]}}, "edits": [], "origin": {"manifest": "game_data.yaml", "source": null, "module": 0}}),
     ] {
         let document: ltk_game_data::DeclarationDocument =
             serde_json::from_value(serde_json::json!({"version": 1, "modules": [module]})).unwrap();
@@ -405,10 +460,10 @@ fn a_module_requires_exactly_one_selector() {
 fn entry_bodies_refuse_sources_unknown_keys_and_empty_names() {
     for text in [
         r#"{"version":1,"modules":[{"entries":{"x":{"source":"a.json"}}}]}"#,
-        r#"{"version":1,"modules":[{"entries":{"x":{"links":["a"],"steps":[]}}}]}"#,
-        r#"{"version":1,"modules":[{"entries":{"x":{"steps":[{"links":["a"]}]}}}]}"#,
-        r#"{"version":1,"modules":[{"target":"a","steps":[]}]}"#,
-        r#"{"version":1,"modules":[{"target":"a","steps":[{}]}]}"#,
+        r#"{"version":1,"modules":[{"entries":{"x":{"links":["a"],"edits":[]}}}]}"#,
+        r#"{"version":1,"modules":[{"entries":{"x":{"edits":[{"links":["a"]}]}}}]}"#,
+        r#"{"version":1,"modules":[{"target":"a","edits":[]}]}"#,
+        r#"{"version":1,"modules":[{"target":"a","edits":[{}]}]}"#,
         r#"{"version":1,"modules":[{"entries":{"x":{}}}]}"#,
         r#"{"version":1,"modules":[{"entries":{"x":{"overrides":["a"]}}}]}"#,
         r#"{"version":1,"modules":[{"entries":{"":{"links":["a"]}}}]}"#,
@@ -471,4 +526,307 @@ fn entry_names_hash_like_bin_objects_and_refuse_the_empty_string() {
     assert!(EntryName::try_from(String::new()).is_err());
     assert!(serde_json::from_str::<EntryName>(r#""""#).is_err());
     assert!(serde_json::from_str::<EntryName>("1").is_err());
+}
+
+#[test]
+fn override_paths_enforce_spelling_and_extension() {
+    for value in ["a/b.ptch", "X.PTCH", "Test.wad.client/patch.ptch"] {
+        assert_eq!(OverridePath::try_from(value).unwrap().as_str(), value);
+    }
+    for value in [
+        "",
+        "a\\b.ptch",
+        "/a.ptch",
+        "../a.ptch",
+        "a/../b.ptch",
+        "a/./b.ptch",
+        "a//b.ptch",
+        ".ptch",
+        "a.bin",
+        "a.ptch/",
+    ] {
+        assert!(OverridePath::try_from(value).is_err(), "{value:?}");
+    }
+    let rito = OverridePath::try_from("a.rito").unwrap_err();
+    assert!(rito.to_string().contains(".rito"), "{rito}");
+}
+
+#[test]
+fn override_paths_resolve_against_their_source_and_stay_within_the_layer() {
+    let declarations = load_declarations(
+        "game_data.yaml",
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [patches/./a.ptch]\n  - target: other\n    source: Test.wad.client/links.yaml\n  - target: third\n    source: ./patches/links.yaml\n",
+        |source| {
+            Ok(match source {
+                "./patches/links.yaml" => "version: 1\noverrides: [../dotted.ptch]\n".to_owned(),
+                _ => "version: 1\noverrides: [../patch.ptch, sub/../local.ptch]\nlinks: [x]\n"
+                    .to_owned(),
+            })
+        },
+    )
+    .unwrap();
+    let paths = |module: &Module| -> Vec<String> {
+        target_of(module).1[0]
+            .overrides
+            .iter()
+            .map(|path| path.as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(paths(&declarations.modules[0]), ["patches/a.ptch"]);
+    assert_eq!(
+        paths(&declarations.modules[1]),
+        ["patch.ptch", "Test.wad.client/local.ptch"]
+    );
+    assert_eq!(paths(&declarations.modules[2]), ["dotted.ptch"]);
+    for authored in ["../../patch.ptch", "/patch.ptch", "a\\b.ptch", "a.rito", ""] {
+        let error = load_declarations(
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.yaml\n",
+            |_| Ok(format!("version: 1\noverrides: [{authored:?}]\n")),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("module 0"),
+            "{authored}: {error}"
+        );
+    }
+    assert!(
+        load_declarations(
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: shared\n    overrides: []\n",
+            |_| unreachable!(),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn overrides_inside_entries_are_errors() {
+    for (name, text) in [
+        (
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - entries:\n      Characters/Teemo:\n        overrides: [a.ptch]\n".to_owned(),
+        ),
+        (
+            "game_data.json",
+            r#"{"version":1,"modules":[{"entries":{"Characters/Teemo":{"overrides":["a.ptch"]}}}]}"#.to_owned(),
+        ),
+        (
+            "game_data.toml",
+            "version = 1\n[[modules]]\n[modules.entries.\"Characters/Teemo\"]\noverrides = [\"a.ptch\"]\n".to_owned(),
+        ),
+    ] {
+        let error = load_declarations(name, &text, |_| unreachable!()).unwrap_err();
+        assert!(error.to_string().contains("overrides"), "{name}: {error}");
+    }
+    let document: DeclarationDocument = serde_json::from_str(
+        r#"{"version":1,"modules":[{"entries":{"Characters/Teemo":{"overrides":["a.ptch"]}},"origin":{"manifest":"game_data.json","source":null,"module":0}}]}"#,
+    )
+    .unwrap();
+    assert!(document.parse().is_err());
+}
+
+#[test]
+fn overrides_rewrite_objects_and_report_skipped_records() {
+    let base = base_bin();
+    let mut v2 = base.clone();
+    v2[4] = 2;
+    let declarations = load_declarations(
+        "game_data.json",
+        r#"{"version":1,"modules":[{"target":"shared","edits":[
+            {"overrides":["first.ptch","second.ptch"],"links":["Added"]},
+            {"overrides":["third.ptch"]}
+        ]}]}"#,
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let mut reads = Vec::new();
+    let output = apply(&v2, target_of(&declarations.modules[0]).1, |path| {
+        reads.push(path.as_str().to_owned());
+        Ok(match path.as_str() {
+            "first.ptch" => ptch(1, 2.0),
+            "second.ptch" => ptch(9, 3.0),
+            "third.ptch" => ptch(1, 4.0),
+            other => panic!("{other}"),
+        })
+    })
+    .unwrap();
+    assert_eq!(reads, ["first.ptch", "second.ptch", "third.ptch"]);
+    assert_eq!(&output.bytes[..8], b"PROP\x03\0\0\0");
+    assert_eq!(speed_of(&output.bytes), 4.0);
+    assert_eq!(output.dependencies, ["shared", "Added"]);
+    assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+    let skipped = &output.diagnostics[0];
+    assert_eq!(skipped.kind, ApplyDiagnosticKind::OverrideRecordSkipped);
+    assert_eq!(skipped.edit_index, 0);
+    assert_eq!(skipped.path, "second.ptch");
+    assert_eq!(
+        skipped.record,
+        Some(SkippedRecord {
+            index: 0,
+            object: BinHash(9),
+            property: "speed".into(),
+            reason: RecordSkipReason::MissingObject,
+        })
+    );
+    let json = serde_json::to_value(skipped).unwrap();
+    assert_eq!(json["kind"], "overrideRecordSkipped");
+    assert_eq!(json["record"]["reason"], "missingObject");
+}
+
+#[test]
+fn unavailable_overrides_are_reported_and_links_still_apply() {
+    let base = base_bin();
+    let declarations = load_declarations(
+        "game_data.json",
+        r#"{"version":1,"modules":[{"target":"shared","overrides":["missing.ptch","prop.ptch"],"links":["Added"]}]}"#,
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let output = apply(
+        &base,
+        target_of(&declarations.modules[0]).1,
+        |path| match path.as_str() {
+            "missing.ptch" => Err(ltk_game_data::Error::new(path.as_str(), "not found")),
+            _ => Ok(base_bin()),
+        },
+    )
+    .unwrap();
+    assert_eq!(output.dependencies, ["shared", "Added"]);
+    assert_eq!(
+        &output.bytes[output.bytes.len() - 27..],
+        &base[base.len() - 27..]
+    );
+    let kinds: Vec<_> = output
+        .diagnostics
+        .iter()
+        .map(|d| (d.kind, d.path.as_str(), d.edit_index))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (ApplyDiagnosticKind::OverrideUnreadable, "missing.ptch", 0),
+            (ApplyDiagnosticKind::OverrideInvalid, "prop.ptch", 0),
+        ]
+    );
+    assert!(output.diagnostics.iter().all(|d| d.record.is_none()));
+}
+
+#[test]
+fn documents_round_trip_overrides_and_manifests_write_them() {
+    let declarations = load_declarations(
+        "game_data.json",
+        r#"{"version":1,"modules":[{"target":"shared","edits":[{"overrides":["a.ptch"]},{"links":["x"]}]}]}"#,
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let document = DeclarationDocument::from(declarations.clone());
+    let json = serde_json::to_string(&document).unwrap();
+    assert!(json.contains(r#""overrides":["a.ptch"]"#), "{json}");
+    assert_eq!(document.parse().unwrap(), declarations);
+    let manifest = declarations.manifest_json().unwrap();
+    assert!(manifest.contains(r#""overrides": ["#), "{manifest}");
+    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    assert_eq!(
+        target_of(&reloaded.modules[0]).1,
+        target_of(&declarations.modules[0]).1
+    );
+    assert!(
+        serde_json::from_str::<DeclarationDocument>(
+            r#"{"version":1,"modules":[{"target":"shared","edits":[{"overrides":["../a.ptch"]}],"origin":{"manifest":"m","source":null,"module":0}}]}"#
+        )
+        .unwrap()
+        .parse()
+        .is_err()
+    );
+}
+
+#[test]
+fn override_discovery_retains_paths_in_rejected_documents() {
+    let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  overrides: [a.ptch]\n  unknown: 1\n- target: other\n  edits:\n    - overrides: [b.ptch, c.ptch]\n";
+    assert!(load_declarations("game_data.yaml", yaml, |_| unreachable!()).is_err());
+    assert_eq!(
+        ReferencedInputs::discover("game_data.yaml", yaml)
+            .unwrap()
+            .overrides,
+        ["a.ptch", "b.ptch", "c.ptch"]
+    );
+    let source = r#"{"version":1,"overrides":["d.ptch"],"edits":[{"overrides":["e.ptch"]}]}"#;
+    assert_eq!(
+        ReferencedInputs::discover("source.json", source).unwrap(),
+        ReferencedInputs {
+            sources: vec![],
+            overrides: vec!["d.ptch".into(), "e.ptch".into()],
+        }
+    );
+}
+
+#[test]
+fn a_written_manifest_loads_to_the_same_declarations() {
+    let declarations = load_declarations(
+        "game_data.json",
+        r#"{"version":1,"modules":[
+            {"target":"shared","edits":[{"overrides":["a.ptch"],"+links":["x"],"-links":["y"]},{"links":[]}]},
+            {"entries":{"Characters/A":{"links":["s"]},"0x0000abcd":{"-links":["t"]}}},
+            {"target":"0123456789ABCDEF","overrides":["b.ptch"]}
+        ]}"#,
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let manifest = declarations.manifest_json().unwrap();
+    assert_eq!(
+        manifest,
+        r#"{
+  "version": 1,
+  "modules": [
+    {
+      "target": "shared",
+      "edits": [
+        {
+          "overrides": [
+            "a.ptch"
+          ],
+          "links": [
+            "x"
+          ],
+          "-links": [
+            "y"
+          ]
+        },
+        {
+          "links": []
+        }
+      ]
+    },
+    {
+      "entries": {
+        "Characters/A": {
+          "links": [
+            "s"
+          ]
+        },
+        "0x0000abcd": {
+          "links": [],
+          "-links": [
+            "t"
+          ]
+        }
+      }
+    },
+    {
+      "target": "0123456789ABCDEF",
+      "edits": [
+        {
+          "overrides": [
+            "b.ptch"
+          ],
+          "links": []
+        }
+      ]
+    }
+  ]
+}"#
+    );
+    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    assert_eq!(reloaded, declarations);
 }

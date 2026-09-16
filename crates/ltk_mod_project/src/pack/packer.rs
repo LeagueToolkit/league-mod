@@ -286,8 +286,10 @@ impl ProjectPacker {
                 crate::game_data::load_layer(&self.project_root, &layer.name, ignore);
             let mut files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
             files.retain(|file| !declarations.is_declaration_input(file.source()));
+            let override_files = declarations.override_files().to_vec();
             let declarations = declarations.declarations?;
-            planned.push(PlannedLayer::new(layer, files).with_game_data(declarations));
+            planned
+                .push(PlannedLayer::new(layer, files).with_game_data(declarations, override_files));
         }
 
         progress.set_total(planned.iter().map(|layer| layer.files().len() as u32).sum());

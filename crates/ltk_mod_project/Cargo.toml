@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 serde_json = { workspace = true }
 ltk_hashtable = { workspace = true }
+ltk_meta = { workspace = true }
 
 # Optional: packing backends, one cargo feature per format
 ltk_modpkg = { workspace = true, optional = true }

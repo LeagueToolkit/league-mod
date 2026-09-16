@@ -231,6 +231,14 @@ pub enum ModContentError {
     #[error("the modpkg format has no raw overrides")]
     ModpkgRawUnsupported,
 
+    /// The provider carries no game-data override files.
+    #[error("the content provider has no game-data override files")]
+    GameDataResourceUnsupported,
+
+    /// A layer's declarations name an override file the provider does not hold.
+    #[error("override file {path} of layer '{layer}' is not in the mod content")]
+    GameDataResourceMissing { layer: String, path: String },
+
     /// A mod's string overrides produced a table that will not serialize.
     #[error("the '{locale}' string overrides produced a stringtable that cannot be written")]
     StringOverrideUnencodable {
@@ -238,6 +246,17 @@ pub enum ModContentError {
         #[source]
         source: ltk_rst::RstError,
     },
+}
+
+impl ModContentError {
+    /// The error for an override file at `path` that `layer` does not hold.
+    pub fn game_data_resource_missing(layer: &str, path: &str) -> Error {
+        Self::GameDataResourceMissing {
+            layer: layer.to_owned(),
+            path: path.to_owned(),
+        }
+        .into()
+    }
 }
 
 /// A limit of the WAD v3.4 format the output would have exceeded.

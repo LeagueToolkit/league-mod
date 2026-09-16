@@ -3,6 +3,8 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_hashtable::{Hashtable, HashtableEntry};
 
+use crate::game_data::OverrideFile;
+
 use crate::{ModProject, ModProjectLayer};
 
 /// Everything a `PackFormat` needs to write an archive: the project's
@@ -102,6 +104,7 @@ pub struct PlannedLayer {
     layer: ModProjectLayer,
     files: Vec<PlannedFile>,
     game_data: Option<ltk_game_data::DeclarationDocument>,
+    override_files: Vec<OverrideFile>,
 }
 
 impl PlannedLayer {
@@ -110,20 +113,29 @@ impl PlannedLayer {
             layer,
             files,
             game_data: None,
+            override_files: Vec::new(),
         }
     }
 
     pub(crate) fn with_game_data(
         mut self,
         declarations: Option<ltk_game_data::Declarations>,
+        override_files: Vec<OverrideFile>,
     ) -> Self {
         self.game_data = declarations.map(Into::into);
+        self.override_files = override_files;
         self
     }
 
     /// The layer declarations, with sources expanded.
     pub fn game_data(&self) -> Option<&ltk_game_data::DeclarationDocument> {
         self.game_data.as_ref()
+    }
+
+    /// The override files the layer's declarations name, each at its
+    /// layer-relative path. Build resources, not content.
+    pub fn override_files(&self) -> &[OverrideFile] {
+        &self.override_files
     }
 
     /// The layer's configuration. For an unconfigured base layer this is the

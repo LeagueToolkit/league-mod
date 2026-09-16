@@ -55,5 +55,6 @@ memmap2 = "0.9"
 rayon = { workspace = true }
 
 [dev-dependencies]
+ltk_meta = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

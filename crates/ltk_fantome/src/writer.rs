@@ -154,6 +154,23 @@ impl<W: Write + Seek> FantomeWriter<W> {
         Ok(())
     }
 
+    /// Write one override file as `META/game_data/{layer}/{path}`.
+    ///
+    /// `path` is the file's layer-relative path with `/` separators, the
+    /// spelling the layer's game-data declarations name it by.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry cannot be written.
+    pub fn write_game_data_resource(
+        &mut self,
+        layer: &str,
+        path: &str,
+        content: &mut impl Read,
+    ) -> Result<(), FantomeWriteError> {
+        self.write_entry(&crate::reader::game_data_entry_name(layer, path), content)
+    }
+
     /// Write the mod's thumbnail as `META/image.png`.
     ///
     /// The bytes must already be PNG-encoded; the format stores no other

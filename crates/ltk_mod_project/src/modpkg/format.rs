@@ -224,6 +224,25 @@ impl<W: Write + Seek> ModpkgFormat<W> {
                 }
                 builder = builder.with_chunk(cb);
             }
+            // Override files: a chunk of the layer with no WAD, at the
+            // layer-relative path the declarations name (ADR-0013).
+            for override_file in planned.override_files() {
+                let cb = ModpkgChunkBuilder::new()
+                    .with_path(override_file.path.as_str())
+                    .with_compression(ModpkgCompression::for_extension(
+                        override_file.source.extension(),
+                    ))
+                    .with_layer(layer_name);
+                if let Some(first) = file_map.insert(cb.full_key(), override_file.source.clone()) {
+                    return Err(ModpkgPackError::DuplicateChunkPath {
+                        rel_path: override_file.path.as_str().to_string(),
+                        layer: layer_name.to_string(),
+                        first,
+                        second: override_file.source.clone(),
+                    });
+                }
+                builder = builder.with_chunk(cb);
+            }
         }
 
         // Meta chunks

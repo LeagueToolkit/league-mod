@@ -14,6 +14,6 @@ serde-saphyr = { version = "1.2", default-features = false, features = ["deseria
 toml = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 ltk_meta = { workspace = true }
-ltk_hash = { workspace = true }
+ltk_hash = { workspace = true, features = ["serde"] }
 indexmap = { workspace = true }
 xxhash-rust = { workspace = true }

@@ -262,6 +262,9 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         }
 
         write_hashtables(output_dir, &table_routes, &declared_tables)?;
+        reader
+            .extract_game_data(&target.content_dir())
+            .map_err(import_error)?;
         for (name, layer) in declarations {
             if let Some(document) = layer.game_data {
                 let name = if layer.name.is_empty() {

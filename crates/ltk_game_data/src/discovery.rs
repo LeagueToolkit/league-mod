@@ -1,11 +1,11 @@
-//! Structural discovery retains duplicate keys in refused authoring documents.
+//! Structural discovery retains duplicate keys in refused manifest and source files.
 
 use serde::{
     Deserialize, Deserializer,
     de::{MapAccess, SeqAccess, Visitor},
 };
 
-pub(super) enum Node {
+pub(crate) enum Node {
     Map(Vec<(Node, Node)>),
     Sequence(Vec<Node>),
     Text(String),
@@ -23,7 +23,46 @@ impl Node {
         })
     }
 
-    pub(super) fn sources(&self) -> Vec<String> {
+    /// The text items of every `overrides` list of a body: the compact body's own and each
+    /// edit's under the `edits` key.
+    fn body_overrides(&self, paths: &mut Vec<String>) {
+        self.texts("overrides", paths);
+        for edits in self.fields("edits") {
+            if let Self::Sequence(edits) = edits {
+                for edit in edits {
+                    edit.texts("overrides", paths);
+                }
+            }
+        }
+    }
+
+    /// The text items of every list under `name`, appended to `paths`.
+    fn texts(&self, name: &str, paths: &mut Vec<String>) {
+        for list in self.fields(name) {
+            if let Self::Sequence(items) = list {
+                paths.extend(items.iter().filter_map(|item| match item {
+                    Self::Text(path) => Some(path.clone()),
+                    _ => None,
+                }));
+            }
+        }
+    }
+
+    /// Every override path of a manifest or source file, as spelled, in document order.
+    pub(crate) fn overrides(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        self.body_overrides(&mut paths);
+        for modules in self.fields("modules") {
+            if let Self::Sequence(modules) = modules {
+                for module in modules {
+                    module.body_overrides(&mut paths);
+                }
+            }
+        }
+        paths
+    }
+
+    pub(crate) fn sources(&self) -> Vec<String> {
         let mut paths = Vec::new();
         for modules in self.fields("modules") {
             if let Self::Sequence(modules) = modules {

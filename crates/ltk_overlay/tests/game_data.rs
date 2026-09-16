@@ -153,7 +153,7 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
         let declarations = ltk_game_data::load_declarations(
             "game_data.json",
             &r#"{"version":1,"modules":[
-            {"target":"TARGET","steps":[{"-links":["Absent"]},{"links":["Added"]}]},
+            {"target":"TARGET","edits":[{"-links":["Absent"]},{"links":["Added"]}]},
             {"target":"missing","links":["Added"]},
             {"target":"invalid","links":["Added"]}
         ]}"#
@@ -311,7 +311,7 @@ fn linked_dependencies_use_literal_game_paths() {
 }
 
 #[test]
-fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
+fn layer_and_mod_order_apply_edits_and_directory_edits_invalidate_output() {
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     let game = root.join("game");
@@ -351,7 +351,7 @@ fn layer_and_mod_order_apply_steps_and_directory_edits_invalidate_output() {
     .unwrap();
     fs::create_dir_all(path.join("content/extras")).unwrap();
     fs::create_dir_all(path.join("content/disabled")).unwrap();
-    fs::write(path.join("content/extras/game_data.json"), r#"{"version":1,"modules":[{"target":"shared","steps":[{"-links":["base"],"links":["first"]},{"links":["second"]}]},{"target":"shared","-links":["first"]}]}"#).unwrap();
+    fs::write(path.join("content/extras/game_data.json"), r#"{"version":1,"modules":[{"target":"shared","edits":[{"-links":["base"],"links":["first"]},{"links":["second"]}]},{"target":"shared","-links":["first"]}]}"#).unwrap();
     fs::write(
         path.join("content/disabled/game_data.json"),
         "invalid ignored layer",
@@ -586,4 +586,305 @@ fn a_called_off_build_ends_without_writing_state() {
     );
     assert!(!state.join("object_index.bin").exists());
     assert!(!state.join("overlay.json").exists());
+}
+
+/// A PROP v3 with the dependency `shared` and one object `1` of class `2` whose `speed` is 1.0.
+fn speed_bin() -> Vec<u8> {
+    use ltk_meta::concrete::{Bin, BinObject, values};
+    let bin = Bin::builder()
+        .dependency("shared")
+        .object(
+            BinObject::builder(1u32, 2u32)
+                .property(ltk_game_data::BinHash::from("speed"), values::F32::new(1.0))
+                .build(),
+        )
+        .build();
+    let mut cursor = Cursor::new(Vec::new());
+    bin.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+/// A PTCH setting `speed` to 2.0 on object `1` and on the absent object `9`.
+fn speed_ptch() -> Vec<u8> {
+    speed_ptch_with(&[1, 9])
+}
+
+/// A PTCH setting `speed` to 2.0 on each of `objects`.
+fn speed_ptch_with(objects: &[u32]) -> Vec<u8> {
+    use ltk_meta::{concrete::values, path::PropertyPath};
+    let mut patch = ltk_meta::concrete::BinOverride::builder();
+    for &object in objects {
+        patch = patch.set(
+            object,
+            PropertyPath::new("speed").unwrap(),
+            values::F32::new(2.0),
+        );
+    }
+    let patch = patch.build();
+    let mut cursor = Cursor::new(Vec::new());
+    patch.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+/// The `speed` of object `1` and the dependencies of a PROP.
+fn speed_and_links(bytes: &[u8]) -> (f32, Vec<String>) {
+    use ltk_meta::{concrete::Bin, path::PropertyPath};
+    let bin = Bin::from_reader(&mut Cursor::new(bytes)).unwrap();
+    let speed = match bin.objects[&ltk_game_data::BinHash(1)]
+        .resolve(&PropertyPath::new("speed").unwrap())
+    {
+        Ok(ltk_meta::PropertyValueEnum::F32(value)) => value.value,
+        other => panic!("unexpected speed: {other:?}"),
+    };
+    (speed, bin.dependencies)
+}
+
+fn skipped_record() -> ltk_game_data::SkippedRecord {
+    ltk_game_data::SkippedRecord {
+        index: 1,
+        object: ltk_game_data::BinHash(9),
+        property: "speed".into(),
+        reason: ltk_game_data::RecordSkipReason::MissingObject,
+    }
+}
+
+#[test]
+fn declared_overrides_rewrite_game_bins_and_report_skipped_records() {
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"target":"shared","source":"patches/skin.yaml"}]}"#),
+    );
+    let layer = root.join("top/content/base");
+    fs::create_dir_all(layer.join("patches")).unwrap();
+    fs::write(
+        layer.join("patches/skin.yaml"),
+        "version: 1\nedits:\n  - overrides: [../speed.ptch]\n    links: [Added]\n  - links: [Later]\n",
+    )
+    .unwrap();
+    fs::write(layer.join("speed.ptch"), speed_ptch()).unwrap();
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+    assert_eq!(
+        speed_and_links(&chunk(&overlay.join(WAD), "shared")),
+        (
+            2.0,
+            vec!["shared".to_owned(), "Added".into(), "Later".into()]
+        )
+    );
+    assert_eq!(
+        result.game_data_diagnostics.len(),
+        1,
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    let skipped = &result.game_data_diagnostics[0];
+    assert_eq!(skipped.kind, GameDataDiagnosticKind::OverrideRecordSkipped);
+    assert_eq!(skipped.chunk, Some(common::hash("shared")));
+    assert_eq!(skipped.edit_index, Some(0));
+    assert_eq!(skipped.record, Some(skipped_record()));
+    assert_eq!(
+        skipped
+            .origin
+            .as_ref()
+            .map(|origin| origin.source.as_deref()),
+        Some(Some("patches/skin.yaml"))
+    );
+    // The declared override file is a build resource, never WAD content.
+    assert!(
+        !overlay.join(WAD).exists() || {
+            let wad = Wad::mount(Cursor::new(fs::read(overlay.join(WAD)).unwrap())).unwrap();
+            wad.chunks().get(common::hash("speed.ptch")).is_none()
+        }
+    );
+}
+
+#[test]
+fn a_clean_override_sets_the_property_and_reports_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"target":"shared","overrides":["speed.ptch"]}]}"#),
+    );
+    fs::write(
+        root.join("top/content/base/speed.ptch"),
+        speed_ptch_with(&[1]),
+    )
+    .unwrap();
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+    assert!(
+        result.game_data_diagnostics.is_empty(),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    assert_eq!(
+        speed_and_links(&chunk(&overlay.join(WAD), "shared")),
+        (2.0, vec!["shared".to_owned()])
+    );
+}
+
+#[test]
+fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
+    use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
+    use ltk_modpkg::{
+        Modpkg, ModpkgLayerMetadata, ModpkgMetadata,
+        builder::{ModpkgBuilder, ModpkgChunkBuilder, ModpkgLayerBuilder},
+    };
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    use ltk_overlay::{FantomeContent, ModContentProvider, ModpkgContent};
+    for format in ["modpkg", "fantome"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let game = root.join("game");
+        let overlay = root.join("overlay");
+        let state = root.join("state");
+        common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+        let declarations = ltk_game_data::load_declarations(
+            "game_data.json",
+            r#"{"version":1,"modules":[{"target":"shared","overrides":["patches/speed.ptch","prop.ptch","missing.ptch"],"links":["Added"]}]}"#,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let mut archive = Cursor::new(Vec::new());
+        if format == "modpkg" {
+            ModpkgBuilder::default()
+                .with_layer(ModpkgLayerBuilder::base())
+                .with_chunk(
+                    ModpkgChunkBuilder::new()
+                        .with_path("patches/speed.ptch")
+                        .with_layer("base"),
+                )
+                .with_chunk(
+                    ModpkgChunkBuilder::new()
+                        .with_path("prop.ptch")
+                        .with_layer("base"),
+                )
+                .with_metadata(ModpkgMetadata {
+                    name: "overrides".into(),
+                    layers: vec![ModpkgLayerMetadata {
+                        name: "base".into(),
+                        priority: 0,
+                        display_name: None,
+                        description: None,
+                        string_overrides: Default::default(),
+                        game_data: Some(declarations.into()),
+                    }],
+                    ..Default::default()
+                })
+                .build_to_writer(&mut archive, |chunk| {
+                    Ok(match chunk.path() {
+                        "patches/speed.ptch" => speed_ptch(),
+                        _ => speed_bin(),
+                    })
+                })
+                .unwrap();
+        } else {
+            let mut writer = FantomeWriter::new(&mut archive);
+            writer
+                .write_info(&FantomeInfo {
+                    name: "overrides".into(),
+                    layers: [(
+                        "base".into(),
+                        FantomeLayerInfo {
+                            name: "base".into(),
+                            game_data: Some(declarations.into()),
+                            ..Default::default()
+                        },
+                    )]
+                    .into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            writer
+                .write_game_data_resource(
+                    "base",
+                    "patches/speed.ptch",
+                    &mut speed_ptch().as_slice(),
+                )
+                .unwrap();
+            writer
+                .write_game_data_resource("base", "prop.ptch", &mut speed_bin().as_slice())
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let archive_path = root.join(format!("mod.{format}"));
+        fs::write(&archive_path, archive.get_ref()).unwrap();
+        archive.set_position(0);
+        let content: Box<dyn ModContentProvider> = if format == "modpkg" {
+            Box::new(
+                ModpkgContent::new(Modpkg::mount_from_reader(archive).unwrap())
+                    .with_archive_path(archive_path),
+            )
+        } else {
+            Box::new(
+                FantomeContent::new(archive)
+                    .unwrap()
+                    .with_archive_path(archive_path),
+            )
+        };
+        let mut builder = OverlayBuilder::new(game, overlay.clone(), state.clone());
+        builder.set_enabled_mods(vec![EnabledMod {
+            id: "mod".into(),
+            content,
+            enabled_layers: None,
+        }]);
+        let first = builder.build().unwrap();
+        assert_eq!(
+            speed_and_links(&chunk(&overlay.join(WAD), "shared")),
+            (2.0, vec!["shared".to_owned(), "Added".into()]),
+            "{format}"
+        );
+        let reports = first.game_data_diagnostics;
+        let kinds: Vec<_> = reports
+            .iter()
+            .map(|d| (d.kind, d.edit_index, d.record.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (
+                    GameDataDiagnosticKind::OverrideRecordSkipped,
+                    Some(0),
+                    Some(skipped_record())
+                ),
+                (GameDataDiagnosticKind::OverrideInvalid, Some(0), None),
+                (GameDataDiagnosticKind::OverrideUnreadable, Some(0), None),
+            ],
+            "{format}"
+        );
+        assert!(
+            reports
+                .iter()
+                .all(|d| d.chunk == Some(common::hash("shared")))
+        );
+        let cached = builder.build().unwrap();
+        assert!(cached.wads_built.is_empty(), "{format}");
+        assert_eq!(cached.game_data_diagnostics, reports, "{format}");
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(state.join("overlay.json")).unwrap()).unwrap();
+        assert_eq!(
+            saved["gameDataReports"][0]["record"]["reason"], "missingObject",
+            "{format}"
+        );
+        assert!(
+            saved["gameDataReports"][1].get("record").is_none(),
+            "{format}"
+        );
+    }
 }

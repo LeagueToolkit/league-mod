@@ -410,6 +410,27 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             .map(|document| document.parse())
             .transpose()
     }
+
+    fn read_game_data_resource(&mut self, layer: &str, path: &str) -> Result<Vec<u8>> {
+        // `META/game_data/{layer}/{path}`, matched case-insensitively like
+        // every `META/` entry.
+        let want = ltk_fantome::game_data_entry_name(layer, path);
+        let zip_path = self
+            .archive
+            .file_names()
+            .find(|name| name.eq_ignore_ascii_case(&want))
+            .map(str::to_owned);
+        let Some(zip_path) = zip_path else {
+            return Err(ModContentError::game_data_resource_missing(layer, path));
+        };
+        let mut entry = self
+            .archive
+            .by_name(&zip_path)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+        read_zip_entry_bytes(&mut entry)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))
+    }
+
     fn mod_project(&mut self) -> Result<ModProject> {
         let info_name = self
             .index
