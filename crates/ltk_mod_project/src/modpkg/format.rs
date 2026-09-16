@@ -387,6 +387,7 @@ impl TryFrom<&PackPlan<'_>> for ModpkgMetadata {
             // declares each table, so declaration and stored chunk cannot
             // disagree.
             hashtables: vec![],
+            generator: Some(crate::pack::GENERATOR.to_owned()),
         })
     }
 }

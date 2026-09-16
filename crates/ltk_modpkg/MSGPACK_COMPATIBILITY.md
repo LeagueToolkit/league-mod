@@ -55,7 +55,7 @@ pub enum ModpkgLicense {
 ### MessagePack Encoding Details
 
 **Structs** are encoded as **MessagePack maps** (named fields):
-- `ModpkgMetadata` → Map with keys: `{"schema_version": ..., "name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ...}`
+- `ModpkgMetadata` → Map with keys: `{"schema_version": ..., "name": ..., "display_name": ..., "description": ..., "version": ..., "distributor": ..., "authors": ..., "license": ..., "layers": ..., "generator": ...}`
 - `DistributorInfo` → Map with keys: `{"site_id": ..., "site_name": ..., "site_url": ..., "mod_id": ...}`
 - `ModpkgAuthor` → Map with keys: `{"name": ..., "role": ...}`
 - Field names use `snake_case`

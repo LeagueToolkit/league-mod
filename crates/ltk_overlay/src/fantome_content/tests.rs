@@ -116,6 +116,7 @@ fn make_info_json_with_license(
         maps: Vec::new(),
         layers: std::collections::HashMap::new(),
         hashtables: Vec::new(),
+        generator: None,
         extra: Default::default(),
     })
     .unwrap()
@@ -181,6 +182,7 @@ fn mod_project_handles_bom() {
             maps: Vec::new(),
             layers: std::collections::HashMap::new(),
             hashtables: Vec::new(),
+            generator: None,
             extra: Default::default(),
         })
         .unwrap()

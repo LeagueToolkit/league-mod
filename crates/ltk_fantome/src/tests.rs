@@ -12,6 +12,7 @@ fn info_json(license: Option<FantomeLicense>) -> serde_json::Value {
         maps: vec![],
         layers: HashMap::new(),
         hashtables: vec![],
+        generator: None,
         extra: Default::default(),
     };
     serde_json::to_value(&info).unwrap()

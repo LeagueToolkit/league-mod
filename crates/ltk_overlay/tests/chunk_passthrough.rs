@@ -101,6 +101,7 @@ fn fantome_with_packed_wad(packed_wad: Vec<u8>) -> Cursor<Vec<u8>> {
         maps: Vec::new(),
         layers: std::collections::HashMap::new(),
         hashtables: Vec::new(),
+        generator: None,
         extra: Default::default(),
     })
     .expect("fantome info serializes");

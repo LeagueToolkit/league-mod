@@ -53,6 +53,7 @@ impl From<&ModProject> for FantomeInfo {
             // what they declare, so the entries and the manifest cannot
             // disagree.
             hashtables: vec![],
+            generator: Some(crate::pack::GENERATOR.to_owned()),
             extra: Default::default(),
         }
     }

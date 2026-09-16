@@ -289,6 +289,22 @@ fn pack_preserves_metadata() {
 }
 
 #[test]
+fn pack_names_this_crate_as_the_generator() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let (mut modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
+    let meta = modpkg.load_metadata().unwrap();
+
+    assert_eq!(meta.schema_version, ltk_modpkg::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        meta.generator(),
+        Some(concat!("ltk_mod_project ", env!("CARGO_PKG_VERSION")))
+    );
+}
+
+#[test]
 fn pack_rejects_a_non_semver_version() {
     let tmp = tempfile::tempdir().unwrap();
     let root = utf8_tempdir(&tmp);

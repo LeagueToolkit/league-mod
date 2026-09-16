@@ -108,6 +108,13 @@ pub struct FantomeInfo {
     /// tables serializes byte-identically to one written before this field.
     #[serde(rename = "Hashtables", default, skip_serializing_if = "Vec::is_empty")]
     pub hashtables: Vec<FantomeHashtable>,
+    /// The tool that wrote the archive: its name, one space, its version.
+    ///
+    /// A LeagueToolkit extension, `ltk_mod_project 0.9.2`. Free text,
+    /// informational: a reader may display it and never varies its behaviour
+    /// on it. Omitted when unset.
+    #[serde(rename = "Generator", default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<String>,
     /// Fields this crate does not know, carried verbatim.
     ///
     /// `info.json` is shared ground: other tools extend it, and the archive

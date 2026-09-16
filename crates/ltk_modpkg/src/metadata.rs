@@ -208,6 +208,22 @@ pub struct ModpkgMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(test, proptest(strategy = "hashtables_strategy()"))]
     pub hashtables: Vec<ModpkgHashtable>,
+
+    /// The tool that wrote the package: its name, one space, its version
+    /// (schema version 5).
+    ///
+    /// Free text, informational: `ltk_mod_project 0.9.2`. A reader may
+    /// display the value and never varies its behaviour on it. Absent from
+    /// packages written before schema v5, and omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, proptest(strategy = "generator_strategy()"))]
+    pub generator: Option<String>,
+}
+
+/// Proptest strategy for [`ModpkgMetadata::generator`].
+#[cfg(test)]
+fn generator_strategy() -> impl proptest::strategy::Strategy<Value = Option<String>> {
+    proptest::option::of("[a-z_]{1,20} [0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}")
 }
 
 /// Proptest strategy for [`ModpkgMetadata::hashtables`].
@@ -242,12 +258,13 @@ impl Default for ModpkgMetadata {
             maps: Vec::new(),
             layers: Vec::new(),
             hashtables: Vec::new(),
+            generator: None,
         }
     }
 }
 
 /// Current metadata schema version.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 fn default_schema_version() -> u32 {
     CURRENT_SCHEMA_VERSION
@@ -332,6 +349,11 @@ impl ModpkgMetadata {
     pub fn hashtables(&self) -> &[ModpkgHashtable] {
         &self.hashtables
     }
+
+    /// Get the tool that wrote the package, if it named itself.
+    pub fn generator(&self) -> Option<&str> {
+        self.generator.as_deref()
+    }
 }
 
 /// The author of a mod package.
@@ -410,6 +432,7 @@ mod tests {
             maps: vec![],
             layers: vec![],
             hashtables: vec![],
+            generator: None,
         };
         let mut cursor = Cursor::new(Vec::new());
         metadata.write(&mut cursor).unwrap();
@@ -446,6 +469,7 @@ mod tests {
             maps: vec![],
             layers: vec![],
             hashtables: vec![],
+            generator: None,
         };
 
         let encoded = rmp_serde::to_vec_named(&metadata).unwrap();
@@ -653,6 +677,7 @@ mod tests {
                 string_overrides: IndexMap::new(),
             }],
             hashtables: vec![],
+            generator: None,
         };
 
         let mut cursor = Cursor::new(Vec::new());
@@ -709,6 +734,7 @@ mod tests {
                 },
             ],
             hashtables: vec![],
+            generator: None,
         };
 
         let mut cursor = Cursor::new(Vec::new());
@@ -727,5 +753,27 @@ mod tests {
                 .and_then(|m| m.get("game_stat_name")),
             Some(&"Custom Stat".to_string())
         );
+    }
+
+    #[test]
+    fn a_generator_round_trips_and_an_absent_one_reads_as_none() {
+        let named = ModpkgMetadata {
+            generator: Some("ltk_mod_project 0.9.2".to_string()),
+            ..ModpkgMetadata::default()
+        };
+        let mut cursor = Cursor::new(Vec::new());
+        named.write(&mut cursor).unwrap();
+        cursor.set_position(0);
+        assert_eq!(
+            ModpkgMetadata::read(&mut cursor).unwrap().generator(),
+            Some("ltk_mod_project 0.9.2")
+        );
+
+        let unnamed = ModpkgMetadata::default();
+        let mut cursor = Cursor::new(Vec::new());
+        unnamed.write(&mut cursor).unwrap();
+        assert!(!cursor.get_ref().windows(9).any(|w| w == b"generator"));
+        cursor.set_position(0);
+        assert_eq!(ModpkgMetadata::read(&mut cursor).unwrap().generator(), None);
     }
 }
