@@ -44,7 +44,8 @@ impl Sign {
 /// One signed property path with its value.
 ///
 /// The path is Riot's property path; the sign is not part of it. The value is the literal as
-/// spelled; a mapping on a struct-typed property descends into it at apply time.
+/// spelled. A one-key mapping keyed by a type name is a pin on every property; any other
+/// mapping on a struct-typed property descends into it at apply time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyEdit {
     /// The property path, without the sign.

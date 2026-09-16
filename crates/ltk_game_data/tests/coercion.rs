@@ -426,7 +426,7 @@ fn every_coercion_row_passes_and_every_reason_fails() {
         ("ptr: {}", "ptr", Reason::NullPointer),
         ("opt: {}", "opt", Reason::KindMismatch),
         ("mesh2: {texture: q}", "mesh2", Reason::KindMismatch),
-        ("mesh2: !string q", "mesh2", Reason::KindMismatch),
+        ("mesh2: !string q", "mesh2", Reason::PinMismatch),
         ("+names: [x]", "+names", Reason::TypeMismatch),
         ("-names: [n]", "-names", Reason::TypeMismatch),
         ("ptr: !pointer {class: Nope}", "ptr", Reason::UnknownClass),
@@ -441,6 +441,14 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             Reason::InvalidPath,
         ),
         ("mesh: !embed {class: C}", "mesh", Reason::PinMismatch),
+        ("mesh: !hash x", "mesh", Reason::PinMismatch),
+        ("mesh: {hash: x}", "mesh", Reason::PinMismatch),
+        ("mesh: {string: x}", "mesh", Reason::PinMismatch),
+        (
+            "ptr: !pointer {class: E, set: {texture: {hash: x}}}",
+            "ptr",
+            Reason::PinMismatch,
+        ),
         ("mesh: !pointer {class: E}", "mesh", Reason::PinMismatch),
         ("count.x: 1", "count.x", Reason::CannotDescend),
         ("tags[5]: a", "tags[5]", Reason::IndexOutOfRange),
@@ -588,8 +596,11 @@ fn blocks_merge_field_by_field_and_report_joined_paths() {
         ]
     );
 
-    // A one-key mapping on a struct with a type name that is not `pointer` or `embed` descends.
+    // A one-key mapping keyed by a type name is a pin on a struct too; the dotted path reaches
+    // a field with a type's name.
     let output = run(&manifest("mesh: {string: 1}\n"), &schema);
+    assert_eq!(skips(&output), [("mesh", Reason::PinMismatch)]);
+    let output = run(&manifest("mesh.string: 1\n"), &schema);
     assert_eq!(skips(&output), [("mesh.string", Reason::Untypable)]);
 }
 

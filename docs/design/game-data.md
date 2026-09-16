@@ -238,11 +238,14 @@ the name is spelled as a hash.
 Loading checks the structure of every value. A one-key mapping keyed `pointer` or `embed`,
 anywhere in a value, is a struct pin: its value is null or the empty mapping (`pointer`
 only, the null pointer), or a mapping whose keys are `class`, a string, and `set`, a mapping,
-with at least one of the two; any other shape is an error. Every other mapping is read at apply time by the property's type
-([section 6](#s6)). A mapping on a struct property descends into it (block nesting): each key
-of the mapping is itself a signed property path relative to the struct, in any format; the
-dotted form `a.b: 1` and the block form `a: {b: 1}` are one edit. An index stays a path
-segment, `bankUnits[0]: {...}`.
+with at least one of the two; any other shape is an error. A one-key mapping keyed by any
+other type name is a type pin on every property ([ADR-0019](../adr/0019-uniform-type-pins.md)).
+Every other mapping is read at apply time by the property's type ([section 6](#s6)). A mapping
+that is not a pin on a struct property descends into it (block nesting): each key of the
+mapping is itself a signed property path relative to the struct, in any format; the dotted
+form `a.b: 1` and the block form `a: {b: 1}` are one edit. A block whose only key is a type
+name is a pin; the dotted form `a.hash: 1` reaches a field with a type's name. An index stays
+a path segment, `bankUnits[0]: {...}`.
 
 Source files require their own version and a compact body or `edits`. Sources have no target
 or recursive includes. Source paths remain within the layer through symlink resolution.
@@ -347,7 +350,7 @@ object bytes and PROP version; application replaces only the dependency header.
 absent object skips every edit of the entry with `MissingObject`. The entry's property edits
 lower to leaf edits ([ADR-0017](../adr/0017-per-key-patch-lowering.md)): an edit whose
 property is a `pointer` or `embed` in the base and whose value is a mapping that is not a
-struct pin descends, each key a signed path relative to the struct, joined to the outer path;
+type pin descends, each key a signed path relative to the struct, joined to the outer path;
 a null pointer in the base is `NullPointer`. Leaf edits are grouped by path in first-occurrence
 order. Per path: the set value, coerced, replaces the base value; the removals then the
 additions apply to the result; one `Bin::patch` sets the property. A property the object
@@ -384,14 +387,15 @@ field name of the pinned class typed by the schema; a nested struct is a nested 
 | list | `vec2`, `vec3`, `vec4`, `mtx44` | Exactly 2, 3, 4, or 16 numbers to `f32`, else `ArityMismatch` |
 | list | `rgba` | Exactly 4 integers from 0 to 255, else `ArityMismatch` or `OutOfRange` |
 | mapping | `map` | Each key, a string, to the key kind by the string rules; each value to the value kind |
-| mapping | `pointer`, `embed` | A struct pin constructs the struct; any other mapping descends ([section 4](#s4)) |
+| mapping | `pointer`, `embed` | A struct pin constructs the struct; a pin of any other type name is `PinMismatch`; any other mapping descends ([section 4](#s4)) |
 | `{}` | `pointer`, `option` | Inside a struct pin or an `option` pin only, the null pointer or the empty option |
 
 A type pin on a value fixes the shape: a pin whose type name is not the property's kind is
 `PinMismatch`, and the pinned value coerces by the row of that kind. On a list, an option, or
-a map, signed or not, a pin names the item kind. A pin on a map value pins its values. A one-key mapping on a `pointer`
-or `embed` property whose key is a type name other than `pointer` or `embed` descends. An
-`option` pin wraps one bare or pinned value, or null.
+a map, signed or not, a pin names the item kind. A pin on a map value pins its values. A pin is read by one rule on every property kind,
+including a field inside a struct pin's `set`
+([ADR-0019](../adr/0019-uniform-type-pins.md)). An `option` pin wraps one bare or pinned
+value, or null.
 
 **Additions and removals.** `+` on a list appends each element, coerced to the item kind, to
 the base's elements; on a map it adds or replaces by key; on a property the base omits it
@@ -499,3 +503,4 @@ through both archives, and an overlay build with a schema and a cached replay of
 | D21 | A skipped property edit is one `PropertyEditSkipped` with a reason code | One kind per condition | The override pattern | [ADR-0018](../adr/0018-property-edit-diagnostics.md) |
 | D22 | An entry name at a body root carries a slash or is hash-form | Any key | The standard's words and the game's never share a mapping | [section 4](#s4) |
 | D23 | A struct pin's `set` keys are single field names | Dotted paths in a `set` | A new struct has no base to descend through | [section 6](#s6) |
+| D24 | A one-key mapping keyed by a type name is a pin on every property kind | A descent on a struct | A tag and the one-key mapping are one value; a pin never turns into a field | [ADR-0019](../adr/0019-uniform-type-pins.md) |

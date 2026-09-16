@@ -42,8 +42,7 @@ impl Coercer<'_> {
                 "pointer" | "embed" if pin == shape.kind => {
                     self.struct_pin(inner, shape.kind, base)
                 }
-                "pointer" | "embed" => Err(Reason::PinMismatch),
-                _ => Err(Reason::KindMismatch),
+                _ => Err(Reason::PinMismatch),
             },
             K::Container | K::UnorderedContainer | K::Map => {
                 if Some(pin) != shape.item {

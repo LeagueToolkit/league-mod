@@ -179,7 +179,7 @@ impl Phase<'_> {
         };
         let key = || format!("{}{}", edit.sign.as_str(), path.as_str());
         if let Value::Mapping(block) = &edit.value
-            && !edit.value.is_struct_pin()
+            && edit.value.pin().is_none()
         {
             let base = self.bin.objects[&hash].resolve(&path).ok();
             match base {

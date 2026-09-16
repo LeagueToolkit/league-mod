@@ -1,6 +1,6 @@
 # ADR-0016: Literal property values
 
-- **Status:** Accepted
+- **Status:** Accepted; the reading of a one-key mapping on a struct property is superseded by ADR-0019
 - **Date:** 2026-09-16
 - **Crates:** `ltk_game_data`
 - **Related:** #190, #191, `docs/design/game-data.md` [section 4](../design/game-data.md#s4)
