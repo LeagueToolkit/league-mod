@@ -17,25 +17,31 @@ is where an end user clicks buttons; everything it does to a mod happens in the 
    mod.config.json         (or .fantome)            + mod.config.json      *.wad.client
 
    ltk_mod_project         ltk_modpkg               ltk_mod_project        ltk_overlay
-   (pack)                  ltk_fantome              (import)               (build)
+   (pack)                  ltk_fantome              (import)               ltk_game_index
+                                                                           ltk_game_data
+                                                                           (build)
 ```
 
 A mod project is a directory of loose files organized by layer and WAD target. Packing turns it
 into one archive. Installing imports that archive back into a project directory in the user's
 library. Enabling a mod rebuilds an overlay: copies of the game's WADs with the mod's chunks
-written into them, which a patcher loads in place of the originals.
+written into them, which a patcher loads in place of the originals. The build reads the game's
+archives through an index of the installation, and applies each layer's game-data declarations
+to the `.bin` files they name.
 
 ## Crates
 
-| Crate                                          | Version                                                                                                       | What it is                                                                                  |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [`ltk_mod_project`](crates/ltk_mod_project)    | [![crates.io](https://img.shields.io/crates/v/ltk_mod_project.svg)](https://crates.io/crates/ltk_mod_project)  | The `mod.config.json` schema, the project layout, and the pack and import drivers            |
-| [`ltk_modpkg`](crates/ltk_modpkg)              | [![crates.io](https://img.shields.io/crates/v/ltk_modpkg.svg)](https://crates.io/crates/ltk_modpkg)            | The `.modpkg` binary container: read, write, extract                                          |
-| [`ltk_fantome`](crates/ltk_fantome)            | [![crates.io](https://img.shields.io/crates/v/ltk_fantome.svg)](https://crates.io/crates/ltk_fantome)          | The legacy `.fantome` archive: read, write, rewrite in place                                  |
-| [`ltk_overlay`](crates/ltk_overlay)            | [![crates.io](https://img.shields.io/crates/v/ltk_overlay.svg)](https://crates.io/crates/ltk_overlay)          | Builds the WAD overlay from the enabled mods, incrementally                                   |
-| [`ltk_hashtable`](crates/ltk_hashtable)        | [![crates.io](https://img.shields.io/crates/v/ltk_hashtable.svg)](https://crates.io/crates/ltk_hashtable)      | The hashtables a mod embeds: file grammar, keys, merging, collision detection                 |
-| [`ltk_mod_core`](crates/ltk_mod_core)          | [![crates.io](https://img.shields.io/crates/v/ltk_mod_core.svg)](https://crates.io/crates/ltk_mod_core)        | League installation detection and cross-platform path helpers                                 |
-| [`league-mod`](crates/league-mod)              | -                                                                                                              | The CLI for mod authors. Deprecated; distributed through GitHub Releases rather than crates.io |
+| Crate                                       | Version                                                                                                       | What it is                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [`ltk_mod_project`](crates/ltk_mod_project) | [![crates.io](https://img.shields.io/crates/v/ltk_mod_project.svg)](https://crates.io/crates/ltk_mod_project) | The `mod.config.json` schema, the project layout, and the pack and import drivers                         |
+| [`ltk_modpkg`](crates/ltk_modpkg)           | [![crates.io](https://img.shields.io/crates/v/ltk_modpkg.svg)](https://crates.io/crates/ltk_modpkg)           | The `.modpkg` binary container: read, write, extract                                                      |
+| [`ltk_fantome`](crates/ltk_fantome)         | [![crates.io](https://img.shields.io/crates/v/ltk_fantome.svg)](https://crates.io/crates/ltk_fantome)         | The legacy `.fantome` archive: read, write, rewrite in place                                              |
+| [`ltk_overlay`](crates/ltk_overlay)         | [![crates.io](https://img.shields.io/crates/v/ltk_overlay.svg)](https://crates.io/crates/ltk_overlay)         | Builds the WAD overlay from the enabled mods, incrementally                                               |
+| [`ltk_hashtable`](crates/ltk_hashtable)     | [![crates.io](https://img.shields.io/crates/v/ltk_hashtable.svg)](https://crates.io/crates/ltk_hashtable)     | The hashtables a mod embeds: file grammar, keys, merging, collision detection                             |
+| [`ltk_game_data`](crates/ltk_game_data)     | [![crates.io](https://img.shields.io/crates/v/ltk_game_data.svg)](https://crates.io/crates/ltk_game_data)     | Game-data declarations: the `game_data.yaml` manifest, its loaders, and their application to `.bin` files |
+| [`ltk_game_index`](crates/ltk_game_index)   | [![crates.io](https://img.shields.io/crates/v/ltk_game_index.svg)](https://crates.io/crates/ltk_game_index)   | An index of a League installation: which archives hold a chunk, which chunks declare a bin object         |
+| [`ltk_mod_core`](crates/ltk_mod_core)       | [![crates.io](https://img.shields.io/crates/v/ltk_mod_core.svg)](https://crates.io/crates/ltk_mod_core)       | League installation detection and cross-platform path helpers                                             |
+| [`league-mod`](crates/league-mod)           | -                                                                                                             | The CLI for mod authors. Deprecated; distributed through GitHub Releases rather than crates.io            |
 
 Each crate's README is the reference for its own surface. `ltk_mod_project`'s covers the config
 schema and the project layout in full.
@@ -55,6 +61,7 @@ my-mod
 |   |-- game.hashes.txt       # declared by the config's hashtables manifest
 |-- content
 |   |-- base                  # the base layer, priority 0, always present
+|   |   |-- game_data.yaml    # optional, declarative edits to game .bin files
 |   |   |-- Aatrox.wad.client # one directory per WAD target
 |   |   |   |-- assets
 |   |   |   |-- data
@@ -90,6 +97,16 @@ A layer is a named, prioritized set of overrides. Every project has `base` at pr
 two layers write the same file, the higher priority wins. A manager can enable a subset of a
 mod's layers, so one package ships a base skin plus optional chromas, high-res textures, or sound
 replacements.
+
+### Game-data declarations
+
+A layer may carry one `game_data.yaml` (`.yml`, `.toml` and `.json` are also accepted) declaring
+edits to the game's `.bin` files without shipping a copy of each file. A module names a target
+chunk and binds `overrides` (`.ptch` files applied over it), `links` to add or remove, and
+property edits on named entries. The overlay build applies the declarations of every enabled layer
+on top of the game's own `.bin`, so a mod that only adds a particle link keeps working when the
+patch changes the rest of the file. Field-by-field reference:
+[wiki.leaguetoolkit.dev](https://wiki.leaguetoolkit.dev/reference/mod-packages/game-data/).
 
 ### Ignoring files
 
@@ -143,8 +160,8 @@ league-mod config auto-detect            # find the League installation
 
 ```toml
 [dependencies]
-ltk_mod_project = { version = "0.9", features = ["modpkg", "fantome"] }
-ltk_overlay = "0.9"
+ltk_mod_project = { version = "0.10", features = ["modpkg", "fantome"] }
+ltk_overlay = "0.10"
 ```
 
 Pack a project:
@@ -220,6 +237,7 @@ cargo fmt
 
 - [wiki.leaguetoolkit.dev](https://wiki.leaguetoolkit.dev) - guides for mod authors
 - Per-crate READMEs, linked from the table above
+- `docs/design/` - API specs, edited in place: `modpkg.md`, `game-data.md`, `game-index.md`
 - `docs/adr/` - architectural decision records, one per decision with real alternatives
 - `docs/overlay-builder-design.md` - the overlay build, its incremental path and its state files
 - `docs/modignore-behavior-notes.md` - `.modignore` edge cases
@@ -230,8 +248,8 @@ Issues and pull requests are welcome. For a large change, open an issue first.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/); release-plz reads the
 type and the `!` marker to pick each crate's version bump. The scope is the crate without its
-`ltk_` prefix (`modpkg`, `fantome`, `overlay`), `cli` for `league-mod`, or the area (`docs`, `ci`,
-`workspace`) for work outside one.
+`ltk_` prefix (`modpkg`, `fantome`, `overlay`, `game_data`, `game_index`), `cli` for
+`league-mod`, or the area (`docs`, `ci`, `workspace`) for work outside one.
 
 ```bash
 git commit -m "feat(overlay): pass through container chunks"
