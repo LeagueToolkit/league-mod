@@ -5,7 +5,8 @@
 Game-data declarations travel from a mod project's layer manifest through archives to the
 overlay builder. The binding syntax follows the [game-data reference](https://wiki.leaguetoolkit.dev/reference/mod-packages/game-data/).
 The supported bindings are `overrides`, `links`, `+links`, `-links`, and entry bodies of
-property edits. Other bindings are errors.
+property edits. Other bindings are errors. A property edit's value is a literal or a reference
+to a value of the installed game.
 
 ## <a id="s2"></a>2. Vocabulary
 
@@ -28,6 +29,9 @@ property edits. Other bindings are errors.
 - **Schema:** The class schema of the installed patch: the shape of each field of each class, reached through the `Schema` trait.
 - **Shape:** A property type: a kind, and for a container or an option its item kind, for a map its key kind and item kind.
 - **Coercion:** The reading of a value as the shape of its property.
+- **Reference:** A one-key mapping keyed `ref` whose value is an entry name, a `:`, and a property path. In YAML a local tag `!ref` on a string is the same reference. It names the value at that path in the installed game's copy of the entry.
+- **Rendering:** The reading of a bin's property value as a `Value`. The inverse of coercion.
+- **Names:** The plaintext a consumer holds for the field, class, entry, file, and hash values a bin carries, reached through the `Names` trait.
 - **Leaf edit:** A property edit with block descent applied: a full path from the entry, a sign, and a value that is not a descent.
 - **Origin:** A manifest, optional source, and zero-based module index.
 - **Target:** A nonempty literal game path or bare chunk hash.
@@ -68,6 +72,7 @@ pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
+    read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
     schema: &dyn Schema,
 ) -> Result<ApplyResult, Error>;
 
@@ -95,6 +100,29 @@ pub struct Shape {
 
 /// The schema that says nothing. Every property is typed from the base.
 pub struct NoSchema;
+
+/// Plaintext for the hashes a rendered value carries (ADR-0020).
+pub trait Names: ltk_meta::path::FieldNames {
+    /// The name of a struct's class.
+    fn class(&self, class: BinHash) -> Option<Cow<'_, str>>;
+    /// The object path a `link` value hashes.
+    fn entry(&self, entry: BinHash) -> Option<Cow<'_, str>>;
+    /// The chunk path a `file` value hashes.
+    fn file(&self, chunk: u64) -> Option<Cow<'_, str>>;
+}
+
+impl Value {
+    /// The literal that coerces back to `value` under the value's own shape.
+    pub fn render(value: &PropertyValueEnum, names: &dyn Names) -> Result<Value, Error>;
+    /// The value as YAML text.
+    pub fn to_yaml(&self) -> String;
+}
+
+/// A value of the installed game, named by entry and path (ADR-0021).
+pub struct Reference {
+    pub entry: EntryName,
+    pub path: PropertyPath,
+}
 ```
 
 `Schema` is implemented for `&S`, `Box<S>`, and `Arc<S>` of any `S: Schema + ?Sized`.
@@ -103,6 +131,15 @@ pub struct NoSchema;
 both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, and
 `Shape::bare(kind)` is the shape with no key and no item. `NoSchema` implements `Schema` with
 `expected` answering `None` and `has_class` answering `true`.
+
+`FieldNames` is `ltk_meta::path::FieldNames`; `BinObject` is `ltk_meta::BinObject`; both are
+re-exported. `Names` is implemented for `()`, which names nothing, and for `&N` of any
+`N: Names + ?Sized`. `Value::render` follows the rendering table ([section 6](#s6)); a struct
+field or a map key with no spelling is an error whose key is the rendered path
+([ADR-0020](../adr/0020-value-rendering.md)). `Value::to_yaml` writes block style, a list whose
+items are scalars in flow style, and quotes a string YAML reads as another type.
+`Reference::parse(text)` splits `text` at its first `:`: the part before is an `EntryName`, the
+part after a `PropertyPath`. `Reference` implements `Display` as the same spelling.
 
 `Error` is a code with a typed place ([ADR-0014](../adr/0014-coded-declaration-errors.md)):
 
@@ -143,7 +180,9 @@ types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each
 result of the preceding one, returns bytes, and leaves its input unchanged. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
 supplies the bytes of an override file by its path in any `AsRef<[u8]>` container; it is
-called once per listed path, in apply order. `dependencies` contains the resulting BIN dependency spellings, including
+called once per listed path, in apply order. `read_entry` supplies the installed game's copy
+of an entry a reference names, and `None` for an entry the game lacks; a caller with no game
+passes `|_| None`. `dependencies` contains the resulting BIN dependency spellings, including
 retained base entries.
 
 ## <a id="s4"></a>4. Authoring
@@ -228,10 +267,12 @@ A key's path is parsed by `PropertyPath::new` and a refused path is an error; th
 part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
 refuses a duplicate key in every format; an integer past the ranges named is what the format's
 parser makes of it, a float. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
-loads as `{f32: 1.0}`; a tag whose name is not a type name is an error. `Value::pin()` is the
-type name of a one-key mapping whose key is a type name, or `None`; `Value::is_struct_pin()`
-is whether that name is `pointer` or `embed`; `Value::check_pins()` is the struct-pin check
-loading runs; `Value` implements `Display` as a JSON-like rendering. `kind_named(name)` and
+loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`; a tag whose name is neither a
+type name nor `ref` is an error. `Value::pin()` is the
+type name of a one-key mapping whose key is a type name, or `None`; `Value::reference()` is the
+text of a one-key mapping keyed `ref`, or `None`; `Value::is_struct_pin()`
+is whether that name is `pointer` or `embed`; `Value::check_pins()` is the struct-pin and
+reference check loading runs; `Value` implements `Display` as a JSON-like rendering. `kind_named(name)` and
 `name_of(kind)` map type names to `PropertyKind` and back. `EntryName::is_hash()` is whether
 the name is spelled as a hash.
 
@@ -240,11 +281,15 @@ anywhere in a value, is a struct pin: its value is null or the empty mapping (`p
 only, the null pointer), or a mapping whose keys are `class`, a string, and `set`, a mapping,
 with at least one of the two; any other shape is an error. A one-key mapping keyed by any
 other type name is a type pin on every property ([ADR-0019](../adr/0019-uniform-type-pins.md)).
+A one-key mapping keyed `ref`, anywhere in a value, is a reference
+([ADR-0021](../adr/0021-game-copy-references.md)): its value is a string `Reference::parse`
+accepts; any other shape is an error.
 Every other mapping is read at apply time by the property's type ([section 6](#s6)). A mapping
 that is not a pin on a struct property descends into it (block nesting): each key of the
 mapping is itself a signed property path relative to the struct, in any format; the dotted
 form `a.b: 1` and the block form `a: {b: 1}` are one edit. A block whose only key is a type
-name is a pin; the dotted form `a.hash: 1` reaches a field with a type's name. An index stays
+name is a pin; the dotted form `a.hash: 1` reaches a field with a type's name. A block whose
+only key is `ref` is a reference; the dotted form `a.ref: 1` reaches a field named `ref`. An index stays
 a path segment, `bankUnits[0]: {...}`.
 
 Source files require their own version and a compact body or `edits`. Sources have no target
@@ -328,8 +373,12 @@ edits are skipped. A diagnostic of an entry carries the entry name as its `targe
 lowered application names its chunk by hex hash and carries it in `chunk`. The overlay loads or builds the object index only for a build in which an
 enabled layer declares an `entries` module, from `object_index.bin` beside `game_index.bin`,
 under the `IndexingObjects` build stage. An object index that fails to load and build produces
-`IndexUnavailable` for every `entries` module and a warning in the log; the build continues.
-An object index build the cancellation poll stops ends the build.
+`IndexUnavailable` for every `entries` module and every module holding a reference, and a
+warning in the log; the build continues. An object index build the cancellation poll stops
+ends the build. The overlay also loads or builds the object index for a build in which an
+enabled layer declares a reference. It answers `read_entry` with the entry's object in the
+first of its declaring chunks in `ltk_game_index` archive order, read from the game before any
+mod content applies; a build reads and decodes each such chunk once.
 The target must be PROP version 2 or 3. Invalid declarations refuse the layer's declarations;
 ordinary content remains available. Missing or invalid targets produce diagnostics and retain
 their original bytes. `ltk_meta` decodes the complete base.
@@ -389,6 +438,7 @@ field name of the pinned class typed by the schema; a nested struct is a nested 
 | mapping | `map` | Each key, a string, to the key kind by the string rules; each value to the value kind |
 | mapping | `pointer`, `embed` | A struct pin constructs the struct; a pin of any other type name is `PinMismatch`; any other mapping descends ([section 4](#s4)) |
 | `{}` | `pointer`, `option` | Inside a struct pin or an `option` pin only, the null pointer or the empty option |
+| reference | any | The value at the reference in the game's copy, where `Shape::of` the value is the shape read; an entry `read_entry` does not supply is `ReferenceMissingEntry`, a path the entry does not resolve is `ReferenceUnresolved`, any other shape is `KindMismatch` |
 
 A type pin on a value fixes the shape: a pin whose type name is not the property's kind is
 `PinMismatch`, and the pinned value coerces by the row of that kind. On a list, an option, or
@@ -396,6 +446,33 @@ a map, signed or not, a pin names the item kind. A pin on a map value pins its v
 including a field inside a struct pin's `set`
 ([ADR-0019](../adr/0019-uniform-type-pins.md)). An `option` pin wraps one bare or pinned
 value, or null.
+
+**Rendering.** A property value renders to a `Value` by these rules
+([ADR-0020](../adr/0020-value-rendering.md)). A rendered value coerces back to the same value
+under the value's own shape, and carries no type pin.
+
+| Kind | Rendered |
+| --- | --- |
+| `bool`, `flag` | The boolean |
+| `i8` to `i64`, `u8` to `u64` | The integer |
+| `f32` | The float with the shortest spelling that rounds to the same single-precision bits |
+| `vec2`, `vec3`, `vec4`, `mtx44` | A list of 2, 3, 4, or 16 floats, in the order coercion reads them |
+| `rgba` | A list of 4 integers |
+| `string` | The string |
+| `hash` | `FieldNames::hash` of the value, else `0x` and 8 hexadecimal digits |
+| `link` | `Names::entry` of the value, else `0x` and 8 hexadecimal digits |
+| `file` | `Names::file` of the value, else `0x` and 16 hexadecimal digits |
+| `list`, `list2` | A list of the rendered items |
+| `option` | Null when empty; else the rendered element, or a one-element list where the element renders as a list |
+| `map` | A mapping of each key, rendered as a string, to its rendered value |
+| `pointer` | Null for the null pointer; else `{pointer: {class, set}}` |
+| `embed` | `{embed: {class, set}}` |
+
+A struct's `class` is `Names::class`, else `0x` and 8 hexadecimal digits. Its `set` holds one
+key per field, the name `FieldNames::field` answers for the field on the class, and is absent
+for a struct with no fields. A map key renders as a `bool`, integer, or `f32` spelling, or as a
+`string`, `hash`, or `file` value renders. A field with no name, and a key of any other kind,
+is an error.
 
 **Additions and removals.** `+` on a list appends each element, coerced to the item kind, to
 the base's elements; on a map it adds or replaces by key; on a property the base omits it
@@ -436,7 +513,8 @@ key the diagnostic is about, a block's inner key joined to its outer path. Its n
 `MissingObject`, `MissingProperty`, `NullPointer`, `CannotDescend`, `NotIndexable`,
 `IndexOutOfRange`, `InvalidKey`, `KeyNotFound`, `TypeMismatch`, `InvalidPath`, `Untypable`,
 `UnknownClass`, `PinMismatch`, `SignOnScalar`, `ContainerAbsent`, `RemovalUnmatched`,
-`KindMismatch`, `OutOfRange`, `PrecisionLoss`, `ArityMismatch`, and `Unknown`. The first nine
+`KindMismatch`, `OutOfRange`, `PrecisionLoss`, `ArityMismatch`, `ReferenceMissingEntry`,
+`ReferenceUnresolved`, and `Unknown`. The first nine
 are the `RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch`
 refuses; `InvalidPath` is a key inside a block or a `set` that is not a property path.
 `SkippedRecord` contains `index`, `object` (a `BinHash`), `property`, and `reason`; the
@@ -475,6 +553,12 @@ refusals of paths, tags, and struct pins, coercion of every row of the table aga
 hand-written schema and against the base alone, additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, and an overlay build with a schema and a cached replay of the two kinds.
+Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
+spellings, an `option` of a vector, a nameless field, and YAML output reloaded. Reference cases
+cover the tag and the one-key mapping in every format, the dotted escape, a reference through a
+hand-written `read_entry` as a set, an addition, a removal, a map value, a list item, and a
+`set` field, both reference reasons, a shape mismatch, and an overlay build resolving a
+reference from the game.
 
 ## <a id="s8"></a>8. Rules
 
@@ -504,3 +588,8 @@ through both archives, and an overlay build with a schema and a cached replay of
 | D22 | An entry name at a body root carries a slash or is hash-form | Any key | The standard's words and the game's never share a mapping | [section 4](#s4) |
 | D23 | A struct pin's `set` keys are single field names | Dotted paths in a `set` | A new struct has no base to descend through | [section 6](#s6) |
 | D24 | A one-key mapping keyed by a type name is a pin on every property kind | A descent on a struct | A tag and the one-key mapping are one value; a pin never turns into a field | [ADR-0019](../adr/0019-uniform-type-pins.md) |
+| D25 | Rendering lives beside coercion, with names through a trait over `FieldNames` | Rendering in each consumer | A coercion row and its inverse change under one test | [ADR-0020](../adr/0020-value-rendering.md) |
+| D26 | A rendered value carries no type pin | A pin on every value | The installed patch's schema types the value at the build | [section 6](#s6) |
+| D27 | A reference is a value resolved against the installed game's copy | A reference into the build state; an object binding only | The result depends on the game and the declaration, never on mod order | [ADR-0021](../adr/0021-game-copy-references.md) |
+| D28 | `ref` is a reserved one-key mapping key | A field lookup | A tag and the one-key mapping are one value, as with pins; no Riot field hashes to `ref` | [ADR-0021](../adr/0021-game-copy-references.md) |
+| D29 | A reference splits at its first `:` | A split at a `.` | LTK Manager's Copy path writes `<entry>:<path>`; no known entry name holds a `:` | [section 4](#s4) |
