@@ -13,7 +13,10 @@
 
 use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::{CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer};
+use ltk_game_data::{OverrideFormat, OverridePath};
+use ltk_mod_project::{
+    CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer, game_data::compile_override,
+};
 use ltk_wad::WadChunkCompression;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -401,7 +404,17 @@ impl ModContentProvider for FsModContent {
         if !inside {
             return Err(ModContentError::game_data_resource_missing(layer, path));
         }
-        std::fs::read(file_path.as_std_path()).map_err(|source| Error::read(&file_path, source))
+        let bytes = std::fs::read(file_path.as_std_path())
+            .map_err(|source| Error::read(&file_path, source))?;
+        // A `.rito` file reaches the build as the `PTCH` it compiles to, as it does packed.
+        match OverridePath::try_from(path) {
+            Ok(override_path) if override_path.format() == OverrideFormat::Rito => {
+                compile_override(&override_path, bytes).map_err(|source| {
+                    ModContentError::game_data_resource_invalid(layer, path, source)
+                })
+            }
+            _ => Ok(bytes),
+        }
     }
 
     fn mod_project(&mut self) -> Result<ModProject> {

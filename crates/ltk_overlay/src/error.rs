@@ -239,6 +239,15 @@ pub enum ModContentError {
     #[error("override file {path} of layer '{layer}' is not in the mod content")]
     GameDataResourceMissing { layer: String, path: String },
 
+    /// An override file the provider holds that does not compile to a `PTCH`.
+    #[error("override file {path} of layer '{layer}' does not compile to a PTCH")]
+    GameDataResourceInvalid {
+        layer: String,
+        path: String,
+        #[source]
+        source: ltk_game_data::Error,
+    },
+
     /// A mod's string overrides produced a table that will not serialize.
     #[error("the '{locale}' string overrides produced a stringtable that cannot be written")]
     StringOverrideUnencodable {
@@ -249,6 +258,20 @@ pub enum ModContentError {
 }
 
 impl ModContentError {
+    /// The error for an override file at `path` of `layer` that does not compile.
+    pub fn game_data_resource_invalid(
+        layer: &str,
+        path: &str,
+        source: ltk_game_data::Error,
+    ) -> Error {
+        Self::GameDataResourceInvalid {
+            layer: layer.to_owned(),
+            path: path.to_owned(),
+            source,
+        }
+        .into()
+    }
+
     /// The error for an override file at `path` that `layer` does not hold.
     pub fn game_data_resource_missing(layer: &str, path: &str) -> Error {
         Self::GameDataResourceMissing {
