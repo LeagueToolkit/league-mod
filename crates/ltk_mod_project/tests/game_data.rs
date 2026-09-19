@@ -589,3 +589,266 @@ fn invalid_entry_bodies_refuse_the_layer_with_typed_kinds() {
         assert!(expected(&error.kind), "{manifest}: {error}");
     }
 }
+
+/// A `.rito` override of type `PTCH` with one record: `FlipX` set on object `0xa4edcb0d`.
+const RITO_PATCH: &str = r#"#PROP_text
+type: string = "PTCH"
+version: u32 = 3
+linked: list[string] = {}
+entries: map[hash,embed] = {}
+patches: map[hash,embed] = {
+    0xa4edcb0d = patch {
+        path: string = "FlipX"
+        value: bool = true
+    }
+}
+"#;
+
+/// The bytes `ltk_meta` writes for the patch [`RITO_PATCH`] spells.
+fn rito_patch_bytes() -> Vec<u8> {
+    let patch = ltk_meta::concrete::BinOverride::builder()
+        .set(
+            0xa4edcb0d_u32,
+            ltk_meta::path::PropertyPath::new("FlipX").unwrap(),
+            ltk_meta::concrete::values::Bool::new(true),
+        )
+        .build();
+    let mut cursor = Cursor::new(Vec::new());
+    patch.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+/// A project whose base layer names one override file, `patch.rito`, holding `text`.
+fn rito_fixture(root: &Utf8Path, text: &str) -> ModProject {
+    fs::create_dir_all(root.join("content/base")).unwrap();
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [patch.rito]\n",
+    )
+    .unwrap();
+    fs::write(root.join("content/base/patch.rito"), text).unwrap();
+    ModProject {
+        name: "rito".into(),
+        display_name: "Rito".into(),
+        version: "1.0.0".into(),
+        layers: vec![ModProjectLayer::base()],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_rito_override_compiles_to_the_bytes_ltk_meta_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(&root, RITO_PATCH);
+
+    let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+
+    let declarations = layer.declarations.as_ref().unwrap().as_ref().unwrap();
+    assert_eq!(override_paths(declarations), ["patch.rito"]);
+    let [file] = layer.override_files() else {
+        panic!("{:#?}", layer.override_files());
+    };
+    assert_eq!(file.path.as_str(), "patch.rito");
+    assert_eq!(file.source, root.join("content/base/patch.rito"));
+    assert_eq!(file.bytes, rito_patch_bytes());
+}
+
+#[test]
+fn a_rito_override_of_type_prop_refuses_the_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(
+        &root,
+        "type: string = \"PROP\"\nversion: u32 = 3\nlinked: list[string] = {}\nentries: map[hash,embed] = {}\n",
+    );
+
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+
+    assert_eq!(error.kind, ltk_game_data::ErrorKind::OverrideNotPtch);
+    assert_eq!(error.location.document.as_deref(), Some("patch.rito"));
+}
+
+#[test]
+fn a_rito_override_with_a_ritobin_error_is_a_syntax_error_at_its_span() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let text = RITO_PATCH.replace(r#""FlipX""#, r#""Elements[3]x""#);
+    rito_fixture(&root, &text);
+
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+
+    assert!(
+        matches!(error.kind, ltk_game_data::ErrorKind::Syntax { .. }),
+        "{error:#?}"
+    );
+    assert_eq!(error.location.document.as_deref(), Some("patch.rito"));
+    let span = error
+        .location
+        .span
+        .expect("a ritobin diagnostic has a span");
+    assert_eq!(&text[span.start..span.end], r#""Elements[3]x""#);
+}
+
+#[test]
+fn a_rito_and_a_ptch_override_packing_to_one_path_refuse_the_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(&root, RITO_PATCH);
+    fs::write(root.join("content/base/patch.ptch"), empty_ptch()).unwrap();
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [patch.rito, patch.ptch]\n",
+    )
+    .unwrap();
+
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+
+    assert_eq!(error.kind, ltk_game_data::ErrorKind::OverridePathCollision);
+    assert_eq!(error.location.document.as_deref(), Some("patch.ptch"));
+}
+
+#[test]
+fn a_rito_override_packs_as_its_compiled_ptch_through_modpkg() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let source = root.join("source");
+    let project = rito_fixture(&source, RITO_PATCH);
+
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::new(project, source)
+        .pack(ModpkgFormat::new(&mut archive))
+        .unwrap();
+
+    archive.set_position(0);
+    let mut package = Modpkg::mount_from_reader(archive.clone()).unwrap();
+    assert!(package.chunk("patch.rito", Some("base")).is_err());
+    assert_eq!(
+        &*package
+            .load_chunk_decompressed_by_path("patch.ptch", Some("base"))
+            .unwrap(),
+        rito_patch_bytes().as_slice()
+    );
+    let declarations = package.load_metadata().unwrap().layers[0]
+        .game_data
+        .as_ref()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(override_paths(&declarations), ["patch.ptch"]);
+
+    let output = root.join("output");
+    ProjectImporter::new(output.clone())
+        .import(ModpkgImporter::new(archive))
+        .unwrap();
+    let extracted = load_layer(&output, "base", &ModIgnore::empty(&output));
+    assert_eq!(
+        override_paths(extracted.declarations.as_ref().unwrap().as_ref().unwrap()),
+        ["patch.ptch"]
+    );
+    assert_eq!(
+        fs::read(output.join("content/base/patch.ptch")).unwrap(),
+        rito_patch_bytes()
+    );
+    assert!(!output.join("content/base/patch.rito").exists());
+}
+
+#[test]
+fn a_rito_override_packs_as_its_compiled_ptch_through_fantome() {
+    use ltk_mod_project::fantome::FantomeFormat;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let source = root.join("source");
+    let project = rito_fixture(&source, RITO_PATCH);
+
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::new(project, source)
+        .pack(FantomeFormat::new(&mut archive))
+        .unwrap();
+
+    archive.set_position(0);
+    let mut reader = ltk_fantome::FantomeReader::new(archive).unwrap();
+    let names: Vec<String> = reader
+        .entry_names()
+        .filter(|name| name.contains("game_data"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(names, ["META/game_data/base/patch.ptch"]);
+    assert_eq!(
+        reader
+            .read_game_data_resource("base", "patch.ptch")
+            .unwrap()
+            .unwrap(),
+        rito_patch_bytes()
+    );
+    let info = reader.read_info().unwrap();
+    let declarations = info.layers["base"]
+        .game_data
+        .as_ref()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(override_paths(&declarations), ["patch.ptch"]);
+}
+
+#[test]
+fn a_rito_override_of_type_prop_with_ptch_roots_is_not_a_ptch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(&root, &RITO_PATCH.replace(r#""PTCH""#, r#""PROP""#));
+
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+
+    assert_eq!(error.kind, ltk_game_data::ErrorKind::OverrideNotPtch);
+}
+
+#[test]
+fn a_rito_override_with_a_byte_order_mark_compiles_and_reports_file_offsets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(&root, &format!("\u{feff}{RITO_PATCH}"));
+    let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+    assert_eq!(layer.override_files()[0].bytes, rito_patch_bytes());
+
+    let text = format!(
+        "\u{feff}{}",
+        RITO_PATCH.replace(r#""FlipX""#, r#""Elements[3]x""#)
+    );
+    rito_fixture(&root, &text);
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+    let span = error
+        .location
+        .span
+        .expect("a ritobin diagnostic has a span");
+    assert_eq!(&text[span.start..span.end], r#""Elements[3]x""#);
+}
+
+#[test]
+fn override_files_packing_to_paths_that_differ_in_case_refuse_the_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    rito_fixture(&root, RITO_PATCH);
+    fs::write(root.join("content/base/Patch.ptch"), empty_ptch()).unwrap();
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [patch.rito, Patch.ptch]\n",
+    )
+    .unwrap();
+
+    let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+        .declarations
+        .unwrap_err();
+
+    assert_eq!(error.kind, ltk_game_data::ErrorKind::OverridePathCollision);
+    assert_eq!(error.location.document.as_deref(), Some("Patch.ptch"));
+}

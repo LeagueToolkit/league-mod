@@ -740,6 +740,51 @@ fn a_clean_override_sets_the_property_and_reports_nothing() {
 }
 
 #[test]
+fn a_directory_mod_applies_a_rito_override_as_the_patch_it_spells() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"target":"shared","overrides":["speed.rito"]}]}"#),
+    );
+    fs::write(
+        root.join("top/content/base/speed.rito"),
+        r#"#PROP_text
+type: string = "PTCH"
+version: u32 = 3
+linked: list[string] = {}
+entries: map[hash,embed] = {}
+patches: map[hash,embed] = {
+    0x1 = patch {
+        path: string = "speed"
+        value: f32 = 2
+    }
+}
+"#,
+    )
+    .unwrap();
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+
+    let result = builder.build().unwrap();
+
+    assert!(
+        result.game_data_diagnostics.is_empty(),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    assert_eq!(
+        speed_and_links(&chunk(&overlay.join(WAD), "shared")),
+        (2.0, vec!["shared".to_owned()])
+    );
+}
+
+#[test]
 fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
     use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
     use ltk_modpkg::{

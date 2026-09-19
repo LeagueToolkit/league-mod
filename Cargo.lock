@@ -244,6 +244,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "bytecount"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
+
+[[package]]
 name = "bytemuck"
 version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -680,7 +686,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1452,8 +1458,7 @@ dependencies = [
 [[package]]
 name = "ltk_hash"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
+source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F243%2Fhead#e3aab493896f155329e52f219a83820f3c595c77"
 dependencies = [
  "byteorder",
  "serde",
@@ -1474,9 +1479,8 @@ dependencies = [
 
 [[package]]
 name = "ltk_io_ext"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "092554284ee9c83dda80408d9370800aa188e5c2da99bee36a3b06c733ced258"
+version = "0.4.5"
+source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F243%2Fhead#e3aab493896f155329e52f219a83820f3c595c77"
 dependencies = [
  "byteorder",
  "glam",
@@ -1486,9 +1490,8 @@ dependencies = [
 
 [[package]]
 name = "ltk_meta"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5956007c9b54bb2c66b7a1787ad56189071846fc5501033a52d89b38befe388e"
+version = "0.8.3"
+source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F243%2Fhead#e3aab493896f155329e52f219a83820f3c595c77"
 dependencies = [
  "byteorder",
  "enum_dispatch",
@@ -1529,6 +1532,7 @@ dependencies = [
  "ltk_hashtable",
  "ltk_meta",
  "ltk_modpkg",
+ "ltk_ritobin",
  "ltk_wad",
  "semver",
  "serde",
@@ -1598,12 +1602,29 @@ dependencies = [
 [[package]]
 name = "ltk_primitives"
 version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c42f3eddcad904acfbdaa7d62efa643e8cad771b27b6a56a24eeabcfc80f94"
+source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F243%2Fhead#e3aab493896f155329e52f219a83820f3c595c77"
 dependencies = [
  "byteorder",
  "glam",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ltk_ritobin"
+version = "0.8.1"
+source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F243%2Fhead#e3aab493896f155329e52f219a83820f3c595c77"
+dependencies = [
+ "glam",
+ "indexmap",
+ "ltk_hash",
+ "ltk_meta",
+ "ltk_primitives",
+ "miette",
+ "nom",
+ "nom_locate",
+ "smallvec",
+ "thiserror 1.0.69",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1717,6 +1738,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,6 +1823,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nom"
+version = "7.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
+]
+
+[[package]]
+name = "nom_locate"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e3c83c053b0713da60c5b8de47fe8e494fe3ece5267b2f23090a07a053ba8f3"
+dependencies = [
+ "bytecount",
+ "memchr",
+ "nom",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1810,7 +1858,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2162,7 +2210,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2464,7 +2512,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2905,7 +2953,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2915,7 +2963,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3477,7 +3525,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Seek, Write};
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use ltk_modpkg::builder::{
     ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder,
 };
@@ -16,8 +15,8 @@ use ltk_modpkg::{
 
 use super::thumbnail::{load_thumbnail, ThumbnailError};
 use crate::{
-    ModProjectAuthor, ModProjectLicense, PackFormat, PackFormatReport, PackPlan, PackReporter,
-    PlannedLayer,
+    game_data::OverrideFile, ModProjectAuthor, ModProjectLicense, PackFormat, PackFormatReport,
+    PackPlan, PackReporter, PlannedLayer,
 };
 
 /// Failure to encode a pack plan as a `.modpkg` archive.
@@ -110,9 +109,34 @@ pub struct ModpkgFormat<W> {
     writer: W,
 }
 
-/// Maps each chunk's storage key (identity plus WAD) to the source file on
-/// disk.
-type ChunkFileMap = HashMap<(ChunkKey, WadNameHash), Utf8PathBuf>;
+/// Maps each chunk's storage key (identity plus WAD) to where its bytes come
+/// from.
+type ChunkFileMap<'p> = HashMap<(ChunkKey, WadNameHash), ChunkSource<'p>>;
+
+/// Where a chunk's bytes come from.
+enum ChunkSource<'p> {
+    /// A content file, read from disk at pack time.
+    File(&'p Utf8Path),
+    /// An override file, as the plan holds it compiled.
+    Override(&'p OverrideFile),
+}
+
+impl ChunkSource<'_> {
+    /// The file on disk the chunk comes from.
+    fn path(&self) -> &Utf8Path {
+        match self {
+            Self::File(path) => path,
+            Self::Override(file) => &file.source,
+        }
+    }
+
+    fn read(&self) -> io::Result<Vec<u8>> {
+        match self {
+            Self::File(path) => std::fs::read(path),
+            Self::Override(file) => Ok(file.bytes.clone()),
+        }
+    }
+}
 
 impl<W: Write + Seek> ModpkgFormat<W> {
     /// Create a format writing the archive to `writer`.
@@ -121,10 +145,10 @@ impl<W: Write + Seek> ModpkgFormat<W> {
     }
 
     /// Turn the plan into a configured `ModpkgBuilder` plus a map from chunk
-    /// keys to source file paths, and how many `game` names the trim dropped.
-    fn configure_builder(
-        plan: &PackPlan<'_>,
-    ) -> Result<(ModpkgBuilder, ChunkFileMap, usize), ModpkgPackError> {
+    /// keys to chunk sources, and how many `game` names the trim dropped.
+    fn configure_builder<'p>(
+        plan: &'p PackPlan<'_>,
+    ) -> Result<(ModpkgBuilder, ChunkFileMap<'p>, usize), ModpkgPackError> {
         let mut builder = ModpkgBuilder::default();
 
         // Layers
@@ -214,30 +238,36 @@ impl<W: Write + Seek> ModpkgFormat<W> {
                     cb = cb.with_wad(wad);
                 }
 
-                if let Some(first) = file_map.insert(cb.full_key(), entry.source().to_owned()) {
+                if let Some(first) =
+                    file_map.insert(cb.full_key(), ChunkSource::File(entry.source()))
+                {
                     return Err(ModpkgPackError::DuplicateChunkPath {
                         rel_path: entry.rel_path().to_string(),
                         layer: layer_name.to_string(),
-                        first,
+                        first: first.path().to_owned(),
                         second: entry.source().to_owned(),
                     });
                 }
                 builder = builder.with_chunk(cb);
             }
             // Override files: a chunk of the layer with no WAD, at the
-            // layer-relative path the declarations name (ADR-0013).
+            // layer-relative path the declarations name (ADR-0013), holding
+            // the compiled `PTCH` bytes.
             for override_file in planned.override_files() {
+                let path = override_file.path.as_str();
                 let cb = ModpkgChunkBuilder::new()
-                    .with_path(override_file.path.as_str())
+                    .with_path(path)
                     .with_compression(ModpkgCompression::for_extension(
-                        override_file.source.extension(),
+                        Utf8Path::new(path).extension(),
                     ))
                     .with_layer(layer_name);
-                if let Some(first) = file_map.insert(cb.full_key(), override_file.source.clone()) {
+                if let Some(first) =
+                    file_map.insert(cb.full_key(), ChunkSource::Override(override_file))
+                {
                     return Err(ModpkgPackError::DuplicateChunkPath {
-                        rel_path: override_file.path.as_str().to_string(),
+                        rel_path: path.to_string(),
                         layer: layer_name.to_string(),
-                        first,
+                        first: first.path().to_owned(),
                         second: override_file.source.clone(),
                     });
                 }
@@ -324,7 +354,7 @@ impl<W: Write + Seek> PackFormat for ModpkgFormat<W> {
             .build_to_writer(&mut self.writer, |chunk_builder| {
                 progress.report_file(chunk_builder.path());
 
-                let file_path = file_map.get(&chunk_builder.full_key()).ok_or_else(|| {
+                let chunk_source = file_map.get(&chunk_builder.full_key()).ok_or_else(|| {
                     ModpkgBuilderError::from(io::Error::new(
                         io::ErrorKind::NotFound,
                         format!(
@@ -335,10 +365,7 @@ impl<W: Write + Seek> PackFormat for ModpkgFormat<W> {
                     ))
                 })?;
 
-                let mut file = File::open(file_path)?;
-                let mut buffer = Vec::new();
-                file.read_to_end(&mut buffer)?;
-                Ok(buffer)
+                Ok(chunk_source.read()?)
             })
             .map_err(ModpkgPackError::Builder)?;
 

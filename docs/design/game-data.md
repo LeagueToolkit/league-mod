@@ -15,7 +15,7 @@ to a value of the installed game.
 - **Module:** One selector with its edits and its origin.
 - **Selector:** What a module edits: a chunk target with edits, or a mapping of entry names to entry edits.
 - **Edit:** One batch of bindings on a chunk, applied phase by phase. The phases are override files, then entry edits, then link removals followed by additions.
-- **Override file:** A `.ptch` file in a layer holding `PTCH` records applied over a target.
+- **Override file:** A `.ptch` or `.rito` file in a layer holding `PTCH` records applied over a target. A `.rito` file is ritobin text of type `PTCH`.
 - **Override path:** The layer-relative, forward-slash path of an override file.
 - **Entry edit:** The bindings of one entry: its property edits and, in an `entries` module, its links.
 - **Entry body:** The mapping under an entry name: signed property paths to values, and in an `entries` module the link keys.
@@ -212,9 +212,11 @@ or to the layer directory in a manifest body. `load_declarations()` resolves it 
 file lexically; a loaded declaration and a declaration document carry the layer-relative
 spelling ([ADR-0013](../adr/0013-override-file-placement.md)). `OverridePath` has the same
 construction and string-access traits as `LinkPath` and implements `Display`. It is nonempty,
-relative, has no backslash, no empty, `.`, or `..` segment, and a nonempty file stem ending
-in `.ptch`, compared ASCII case-insensitively. A `.rito` path is an error naming the unsupported extension. A path that
-leaves the layer is a loading error.
+relative, has no backslash, no empty, `.`, or `..` segment, and a nonempty file stem with a
+`.ptch` or `.rito` extension, compared ASCII case-insensitively. `format()` is the path's
+`OverrideFormat`, `Ptch` or `Rito`. `to_ptch()` is the path an archive stores the file under:
+the path itself for `.ptch`, and for `.rito` the path with its extension replaced by `ptch`
+([ADR-0022](../adr/0022-load-time-override-compilation.md)). A path that leaves the layer is a loading error.
 
 An entry name is one nonempty string. `0x` followed by exactly 8 ASCII hexadecimal digits
 identifies an object hash; every other spelling identifies an object path. `EntryName` has the
@@ -303,10 +305,20 @@ manifest or source document references, independently of binding validation.
 `ltk_mod_project::game_data::load_layer()` returns `LayerDeclarations`. Its `declarations`
 field is `Result<Option<Declarations>, Error>`; `is_declaration_input(path)` identifies build
 resources, including inputs discovered in rejected declarations. `override_files()` lists
-the override files of accepted declarations as `OverrideFile` values, each with its `path`
-and its `source` file, one per distinct path in first-reference order. Loading reads every
-override file; a missing, ignored, or escaping file, or one that does not read as a `PTCH`,
-refuses the layer's declarations.
+the override files of accepted declarations as `OverrideFile` values, each with its `path`,
+its `source` file, and its compiled `PTCH` `bytes`, one per distinct path in first-reference
+order. Loading reads every override file and compiles it through
+`compile_override(path, contents)`: a `.ptch` file's bytes are its contents, and a `.rito`
+file compiles through `ltk_ritobin` to the bytes `ltk_meta` writes for the patch it spells
+([ADR-0022](../adr/0022-load-time-override-compilation.md)). A leading byte-order mark in a
+`.rito` file is skipped, and an error span is a byte range of the file. A missing, ignored, or escaping
+file refuses the layer's declarations, as does a file that does not compile:
+
+| Condition | Code |
+| --- | --- |
+| A file that is not a `PTCH`, a `.rito` file whose `type` root is not `PTCH` among them | `OverrideNotPtch` |
+| `.rito` text that is not UTF-8, or that ritobin refuses | `Syntax`, at the span of the first parse error or diagnostic |
+| A path whose `to_ptch()` is that of an earlier, different path of the layer, compared ASCII case-insensitively | `OverridePathCollision` |
 
 ## <a id="s5"></a>5. Containers
 
@@ -316,7 +328,9 @@ retain their origins. Archive declarations use the target strings specified in
 [section 4](#s4). An override file travels under its layer-relative path
 ([ADR-0013](../adr/0013-override-file-placement.md)): modpkg stores it as a chunk of its layer
 with no WAD; Fantome stores it as `META/game_data/<layer>/<path>`, classified as
-`FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.json` manifest per
+`FantomeEntry::GameData`. The stored path is `OverridePath::to_ptch()` and the stored bytes are
+the file's compiled `PTCH` bytes; the packed declaration document names the same path
+([ADR-0022](../adr/0022-load-time-override-compilation.md)). A packed `.rito` file is a `.ptch` file in the archive and in an extracted project. Extraction reconstructs a direct `game_data.json` manifest per
 layer and places every override file at its path under the layer's content directory.
 The modpkg layer metadata field is `game_data`; the Fantome layer field is `GameData`.
 Modpkg metadata uses schema version 4. Absent fields represent no declarations.
@@ -357,7 +371,12 @@ Its default is `Ok(None)`. `ModContentProvider::read_game_data_resource(layer, p
 the bytes of the layer's override file at a layer-relative path; its default is
 `Err(ModContentError::GameDataResourceUnsupported)`, and a provider that carries override
 files answers a path it does not hold with `ModContentError::GameDataResourceMissing`.
-Filesystem, modpkg, and Fantome providers load declarations and read override files.
+Filesystem, modpkg, and Fantome providers load declarations and read override files. The
+filesystem provider reads a `.rito` override file as the bytes `compile_override` returns, and
+answers one that does not compile with `ModContentError::GameDataResourceInvalid`. The modpkg
+and Fantome providers read an override file's stored bytes as they are; an archive whose
+document names a `.rito` path, which this packer never writes, has its stored text reported as
+`OverrideInvalid`.
 
 Modules execute from lowest to highest mod precedence, ascending layer priority with name
 as a tie-breaker, module order, and edit order. The highest-precedence enabled mod copy is
@@ -547,7 +566,10 @@ overlay builds. Cases cover ordering, input classification, invalid declarations
 construction, serialized field compatibility, target selection, enabled layers, typed
 diagnostics, cached builds with missing or unknown diagnostic kinds, a called-off build,
 override path resolution, override application with skipped records and unreadable files,
-override files round-tripping through both archives, entry bodies in every format with tags
+override files round-tripping through both archives, a `.rito` override file compiled to the
+bytes `ltk_meta` writes, refused as a `PROP`, refused at the span of a ritobin error, colliding
+with a `.ptch` file, packed as `.ptch` through both archives, and applied from a directory mod,
+entry bodies in every format with tags
 and one-key pins loading to one model, block and dotted forms loading to one edit, structural
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
 hand-written schema and against the base alone, additions and removals on lists and maps,
@@ -579,7 +601,7 @@ reference from the game.
 | D13 | An override file is referenced by its layer-relative path in every container | Per-container references | One spelling from manifest to build | ADR-0013 |
 | D14 | A target with an applied override is rewritten from the eager tree | A patched byte splice | The published `ltk_meta` owns matching and skipping | ADR-0012 |
 | D15 | `overrides` binds a `target`; an entry body refuses it | `overrides` inside `entries` | An override names its objects itself | [section 4](#s4) |
-| D16 | An override file is `.ptch`; `.rito` is an error naming the extension | Silent acceptance | A text override needs a `PTCH` text parser | [section 4](#s4) |
+| D16 | An override file is `.ptch` or `.rito`; a `.rito` file compiles to `PTCH` at load and packs as `.ptch` | Carrying the text into archives; compiling at apply | Archives and `apply` read one encoding | [ADR-0022](../adr/0022-load-time-override-compilation.md) |
 | D17 | An error is a code with a typed location | A location string and a message | The consumer matches the code and navigates by the place | [ADR-0014](../adr/0014-coded-declaration-errors.md) |
 | D18 | The class schema enters through a `Schema` trait | A schema crate; schema data | The library is testable without a dump; the manager adapts what it holds | [ADR-0015](../adr/0015-schema-trait.md) |
 | D19 | A property edit carries a literal value; a YAML tag lowers to the one-key mapping | Load-time coercion; a pinned document form | The type is the installed patch's on the day of the build | [ADR-0016](../adr/0016-literal-property-values.md) |
@@ -593,3 +615,4 @@ reference from the game.
 | D27 | A reference is a value resolved against the installed game's copy | A reference into the build state; an object binding only | The result depends on the game and the declaration, never on mod order | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D28 | `ref` is a reserved one-key mapping key | A field lookup | A tag and the one-key mapping are one value, as with pins; no Riot field hashes to `ref` | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D29 | A reference splits at its first `:` | A split at a `.` | LTK Manager's Copy path writes `<entry>:<path>`; no known entry name holds a `:` | [section 4](#s4) |
+| D30 | Two override files of a layer that pack to one `.ptch` path refuse its declarations | The later file overwriting the earlier in an archive | A directory build and a packed build of one layer apply the same files | [section 4](#s4) |

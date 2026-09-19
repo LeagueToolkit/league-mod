@@ -256,12 +256,13 @@ pub enum ErrorKind {
     /// An override path with an empty, `.`, or `..` segment.
     #[error("override paths contain no empty, `.`, or `..` segment")]
     OverridePathSegment,
-    /// An override path whose file is not `.ptch`.
-    #[error("override files require the `.ptch` extension")]
+    /// An override path whose file is not `.ptch` or `.rito`.
+    #[error("override files require the `.ptch` or `.rito` extension")]
     OverridePathExtension,
-    /// A `.rito` override path. The text form needs a `PTCH` text parser.
-    #[error("`.rito` override files are unsupported; convert the file to `.ptch`")]
-    OverridePathRito,
+    /// A second override file of one layer that packs to the path of the first, compared ASCII
+    /// case-insensitively, such as `patch.ptch` beside `patch.rito`.
+    #[error("another override file of the layer packs to this path")]
+    OverridePathCollision,
     /// An override path whose `..` segments resolve above the layer.
     #[error("override path leaves the layer")]
     OverridePathEscapes,

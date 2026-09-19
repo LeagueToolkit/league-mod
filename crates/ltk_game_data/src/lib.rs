@@ -319,14 +319,39 @@ impl LinkPath {
     }
 }
 
-/// The layer-relative, forward-slash path of a `.ptch` override file.
+/// The encoding of an override file, named by its path's extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OverrideFormat {
+    /// `.ptch`: a binary `PTCH` bin.
+    Ptch,
+    /// `.rito`: ritobin text of type `PTCH`. Packing compiles it to `.ptch`.
+    Rito,
+}
+
+impl OverrideFormat {
+    /// The format an extension names, compared ASCII case-insensitively.
+    fn from_extension(extension: &str) -> Option<Self> {
+        if extension.eq_ignore_ascii_case("ptch") {
+            Some(Self::Ptch)
+        } else if extension.eq_ignore_ascii_case("rito") {
+            Some(Self::Rito)
+        } else {
+            None
+        }
+    }
+}
+
+/// The layer-relative, forward-slash path of a `.ptch` or `.rito` override file.
 ///
 /// Construction enforces the spelling and preserves it verbatim: nonempty, relative, no
-/// backslash, no empty, `.`, or `..` segment, and a `.ptch` extension compared ASCII
-/// case-insensitively. A `.rito` path is refused with an error naming the extension.
+/// backslash, no empty, `.`, or `..` segment, and a nonempty file stem with a `.ptch` or `.rito`
+/// extension compared ASCII case-insensitively.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct OverridePath(String);
+pub struct OverridePath {
+    path: String,
+    format: OverrideFormat,
+}
 
 impl TryFrom<String> for OverridePath {
     type Error = Error;
@@ -347,18 +372,14 @@ impl TryFrom<String> for OverridePath {
         {
             return Err(Error::at_key(ErrorKind::OverridePathSegment, "overrides"));
         }
-        let file_name = value.rsplit('/').next().unwrap_or(&value);
-        match file_name.rsplit_once('.') {
-            Some((stem, extension))
-                if !stem.is_empty() && extension.eq_ignore_ascii_case("ptch") =>
-            {
-                Ok(Self(value))
-            }
-            Some((_, extension)) if extension.eq_ignore_ascii_case("rito") => {
-                Err(Error::at_key(ErrorKind::OverridePathRito, "overrides"))
-            }
-            _ => Err(Error::at_key(ErrorKind::OverridePathExtension, "overrides")),
-        }
+        let format = split_extension(&value)
+            .filter(|(stem, _)| !stem.is_empty())
+            .and_then(|(_, extension)| OverrideFormat::from_extension(extension))
+            .ok_or_else(|| Error::at_key(ErrorKind::OverridePathExtension, "overrides"))?;
+        Ok(Self {
+            path: value,
+            format,
+        })
     }
 }
 
@@ -372,21 +393,53 @@ impl TryFrom<&str> for OverridePath {
 
 impl From<OverridePath> for String {
     fn from(path: OverridePath) -> Self {
-        path.0
+        path.path
     }
 }
 
 impl fmt::Display for OverridePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.path)
     }
 }
 
 impl OverridePath {
     /// The path's layer-relative spelling.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.path
     }
+
+    /// The encoding of the file, named by the path's extension.
+    pub fn format(&self) -> OverrideFormat {
+        self.format
+    }
+
+    /// The path an archive stores the file under.
+    ///
+    /// A `.ptch` path is itself. A `.rito` path has its extension replaced by `ptch`, and the
+    /// compiled bytes travel under it.
+    pub fn to_ptch(&self) -> OverridePath {
+        match (self.format, split_extension(&self.path)) {
+            (OverrideFormat::Rito, Some((stem, _))) => {
+                let directory = &self.path[..self.path.len() - file_name(&self.path).len()];
+                Self {
+                    path: format!("{directory}{stem}.ptch"),
+                    format: OverrideFormat::Ptch,
+                }
+            }
+            _ => self.clone(),
+        }
+    }
+}
+
+/// The last segment of a forward-slash path.
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// A path's file stem and extension: its file name split at the last `.`.
+fn split_extension(path: &str) -> Option<(&str, &str)> {
+    file_name(path).rsplit_once('.')
 }
 
 /// The game's chunk-path hash. File suffixes and separators are preserved.
