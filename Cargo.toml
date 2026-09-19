@@ -57,8 +57,8 @@ zip = "2.4"
 zstd = "0.13"
 
 [patch.crates-io]
-ltk_ritobin = { git = "https://github.com/LeagueToolkit/league-toolkit", branch = "feat/ritobin-ptch" }
-ltk_meta = { git = "https://github.com/LeagueToolkit/league-toolkit", branch = "feat/ritobin-ptch" }
-ltk_hash = { git = "https://github.com/LeagueToolkit/league-toolkit", branch = "feat/ritobin-ptch" }
-ltk_primitives = { git = "https://github.com/LeagueToolkit/league-toolkit", branch = "feat/ritobin-ptch" }
-ltk_io_ext = { git = "https://github.com/LeagueToolkit/league-toolkit", branch = "feat/ritobin-ptch" }
+ltk_ritobin = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/243/head" }
+ltk_meta = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/243/head" }
+ltk_hash = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/243/head" }
+ltk_primitives = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/243/head" }
+ltk_io_ext = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/243/head" }
