@@ -117,23 +117,42 @@ impl PlannedLayer {
         }
     }
 
+    /// Sets the layer's declarations and override files.
+    ///
+    /// Each override path is replaced by the path an archive stores the file
+    /// under ([`OverridePath::to_ptch`](ltk_game_data::OverridePath::to_ptch)).
     pub(crate) fn with_game_data(
         mut self,
         declarations: Option<ltk_game_data::Declarations>,
         override_files: Vec<OverrideFile>,
     ) -> Self {
-        self.game_data = declarations.map(Into::into);
-        self.override_files = override_files;
+        self.game_data = declarations.map(|mut declarations| {
+            pack_override_paths(&mut declarations);
+            declarations.into()
+        });
+        self.override_files = override_files
+            .into_iter()
+            .map(|file| OverrideFile {
+                path: file.path.to_ptch(),
+                ..file
+            })
+            .collect();
         self
     }
 
     /// The layer declarations, with sources expanded.
+    ///
+    /// Every override path is the `.ptch` path an archive stores the file
+    /// under.
     pub fn game_data(&self) -> Option<&ltk_game_data::DeclarationDocument> {
         self.game_data.as_ref()
     }
 
-    /// The override files the layer's declarations name, each at its
-    /// layer-relative path. Build resources, not content.
+    /// The override files the layer's declarations name. Build resources, not
+    /// content.
+    ///
+    /// Each is at the `.ptch` path an archive stores it under, with its
+    /// compiled bytes.
     pub fn override_files(&self) -> &[OverrideFile] {
         &self.override_files
     }
@@ -251,5 +270,17 @@ impl PlannedLicense {
     /// the author happened to type.
     pub fn canonical_name(&self) -> &'static str {
         self.canonical_name
+    }
+}
+
+/// Replaces every override path of `declarations` by the path an archive
+/// stores the file under.
+fn pack_override_paths(declarations: &mut ltk_game_data::Declarations) {
+    for module in &mut declarations.modules {
+        if let ltk_game_data::Selector::Target { edits, .. } = &mut module.selector {
+            for path in edits.iter_mut().flat_map(|edit| &mut edit.overrides) {
+                *path = path.to_ptch();
+            }
+        }
     }
 }

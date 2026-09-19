@@ -4,8 +4,10 @@ use std::{collections::HashSet, io::Cursor};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_data::{
-    Declarations, Error, ErrorKind, OverridePath, ReferencedInputs, Selector, MANIFEST_NAMES,
+    Declarations, Error, ErrorKind, OverrideFormat, OverridePath, ReferencedInputs, Selector, Span,
+    MANIFEST_NAMES,
 };
+use ltk_meta::{BinFile, BinOverride};
 
 use crate::{ModIgnore, ModProjectLayer};
 
@@ -16,6 +18,85 @@ pub struct OverrideFile {
     pub path: OverridePath,
     /// The file on disk.
     pub source: Utf8PathBuf,
+    /// The compiled `PTCH` bytes: the file's own for `.ptch`, converted for `.rito`.
+    pub bytes: Vec<u8>,
+}
+
+/// The `PTCH` bytes of the override file at `path` with `contents`.
+///
+/// A `.ptch` file's bytes are its contents. A `.rito` file is ritobin text of type `PTCH`, and
+/// compiles to the bytes `ltk_meta` writes for the patch it spells.
+///
+/// # Errors
+///
+/// [`ErrorKind::OverrideNotPtch`] for contents that are not a `PTCH`, a `.rito` file of another
+/// type among them. [`ErrorKind::Syntax`] for `.rito` text that is not UTF-8 or that ritobin
+/// refuses, at the span of the first error. Each error names `path` as its document.
+pub fn compile_override(path: &OverridePath, contents: Vec<u8>) -> Result<Vec<u8>, Error> {
+    let patch = match path.format() {
+        OverrideFormat::Ptch => {
+            BinOverride::from_reader(&mut Cursor::new(&contents))
+                .map_err(|_| Error::in_document(ErrorKind::OverrideNotPtch, path.as_str()))?;
+            return Ok(contents);
+        }
+        OverrideFormat::Rito => {
+            parse_rito(contents).map_err(|error| error.document(path.as_str()))?
+        }
+    };
+    let mut bytes = Cursor::new(Vec::new());
+    patch
+        .to_writer(&mut bytes)
+        .map_err(|error| Error::io(path.as_str(), &error))?;
+    Ok(bytes.into_inner())
+}
+
+/// The byte-order mark a text editor can write ahead of UTF-8 text.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
+/// The patch `.rito` text spells.
+///
+/// A leading byte-order mark is skipped. A span in an error is a byte range of `contents`.
+fn parse_rito(contents: Vec<u8>) -> Result<BinOverride, Error> {
+    let text = String::from_utf8(contents).map_err(|error| {
+        let at = error.utf8_error().valid_up_to();
+        syntax(
+            error.to_string(),
+            Span {
+                start: at,
+                end: at + 1,
+            },
+        )
+    })?;
+    let body = text.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&text);
+    let offset = text.len() - body.len();
+    let cst = ltk_ritobin::Cst::parse(body);
+    if let Some(error) = cst.errors.first() {
+        return Err(syntax(error.to_string(), text_span(error.span, offset)));
+    }
+    let (file, diagnostics) = cst.build(body);
+    let BinFile::Override(patch) = file else {
+        return Err(Error::new(ErrorKind::OverrideNotPtch));
+    };
+    if let Some(first) = diagnostics.first() {
+        return Err(syntax(
+            first.diagnostic.to_string(),
+            text_span(first.span, offset),
+        ));
+    }
+    Ok(patch)
+}
+
+/// A `Syntax` error at `span` of the parsed text.
+fn syntax(detail: String, span: Span) -> Error {
+    Error::new(ErrorKind::Syntax { detail }).span(span)
+}
+
+/// The byte range of a ritobin span over text that starts `offset` bytes into the file.
+fn text_span(span: ltk_ritobin::parse::Span, offset: usize) -> Span {
+    Span {
+        start: span.start as usize + offset,
+        end: span.end as usize + offset,
+    }
 }
 
 /// A layer's declaration result and classified input files.
@@ -163,7 +244,7 @@ impl<'a> Loader<'a> {
         std::fs::read_to_string(path).map_err(|e| input_error(path.as_str(), &e))
     }
 
-    /// Reads and checks one override file and records it, once per distinct path.
+    /// Reads and compiles one override file and records it, once per distinct path.
     fn override_file(
         &mut self,
         path: &OverridePath,
@@ -172,14 +253,27 @@ impl<'a> Loader<'a> {
         if self.override_files.iter().any(|file| file.path == *path) {
             return Ok(());
         }
+        // Archives key a stored path ASCII case-insensitively.
+        let packed = path.to_ptch();
+        if self.override_files.iter().any(|file| {
+            file.path
+                .to_ptch()
+                .as_str()
+                .eq_ignore_ascii_case(packed.as_str())
+        }) {
+            return Err(Error::in_document(
+                ErrorKind::OverridePathCollision,
+                path.as_str(),
+            ));
+        }
         let source = self.root.join(path.as_str());
         self.required(&source, root_canonical)?;
-        let bytes = std::fs::read(&source).map_err(|e| input_error(path.as_str(), &e))?;
-        ltk_meta::BinOverride::from_reader(&mut Cursor::new(bytes))
-            .map_err(|_| Error::in_document(ErrorKind::OverrideNotPtch, path.as_str()))?;
+        let contents = std::fs::read(&source).map_err(|e| input_error(path.as_str(), &e))?;
+        let bytes = compile_override(path, contents)?;
         self.override_files.push(OverrideFile {
             path: path.clone(),
             source,
+            bytes,
         });
         Ok(())
     }
