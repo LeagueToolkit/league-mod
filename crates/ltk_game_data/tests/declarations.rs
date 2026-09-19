@@ -1,6 +1,7 @@
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, NoSchema, OverridePath,
-    RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply, load_declarations,
+    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, NoSchema, OverrideFormat,
+    OverridePath, RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply,
+    load_declarations,
 };
 use ltk_meta::{
     BinOverride,
@@ -530,7 +531,13 @@ fn entry_names_hash_like_bin_objects_and_refuse_the_empty_string() {
 
 #[test]
 fn override_paths_enforce_spelling_and_extension() {
-    for value in ["a/b.ptch", "X.PTCH", "Test.wad.client/patch.ptch"] {
+    for value in [
+        "a/b.ptch",
+        "X.PTCH",
+        "Test.wad.client/patch.ptch",
+        "a.rito",
+        "b/C.RITO",
+    ] {
         assert_eq!(OverridePath::try_from(value).unwrap().as_str(), value);
     }
     for value in [
@@ -542,13 +549,23 @@ fn override_paths_enforce_spelling_and_extension() {
         "a/./b.ptch",
         "a//b.ptch",
         ".ptch",
+        ".rito",
         "a.bin",
         "a.ptch/",
     ] {
         assert!(OverridePath::try_from(value).is_err(), "{value:?}");
     }
-    let rito = OverridePath::try_from("a.rito").unwrap_err();
-    assert!(rito.to_string().contains(".rito"), "{rito}");
+}
+
+#[test]
+fn a_rito_override_path_is_text_and_packs_under_its_ptch_spelling() {
+    let rito = OverridePath::try_from("Test.wad.client/Patch.RITO").unwrap();
+    assert_eq!(rito.format(), OverrideFormat::Rito);
+    assert_eq!(rito.to_ptch().as_str(), "Test.wad.client/Patch.ptch");
+
+    let ptch = OverridePath::try_from("a/b.PTCH").unwrap();
+    assert_eq!(ptch.format(), OverrideFormat::Ptch);
+    assert_eq!(ptch.to_ptch(), ptch);
 }
 
 #[test]
@@ -578,7 +595,7 @@ fn override_paths_resolve_against_their_source_and_stay_within_the_layer() {
         ["patch.ptch", "Test.wad.client/local.ptch"]
     );
     assert_eq!(paths(&declarations.modules[2]), ["dotted.ptch"]);
-    for authored in ["../../patch.ptch", "/patch.ptch", "a\\b.ptch", "a.rito", ""] {
+    for authored in ["../../patch.ptch", "/patch.ptch", "a\\b.ptch", "a.bin", ""] {
         let error = load_declarations(
             "game_data.yaml",
             "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.yaml\n",
