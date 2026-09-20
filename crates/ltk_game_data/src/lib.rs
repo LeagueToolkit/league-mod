@@ -16,18 +16,20 @@ mod document;
 mod error;
 mod manifest;
 mod property;
+mod reference;
 mod schema;
 mod value;
 
-pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
+pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply, read_entry};
 pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
 pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
 pub use ltk_hash::BinHash;
-pub use ltk_meta::{PropertyKind, path::PropertyPath};
+pub use ltk_meta::{BinObject, PropertyKind, path::PropertyPath};
 pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
 pub use property::{PropertyEdit, Sign};
+pub use reference::Reference;
 pub use schema::{NoSchema, Schema, Shape};
 pub use value::{Value, kind_named, name_of};
 
@@ -111,6 +113,37 @@ pub enum Selector {
     /// Entry names in mapping order, each with its edits. Every declaring chunk of an entry
     /// is edited.
     Entries(IndexMap<EntryName, EntryEdit>),
+}
+
+impl Module {
+    /// Every reference the module's edits hold, in spelled order, duplicates included.
+    ///
+    /// A build resolves a reference against the installed game, which costs an object index
+    /// and a chunk read. A consumer asks this to learn whether a module owes that cost
+    /// before paying it.
+    #[must_use]
+    pub fn references(&self) -> Vec<Reference> {
+        match &self.selector {
+            Selector::Target { edits, .. } => edits.iter().flat_map(Edit::references).collect(),
+            Selector::Entries(entries) => entries
+                .values()
+                .flat_map(|edit| edit.properties.iter())
+                .flat_map(|property| property.value.references())
+                .collect(),
+        }
+    }
+}
+
+impl Edit {
+    /// Every reference the edit's property edits hold, in spelled order.
+    #[must_use]
+    pub fn references(&self) -> Vec<Reference> {
+        self.entries
+            .values()
+            .flatten()
+            .flat_map(|property| property.value.references())
+            .collect()
+    }
 }
 
 /// Where a module is declared. Indices are zero-based.

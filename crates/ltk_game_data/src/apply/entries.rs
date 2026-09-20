@@ -14,7 +14,10 @@ use ltk_meta::{
 
 use crate::{BinHash, EntryName, PropertyEdit, Schema, Shape, Sign, Value};
 
-use super::{ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, coerce::Coercer};
+use super::{
+    ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty,
+    coerce::{Coercer, ResolvedReferences},
+};
 
 /// One diagnostic of the phase, before its edit index is known.
 #[derive(Debug)]
@@ -36,12 +39,13 @@ pub(super) struct Outcome {
 pub(super) fn run(
     bin: &mut Bin,
     schema: &dyn Schema,
+    references: &ResolvedReferences,
     entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
 ) -> Outcome {
     let mut phase = Phase {
         bin,
         schema,
-        coercer: Coercer { schema },
+        coercer: Coercer { schema, references },
         outcome: Outcome::default(),
     };
     for (name, edits) in entries {
@@ -201,8 +205,11 @@ impl Phase<'_> {
             None => edit.path.clone(),
         };
         let key = || format!("{}{}", edit.sign.as_str(), path.as_str());
+        // A reference is a one-key mapping, so it would descend as a block and have `ref`
+        // read as a field name. It names a value instead, and coercion resolves it.
         if let Value::Mapping(block) = &edit.value
             && edit.value.pin().is_none()
+            && edit.value.reference().is_none()
         {
             let base = self.bin.objects[&hash].resolve(&path).ok();
             match base {

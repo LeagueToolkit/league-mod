@@ -6,7 +6,7 @@ mod entries;
 use std::{collections::HashSet, io::Cursor};
 
 use ltk_meta::{
-    BinOverride,
+    BinObject, BinOverride,
     concrete::{Bin, BinStream},
     path::{PatchError, ResolveErrorKind},
 };
@@ -141,6 +141,11 @@ pub enum PropertySkipReason {
     PrecisionLoss,
     /// A list whose length is not the shape's.
     ArityMismatch,
+    /// A reference whose entry the caller does not supply. The game lacks it, or the caller
+    /// reads no game.
+    ReferenceMissingEntry,
+    /// A reference whose path the supplied entry does not resolve.
+    ReferenceUnresolved,
     /// A reason this crate does not name.
     #[default]
     #[serde(other)]
@@ -311,15 +316,58 @@ impl ApplyResult {
     }
 }
 
+/// The object `name` names in a `PROP` chunk.
+///
+/// This is what a caller answers `apply`'s `read_entry` with once it holds the bytes of a
+/// declaring chunk. Decoding lives here because the crate already owns `PROP` decoding, and
+/// a consumer that resolves references should not have to take a bin library of its own.
+///
+/// `None` for bytes that are not a readable `PROP` and for a chunk that does not hold the
+/// object. Both are references the build cannot resolve, and neither is worth telling apart
+/// at the call site.
+#[must_use]
+pub fn read_entry(bytes: &[u8], name: &EntryName) -> Option<BinObject> {
+    let mut stream = BinStream::mount(Cursor::new(bytes)).ok()?;
+    stream.object(name.object_hash()).ok()??.read().ok()
+}
+
+/// The game's copy of every entry the edits reference.
+///
+/// A reference reads the game, not the target being built, so every reference of a batch is
+/// answered from one reading taken before the first edit applies. Asking once per distinct
+/// entry also keeps the cost of a reference off the caller: the overlay reads and decodes a
+/// chunk per entry, however many references name it.
+///
+/// A reference the name rule refuses is not collected. Coercion reports it as it reports
+/// every other reference it cannot resolve.
+fn resolve_references(
+    edits: &[Edit],
+    mut read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
+) -> coerce::ResolvedReferences {
+    let mut resolved = coerce::ResolvedReferences::new();
+    let mut asked = HashSet::new();
+    for reference in edits.iter().flat_map(Edit::references) {
+        if !asked.insert(reference.entry.clone()) {
+            continue;
+        }
+        if let Some(object) = read_entry(&reference.entry) {
+            resolved.insert(reference.entry, object);
+        }
+    }
+    resolved
+}
+
 /// Applies ordered edits to a PROP v2 or v3.
 ///
 /// Each edit runs its phases in field order and reads the result of the preceding edit.
 /// `read_override` supplies the bytes of an override file by its path, once per listed path
 /// in apply order, in any byte container; a caller sharing one file across several targets
-/// hands over an `Arc<[u8]>`. `schema` types every property edit; a caller with no schema
-/// passes `&NoSchema`. A target with an applied override file or an applied property edit is
-/// written from the decoded tree at PROP version 3; a target with neither keeps its object
-/// bytes and header version.
+/// hands over an `Arc<[u8]>`. `read_entry` supplies the installed game's copy of an entry a
+/// reference names, once per distinct entry referenced and before any edit applies, and
+/// `None` for an entry the game lacks; a caller with no game passes `|_| None`. `schema`
+/// types every property edit; a caller with no schema passes `&NoSchema`. A target with an
+/// applied override file or an applied property edit is written from the decoded tree at PROP
+/// version 3; a target with neither keeps its object bytes and header version.
 ///
 /// # Errors
 ///
@@ -328,8 +376,10 @@ pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     mut read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
+    read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
     schema: &dyn Schema,
 ) -> Result<ApplyResult, Error> {
+    let references = resolve_references(edits, read_entry);
     let stream = BinStream::mount(Cursor::new(base)).map_err(|e| bin_error(&e))?;
     if !matches!(stream.version(), 2 | 3) {
         return Err(Error::new(ErrorKind::UnsupportedBase));
@@ -402,7 +452,7 @@ pub fn apply<B: AsRef<[u8]>>(
                 );
             }
         }
-        let outcome = entries::run(&mut bin, schema, &edit.entries);
+        let outcome = entries::run(&mut bin, schema, &references, &edit.entries);
         applied.properties += outcome.properties;
         diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
             kind: report.kind,

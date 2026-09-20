@@ -20,6 +20,11 @@ fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
     unreachable!("no override is read: {path}")
 }
 
+/// The caller with no game: every reference reports `ReferenceMissingEntry`.
+fn no_entry(_: &ltk_game_data::EntryName) -> Option<ltk_meta::BinObject> {
+    None
+}
+
 fn h(name: &str) -> BinHash {
     BinHash::from(name)
 }
@@ -172,7 +177,7 @@ fn run(manifest: &str, schema: &dyn Schema) -> ApplyResult {
     let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
         panic!("expected a target");
     };
-    apply(&base_bin(), edits, no_override, schema).unwrap()
+    apply(&base_bin(), edits, no_override, no_entry, schema).unwrap()
 }
 
 fn manifest(body: &str) -> String {
@@ -710,7 +715,14 @@ fn missing_objects_skip_every_edit_and_skipped_targets_keep_their_bytes() {
         entry.properties.clone(),
     );
     edit.links = entry.links.clone();
-    let output = apply(&base_bin(), &[edit], no_override, &TestSchema::new()).unwrap();
+    let output = apply(
+        &base_bin(),
+        &[edit],
+        no_override,
+        no_entry,
+        &TestSchema::new(),
+    )
+    .unwrap();
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
     assert_eq!(value_at(&output, "speed"), values::F32::new(4.0).into());
     assert_eq!(output.dependencies, ["x.bin"]);
@@ -759,7 +771,7 @@ fn the_result_says_whether_any_edit_landed() {
     assert_eq!(output.applied.properties, 0);
 
     // An edit list with no edits at all is not a change.
-    let output = apply(&base_bin(), &[], no_override, &TestSchema::new()).unwrap();
+    let output = apply(&base_bin(), &[], no_override, no_entry, &TestSchema::new()).unwrap();
     assert!(!output.changed());
 }
 
@@ -781,7 +793,14 @@ fn an_override_that_applies_nothing_leaves_the_bytes_alone() {
     let mut edit = ltk_game_data::Edit::default();
     edit.overrides
         .push(OverridePath::try_from("a.ptch").unwrap());
-    let output = apply(&base, &[edit], |_| Ok(bytes.clone()), &TestSchema::new()).unwrap();
+    let output = apply(
+        &base,
+        &[edit],
+        |_| Ok(bytes.clone()),
+        no_entry,
+        &TestSchema::new(),
+    )
+    .unwrap();
 
     assert!(!output.changed(), "{:?}", output.applied);
     assert_eq!(output.bytes, base);

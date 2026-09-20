@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use ltk_game_data::{
-    ApplyDiagnosticKind, Edit, EntryEdit, EntryName, IndexMap, Module, Origin, OverridePath,
-    Selector, SkippedProperty, SkippedRecord,
+    ApplyDiagnosticKind, BinHash, BinObject, Edit, EntryEdit, EntryName, IndexMap, Module, Origin,
+    OverridePath, Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_mod_project::ModProjectLayer;
@@ -17,7 +17,7 @@ use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use super::{OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource};
-use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
+use crate::{error::Result, game::GameDir, game::GameIndexExt, utils::ContentHash};
 
 /// The category of a declaration diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,9 +376,14 @@ impl OverlayBuilder {
             }
         }
 
+        // A reference needs the index for the same reason an `entries` module does: it names
+        // an entry, and only the index says which chunk declares it.
         let object_index = pending
             .iter()
-            .any(|pending| matches!(pending.module.selector, Selector::Entries(_)))
+            .any(|pending| {
+                matches!(pending.module.selector, Selector::Entries(_))
+                    || !pending.module.references().is_empty()
+            })
             .then(|| self.load_object_index(game));
         if matches!(object_index, Some(Err(_))) {
             self.check_called_off()?;
@@ -387,6 +392,14 @@ impl OverlayBuilder {
         for pending in pending {
             match &pending.module.selector {
                 Selector::Target { target, edits } => {
+                    // A target module resolves without the index, but a reference inside one
+                    // does not, so the author hears the same thing an `entries` module hears.
+                    if let Some(Err(error)) = &object_index
+                        && !pending.module.references().is_empty()
+                    {
+                        self.last_game_data_diagnostics
+                            .push(index_unavailable(&pending, error));
+                    }
                     let hash = WadHash::from(target.chunk_hash());
                     targets.entry(hash).or_default().push(Application {
                         mod_id: pending.mod_id,
@@ -429,6 +442,10 @@ impl OverlayBuilder {
         }
         let subchunktoc_blocked = game.subchunktoc_blocked();
         let mut resources = ResourceCache::default();
+        // One decode per referenced entry for the whole build, not one per target that
+        // references it.
+        let mut entries: HashMap<BinHash, Option<BinObject>> = HashMap::new();
+        let declaring_index = object_index.as_ref().and_then(|index| index.as_ref().ok());
         for (hash, applications) in targets {
             let original = bases.remove(&hash).or_else(|| metadata.get(&hash).cloned());
             let game_wad = game
@@ -462,10 +479,20 @@ impl OverlayBuilder {
             let mut applied = false;
             for application in &applications {
                 let enabled_mods = &mut self.enabled_mods;
+                let game_dir = &self.game_dir;
                 let read_override =
                     |path: &OverridePath| resources.read(enabled_mods, application, path);
+                let read_entry = |name: &EntryName| {
+                    Self::read_referenced_entry(game_dir, declaring_index, game, &mut entries, name)
+                };
                 let schema = &self.game_data_schema;
-                match ltk_game_data::apply(&bytes, &application.edits, read_override, schema) {
+                match ltk_game_data::apply(
+                    &bytes,
+                    &application.edits,
+                    read_override,
+                    read_entry,
+                    schema,
+                ) {
                     Ok(output) => {
                         let changed = output.changed();
                         self.last_game_data_diagnostics.extend(
@@ -521,6 +548,40 @@ impl OverlayBuilder {
             );
         }
         Ok(())
+    }
+
+    /// Reads the game's copy of a referenced entry, once per entry.
+    ///
+    /// A reference reads the shipped game, never the overlay being built, so this goes to the
+    /// game directory and not to the bytes the loop is accumulating. Mod content cannot reach
+    /// it, which is what makes a reference independent of mod order.
+    ///
+    /// An entry the index does not declare, a chunk that does not read, and an object the
+    /// chunk does not hold are all one answer here. Each is a reference the build cannot
+    /// resolve, and coercion reports it as `ReferenceMissingEntry` against the key that
+    /// wrote it.
+    /// Takes `game_dir` rather than `&self` because the caller is already holding
+    /// `self.enabled_mods` mutably for the override reader.
+    fn read_referenced_entry(
+        game_dir: &GameDir,
+        index: Option<&ObjectIndex>,
+        game: &GameIndex,
+        cache: &mut HashMap<BinHash, Option<BinObject>>,
+        name: &EntryName,
+    ) -> Option<BinObject> {
+        let object = name.object_hash();
+        if let Some(cached) = cache.get(&object) {
+            return cached.clone();
+        }
+        let read = || {
+            let declaration = index?.declarations(object).first()?;
+            let wad = game.wad_rel_path(declaration.archive);
+            let bytes = game_dir.read_chunk(&wad, declaration.chunk).ok()?;
+            ltk_game_data::read_entry(&bytes, name)
+        };
+        let found = read();
+        cache.insert(object, found.clone());
+        found
     }
 
     /// Loads the object index cached in the state directory, or builds it and writes the cache.
