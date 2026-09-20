@@ -148,6 +148,9 @@ pub enum PropertySkipReason {
 }
 
 impl From<RecordSkipReason> for PropertySkipReason {
+    /// Written arm by arm with no catch-all, so a code gained by one of the two enums and
+    /// not the other is a compile error rather than a diagnostic that silently reads
+    /// `Unknown`. The nine codes the two share are the same nine in the same order.
     fn from(reason: RecordSkipReason) -> Self {
         match reason {
             RecordSkipReason::MissingObject => Self::MissingObject,
@@ -159,7 +162,7 @@ impl From<RecordSkipReason> for PropertySkipReason {
             RecordSkipReason::InvalidKey => Self::InvalidKey,
             RecordSkipReason::KeyNotFound => Self::KeyNotFound,
             RecordSkipReason::TypeMismatch => Self::TypeMismatch,
-            _ => Self::Unknown,
+            RecordSkipReason::Unknown => Self::Unknown,
         }
     }
 }
