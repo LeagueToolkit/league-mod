@@ -86,7 +86,7 @@ pub struct ApplyResult {
 pub trait Schema {
     /// The shape of `field` on `class`. `None` is "the schema says nothing", never a mismatch.
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape>;
-    /// Whether the schema knows `class`.
+    /// Whether the schema knows `class`. Asked of a class a struct pin names.
     fn has_class(&self, class: BinHash) -> bool;
 }
 
@@ -130,7 +130,8 @@ pub struct Reference {
 `PropertyKind` is `ltk_meta::PropertyKind`; `PropertyPath` is `ltk_meta::path::PropertyPath`;
 both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, and
 `Shape::bare(kind)` is the shape with no key and no item. `NoSchema` implements `Schema` with
-`expected` answering `None` and `has_class` answering `true`.
+`expected` answering `None` and `has_class` answering `false`
+([ADR-0022](../adr/0022-unattested-class-refusal.md)).
 
 `FieldNames` is `ltk_meta::path::FieldNames`; `BinObject` is `ltk_meta::BinObject`; both are
 re-exported. `Names` is implemented for `()`, which names nothing, and for `&N` of any
@@ -417,8 +418,11 @@ struct holding it. Where the schema says nothing the base value's shape is the t
 `SchemaFallback` diagnostic names the path. A property the base omits with no schema answer is
 `Untypable`. A subscripted path is typed by the container's item kind, or the map's value
 kind. A struct pin's `class` is a name, hashed FNV-1a lowercased, or `0x` and 8 hexadecimal
-digits; a class the schema does not know is `UnknownClass`. Inside a `set`, each key is one
-field name of the pinned class typed by the schema; a nested struct is a nested struct pin.
+digits; a class the pin names and the schema does not know is `UnknownClass`. A pin without a
+`class` key takes the class of the base value, which the shipped bin attests, and the schema
+is not consulted ([ADR-0022](../adr/0022-unattested-class-refusal.md)). Inside a `set`, each
+key is one field name of the pinned class typed by the schema; a nested struct is a nested
+struct pin.
 
 **Coercion.** A value coerces to a shape by these rules; any other pair is `KindMismatch`.
 

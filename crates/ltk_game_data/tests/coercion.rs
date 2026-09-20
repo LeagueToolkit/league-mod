@@ -238,6 +238,77 @@ fn the_schema_types_absent_properties_and_the_base_types_the_rest() {
     );
 }
 
+/// The hash of a container of `K::Hash` items.
+fn hashes(names: &[&str]) -> V {
+    values::Container::new(
+        K::Hash,
+        names
+            .iter()
+            .map(|name| values::Hash::new(h(name)).into())
+            .collect(),
+    )
+    .unwrap()
+    .into()
+}
+
+#[test]
+fn two_spellings_of_one_property_reach_the_same_group() {
+    // A bin property name hashes without case, so both keys name `tags`.
+    let output = run(&manifest("+tags: [c]\n+TAGS: [d]\n"), &TestSchema::new());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "tags"), hashes(&["a", "b", "c", "d"]));
+
+    // A set under one spelling and an addition under another settle together.
+    let output = run(&manifest("TAGS: [x]\n+tags: [y]\n"), &TestSchema::new());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "tags"), hashes(&["x", "y"]));
+}
+
+/// A schema that types every field of [`TestSchema`] and knows no class name.
+struct ShapesOnly(TestSchema);
+
+impl Schema for ShapesOnly {
+    fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        self.0.expected(class, field)
+    }
+
+    fn has_class(&self, _: BinHash) -> bool {
+        false
+    }
+}
+
+#[test]
+fn an_authored_class_needs_the_schema_and_a_base_class_does_not() {
+    // `ptr` is a null pointer in the base, so its class can only be the authored one.
+    let typo = manifest("ptr: !pointer { class: Typo }\n");
+    assert_eq!(
+        skips(&run(&typo, &TestSchema::new())),
+        [("ptr", Reason::UnknownClass)]
+    );
+    assert_eq!(
+        skips(&run(&typo, &NoSchema)),
+        [("ptr", Reason::UnknownClass)]
+    );
+
+    // `mesh` is an embedded `E` in the base, which attests the class the pin inherits.
+    let inherited = manifest("mesh: !embed { set: { texture: z } }\n");
+    let output = run(&inherited, &ShapesOnly(TestSchema::new()));
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        value_at(&output, "mesh.texture"),
+        values::String::new("z".into()).into()
+    );
+
+    // The same schema still refuses a class the author names.
+    assert_eq!(
+        skips(&run(
+            &manifest("ptr: !pointer { class: E }\n"),
+            &ShapesOnly(TestSchema::new())
+        )),
+        [("ptr", Reason::UnknownClass)]
+    );
+}
+
 #[test]
 fn every_coercion_row_passes_and_every_reason_fails() {
     let schema = TestSchema::new();

@@ -1,7 +1,8 @@
 //! The class schema of the installed patch.
 //!
 //! A [`Schema`] answers the shape of a field on a class. The consumer implements it over the
-//! schema it holds; [`NoSchema`] says nothing and every property is typed from the base.
+//! schema it holds; [`NoSchema`] says nothing, every property is typed from the base, and an
+//! authored class name is refused.
 
 use std::sync::Arc;
 
@@ -89,7 +90,13 @@ impl From<ValueShape> for Shape {
     }
 }
 
-/// The schema that says nothing. Every property is typed from the base.
+/// The schema that says nothing. Every property is typed from the base, and no class is known.
+///
+/// `has_class` answers `false` for every class. A struct pin naming its own class is refused
+/// with `UnknownClass`; one whose class comes from the base tree applies, the base being the
+/// attestation ([ADR-0022]).
+///
+/// [ADR-0022]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0022-unattested-class-refusal.md
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct NoSchema;
 
@@ -99,6 +106,6 @@ impl Schema for NoSchema {
     }
 
     fn has_class(&self, _: BinHash) -> bool {
-        true
+        false
     }
 }

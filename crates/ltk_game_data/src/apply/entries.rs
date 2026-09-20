@@ -49,6 +49,21 @@ pub(super) fn run(
     phase.outcome
 }
 
+/// The property a path names, independent of how the path spells it.
+///
+/// A bin property name hashes ASCII case-insensitively, so `mFoo` and `MFoo` name one
+/// property. Two spellings of one property share an identity and one [`Group`], whose single
+/// `Bin::patch` carries every edit of that property.
+fn identity(path: &PropertyPath) -> String {
+    path.segments()
+        .map(|segment| match &segment.subscript {
+            Some(subscript) => format!("{:08x}{subscript}", segment.name_hash().0),
+            None => format!("{:08x}", segment.name_hash().0),
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 /// A property edit with block descent applied.
 #[derive(Debug)]
 struct Leaf {
@@ -146,7 +161,7 @@ impl Phase<'_> {
         let mut groups: IndexMap<String, Group> = IndexMap::new();
         for leaf in leaves {
             groups
-                .entry(leaf.path.as_str().to_owned())
+                .entry(identity(&leaf.path))
                 .or_insert_with(|| Group::new(leaf.path.clone()))
                 .push(leaf);
         }
