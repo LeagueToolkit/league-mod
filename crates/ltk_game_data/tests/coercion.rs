@@ -9,10 +9,9 @@ use ltk_game_data::{
     load_declarations,
 };
 use ltk_meta::{
-    PropertyValueEnum as V,
-    concrete::{Bin, BinObject, values},
+    Bin, BinObject, PropertyValueEnum as V,
     path::PropertyPath,
-    property::NoMeta,
+    property::values,
     property::values::{Embedded, UnorderedContainer},
 };
 
@@ -118,7 +117,6 @@ fn embed(texture: &str) -> Embedded {
     Embedded(values::Struct {
         class_hash: h("E"),
         properties: [(h("texture"), V::from(values::String::new(texture.into())))].into(),
-        meta: NoMeta,
     })
 }
 
@@ -475,7 +473,6 @@ fn every_coercion_row_passes_and_every_reason_fails() {
                     (h("scale"), V::from(values::F32::new(2.0))),
                 ]
                 .into(),
-                meta: NoMeta,
             }
             .into(),
         ),
