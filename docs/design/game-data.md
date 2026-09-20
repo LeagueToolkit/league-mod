@@ -83,7 +83,18 @@ pub fn apply<B: AsRef<[u8]>>(
 pub struct ApplyResult {
     pub bytes: Vec<u8>,
     pub dependencies: Vec<String>,
+    /// What the edits changed.
+    pub applied: Applied,
     pub diagnostics: Vec<ApplyDiagnostic>,
+}
+
+/// What an application changed, counted across every edit.
+pub struct Applied {
+    pub records: usize,
+    pub objects: usize,
+    pub properties: usize,
+    pub links_added: usize,
+    pub links_removed: usize,
 }
 
 /// The class schema of the installed patch ([ADR-0015](../adr/0015-schema-trait.md)).
@@ -191,7 +202,9 @@ keyword is refused earlier, at construction
 `manifest_json()` output loads
 to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each edit over the
-result of the preceding one, returns bytes, and leaves its input unchanged. `schema` types
+result of the preceding one, returns bytes, and leaves its input unchanged. `applied` counts
+what the edits changed, and `changed()` is whether any did; an `Ok` result reports that the
+base decoded, not that an edit landed. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
 supplies the bytes of an override file by its path in any `AsRef<[u8]>` container; it is
 called once per listed path, in apply order. `read_entry` supplies the installed game's copy
@@ -523,15 +536,19 @@ contains `kind`, `mod_id`, `layer`, optional `target`, optional `chunk`, optiona
 optional `edit_index`, and a human-readable `message`. `chunk` is the chunk the diagnostic is
 about, absent from a module-level diagnostic; it serializes as the `WadHash` number and decodes
 absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
-`DeclarationsRejected`, `TargetSkipped`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
+`DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
 `PropertyEditSkipped`, `SchemaFallback`, and `Unknown`. `EntryFanOut` and `SchemaFallback` are
 informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, and one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field; each is absent otherwise and decodes
-absent as `None`. `ApplyDiagnostic` contains `kind`, `edit_index`, `path`, optional `record`,
-and optional `property`; `path` is the link path, the override path, or the signed property
-key the diagnostic is about, a block's inner key joined to its outer path. Its non-exhaustive
+absent as `None`. `NoEffect` names a target whose every edit was skipped; the chunk is left
+as the game ships it. `ApplyDiagnostic` contains `kind`, `edit_index`, `path`, optional
+`record`, optional `property`, and optional `detail`; `path` is the link path, the override
+path, or the signed property key the diagnostic is about, a block's inner key joined to its
+outer path, and `detail` is what a lower layer said where no code of this crate carries it.
+`ApplyDiagnosticKind::message()` writes the statement of a category about a path, and
+`ApplyDiagnostic` implements `Display` as that statement with its `detail`. Its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `OverrideUnreadable`, `OverrideInvalid`,
 `OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`, and
 `Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)). `SkippedProperty` contains

@@ -733,3 +733,66 @@ fn property_diagnostics_serialize_with_codes() {
     .unwrap();
     assert_eq!(unknown.property.unwrap().reason, Reason::Unknown);
 }
+
+/// A list of skips does not say whether anything landed, so the result counts what did. A
+/// caller writing a result this is empty for is writing the base.
+#[test]
+fn the_result_says_whether_any_edit_landed() {
+    // Every edit skipped: the object is not there.
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    Characters/Missing:\n      a: 1\n";
+    let output = run(text, &TestSchema::new());
+    assert!(!output.changed(), "{:?}", output.applied);
+    assert_eq!(output.applied, ltk_game_data::Applied::default());
+    assert_eq!(output.bytes, base_bin());
+
+    // One property set.
+    let output = run(&manifest("speed: 4\n"), &TestSchema::new());
+    assert!(output.changed());
+    assert_eq!(output.applied.properties, 1);
+    assert_eq!(output.applied.records, 0);
+
+    // A link edit is a change, though it never reaches the object tree.
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    links: [x.bin]\n";
+    let output = run(text, &TestSchema::new());
+    assert!(output.changed());
+    assert_eq!(output.applied.links_added, 1);
+    assert_eq!(output.applied.properties, 0);
+
+    // An edit list with no edits at all is not a change.
+    let output = apply(&base_bin(), &[], no_override, &TestSchema::new()).unwrap();
+    assert!(!output.changed());
+}
+
+/// An override file whose every record skipped reached nothing, so it does not cost the
+/// re-encode that writes PROP v3 over a v2 base.
+#[test]
+fn an_override_that_applies_nothing_leaves_the_bytes_alone() {
+    let base = base_bin();
+    let mut patch = ltk_meta::BinOverride::default();
+    patch.patches.push(ltk_meta::PropertyPatch {
+        object_hash: h("Characters/Absent"),
+        path: PropertyPath::new("speed").unwrap(),
+        value: values::F32::new(9.0).into(),
+    });
+    let mut written = Cursor::new(Vec::new());
+    patch.to_writer(&mut written).unwrap();
+    let bytes = written.into_inner();
+
+    let mut edit = ltk_game_data::Edit::default();
+    edit.overrides
+        .push(OverridePath::try_from("a.ptch").unwrap());
+    let output = apply(&base, &[edit], |_| Ok(bytes.clone()), &TestSchema::new()).unwrap();
+
+    assert!(!output.changed(), "{:?}", output.applied);
+    assert_eq!(output.bytes, base);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|d| d.kind)
+            .collect::<Vec<_>>(),
+        [ApplyDiagnosticKind::OverrideRecordSkipped]
+    );
+    // The skip carries what the tree said, which no code of this crate holds.
+    assert!(output.diagnostics[0].detail.is_some());
+}

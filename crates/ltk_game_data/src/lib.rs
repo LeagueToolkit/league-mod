@@ -19,7 +19,7 @@ mod property;
 mod schema;
 mod value;
 
-pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
+pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
 pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};

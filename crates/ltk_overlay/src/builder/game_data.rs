@@ -26,6 +26,8 @@ use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
 pub enum GameDataDiagnosticKind {
     DeclarationsRejected,
     TargetSkipped,
+    /// A target whose every edit was skipped. The chunk is left as the game ships it.
+    NoEffect,
     /// An entry no game bin declares. Its edits are skipped.
     EntryUnresolved,
     /// An entry several game bins declare. Every one is edited. Informational.
@@ -84,21 +86,6 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::PropertyEditSkipped => Self::PropertyEditSkipped,
             ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
             _ => Self::Unknown,
-        }
-    }
-}
-
-impl GameDataDiagnosticKind {
-    /// The human-readable statement of an application diagnostic about `path`.
-    fn apply_message(self, path: &str) -> String {
-        match self {
-            Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
-            Self::OverrideUnreadable => format!("Override file cannot be read: {path}"),
-            Self::OverrideInvalid => format!("Override file is not a PTCH: {path}"),
-            Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
-            Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
-            Self::SchemaFallback => format!("Property is typed from the base: {path}"),
-            _ => format!("Application diagnostic: {path}"),
         }
     }
 }
@@ -238,13 +225,12 @@ impl Application {
     }
 
     /// The overlay diagnostic of one application diagnostic of this application.
+    /// The message is the one `ltk_game_data` writes, so a category this crate lowers to
+    /// `Unknown` still reads as what it is.
     fn lower(&self, diagnostic: ltk_game_data::ApplyDiagnostic) -> GameDataDiagnostic {
         let kind = GameDataDiagnosticKind::from(diagnostic.kind);
-        let mut lowered = self.diagnostic(
-            kind,
-            Some(diagnostic.edit_index),
-            kind.apply_message(&diagnostic.path),
-        );
+        let message = diagnostic.to_string();
+        let mut lowered = self.diagnostic(kind, Some(diagnostic.edit_index), message);
         lowered.record = diagnostic.record;
         lowered.property = diagnostic.property;
         lowered
@@ -441,15 +427,28 @@ impl OverlayBuilder {
                 let schema = &self.game_data_schema;
                 match ltk_game_data::apply(&bytes, &application.edits, read_override, schema) {
                     Ok(output) => {
+                        let changed = output.changed();
                         self.last_game_data_diagnostics.extend(
                             output
                                 .diagnostics
                                 .into_iter()
                                 .map(|diagnostic| application.lower(diagnostic)),
                         );
-                        bytes = output.bytes;
-                        dependencies = output.dependencies;
-                        applied = true;
+                        // `Ok` says the base decoded, not that any edit landed. An
+                        // application where every edit skipped leaves the base, and writing
+                        // it into the overlay would claim a change the author did not get
+                        // and would never be told about.
+                        if changed {
+                            bytes = output.bytes;
+                            dependencies = output.dependencies;
+                            applied = true;
+                        } else {
+                            self.last_game_data_diagnostics.push(application.diagnostic(
+                                GameDataDiagnosticKind::NoEffect,
+                                None,
+                                "every edit was skipped; the target is unchanged",
+                            ));
+                        }
                     }
                     Err(error) => self.last_game_data_diagnostics.push(application.diagnostic(
                         GameDataDiagnosticKind::TargetSkipped,
