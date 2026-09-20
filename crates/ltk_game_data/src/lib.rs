@@ -321,9 +321,11 @@ impl LinkPath {
 
 /// The layer-relative, forward-slash path of a `.ptch` override file.
 ///
-/// Construction enforces the spelling and preserves it verbatim: nonempty, relative, no
-/// backslash, no empty, `.`, or `..` segment, and a `.ptch` extension compared ASCII
-/// case-insensitively. A `.rito` path is refused with an error naming the extension.
+/// Construction enforces the spelling and keeps it as written: nonempty, relative, no
+/// backslash, no drive prefix, no empty, `.`, or `..` segment, and a `.ptch` extension
+/// compared ASCII case-insensitively. A `.rito` path is refused with an error naming the
+/// extension. A first segment holding a `:` spells a drive path, `C:/a.ptch` or `C:a.ptch`,
+/// which names a location outside the layer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct OverridePath(String);
@@ -339,6 +341,13 @@ impl TryFrom<String> for OverridePath {
             return Err(Error::at_key(ErrorKind::OverridePathBackslash, "overrides"));
         }
         if value.starts_with('/') {
+            return Err(Error::at_key(ErrorKind::OverridePathAbsolute, "overrides"));
+        }
+        if value
+            .split('/')
+            .next()
+            .is_some_and(|first| first.contains(':'))
+        {
             return Err(Error::at_key(ErrorKind::OverridePathAbsolute, "overrides"));
         }
         if value

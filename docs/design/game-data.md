@@ -188,7 +188,8 @@ retained base entries.
 ## <a id="s4"></a>4. Authoring
 
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
-`game_data.json`. The manifest requires integer `version: 1` and a `modules` array.
+`game_data.json`. A manifest or source file's extension names its format, compared ASCII
+case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one selector. A `target` selector takes a compact binding body, `edits`, or
 `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. A module with both keys, or neither, is an
@@ -213,11 +214,13 @@ file lexically; a loaded declaration and a declaration document carry the layer-
 spelling ([ADR-0013](../adr/0013-override-file-placement.md)). `OverridePath` has the same
 construction and string-access traits as `LinkPath` and implements `Display`. It is nonempty,
 relative, has no backslash, no empty, `.`, or `..` segment, and a nonempty file stem ending
-in `.ptch`, compared ASCII case-insensitively. A `.rito` path is an error naming the unsupported extension. A path that
-leaves the layer is a loading error.
+in `.ptch`, compared ASCII case-insensitively. A first segment holding a `:` spells a drive
+path, `C:/a.ptch` or `C:a.ptch`, and is an error. A `.rito` path is an error naming the
+unsupported extension. A path that leaves the layer is a loading error.
 
 An entry name is one nonempty string. `0x` followed by exactly 8 ASCII hexadecimal digits
-identifies an object hash; every other spelling identifies an object path. `EntryName` has the
+identifies an object hash; every other spelling identifies an object path. A hash-form entry
+name requires quotes in YAML, as a numeric-looking target does. `EntryName` has the
 same construction and string-access traits as `Target`, implements `Display`, and
 `object_hash()` returns its `BinHash`.
 
@@ -266,7 +269,9 @@ pub enum Value {
 A key's path is parsed by `PropertyPath::new` and a refused path is an error; the sign is not
 part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
 refuses a duplicate key in every format; an integer past the ranges named is what the format's
-parser makes of it, a float. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
+parser makes of it, a float. `Value::Integer` holds an `i128`; serializing one outside the
+union of the `i64` and `u64` ranges is an error.
+A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
 loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`; a tag whose name is neither a
 type name nor `ref` is an error. `Value::pin()` is the
 type name of a one-key mapping whose key is a type name, or `None`; `Value::reference()` is the

@@ -50,11 +50,16 @@ enum Reading {
 }
 
 impl Format {
+    /// The format of the file `name`, from its extension compared ASCII case-insensitively.
     fn of(name: &str) -> Result<Self, Error> {
-        match Utf8Path::new(name).extension() {
-            Some("yaml" | "yml") => Ok(Self::Yaml),
-            Some("json") => Ok(Self::Json),
-            Some("toml") => Ok(Self::Toml),
+        let extension = Utf8Path::new(name)
+            .extension()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "yaml" | "yml" => Ok(Self::Yaml),
+            "json" => Ok(Self::Json),
+            "toml" => Ok(Self::Toml),
             _ => Err(Error::in_document(ErrorKind::UnknownFormat, name)),
         }
     }
@@ -98,7 +103,7 @@ impl Format {
                 })
             }
             Self::Json => serde_json::from_str(text).map_err(|e| {
-                let span = Span::at_line_column(text, e.line(), e.column());
+                let span = Span::at_line_byte_column(text, e.line(), e.column());
                 syntax(&e, Some(span))
             }),
             Self::Toml => toml::from_str(text).map_err(|e| {

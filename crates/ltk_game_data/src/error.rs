@@ -138,30 +138,59 @@ pub struct Span {
 }
 
 impl Span {
-    /// The span of the character at a 1-based line and column of `text`.
+    /// The span of the character at a 1-based `line` and 1-based character `column` of `text`.
     ///
-    /// A position past the end of `text` is the empty span at its end.
+    /// A position past the end of `text` is the empty span at its end. `serde_saphyr` counts a
+    /// column in characters.
     #[must_use]
     pub fn at_line_column(text: &str, line: usize, column: usize) -> Self {
-        let line_start = text
-            .split_inclusive('\n')
-            .scan(0, |offset, line| {
-                let start = *offset;
-                *offset += line.len();
-                Some(start)
-            })
-            .nth(line.saturating_sub(1))
-            .unwrap_or(text.len());
+        let line_start = line_start(text, line);
         let start = text[line_start..]
             .char_indices()
             .nth(column.saturating_sub(1))
             .map_or(text.len(), |(offset, _)| line_start + offset);
+        Self::at(text, start)
+    }
+
+    /// The span of the character at a 1-based `line` and 1-based byte `column` of `text`.
+    ///
+    /// A position past the end of `text` is the empty span at its end; one inside a character
+    /// is the span of that character. `serde_json` counts a column in bytes.
+    #[must_use]
+    pub fn at_line_byte_column(text: &str, line: usize, column: usize) -> Self {
+        let mut start = line_start(text, line).saturating_add(column.saturating_sub(1));
+        if start >= text.len() {
+            return Self {
+                start: text.len(),
+                end: text.len(),
+            };
+        }
+        while !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        Self::at(text, start)
+    }
+
+    /// The span of the character `text` holds at the byte offset `start`.
+    fn at(text: &str, start: usize) -> Self {
         let end = text[start..]
             .chars()
             .next()
             .map_or(start, |c| start + c.len_utf8());
         Self { start, end }
     }
+}
+
+/// The byte offset the 1-based `line` of `text` starts at. A line past the last is its end.
+fn line_start(text: &str, line: usize) -> usize {
+    text.split_inclusive('\n')
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some(start)
+        })
+        .nth(line.saturating_sub(1))
+        .unwrap_or(text.len())
 }
 
 impl fmt::Display for Location {
@@ -250,7 +279,7 @@ pub enum ErrorKind {
     /// An override path with a backslash.
     #[error("override paths use forward slashes")]
     OverridePathBackslash,
-    /// An override path that starts with a slash.
+    /// An override path that starts with a slash, or whose first segment holds a drive `:`.
     #[error("override paths are relative")]
     OverridePathAbsolute,
     /// An override path with an empty, `.`, or `..` segment.
@@ -371,5 +400,24 @@ mod tests {
         assert_eq!(Span::at_line_column(text, 1, 1), Span { start: 0, end: 1 });
         assert_eq!(Span::at_line_column(text, 2, 3), Span { start: 5, end: 7 });
         assert_eq!(Span::at_line_column(text, 9, 9), Span { start: 9, end: 9 });
+    }
+
+    #[test]
+    fn a_byte_column_locates_the_same_character_a_multibyte_line_holds() {
+        let text = "ab\ncd\u{e9}f\n";
+        // Character column 4 is `f`; byte column 4 is the second byte of `\u{e9}`.
+        assert_eq!(Span::at_line_column(text, 2, 4), Span { start: 7, end: 8 });
+        assert_eq!(
+            Span::at_line_byte_column(text, 2, 4),
+            Span { start: 5, end: 7 }
+        );
+        assert_eq!(
+            Span::at_line_byte_column(text, 2, 5),
+            Span { start: 7, end: 8 }
+        );
+        assert_eq!(
+            Span::at_line_byte_column(text, 9, 9),
+            Span { start: 9, end: 9 }
+        );
     }
 }
