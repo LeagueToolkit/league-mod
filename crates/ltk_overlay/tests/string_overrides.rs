@@ -573,3 +573,79 @@ fn editing_overrides_rebuilds_only_localized_wad() {
         Some("Second")
     );
 }
+
+#[test]
+fn a_locale_whose_stringtable_does_not_parse_leaves_the_wad_marked_for_a_rebuild() {
+    let env = test_env();
+    // A chunk at the stringtable's path that is not an RST. The read succeeds and the patch
+    // does not apply, which leaves the locale unpatched without failing the build.
+    write_game_wad(&env.game_dir, "en_US", b"NOT AN RST".to_vec());
+
+    let mod_dir = write_mod_dir(
+        &env.root,
+        "strings-mod",
+        vec![string_layer(&[("en_us", &[("a_key", "Patched")])])],
+    );
+
+    let mut builder = OverlayBuilder::new(
+        env.game_dir.clone(),
+        env.overlay_root.clone(),
+        env.profile_dir.clone(),
+    )
+    .with_string_overrides(StringOverrideMode::Locales(vec!["en_us".to_string()]));
+    builder.set_enabled_mods(vec![fs_mod("strings-mod", mod_dir.clone())]);
+    let first = builder.build().unwrap();
+    assert_eq!(first.wads_built.len(), 1);
+
+    let state: serde_json::Value = serde_json::from_slice(
+        &fs::read(env.profile_dir.join("overlay.json").as_std_path()).unwrap(),
+    )
+    .unwrap();
+    let wad = "DATA/FINAL/Localized/Global.en_US.wad.client";
+    assert_eq!(
+        state["dirtyWads"].as_array().unwrap(),
+        &[serde_json::Value::String(wad.to_string())],
+        "{state}"
+    );
+    // The recorded fingerprint describes the empty tail the file actually holds.
+    assert_eq!(state["wadFingerprints"][wad].as_u64(), Some(0), "{state}");
+
+    // Nothing about the configuration changed, and the next build still rebuilds the WAD
+    // rather than taking the exact-match skip over it.
+    builder.set_enabled_mods(vec![fs_mod("strings-mod", mod_dir)]);
+    let second = builder.build().unwrap();
+    assert_eq!(second.wads_built.len(), 1, "{second:?}");
+    assert!(second.wads_reused.is_empty(), "{second:?}");
+}
+
+#[test]
+fn two_enabled_mods_sharing_an_id_refuse_to_build() {
+    let env = test_env();
+    write_game_wad(
+        &env.game_dir,
+        "en_US",
+        make_stringtable(&[("game_client_quit", "Quit")]),
+    );
+    let one = write_mod_dir(
+        &env.root,
+        "one",
+        vec![string_layer(&[("en_us", &[("a", "A")])])],
+    );
+    let two = write_mod_dir(
+        &env.root,
+        "two",
+        vec![string_layer(&[("en_us", &[("b", "B")])])],
+    );
+
+    let mut builder = OverlayBuilder::new(
+        env.game_dir.clone(),
+        env.overlay_root.clone(),
+        env.profile_dir.clone(),
+    );
+    builder.set_enabled_mods(vec![fs_mod("same-id", one), fs_mod("same-id", two)]);
+    let error = builder.build().unwrap_err();
+    assert!(
+        matches!(&error, ltk_overlay::Error::DuplicateModId { id } if id == "same-id"),
+        "{error:?}"
+    );
+}

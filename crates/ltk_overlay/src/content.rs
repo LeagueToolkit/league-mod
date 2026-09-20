@@ -38,6 +38,22 @@ pub struct CompressedChunk {
     pub claimed_checksum: u64,
 }
 
+/// A file's modification time in nanoseconds since the Unix epoch.
+///
+/// `0` when the platform reports none, or the timestamp predates the epoch. A fingerprint
+/// pairs it with the file's size, and both sides of every comparison read it the same way.
+///
+/// The resolution is the filesystem's: NTFS records 100 nanoseconds, ext4 one nanosecond. A
+/// second edit of a file within one clock tick that leaves its length unchanged produces the
+/// fingerprint the first edit produced.
+pub(crate) fn mtime_nanos(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos())
+}
+
 /// Compute a content fingerprint from an archive file's size and modification time.
 ///
 /// This is a cheap way to detect when an archive has changed without reading its
@@ -49,14 +65,9 @@ pub fn archive_fingerprint(path: &Utf8Path) -> Result<Option<u64>> {
     };
 
     let size = meta.len();
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let mtime = mtime_nanos(&meta);
 
-    let mut buf = Vec::with_capacity(16);
+    let mut buf = Vec::with_capacity(24);
     buf.extend_from_slice(&size.to_le_bytes());
     buf.extend_from_slice(&mtime.to_le_bytes());
 
@@ -484,25 +495,17 @@ impl ModContentProvider for FsModContent {
             }
         }
 
-        fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
-            meta.modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-        }
-
         // Collect (path, size, mtime) for all files under content/, plus the
         // project config - string overrides live in mod.config.json/.toml, so
         // config edits must change the fingerprint even when content/ doesn't.
-        let mut entries: Vec<(String, u64, u64)> = Vec::new();
+        let mut entries: Vec<(String, u64, u128)> = Vec::new();
 
         for config_name in ["mod.config.json", "mod.config.toml"] {
             let config_path = self.mod_dir.join(config_name);
             let Ok(meta) = std::fs::metadata(config_path.as_std_path()) else {
                 continue;
             };
-            entries.push((config_name.to_string(), meta.len(), mtime_secs(&meta)));
+            entries.push((config_name.to_string(), meta.len(), mtime_nanos(&meta)));
         }
 
         // The same filter as `read_wad_overrides`, or an edit to an ignored
@@ -521,7 +524,7 @@ impl ModContentProvider for FsModContent {
                 .unwrap_or(path)
                 .as_str()
                 .replace('\\', "/");
-            entries.push((rel, meta.len(), mtime_secs(&meta)));
+            entries.push((rel, meta.len(), mtime_nanos(&meta)));
         }
 
         let content_dir = self.mod_dir.join(CONTENT_DIR_NAME);
@@ -545,7 +548,7 @@ impl ModContentProvider for FsModContent {
                     .unwrap_or(&utf8_path)
                     .as_str()
                     .replace('\\', "/");
-                entries.push((rel, meta.len(), mtime_secs(&meta)));
+                entries.push((rel, meta.len(), mtime_nanos(&meta)));
             }
         }
 

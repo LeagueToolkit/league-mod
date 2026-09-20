@@ -34,7 +34,9 @@ A build runs in two passes over the mods, with the routing decisions in between.
 4. **Route.** Each override is distributed to every game WAD that holds its path
    hash, plus the mod's declared WAD for new entries and cross-WAD imports. A
    per-WAD fingerprint over `(path_hash, content_hash)` pairs decides which WADs
-   need rebuilding at all.
+   need rebuilding at all. The fingerprint a build saves covers the overrides the
+   file holds, not the ones the route sent it; a WAD written short of one is also
+   marked dirty.
 
 5. **Pass 2 - bytes.** Only the WADs being rebuilt have their override bytes
    re-read, from mod content providers or, for stringtable patches, generated
@@ -87,8 +89,17 @@ rewritten in place (tail only) or rebuilt in full. A full rebuild empties the
 overlay directory first, so no file survives for a rewrite to keep and the
 in-place path is not considered at all.
 
-Per-mod content fingerprints participate in the skip because a mod ID is not
-enough: a workshop project directory keeps its ID while its files change.
+Per-mod content fingerprints participate in the skip. A mod ID is not enough: a
+workshop project directory keeps its ID while its files change. A content
+fingerprint pairs each file's relative path with its size and its modification
+time in nanoseconds, so an edit that leaves the length alone still moves it.
+The resolution is the filesystem's, 100 nanoseconds on NTFS and one nanosecond
+on ext4.
+
+Each enabled mod's ID names one mod. A build refuses an enabled list holding one
+ID twice: pass 1 keeps a mod's overrides by list position and pass 2 resolves
+their bytes by ID, and the metadata cache and the saved fingerprints key on the
+ID as well.
 
 ## Patched WAD layout
 
@@ -198,6 +209,9 @@ before the marker is written.
 4. The builder writes only under `overlay_root` and the state directory, and
    never opens a game WAD for writing.
 5. Every trust decision has a full-rebuild fallback.
+6. A saved fingerprint and layout record describe the file on disk. A build that
+   drops an override records the reduced set and marks the WAD dirty, so neither
+   the skip nor the per-WAD reuse reads the file as complete.
 
 ## Deliberately absent
 

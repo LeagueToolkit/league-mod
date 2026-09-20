@@ -121,9 +121,7 @@ fn content_edit_invalidates_exact_match_skip() {
     assert!(rerun.wads_built.is_empty());
     assert_eq!(rerun.wads_reused.len(), 1);
 
-    // Edit the override under the same mod ID. The new bytes differ in length
-    // so the size-based part of the content fingerprint changes even when both
-    // writes land within the same mtime second.
+    // Edit the override under the same mod ID.
     let override_path = mod_dir
         .join("content")
         .join("base")
@@ -139,6 +137,52 @@ fn content_edit_invalidates_exact_match_skip() {
         "content edit under an unchanged mod ID must trigger a rebuild"
     );
     assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V2_EDITED");
+}
+
+/// A content fingerprint pairs each file's size with its modification time. An edit that
+/// leaves the length alone moves only the timestamp, so the timestamp carries the whole
+/// difference and its resolution is what the skip rests on.
+#[test]
+fn a_same_length_content_edit_invalidates_exact_match_skip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+    let game_dir = root.join("Game");
+    write_game_wad(&game_dir, b"GAME_ORIGINAL".to_vec());
+    let profile_dir = root.join("profile");
+    let overlay_root = profile_dir.join("overlay");
+
+    let mod_dir = write_mod_dir(&root, "workshop-proj", b"MOD_V1");
+
+    let mut builder = OverlayBuilder::new(game_dir, overlay_root.clone(), profile_dir);
+    let enabled = || {
+        vec![EnabledMod {
+            id: "workshop:workshop-proj".to_string(),
+            content: Box::new(FsModContent::new(mod_dir.clone())),
+            enabled_layers: None,
+        }]
+    };
+
+    builder.set_enabled_mods(enabled());
+    builder.build().unwrap();
+    assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V1");
+
+    // Six bytes for six, written back to back, which lands both writes in one wall-clock
+    // second.
+    let override_path = mod_dir
+        .join("content")
+        .join("base")
+        .join(GAME_WAD)
+        .join(CHUNK_PATH);
+    fs::write(override_path.as_std_path(), b"MOD_V2").unwrap();
+
+    builder.set_enabled_mods(enabled());
+    let after_edit = builder.build().unwrap();
+    assert_eq!(
+        after_edit.wads_built.len(),
+        1,
+        "a same-length content edit must trigger a rebuild"
+    );
+    assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V2");
 }
 
 /// Overlay files no build state accounts for - e.g. WADs written by a build
