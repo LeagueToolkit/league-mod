@@ -616,12 +616,30 @@ impl ModProjectLayer {
         vec![Self::base()]
     }
 
+    /// The order layers apply in: the base layer first, then ascending
+    /// priority, then name as a person reads it - `layer9` before `layer10`,
+    /// not after it.
+    ///
+    /// This is the one place that order is defined. A layer table is written
+    /// by one crate and consumed by several, and an order two of them spell
+    /// differently is an order the author cannot predict: a layer named
+    /// `armor` at priority 0 applies over the base layer or under it depending
+    /// on which spelling ran.
+    ///
+    /// Base first because the base layer is what the others are layered over,
+    /// whatever priority the table gives it.
+    pub fn apply_order(a: &Self, b: &Self) -> Ordering {
+        b.is_base()
+            .cmp(&a.is_base())
+            .then_with(|| a.priority.cmp(&b.priority))
+            .then_with(|| natural_cmp(&a.name, &b.name))
+    }
+
     /// Put a layer table read out of an archive into the order a project stores
     /// it.
     ///
-    /// Adds the base layer when the archive names none, then sorts: base first,
-    /// then by ascending priority, then by name as a person reads it - `layer9`
-    /// before `layer10`, not after it. Both archive formats store
+    /// Adds the base layer when the archive names none, then sorts into
+    /// [`apply_order`](Self::apply_order). Both archive formats store
     /// their layers unordered - Fantome as a JSON object, modpkg as a hashed
     /// table - so without a sort here two imports of one mod would write two
     /// different config files. Every conversion into a [`ModProject`] goes
@@ -650,12 +668,7 @@ impl ModProjectLayer {
             table.push(Self::base());
         }
 
-        table.sort_by(|a, b| {
-            b.is_base()
-                .cmp(&a.is_base())
-                .then_with(|| a.priority.cmp(&b.priority))
-                .then_with(|| natural_cmp(&a.name, &b.name))
-        });
+        table.sort_by(Self::apply_order);
 
         // After the sort, so which of a repeated name survives is the order
         // above rather than however the archive's map iterated. Not `dedup_by`:

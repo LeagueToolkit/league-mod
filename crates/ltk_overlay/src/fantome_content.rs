@@ -473,13 +473,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
                 string_overrides: layer.string_overrides.clone(),
             })
             .collect();
-        layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
-        if !layers.iter().any(|l| l.name == "base") {
-            layers = ModProjectLayer::default_table()
-                .into_iter()
-                .chain(layers)
-                .collect();
-        }
+        ModProjectLayer::normalize_table(&mut layers);
 
         Ok(ModProject {
             name: slug::slugify(&info.name),

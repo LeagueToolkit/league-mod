@@ -7,6 +7,7 @@ use super::*;
 use crate::meta_cache::{CachedModMeta, OverrideMetaCache};
 use crate::utils::resolve_chunk_hash;
 use ltk_game_index::ArchiveLookupError;
+use ltk_mod_project::ModProjectLayer;
 
 /// Collect override metadata from a single mod (pass 1).
 ///
@@ -40,7 +41,7 @@ pub(super) fn collect_unfiltered_mod_metadata(
 
     let project = enabled_mod.content.mod_project()?;
     let mut layers: Vec<_> = project.layers.iter().collect();
-    layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+    layers.sort_by(|a, b| ModProjectLayer::apply_order(a, b));
 
     let mut mod_meta: HashMap<WadHash, OverrideMeta> = HashMap::new();
 

@@ -12,6 +12,7 @@ use ltk_game_data::{
     Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
+use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
@@ -306,9 +307,9 @@ impl OverlayBuilder {
         for enabled in self.enabled_mods.iter_mut().rev() {
             let mut layers = enabled.content.mod_project()?.layers;
             if !layers.iter().any(|layer| layer.is_base()) {
-                layers.push(ltk_mod_project::ModProjectLayer::base());
+                layers.push(ModProjectLayer::base());
             }
-            layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+            layers.sort_by(ModProjectLayer::apply_order);
             for layer in layers {
                 if !enabled.is_layer_active(&layer.name) {
                     continue;
