@@ -5,11 +5,7 @@
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use ltk_hash::{BinHash, WadHash};
-use ltk_meta::{
-    PropertyKind as K, PropertyValueEnum as V,
-    path::PropertyPath,
-    property::{NoMeta, values},
-};
+use ltk_meta::{PropertyKind as K, PropertyValueEnum as V, path::PropertyPath, property::values};
 
 use crate::{Schema, Shape, Value, kind_named, path_hash};
 
@@ -303,7 +299,6 @@ impl Coercer<'_> {
         let value = values::Struct {
             class_hash,
             properties,
-            meta: NoMeta,
         };
         Ok(if kind == K::Embedded {
             values::Embedded(value).into()

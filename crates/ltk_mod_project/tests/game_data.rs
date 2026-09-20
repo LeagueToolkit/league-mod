@@ -250,9 +250,7 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
 /// A `PTCH` with no records.
 fn empty_ptch() -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
-    ltk_meta::concrete::BinOverride::new()
-        .to_writer(&mut cursor)
-        .unwrap();
+    ltk_meta::BinOverride::new().to_writer(&mut cursor).unwrap();
     cursor.into_inner()
 }
 
