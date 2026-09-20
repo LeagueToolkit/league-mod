@@ -259,10 +259,10 @@ impl Target {
 /// Construction classifies the spelling and preserves it as written.
 ///
 /// A binding keyword is not one. A target body carries its entry names in the same mapping
-/// as its bindings, so an entry named `links` is an entry the serialized form drops along
-/// with every property edit under it. Refusing the spelling here rather than only where the
-/// form is written means a consumer building [`Declarations`] by hand is told at the name it
-/// wrote, not at the pack that comes later.
+/// as its bindings, so the serialized form drops an entry named `links` together with every
+/// property edit under it. Construction refuses the spelling, not only the writer of the
+/// serialized form. A consumer that builds [`Declarations`] by hand then hears about it at
+/// the name it wrote, not at the pack that comes later.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct EntryName(EntryNameKind);

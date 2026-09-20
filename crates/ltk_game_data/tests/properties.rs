@@ -360,9 +360,9 @@ fn a_property_path_spelling_a_binding_keyword_refuses_to_serialize() {
 /// name is refused where it is built, which is the only place the consumer is still holding
 /// the thing it got wrong.
 ///
-/// A property path spelling a keyword is refused later instead, at serialization, because
-/// `PropertyEdit::parse` is also how block descent reads an inner key and a struct field may
-/// legitimately be named `links`. That half is
+/// A property path that spells a keyword is refused later instead, at serialization.
+/// `PropertyEdit::parse` is also how block descent reads an inner key, and a struct field
+/// may legitimately be named `links`. That half is
 /// [`a_property_path_spelling_a_binding_keyword_refuses_to_serialize`].
 #[test]
 fn an_entry_name_spelling_a_binding_keyword_cannot_be_built() {

@@ -218,8 +218,8 @@ pub struct ApplyDiagnostic {
     /// The property of a `PropertyEditSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property: Option<SkippedProperty>,
-    /// What a lower layer said, when it said something this crate's codes do not carry: the
-    /// reader's error for an unreadable override, the decoder's for an invalid one.
+    /// What a lower layer said, when it said something this crate's codes do not carry. An
+    /// unreadable override carries the reader's error. An invalid one carries the decoder's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -255,9 +255,9 @@ impl std::fmt::Display for ApplyDiagnostic {
 
 /// What an application changed, counted across every edit.
 ///
-/// Every skip is a diagnostic, but a list of skips does not say whether anything landed: an
-/// application with no diagnostics at all is one where every edit applied and one where the
-/// caller passed no edits. These counts say which.
+/// Every skip is a diagnostic, but a list of skips does not say whether anything landed. An
+/// application with no diagnostics at all is both an application where every edit applied
+/// and an application where the caller passed no edits. These counts say which.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Applied {
@@ -276,9 +276,9 @@ pub struct Applied {
 impl Applied {
     /// Whether any edit took effect.
     ///
-    /// `false` means the returned bytes carry nothing the caller declared: every edit was
-    /// skipped, or there were none. A caller writing the result somewhere is writing the
-    /// base.
+    /// `false` means the returned bytes carry nothing the caller declared. Every edit was
+    /// skipped, or there were no edits at all. A caller that writes the result somewhere
+    /// writes the base.
     #[must_use]
     pub fn any(&self) -> bool {
         self.records > 0
@@ -358,8 +358,9 @@ pub fn apply<B: AsRef<[u8]>>(
                     detail,
                 });
             };
-            // The reader's own error says why the file could not be supplied - missing,
-            // outside the layer, unreadable - and the caller has no other way to learn it.
+            // The reader's own error says why the file could not be supplied. It can be
+            // missing, outside the layer, or unreadable, and the caller has no other way
+            // to learn which.
             let bytes = match read_override(path) {
                 Ok(bytes) => bytes,
                 Err(error) => {

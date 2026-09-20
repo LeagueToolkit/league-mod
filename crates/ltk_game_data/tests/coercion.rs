@@ -735,10 +735,10 @@ fn property_diagnostics_serialize_with_codes() {
 }
 
 /// A list of skips does not say whether anything landed, so the result counts what did. A
-/// caller writing a result this is empty for is writing the base.
+/// caller that writes a result with nothing counted writes the base.
 #[test]
 fn the_result_says_whether_any_edit_landed() {
-    // Every edit skipped: the object is not there.
+    // The object is not in the base, so every edit skips.
     let text = "version: 1\nmodules:\n  - target: a.bin\n    Characters/Missing:\n      a: 1\n";
     let output = run(text, &TestSchema::new());
     assert!(!output.changed(), "{:?}", output.applied);

@@ -616,18 +616,18 @@ impl ModProjectLayer {
         vec![Self::base()]
     }
 
-    /// The order layers apply in: the base layer first, then ascending
-    /// priority, then name as a person reads it - `layer9` before `layer10`,
-    /// not after it.
+    /// The order layers apply in. The base layer comes first, then ascending
+    /// priority, then the name as a person reads it, so `layer9` comes before
+    /// `layer10` and not after it.
     ///
     /// This is the one place that order is defined. A layer table is written
-    /// by one crate and consumed by several, and an order two of them spell
-    /// differently is an order the author cannot predict: a layer named
-    /// `armor` at priority 0 applies over the base layer or under it depending
-    /// on which spelling ran.
+    /// by one crate and consumed by several. An order that two of them spell
+    /// differently is an order the author cannot predict. A layer named
+    /// `armor` at priority 0 then applies over the base layer or under it,
+    /// depending on which spelling ran.
     ///
-    /// Base first because the base layer is what the others are layered over,
-    /// whatever priority the table gives it.
+    /// The base layer comes first because it is what the others are layered
+    /// over, whatever priority the table gives it.
     pub fn apply_order(a: &Self, b: &Self) -> Ordering {
         b.is_base()
             .cmp(&a.is_base())

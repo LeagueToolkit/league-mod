@@ -272,8 +272,8 @@ impl<'de, E: Deserialize<'de>> Fields<E> {
                     Some(BindingKeyword::Overrides) => {
                         fill(&mut fields.bindings.overrides, &mut map, &key)?;
                     }
-                    // Not `fill`: the two spellings are one binding, so the message names
-                    // the pair rather than whichever of them came second.
+                    // `fill` would name whichever spelling came second. The two spellings
+                    // are one binding, so the message names the pair instead.
                     Some(BindingKeyword::AddLinks) => {
                         if fields.bindings.add_links.is_some() {
                             return Err(de::Error::custom(
@@ -394,9 +394,9 @@ impl Bindings {
     ) -> Result<IndexMap<EntryName, Vec<PropertyEdit>>, Error> {
         rest.into_iter()
             .map(|(key, value)| {
-                // A binding keyword never reaches here: `Fields::read` routes it, and
-                // `EntryName` refuses it. What is left is a key naming neither, which only
-                // a target body can tell apart from an entry name, by the `/`.
+                // A binding keyword never reaches here. `Fields::read` routes it and
+                // `EntryName` refuses it. What is left is a key that names neither, and
+                // only a target body tells such a key from an entry name, by the `/`.
                 let name = EntryName::try_from(key.as_str())?;
                 if !name.as_str().contains('/') && !name.is_hash() {
                     return Err(Error::at_key(
@@ -471,16 +471,16 @@ impl TryFrom<Edit> for Bindings {
 /// property path.
 ///
 /// A body carries the binding keys beside the entry names or the property paths, so one
-/// spelling holds one meaning, and this is where the spellings are. The reader that routes
-/// a key and the writer that refuses one have to agree about which keys are which; they
-/// agree by both asking here, so a keyword gained or respelled is one edit.
+/// spelling holds one meaning. This is where the spellings are. The reader that routes a
+/// key and the writer that refuses one must agree about which keys are which. They agree by
+/// both asking here, so a keyword gained or respelled is one edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BindingKeyword {
-    /// `overrides`: the override files the edit applies.
+    /// The override files the edit applies, spelled `overrides`.
     Overrides,
-    /// `links` or `+links`: the dependencies the edit adds.
+    /// The dependencies the edit adds, spelled `links` or `+links`.
     AddLinks,
-    /// `-links`: the dependencies the edit removes.
+    /// The dependencies the edit removes, spelled `-links`.
     RemoveLinks,
 }
 
@@ -488,7 +488,8 @@ impl BindingKeyword {
     /// The keyword `key` spells, or `None` for an entry name or a property path.
     ///
     /// [`Bindings`] spells the same three in its `serde` renames, which take a literal and
-    /// so cannot read them from here. Those renames and this function are the whole of it.
+    /// so cannot read them from here. Those renames and this function are the only two
+    /// places the spellings appear.
     pub(crate) fn of(key: &str) -> Option<Self> {
         match key {
             "overrides" => Some(Self::Overrides),

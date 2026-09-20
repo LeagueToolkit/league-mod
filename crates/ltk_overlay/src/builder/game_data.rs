@@ -134,7 +134,7 @@ impl Pending {
 
     /// The application of one entry's edit to one chunk.
     ///
-    /// The entry becomes a one-entry `Edit`, which is the shape `apply` takes; the links of
+    /// The entry becomes a one-entry `Edit`, which is the shape `apply` takes. The links of
     /// an `entries` module ride along on that edit, as links of the declaring chunk.
     fn application(&self, name: &EntryName, edit: &EntryEdit, chunk: WadHash) -> Application {
         let mut chunk_edit = Edit::default();
@@ -167,9 +167,9 @@ fn index_unavailable(pending: &Pending, error: &ObjectBuildError) -> GameDataDia
 ///
 /// An `entries` module names entries, not chunks, so how many chunks an entry reaches is a
 /// property of the installed game rather than of the declaration. That makes the count the
-/// one thing about the fan-out worth telling the author, and the rule for saying it is
-/// small enough to read in one place: nothing reached is a skip, one is the ordinary case
-/// and silent, several is informational.
+/// one thing about the fan-out worth telling the author. The rule for saying it is small
+/// enough to read in one place. No chunk reached is a skip, one chunk is the ordinary case
+/// and stays silent, and several chunks are informational.
 struct Fanout {
     /// Each declaring chunk once, in the order the index reports it, with the archive that
     /// declares it.
@@ -180,8 +180,8 @@ impl Fanout {
     /// The chunks of `name`, deduplicated.
     ///
     /// The index reports declarations in storage order and names one chunk more than once
-    /// for an entry several of its archives declare. Each distinct chunk is edited once; a
-    /// second application over the accumulating bytes lands every `+` edit twice.
+    /// for an entry several of its archives declare. Each distinct chunk is edited once. A
+    /// second application over the accumulating bytes would land every `+` edit twice.
     fn of(name: &EntryName, index: &ObjectIndex) -> Self {
         Self {
             chunks: index
@@ -486,7 +486,7 @@ impl OverlayBuilder {
                             self.last_game_data_diagnostics.push(application.diagnostic(
                                 GameDataDiagnosticKind::NoEffect,
                                 None,
-                                "every edit was skipped; the target is unchanged",
+                                "every edit was skipped, so the target is unchanged",
                             ));
                         }
                     }
