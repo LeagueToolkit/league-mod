@@ -739,6 +739,58 @@ fn a_clean_override_sets_the_property_and_reports_nothing() {
     );
 }
 
+/// An application that returns `Ok` has decoded the base, not landed an edit. A target whose
+/// every record skipped is left as the game ships it, and the author is told so. Writing it
+/// into the overlay would claim a change that is not there and report nothing.
+#[test]
+fn a_target_whose_every_edit_skipped_is_not_written_and_says_so() {
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"target":"shared","overrides":["speed.ptch"]}]}"#),
+    );
+    // Object 9 is not in the base, so the file's one record skips and nothing lands.
+    fs::write(
+        root.join("top/content/base/speed.ptch"),
+        speed_ptch_with(&[9]),
+    )
+    .unwrap();
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+
+    let kinds: Vec<_> = result
+        .game_data_diagnostics
+        .iter()
+        .map(|d| d.kind)
+        .collect();
+    assert!(
+        kinds.contains(&GameDataDiagnosticKind::OverrideRecordSkipped),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    assert!(
+        kinds.contains(&GameDataDiagnosticKind::NoEffect),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+
+    let written = overlay.join(WAD);
+    let empty = !written.exists() || {
+        let wad = Wad::mount(Cursor::new(fs::read(&written).unwrap())).unwrap();
+        wad.chunks().get(common::hash("shared")).is_none()
+    };
+    assert!(empty, "the unchanged chunk was written into the overlay");
+}
+
 #[test]
 fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
     use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};

@@ -12,6 +12,7 @@ use ltk_game_data::{
     Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
+use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,8 @@ use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
 pub enum GameDataDiagnosticKind {
     DeclarationsRejected,
     TargetSkipped,
+    /// A target whose every edit was skipped. The chunk is left as the game ships it.
+    NoEffect,
     /// An entry no game bin declares. Its edits are skipped.
     EntryUnresolved,
     /// An entry several game bins declare. Every one is edited. Informational.
@@ -87,21 +90,6 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
     }
 }
 
-impl GameDataDiagnosticKind {
-    /// The human-readable statement of an application diagnostic about `path`.
-    fn apply_message(self, path: &str) -> String {
-        match self {
-            Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
-            Self::OverrideUnreadable => format!("Override file cannot be read: {path}"),
-            Self::OverrideInvalid => format!("Override file is not a PTCH: {path}"),
-            Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
-            Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
-            Self::SchemaFallback => format!("Property is typed from the base: {path}"),
-            _ => format!("Application diagnostic: {path}"),
-        }
-    }
-}
-
 /// One module's edits bound to one chunk.
 struct Application {
     mod_id: String,
@@ -143,6 +131,27 @@ impl Pending {
             message: message.to_string(),
         }
     }
+
+    /// The application of one entry's edit to one chunk.
+    ///
+    /// The entry becomes a one-entry `Edit`, which is the shape `apply` takes. The links of
+    /// an `entries` module ride along on that edit, as links of the declaring chunk.
+    fn application(&self, name: &EntryName, edit: &EntryEdit, chunk: WadHash) -> Application {
+        let mut chunk_edit = Edit::default();
+        chunk_edit
+            .entries
+            .insert(name.clone(), edit.properties.clone());
+        chunk_edit.links = edit.links.clone();
+        Application {
+            mod_id: self.mod_id.clone(),
+            layer: self.layer.clone(),
+            target: name.as_str().to_owned(),
+            chunk_path: format!("{:016x}", chunk.0),
+            chunk,
+            edits: vec![chunk_edit],
+            origin: self.module.origin.clone(),
+        }
+    }
 }
 
 /// The diagnostic of an `entries` module skipped for want of an object index.
@@ -152,6 +161,63 @@ fn index_unavailable(pending: &Pending, error: &ObjectBuildError) -> GameDataDia
         None,
         format!("Object index is unavailable: {error}; entries are skipped"),
     )
+}
+
+/// The chunks one entry is edited in, and what that is worth reporting.
+///
+/// An `entries` module names entries, not chunks, so how many chunks an entry reaches is a
+/// property of the installed game rather than of the declaration. That makes the count the
+/// one thing about the fan-out worth telling the author. The rule for saying it is small
+/// enough to read in one place. No chunk reached is a skip, one chunk is the ordinary case
+/// and stays silent, and several chunks are informational.
+struct Fanout {
+    /// Each declaring chunk once, in the order the index reports it, with the archive that
+    /// declares it.
+    chunks: IndexMap<WadHash, ArchiveId>,
+}
+
+impl Fanout {
+    /// The chunks of `name`, deduplicated.
+    ///
+    /// The index reports declarations in storage order and names one chunk more than once
+    /// for an entry several of its archives declare. Each distinct chunk is edited once. A
+    /// second application over the accumulating bytes would land every `+` edit twice.
+    fn of(name: &EntryName, index: &ObjectIndex) -> Self {
+        Self {
+            chunks: index
+                .declarations(name.object_hash())
+                .iter()
+                .map(|declaration| (declaration.chunk, declaration.archive))
+                .collect(),
+        }
+    }
+
+    /// The diagnostic this fan-out is worth, or `None` for the one-chunk case.
+    fn report(&self, game: &GameIndex) -> Option<(GameDataDiagnosticKind, String)> {
+        match self.chunks.len() {
+            0 => Some((
+                GameDataDiagnosticKind::EntryUnresolved,
+                "No game bin declares the entry; edits are skipped".to_owned(),
+            )),
+            1 => None,
+            count => {
+                let named: Vec<String> = self
+                    .chunks
+                    .iter()
+                    .map(|(chunk, archive)| {
+                        format!("{:016x} ({})", chunk.0, game.archive(*archive).name)
+                    })
+                    .collect();
+                Some((
+                    GameDataDiagnosticKind::EntryFanOut,
+                    format!(
+                        "Entry is declared in {count} chunks, each edited: {}",
+                        named.join(", ")
+                    ),
+                ))
+            }
+        }
+    }
 }
 
 /// Lowers the entries of `pending` to one application per declaring chunk, in mapping order.
@@ -164,53 +230,15 @@ fn lower_entries(
     diagnostics: &mut Vec<GameDataDiagnostic>,
 ) {
     for (name, edit) in entries {
-        // The index reports declarations in storage order and names one chunk more than once
-        // for an entry several of its archives declare. Each distinct chunk is edited once; a
-        // second application over the accumulating bytes lands every `+` edit twice.
-        let chunks: IndexMap<WadHash, ArchiveId> = index
-            .declarations(name.object_hash())
-            .iter()
-            .map(|declaration| (declaration.chunk, declaration.archive))
-            .collect();
-        match chunks.len() {
-            0 => diagnostics.push(pending.diagnostic(
-                GameDataDiagnosticKind::EntryUnresolved,
-                Some(name),
-                "No game bin declares the entry; edits are skipped",
-            )),
-            1 => {}
-            count => {
-                let named: Vec<String> = chunks
-                    .iter()
-                    .map(|(chunk, archive)| {
-                        format!("{:016x} ({})", chunk.0, game.archive(*archive).name)
-                    })
-                    .collect();
-                diagnostics.push(pending.diagnostic(
-                    GameDataDiagnosticKind::EntryFanOut,
-                    Some(name),
-                    format!(
-                        "Entry is declared in {count} chunks, each edited: {}",
-                        named.join(", ")
-                    ),
-                ));
-            }
+        let fanout = Fanout::of(name, index);
+        if let Some((kind, message)) = fanout.report(game) {
+            diagnostics.push(pending.diagnostic(kind, Some(name), message));
         }
-        for chunk in chunks.into_keys() {
-            let mut chunk_edit = Edit::default();
-            chunk_edit
-                .entries
-                .insert(name.clone(), edit.properties.clone());
-            chunk_edit.links = edit.links.clone();
-            targets.entry(chunk).or_default().push(Application {
-                mod_id: pending.mod_id.clone(),
-                layer: pending.layer.clone(),
-                target: name.as_str().to_owned(),
-                chunk_path: format!("{:016x}", chunk.0),
-                chunk,
-                edits: vec![chunk_edit],
-                origin: pending.module.origin.clone(),
-            });
+        for chunk in fanout.chunks.into_keys() {
+            targets
+                .entry(chunk)
+                .or_default()
+                .push(pending.application(name, edit, chunk));
         }
     }
 }
@@ -237,13 +265,12 @@ impl Application {
     }
 
     /// The overlay diagnostic of one application diagnostic of this application.
+    /// The message is the one `ltk_game_data` writes, so a category this crate lowers to
+    /// `Unknown` still reads as what it is.
     fn lower(&self, diagnostic: ltk_game_data::ApplyDiagnostic) -> GameDataDiagnostic {
         let kind = GameDataDiagnosticKind::from(diagnostic.kind);
-        let mut lowered = self.diagnostic(
-            kind,
-            Some(diagnostic.edit_index),
-            kind.apply_message(&diagnostic.path),
-        );
+        let message = diagnostic.to_string();
+        let mut lowered = self.diagnostic(kind, Some(diagnostic.edit_index), message);
         lowered.record = diagnostic.record;
         lowered.property = diagnostic.property;
         lowered
@@ -306,9 +333,9 @@ impl OverlayBuilder {
         for enabled in self.enabled_mods.iter_mut().rev() {
             let mut layers = enabled.content.mod_project()?.layers;
             if !layers.iter().any(|layer| layer.is_base()) {
-                layers.push(ltk_mod_project::ModProjectLayer::base());
+                layers.push(ModProjectLayer::base());
             }
-            layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+            layers.sort_by(ModProjectLayer::apply_order);
             for layer in layers {
                 if !enabled.is_layer_active(&layer.name) {
                     continue;
@@ -440,15 +467,28 @@ impl OverlayBuilder {
                 let schema = &self.game_data_schema;
                 match ltk_game_data::apply(&bytes, &application.edits, read_override, schema) {
                     Ok(output) => {
+                        let changed = output.changed();
                         self.last_game_data_diagnostics.extend(
                             output
                                 .diagnostics
                                 .into_iter()
                                 .map(|diagnostic| application.lower(diagnostic)),
                         );
-                        bytes = output.bytes;
-                        dependencies = output.dependencies;
-                        applied = true;
+                        // `Ok` says the base decoded, not that any edit landed. An
+                        // application where every edit skipped leaves the base, and writing
+                        // it into the overlay would claim a change the author did not get
+                        // and would never be told about.
+                        if changed {
+                            bytes = output.bytes;
+                            dependencies = output.dependencies;
+                            applied = true;
+                        } else {
+                            self.last_game_data_diagnostics.push(application.diagnostic(
+                                GameDataDiagnosticKind::NoEffect,
+                                None,
+                                "every edit was skipped, so the target is unchanged",
+                            ));
+                        }
                     }
                     Err(error) => self.last_game_data_diagnostics.push(application.diagnostic(
                         GameDataDiagnosticKind::TargetSkipped,

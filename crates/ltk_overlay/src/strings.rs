@@ -251,7 +251,7 @@ pub(crate) fn collect_effective_overrides(
     for enabled_mod in enabled_mods.iter_mut().rev() {
         let project = enabled_mod.content.mod_project()?;
         let mut layers = project.layers;
-        layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+        layers.sort_by(ModProjectLayer::apply_order);
 
         for layer in &layers {
             if layer.string_overrides.is_empty() || !enabled_mod.is_layer_active(&layer.name) {

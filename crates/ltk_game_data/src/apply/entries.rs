@@ -22,13 +22,14 @@ pub(super) struct Report {
     pub(super) kind: ApplyDiagnosticKind,
     pub(super) path: String,
     pub(super) property: Option<SkippedProperty>,
+    pub(super) detail: Option<String>,
 }
 
-/// The phase's reports and whether any property was set.
+/// The phase's reports and how many property keys it set.
 #[derive(Debug, Default)]
 pub(super) struct Outcome {
     pub(super) reports: Vec<Report>,
-    pub(super) patched: bool,
+    pub(super) properties: usize,
 }
 
 /// Runs the entry edits of one batch over `bin`.
@@ -149,6 +150,7 @@ impl Phase<'_> {
                 entry: entry.clone(),
                 reason,
             }),
+            detail: None,
         });
     }
 
@@ -173,7 +175,7 @@ impl Phase<'_> {
         }
         for group in groups.into_values() {
             match self.settle(hash, &group) {
-                Ok(()) => self.outcome.patched = true,
+                Ok(()) => self.outcome.properties += 1,
                 Err((sign, reason)) => {
                     self.skip(name, format!("{}{}", sign.as_str(), group.path), reason);
                 }
@@ -297,6 +299,7 @@ impl Phase<'_> {
                 kind: ApplyDiagnosticKind::SchemaFallback,
                 path: group.path.as_str().to_owned(),
                 property: None,
+                detail: None,
             });
         }
         let mut current = site.base.clone();

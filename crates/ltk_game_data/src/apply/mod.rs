@@ -148,6 +148,9 @@ pub enum PropertySkipReason {
 }
 
 impl From<RecordSkipReason> for PropertySkipReason {
+    /// Written arm by arm with no catch-all, so a code gained by one of the two enums and
+    /// not the other is a compile error rather than a diagnostic that silently reads
+    /// `Unknown`. The nine codes the two share are the same nine in the same order.
     fn from(reason: RecordSkipReason) -> Self {
         match reason {
             RecordSkipReason::MissingObject => Self::MissingObject,
@@ -159,7 +162,7 @@ impl From<RecordSkipReason> for PropertySkipReason {
             RecordSkipReason::InvalidKey => Self::InvalidKey,
             RecordSkipReason::KeyNotFound => Self::KeyNotFound,
             RecordSkipReason::TypeMismatch => Self::TypeMismatch,
-            _ => Self::Unknown,
+            RecordSkipReason::Unknown => Self::Unknown,
         }
     }
 }
@@ -215,18 +218,97 @@ pub struct ApplyDiagnostic {
     /// The property of a `PropertyEditSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property: Option<SkippedProperty>,
+    /// What a lower layer said, when it said something this crate's codes do not carry. An
+    /// unreadable override carries the reader's error. An invalid one carries the decoder's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
-/// The outcome of one application: the target's bytes, its dependency list, and every
-/// nonfatal outcome.
+impl ApplyDiagnosticKind {
+    /// The statement of a diagnostic of this category about `path`.
+    ///
+    /// The text lives beside the codes because a consumer that renders the codes itself
+    /// writes one arm per variant and silently loses whichever variant it has not heard of.
+    #[must_use]
+    pub fn message(self, path: &str) -> String {
+        match self {
+            Self::OverrideUnreadable => format!("Override file cannot be read: {path}"),
+            Self::OverrideInvalid => format!("Override file is not a PTCH: {path}"),
+            Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
+            Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
+            Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
+            Self::SchemaFallback => format!("Property is typed from the base: {path}"),
+            Self::Unknown => format!("Application diagnostic: {path}"),
+        }
+    }
+}
+
+impl std::fmt::Display for ApplyDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.kind.message(&self.path))?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
+        }
+        Ok(())
+    }
+}
+
+/// What an application changed, counted across every edit.
+///
+/// Every skip is a diagnostic, but a list of skips does not say whether anything landed. An
+/// application with no diagnostics at all is both an application where every edit applied
+/// and an application where the caller passed no edits. These counts say which.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Applied {
+    /// Override records that applied, over every override file of every edit.
+    pub records: usize,
+    /// Objects an override file added to, replaced in, or deleted from the target.
+    pub objects: usize,
+    /// Property keys whose patch landed. One key is one patch, whatever its sign.
+    pub properties: usize,
+    /// Dependencies added to the target.
+    pub links_added: usize,
+    /// Dependencies removed from the target.
+    pub links_removed: usize,
+}
+
+impl Applied {
+    /// Whether any edit took effect.
+    ///
+    /// `false` means the returned bytes carry nothing the caller declared. Every edit was
+    /// skipped, or there were no edits at all. A caller that writes the result somewhere
+    /// writes the base.
+    #[must_use]
+    pub fn any(&self) -> bool {
+        self.records > 0
+            || self.objects > 0
+            || self.properties > 0
+            || self.links_added > 0
+            || self.links_removed > 0
+    }
+}
+
+/// The outcome of one application: the target's bytes, its dependency list, what the edits
+/// changed, and every nonfatal outcome.
 #[derive(Debug)]
 pub struct ApplyResult {
     /// The target after every edit, a `PROP`.
     pub bytes: Vec<u8>,
     /// The dependency spellings of `bytes`, retained base entries included.
     pub dependencies: Vec<String>,
+    /// What the edits changed.
+    pub applied: Applied,
     /// Every diagnostic in apply order.
     pub diagnostics: Vec<ApplyDiagnostic>,
+}
+
+impl ApplyResult {
+    /// Whether any edit took effect. See [`Applied::any`].
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        self.applied.any()
+    }
 }
 
 /// Applies ordered edits to a PROP v2 or v3.
@@ -263,28 +345,51 @@ pub fn apply<B: AsRef<[u8]>>(
     bin.dependencies
         .retain(|path| seen.insert(path.as_str().to_ascii_lowercase()));
     let mut diagnostics = Vec::new();
-    let mut rewritten = false;
+    let mut applied = Applied::default();
     for (index, edit) in edits.iter().enumerate() {
         for path in &edit.overrides {
-            let mut report = |kind, record| {
+            let mut report = |kind, record, detail| {
                 diagnostics.push(ApplyDiagnostic {
                     kind,
                     edit_index: index,
                     path: path.as_str().to_owned(),
                     record,
                     property: None,
+                    detail,
                 });
             };
-            let Ok(bytes) = read_override(path) else {
-                report(ApplyDiagnosticKind::OverrideUnreadable, None);
-                continue;
+            // The reader's own error says why the file could not be supplied. It can be
+            // missing, outside the layer, or unreadable, and the caller has no other way
+            // to learn which.
+            let bytes = match read_override(path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    report(
+                        ApplyDiagnosticKind::OverrideUnreadable,
+                        None,
+                        Some(error.to_string()),
+                    );
+                    continue;
+                }
             };
-            let Ok(patch) = BinOverride::from_reader(&mut Cursor::new(bytes.as_ref())) else {
-                report(ApplyDiagnosticKind::OverrideInvalid, None);
-                continue;
+            let patch = match BinOverride::from_reader(&mut Cursor::new(bytes.as_ref())) {
+                Ok(patch) => patch,
+                Err(error) => {
+                    report(
+                        ApplyDiagnosticKind::OverrideInvalid,
+                        None,
+                        Some(error.to_string()),
+                    );
+                    continue;
+                }
             };
-            let applied = patch.apply(&mut bin);
-            for skipped in applied.skipped {
+            let report_of_patch = patch.apply(&mut bin);
+            applied.records += report_of_patch.applied;
+            applied.objects += report_of_patch.added.len()
+                + report_of_patch.replaced.len()
+                + report_of_patch.deleted.len();
+            for skipped in report_of_patch.skipped {
+                let detail = skipped.error.to_string();
                 report(
                     ApplyDiagnosticKind::OverrideRecordSkipped,
                     Some(SkippedRecord {
@@ -293,30 +398,34 @@ pub fn apply<B: AsRef<[u8]>>(
                         property: skipped.path.as_str().to_owned(),
                         reason: RecordSkipReason::from(&skipped.error),
                     }),
+                    Some(detail),
                 );
             }
-            rewritten = true;
         }
         let outcome = entries::run(&mut bin, schema, &edit.entries);
-        rewritten |= outcome.patched;
+        applied.properties += outcome.properties;
         diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
             kind: report.kind,
             edit_index: index,
             path: report.path,
             record: None,
             property: report.property,
+            detail: report.detail,
         }));
         for path in &edit.links.remove {
             let count = bin.dependencies.len();
             bin.dependencies
                 .retain(|value| !value.eq_ignore_ascii_case(path.as_str()));
-            if bin.dependencies.len() == count {
+            let removed = count - bin.dependencies.len();
+            applied.links_removed += removed;
+            if removed == 0 {
                 diagnostics.push(ApplyDiagnostic {
                     kind: ApplyDiagnosticKind::LinkRemovalUnmatched,
                     edit_index: index,
                     path: path.as_str().to_owned(),
                     record: None,
                     property: None,
+                    detail: None,
                 });
             }
         }
@@ -328,10 +437,15 @@ pub fn apply<B: AsRef<[u8]>>(
         for path in &edit.links.add {
             if seen.insert(path.as_str().to_ascii_lowercase()) {
                 bin.dependencies.push(path.as_str().to_owned());
+                applied.links_added += 1;
             }
         }
     }
-    let bytes = if rewritten {
+    // Only an edit that reached the object tree costs the re-encode, which writes PROP v3
+    // and so changes the version of a v2 base. A link edit is a header edit, and an override
+    // file whose every record skipped reached nothing.
+    let tree_changed = applied.records > 0 || applied.objects > 0 || applied.properties > 0;
+    let bytes = if tree_changed {
         let mut cursor = Cursor::new(Vec::new());
         bin.to_writer(&mut cursor).map_err(|e| bin_error(&e))?;
         cursor.into_inner()
@@ -341,6 +455,7 @@ pub fn apply<B: AsRef<[u8]>>(
     Ok(ApplyResult {
         bytes,
         dependencies: bin.dependencies,
+        applied,
         diagnostics,
     })
 }

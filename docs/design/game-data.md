@@ -35,7 +35,7 @@ to a value of the installed game.
 - **Leaf edit:** A property edit with block descent applied: a full path from the entry, a sign, and a value that is not a descent.
 - **Origin:** A manifest, optional source, and zero-based module index.
 - **Target:** A nonempty literal game path or bare chunk hash.
-- **Entry name:** A nonempty bin object path, or its hash as `0x` and 8 hexadecimal digits. The object hash of a path is the FNV-1a of its ASCII-lowercased spelling.
+- **Entry name:** A nonempty bin object path that is not a binding keyword, or its hash as `0x` and 8 hexadecimal digits. The object hash of a path is the FNV-1a of its ASCII-lowercased spelling.
 - **Declaring chunk:** A game bin chunk containing an entry, reported by the object index.
 - **Link path:** An authored dependency path containing 1 to 65535 UTF-8 bytes.
 - **Diagnostic:** One nonfatal declaration or application outcome, with a typed category.
@@ -83,7 +83,18 @@ pub fn apply<B: AsRef<[u8]>>(
 pub struct ApplyResult {
     pub bytes: Vec<u8>,
     pub dependencies: Vec<String>,
+    /// What the edits changed.
+    pub applied: Applied,
     pub diagnostics: Vec<ApplyDiagnostic>,
+}
+
+/// What an application changed, counted across every edit.
+pub struct Applied {
+    pub records: usize,
+    pub objects: usize,
+    pub properties: usize,
+    pub links_added: usize,
+    pub links_removed: usize,
 }
 
 /// The class schema of the installed patch ([ADR-0015](../adr/0015-schema-trait.md)).
@@ -184,11 +195,16 @@ checks supported declaration versions, and refuses a target module with no edit 
 module with no entry. `manifest_json()` validates and writes a direct JSON manifest.
 A conversion to a serialized form refuses what that form cannot carry, and the manifest and
 the document refuse the same things ([ADR-0023](../adr/0023-refusing-serialization.md)): a
-property path or entry name spelling a binding keyword, one signed key held twice by an entry,
-and an integer outside the union of the `i64` and `u64` ranges. `manifest_json()` output loads
+property path spelling a binding keyword, one signed key held twice by an entry, and an
+integer outside the union of the `i64` and `u64` ranges. An entry name spelling a binding
+keyword is refused earlier, at construction
+([ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md)).
+`manifest_json()` output loads
 to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each edit over the
-result of the preceding one, returns bytes, and leaves its input unchanged. `schema` types
+result of the preceding one, returns bytes, and leaves its input unchanged. `applied` counts
+what the edits changed, and `changed()` is whether any did; an `Ok` result reports that the
+base decoded, not that an edit landed. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
 supplies the bytes of an override file by its path in any `AsRef<[u8]>` container; it is
 called once per listed path, in apply order. `read_entry` supplies the installed game's copy
@@ -229,9 +245,12 @@ in `.ptch`, compared ASCII case-insensitively. A first segment holding a `:` spe
 path, `C:/a.ptch` or `C:a.ptch`, and is an error. A `.rito` path is an error naming the
 unsupported extension. A path that leaves the layer is a loading error.
 
-An entry name is one nonempty string. `0x` followed by exactly 8 ASCII hexadecimal digits
-identifies an object hash; every other spelling identifies an object path. A hash-form entry
-name requires quotes in YAML, as a numeric-looking target does. `EntryName` has the
+An entry name is one nonempty string that is not a binding keyword
+([ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md)). `0x` followed by exactly 8
+ASCII hexadecimal digits identifies an object hash; every other spelling identifies an object
+path. A hash-form entry name requires quotes in YAML, as a numeric-looking target does. A
+target body tells an entry name from a key that names neither an entry nor a binding by the
+`/`, so a name written there holds one or is the hash form. `EntryName` has the
 same construction and string-access traits as `Target`, implements `Display`, and
 `object_hash()` returns its `BinHash`.
 
@@ -517,15 +536,19 @@ contains `kind`, `mod_id`, `layer`, optional `target`, optional `chunk`, optiona
 optional `edit_index`, and a human-readable `message`. `chunk` is the chunk the diagnostic is
 about, absent from a module-level diagnostic; it serializes as the `WadHash` number and decodes
 absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
-`DeclarationsRejected`, `TargetSkipped`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
+`DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
 `PropertyEditSkipped`, `SchemaFallback`, and `Unknown`. `EntryFanOut` and `SchemaFallback` are
 informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, and one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field; each is absent otherwise and decodes
-absent as `None`. `ApplyDiagnostic` contains `kind`, `edit_index`, `path`, optional `record`,
-and optional `property`; `path` is the link path, the override path, or the signed property
-key the diagnostic is about, a block's inner key joined to its outer path. Its non-exhaustive
+absent as `None`. `NoEffect` names a target whose every edit was skipped; the chunk is left
+as the game ships it. `ApplyDiagnostic` contains `kind`, `edit_index`, `path`, optional
+`record`, optional `property`, and optional `detail`; `path` is the link path, the override
+path, or the signed property key the diagnostic is about, a block's inner key joined to its
+outer path, and `detail` is what a lower layer said where no code of this crate carries it.
+`ApplyDiagnosticKind::message()` writes the statement of a category about a path, and
+`ApplyDiagnostic` implements `Display` as that statement with its `detail`. Its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `OverrideUnreadable`, `OverrideInvalid`,
 `OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`, and
 `Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)). `SkippedProperty` contains
@@ -613,3 +636,4 @@ reference from the game.
 | D27 | A reference is a value resolved against the installed game's copy | A reference into the build state; an object binding only | The result depends on the game and the declaration, never on mod order | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D28 | `ref` is a reserved one-key mapping key | A field lookup | A tag and the one-key mapping are one value, as with pins; no Riot field hashes to `ref` | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D29 | A reference splits at its first `:` | A split at a `.` | LTK Manager's Copy path writes `<entry>:<path>`; no known entry name holds a `:` | [section 4](#s4) |
+| D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |

@@ -355,33 +355,28 @@ fn a_property_path_spelling_a_binding_keyword_refuses_to_serialize() {
     );
 }
 
+/// An entry named for a binding keyword shares a target body's mapping with the binding of
+/// that name, so the serialized form drops the entry and every property edit under it. The
+/// name is refused where it is built, which is the only place the consumer is still holding
+/// the thing it got wrong.
+///
+/// A property path that spells a keyword is refused later instead, at serialization.
+/// `PropertyEdit::parse` is also how block descent reads an inner key, and a struct field
+/// may legitimately be named `links`. That half is
+/// [`a_property_path_spelling_a_binding_keyword_refuses_to_serialize`].
 #[test]
-fn an_entry_name_spelling_a_binding_keyword_refuses_to_serialize() {
-    let mut edit = Edit::default();
-    edit.entries.insert(
-        EntryName::try_from("links").unwrap(),
-        vec![PropertyEdit::parse("a", Value::Integer(1)).unwrap()],
-    );
-    let declarations = Declarations {
-        version: 1,
-        modules: vec![Module {
-            selector: Selector::Target {
-                target: ltk_game_data::Target::try_from("a.bin").unwrap(),
-                edits: vec![edit],
-            },
-            origin: ltk_game_data::Origin {
-                manifest: "game_data.json".into(),
-                source: None,
-                module_index: 0,
-            },
-        }],
-    };
-    let error = declarations.manifest_json().unwrap_err();
-    assert!(
-        matches!(&error.kind, ErrorKind::ReservedBindingKey { key } if key == "links"),
-        "{error:?}"
-    );
-    assert_eq!(error.location.module, Some(0));
+fn an_entry_name_spelling_a_binding_keyword_cannot_be_built() {
+    for key in ["overrides", "links", "+links", "-links"] {
+        let error = EntryName::try_from(key).unwrap_err();
+        assert!(
+            matches!(&error.kind, ErrorKind::ReservedBindingKey { key: k } if k == key),
+            "{key}: {error:?}"
+        );
+    }
+
+    // A name that merely starts with a keyword is an ordinary name.
+    assert!(EntryName::try_from("links/Foo").is_ok());
+    assert!(EntryName::try_from("linksPerSecond").is_ok());
 }
 
 #[test]

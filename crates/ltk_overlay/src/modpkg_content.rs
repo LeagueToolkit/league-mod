@@ -90,11 +90,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
                 }
             })
             .collect();
-        layers.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
-
-        if !layers.iter().any(|l| l.name == "base") {
-            layers.insert(0, ModProjectLayer::base());
-        }
+        ModProjectLayer::normalize_table(&mut layers);
 
         Ok(ModProject {
             name: metadata.name,

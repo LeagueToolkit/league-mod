@@ -19,7 +19,7 @@ mod property;
 mod schema;
 mod value;
 
-pub use apply::{ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
+pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
 pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
@@ -256,7 +256,13 @@ impl Target {
 }
 
 /// A nonempty bin object path, or its hash as `0x` and exactly 8 hexadecimal digits.
-/// Construction classifies the spelling and preserves it verbatim.
+/// Construction classifies the spelling and preserves it as written.
+///
+/// A binding keyword is not one. A target body carries its entry names in the same mapping
+/// as its bindings, so the serialized form drops an entry named `links` together with every
+/// property edit under it. Construction refuses the spelling, not only the writer of the
+/// serialized form. A consumer that builds [`Declarations`] by hand then hears about it at
+/// the name it wrote, not at the pack that comes later.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct EntryName(EntryNameKind);
@@ -270,9 +276,19 @@ enum EntryNameKind {
 impl TryFrom<String> for EntryName {
     type Error = Error;
 
+    /// # Errors
+    ///
+    /// [`ErrorKind::EmptyEntryName`] for an empty spelling, and
+    /// [`ErrorKind::ReservedBindingKey`] for a binding keyword.
     fn try_from(value: String) -> Result<Self, Error> {
         if value.is_empty() {
             return Err(Error::at_key(ErrorKind::EmptyEntryName, "entries"));
+        }
+        if document::BindingKeyword::of(&value).is_some() {
+            return Err(Error::at_key(
+                ErrorKind::ReservedBindingKey { key: value.clone() },
+                value,
+            ));
         }
         let hash_form = value.strip_prefix("0x").is_some_and(|digits| {
             digits.len() == 8 && digits.bytes().all(|c| c.is_ascii_hexdigit())

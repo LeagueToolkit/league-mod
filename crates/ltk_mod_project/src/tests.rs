@@ -732,6 +732,30 @@ fn priority_outranks_the_name_ordering() {
     assert_eq!(names, ["base", "layer10", "layer9"]);
 }
 
+/// The base layer is what the others are layered over, so it sorts first even
+/// against a name that precedes it alphabetically at the same priority. Sorting
+/// on priority and name alone puts `armor` under `base`, which reverses which
+/// of the two wins a conflict.
+#[test]
+fn the_base_layer_applies_before_a_name_that_precedes_it() {
+    let armor = ModProjectLayer {
+        name: "armor".to_string(),
+        priority: 0,
+        ..Default::default()
+    };
+    let base = ModProjectLayer::base();
+
+    assert_eq!(
+        ModProjectLayer::apply_order(&base, &armor),
+        std::cmp::Ordering::Less
+    );
+
+    let mut table = vec![armor];
+    ModProjectLayer::normalize_table(&mut table);
+    let names: Vec<&str> = table.iter().map(|layer| layer.name.as_str()).collect();
+    assert_eq!(names, ["base", "armor"]);
+}
+
 #[test]
 fn natural_ordering_handles_padding_and_runs() {
     use std::cmp::Ordering;
