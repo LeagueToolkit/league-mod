@@ -94,8 +94,16 @@ impl Coercer<'_> {
                 Value::Mapping(fields) if fields.is_empty() => self.optional(&Value::Null, shape),
                 inner => self.optional(inner, shape),
             },
+            // A struct pin on an option of structs is the element's own spelling, so the
+            // element keeps it. Any other pin names the item kind and wraps a bare element.
             K::Optional if Some(pin) == shape.item => {
-                self.optional(&Value::List(vec![inner.clone()]), shape)
+                let element = match pin {
+                    K::Struct | K::Embedded => {
+                        Value::Mapping([(name.to_owned(), inner.clone())].into())
+                    }
+                    _ => inner.clone(),
+                };
+                self.optional(&Value::List(vec![element]), shape)
             }
             K::Optional => Err(Reason::PinMismatch),
             kind if pin == kind => self.bare(inner, shape),
