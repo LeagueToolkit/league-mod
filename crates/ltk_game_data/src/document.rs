@@ -394,6 +394,9 @@ impl Bindings {
     ) -> Result<IndexMap<EntryName, Vec<PropertyEdit>>, Error> {
         rest.into_iter()
             .map(|(key, value)| {
+                // A binding keyword never reaches here: `Fields::read` routes it, and
+                // `EntryName` refuses it. What is left is a key naming neither, which only
+                // a target body can tell apart from an entry name, by the `/`.
                 let name = EntryName::try_from(key.as_str())?;
                 if !name.as_str().contains('/') && !name.is_hash() {
                     return Err(Error::at_key(
