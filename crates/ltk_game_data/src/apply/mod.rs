@@ -316,21 +316,6 @@ impl ApplyResult {
     }
 }
 
-/// The object `name` names in a `PROP` chunk.
-///
-/// This is what a caller answers `apply`'s `read_entry` with once it holds the bytes of a
-/// declaring chunk. Decoding lives here because the crate already owns `PROP` decoding, and
-/// a consumer that resolves references should not have to take a bin library of its own.
-///
-/// `None` for bytes that are not a readable `PROP` and for a chunk that does not hold the
-/// object. Both are references the build cannot resolve, and neither is worth telling apart
-/// at the call site.
-#[must_use]
-pub fn read_entry(bytes: &[u8], name: &EntryName) -> Option<BinObject> {
-    let mut stream = BinStream::mount(Cursor::new(bytes)).ok()?;
-    stream.object(name.object_hash()).ok()??.read().ok()
-}
-
 /// The game's copy of every entry the edits reference.
 ///
 /// A reference reads the game, not the target being built, so every reference of a batch is

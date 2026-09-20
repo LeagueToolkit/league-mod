@@ -142,9 +142,6 @@ pub struct Reference {
     pub path: PropertyPath,
 }
 
-/// The object `name` names in a `PROP` chunk, for a caller answering `read_entry`.
-pub fn read_entry(bytes: &[u8], name: &EntryName) -> Option<BinObject>;
-
 impl Module {
     /// Every reference the module's edits hold, in spelled order.
     pub fn references(&self) -> Vec<Reference>;
@@ -180,10 +177,9 @@ part after a `PropertyPath`. `Reference` implements `Display` as the same spelli
 no `:`, an entry name the name rule refuses, or a path the path rule refuses is
 `ReferenceShape`. `Value::references()`, `Edit::references()`, and `Module::references()`
 report the references held, in spelled order and duplicates included; a consumer asks the
-module's before a build, to learn whether that build owes an object index. `read_entry(bytes,
-name)` decodes one object out of a `PROP` chunk, which is what a caller answers `apply`'s
-`read_entry` with once it holds the declaring chunk's bytes; bytes that are not a readable
-`PROP` and a chunk without the object are both `None`.
+module's before a build, to learn whether that build owes an object index. A caller answers
+`read_entry` by decoding the declaring chunk with `ltk_meta`; this crate exposes no decoder
+of its own for it.
 
 `Error` is a code with a typed place ([ADR-0014](../adr/0014-coded-declaration-errors.md)):
 

@@ -4,14 +4,16 @@
 //! chunk declaring it, through the object index (`docs/design/game-data.md` section 6).
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::Cursor;
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, BinObject, Edit, EntryEdit, EntryName, IndexMap, Module, Origin,
+    ApplyDiagnosticKind, BinHash, Edit, EntryEdit, EntryName, IndexMap, Module, Origin,
     OverridePath, Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
+use ltk_meta::{BinObject, concrete::BinStream};
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
@@ -560,6 +562,7 @@ impl OverlayBuilder {
     /// chunk does not hold are all one answer here. Each is a reference the build cannot
     /// resolve, and coercion reports it as `ReferenceMissingEntry` against the key that
     /// wrote it.
+    ///
     /// Takes `game_dir` rather than `&self` because the caller is already holding
     /// `self.enabled_mods` mutably for the override reader.
     fn read_referenced_entry(
@@ -577,7 +580,8 @@ impl OverlayBuilder {
             let declaration = index?.declarations(object).first()?;
             let wad = game.wad_rel_path(declaration.archive);
             let bytes = game_dir.read_chunk(&wad, declaration.chunk).ok()?;
-            ltk_game_data::read_entry(&bytes, name)
+            let mut stream = BinStream::mount(Cursor::new(bytes)).ok()?;
+            stream.object(object).ok()??.read().ok()
         };
         let found = read();
         cache.insert(object, found.clone());
