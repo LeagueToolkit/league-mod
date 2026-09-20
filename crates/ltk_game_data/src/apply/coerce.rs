@@ -11,7 +11,7 @@ use ltk_meta::{
     property::{NoMeta, values},
 };
 
-use crate::{EntryName, Schema, Shape, Value, kind_named, path_hash};
+use crate::{Schema, Shape, Value, kind_named, path_hash};
 
 use super::PropertySkipReason as Reason;
 
@@ -23,7 +23,9 @@ pub(super) type Coerced = Result<V, Reason>;
 /// A reference reads the game, never the target being built, so every reference of a batch
 /// answers from one reading taken before the first edit. An entry the caller does not supply
 /// is absent here, which is what `ReferenceMissingEntry` reports.
-pub(super) type ResolvedReferences = indexmap::IndexMap<EntryName, ltk_meta::BinObject>;
+///
+/// Keyed by object hash, so the path form and the `0x` form of one entry are one key.
+pub(super) type ResolvedReferences = indexmap::IndexMap<BinHash, ltk_meta::BinObject>;
 
 /// Coerces values against a schema.
 #[derive(Clone, Copy)]
@@ -57,7 +59,7 @@ impl Coercer<'_> {
         let reference = crate::Reference::parse(text).map_err(|_| Reason::ReferenceUnresolved)?;
         let object = self
             .references
-            .get(&reference.entry)
+            .get(&reference.entry.object_hash())
             .ok_or(Reason::ReferenceMissingEntry)?;
         let value = object
             .resolve(&reference.path)
@@ -71,6 +73,13 @@ impl Coercer<'_> {
 
     /// Reads a pinned value: the pin fixes the kind, then the bare rules apply.
     fn pinned(&self, name: &str, inner: &Value, shape: Shape, base: Option<&V>) -> Coerced {
+        // A pin fixes the kind a literal reads as. A reference has no literal spelling and
+        // carries the game's own kinds, so a pin over one asks for nothing and is refused.
+        // Without this the inner value would reach `bare` as a mapping and read as a kind
+        // mismatch, which names the shape rather than the pin that is the real fault.
+        if inner.reference().is_some() {
+            return Err(Reason::PinMismatch);
+        }
         let pin = kind_named(name).expect("a pin names a kind");
         match shape.kind {
             K::Struct | K::Embedded => match name {

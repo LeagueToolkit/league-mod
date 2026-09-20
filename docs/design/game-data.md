@@ -76,7 +76,7 @@ pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
-    read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
+    read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
     schema: &dyn Schema,
 ) -> Result<ApplyResult, Error>;
 
@@ -173,7 +173,9 @@ field or a map key with no spelling is an error whose key is the rendered path
 ([ADR-0020](../adr/0020-value-rendering.md)). `Value::to_yaml` writes block style, a list whose
 items are scalars in flow style, and quotes a string YAML reads as another type.
 `Reference::parse(text)` splits `text` at its first `:`: the part before is an `EntryName`, the
-part after a `PropertyPath`. `Reference` implements `Display` as the same spelling. Text with
+part after a `PropertyPath`. `TryFrom<&str>` and `FromStr` are the same parse, so a caller
+writes either. `Reference` implements `Display` as the same spelling, and `Hash`, so a
+consumer can hold a set of them. Text with
 no `:`, an entry name the name rule refuses, or a path the path rule refuses is
 `ReferenceShape`. `Value::references()`, `Edit::references()`, and `Module::references()`
 report the references held, in spelled order and duplicates included; a consumer asks the
@@ -232,9 +234,13 @@ base decoded, not that an edit landed. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
 supplies the bytes of an override file by its path in any `AsRef<[u8]>` container; it is
 called once per listed path, in apply order. `read_entry` supplies the installed game's copy
-of an entry a reference names, and `None` for an entry the game lacks; a caller with no game
-passes `|_| None`. `dependencies` contains the resulting BIN dependency spellings, including
-retained base entries.
+of an entry a reference names, once per distinct entry and before any edit applies. It answers
+`Ok(None)` for an entry the game lacks, which the key naming it reports, and `Err` for an
+entry the game has and the caller could not read, which is one `ReferenceUnreadable`
+diagnostic carrying the reader's own statement; a caller with no game passes `|_| Ok(None)`.
+The base is decoded and its version checked before any entry is read, so a target `apply()`
+refuses costs no reference reads. `dependencies` contains the resulting BIN dependency
+spellings, including retained base entries.
 
 ## <a id="s4"></a>4. Authoring
 
@@ -437,7 +443,16 @@ warning in the log; the build continues. An object index build the cancellation 
 ends the build. The overlay also loads or builds the object index for a build in which an
 enabled layer declares a reference. It answers `read_entry` with the entry's object in the
 first of its declaring chunks in `ltk_game_index` archive order, read from the game before any
-mod content applies; a build reads and decodes each such chunk once.
+mod content applies; a build reads and decodes each such chunk once. An entry no chunk
+declares is `Ok(None)`; a chunk the index does declare and that then fails to read, mount or
+decode is `Err`, because that is the installation or a stale index cache and no property key
+can say so. The `IndexUnavailable` message names what the module loses, which is every entry
+for an `entries` module and only the reference keys for a `target` module.
+
+A reference stands where a value stands: a whole property, a list item, a map value, a `set`
+field of a struct pin, and the whole operand of a signed edit. It does not stand where a key
+or an index stands, so a map removal and a struct list removal, which name keys and indices,
+read a reference as `KindMismatch`.
 The target must be PROP version 2 or 3. Invalid declarations refuse the layer's declarations;
 ordinary content remains available. Missing or invalid targets produce diagnostics and retain
 their original bytes. `ltk_meta` decodes the complete base.
@@ -502,6 +517,7 @@ struct pin.
 | mapping | `pointer`, `embed` | A struct pin constructs the struct; a pin of any other type name is `PinMismatch`; any other mapping descends ([section 4](#s4)) |
 | `{}` | `pointer`, `option` | Inside a struct pin or an `option` pin only, the null pointer or the empty option |
 | reference | any | The value at the reference in the game's copy, where `Shape::of` the value is the shape read; an entry `read_entry` does not supply is `ReferenceMissingEntry`, a path the entry does not resolve is `ReferenceUnresolved`, any other shape is `KindMismatch` |
+| reference | under a type pin | `PinMismatch`. A pin fixes the kind a literal reads as, and a reference carries the game's kinds, so a pin over one asks for nothing |
 
 A type pin on a value fixes the shape: a pin whose type name is not the property's kind is
 `PinMismatch`, and the pinned value coerces by the row of that kind. On a list, an option, or
@@ -562,8 +578,8 @@ about, absent from a module-level diagnostic; it serializes as the `WadHash` num
 absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
 `DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
-`PropertyEditSkipped`, `SchemaFallback`, and `Unknown`. `EntryFanOut` and `SchemaFallback` are
-informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
+`PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, and `Unknown`. `EntryFanOut`
+and `SchemaFallback` are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, and one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field; each is absent otherwise and decodes
 absent as `None`. `NoEffect` names a target whose every edit was skipped; the chunk is left
@@ -574,8 +590,10 @@ outer path, and `detail` is what a lower layer said where no code of this crate 
 `ApplyDiagnosticKind::message()` writes the statement of a category about a path, and
 `ApplyDiagnostic` implements `Display` as that statement with its `detail`. Its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `OverrideUnreadable`, `OverrideInvalid`,
-`OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`, and
-`Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)). `SkippedProperty` contains
+`OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`,
+`ReferenceUnreadable`, and `Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)).
+`ReferenceUnreadable` carries the reference spelling as its `path` and the reader's statement
+as its `detail`, one per distinct entry that failed to read. `SkippedProperty` contains
 `entry`, an `EntryName`, and `reason`; the non-exhaustive `PropertySkipReason` distinguishes
 `MissingObject`, `MissingProperty`, `NullPointer`, `CannotDescend`, `NotIndexable`,
 `IndexOutOfRange`, `InvalidKey`, `KeyNotFound`, `TypeMismatch`, `InvalidPath`, `Untypable`,
@@ -623,9 +641,11 @@ through both archives, and an overlay build with a schema and a cached replay of
 Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
 spellings, an `option` of a vector, a nameless field, and YAML output reloaded. Reference cases
 cover the tag and the one-key mapping in every format, the dotted escape, a reference through a
-hand-written `read_entry` as a set, an addition, a removal, a map value, a list item, and a
-`set` field, both reference reasons, a shape mismatch, and an overlay build resolving a
-reference from the game.
+hand-written `read_entry` as a set, an addition, a removal, a map value, a list item, a whole
+container operand, and a `set` field, both reference reasons, a shape mismatch, a type pin
+over a reference in every position, an entry the reader cannot read, the two spellings of one
+entry read once, an overlay build resolving a reference from the game, and an overlay build in
+which another mod's copy of the referenced entry does not change what resolves.
 
 ## <a id="s8"></a>8. Rules
 
@@ -660,4 +680,6 @@ reference from the game.
 | D27 | A reference is a value resolved against the installed game's copy | A reference into the build state; an object binding only | The result depends on the game and the declaration, never on mod order | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D28 | `ref` is a reserved one-key mapping key | A field lookup | A tag and the one-key mapping are one value, as with pins; no Riot field hashes to `ref` | [ADR-0021](../adr/0021-game-copy-references.md) |
 | D29 | A reference splits at its first `:` | A split at a `.` | LTK Manager's Copy path writes `<entry>:<path>`; no known entry name holds a `:` | [section 4](#s4) |
+| D31 | A type pin over a reference is `PinMismatch` | A pin that resolves the reference and re-types it | A pin fixes the kind a literal reads as; a reference carries the game's own kinds | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md) |
+| D32 | An entry the caller cannot read is a diagnostic, not a missing entry | One reason for both | A read that failed is the installation's, and no property key can name it | [section 3](#s3), [section 6](#s6) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |

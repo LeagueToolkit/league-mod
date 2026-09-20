@@ -1101,17 +1101,37 @@ fn entries_property_edits_reach_every_declaring_chunk() {
 
 /// A PROP v3 whose one object is the entry `Characters/B`, with `speed` 9.0.
 fn referenced_bin() -> Vec<u8> {
+    referenced_bin_with(9.0)
+}
+
+/// The chunk declaring `Characters/B`, whose `speed` a reference reads.
+fn referenced_bin_with(speed: f32) -> Vec<u8> {
     use ltk_meta::concrete::{Bin, BinObject, values};
     let bin = Bin::builder()
         .object(
             BinObject::builder(ltk_game_data::BinHash::from("Characters/B"), 2u32)
-                .property(ltk_game_data::BinHash::from("speed"), values::F32::new(9.0))
+                .property(
+                    ltk_game_data::BinHash::from("speed"),
+                    values::F32::new(speed),
+                )
                 .build(),
         )
         .build();
     let mut cursor = Cursor::new(Vec::new());
     bin.to_writer(&mut cursor).unwrap();
     cursor.into_inner()
+}
+
+/// The `speed` of `Characters/B` in a chunk.
+fn referenced_speed(bytes: &[u8]) -> f32 {
+    use ltk_meta::{concrete::Bin, path::PropertyPath};
+    let bin = Bin::from_reader(&mut Cursor::new(bytes)).unwrap();
+    match bin.objects[&ltk_game_data::BinHash::from("Characters/B")]
+        .resolve(&PropertyPath::new("speed").unwrap())
+    {
+        Ok(ltk_meta::PropertyValueEnum::F32(value)) => value.value,
+        other => panic!("unexpected speed: {other:?}"),
+    }
 }
 
 /// A reference reads the installed game, so the build resolves it from a chunk no mod ships
@@ -1152,4 +1172,68 @@ fn an_overlay_build_resolves_a_reference_from_the_game() {
     );
     // The game's 9.0, not the base's 1.0 and not a literal the author wrote.
     assert_eq!(speed_and_links(&chunk(&overlay.join(WAD), "shared")).0, 9.0);
+    // The index is what turns the entry name into a chunk, so the build built one.
+    assert!(root.join("state").join("object_index.bin").exists());
+}
+
+/// A reference reads the installed game's copy, so another mod's copy of the same entry does
+/// not change what it resolves to (ADR-0021, rule D27).
+///
+/// This is the guarantee the ADR chose option 1 for. Without it a reference would depend on
+/// mod precedence, and two mods referencing each other would form a cycle. A build that
+/// answered a reference from its own accumulating state would pass every other reference test
+/// in this file, so it is asserted here and nowhere else.
+#[test]
+fn a_reference_ignores_another_mods_copy_of_the_entry() {
+    for order in [["lower", "top"], ["top", "lower"]] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let game = root.join("game");
+        let overlay = root.join("overlay");
+        common::write_game_wad(
+            &game.join(WAD),
+            &[("shared", &speed_bin()), ("source", &referenced_bin())],
+        );
+
+        // A mod shipping its own `source`, whose `Characters/B` runs at 99.0. It is raw
+        // content, so it is in the overlay before any declaration is applied.
+        let lower = project(&root, "lower", None, None);
+        fs::write(
+            root.join("lower/content/base/Test.wad.client/source"),
+            referenced_bin_with(99.0),
+        )
+        .unwrap();
+        let top = project(
+            &root,
+            "top",
+            None,
+            Some(
+                r#"{"version":1,"modules":[{"target":"shared",
+                   "0x00000001":{"speed":{"ref":"Characters/B:speed"}}}]}"#,
+            ),
+        );
+
+        let mut mods = std::collections::HashMap::from([("lower", lower), ("top", top)]);
+        let enabled = order
+            .iter()
+            .map(|name| mods.remove(name).unwrap())
+            .collect();
+        let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+        builder.set_enabled_mods(enabled);
+        builder.build().unwrap();
+
+        // The game's 9.0, whichever mod wins precedence.
+        assert_eq!(
+            speed_and_links(&chunk(&overlay.join(WAD), "shared")).0,
+            9.0,
+            "{order:?}"
+        );
+        // The other mod's copy did reach the overlay, so the reference had something to be
+        // wrongly read from and was not.
+        assert_eq!(
+            referenced_speed(&chunk(&overlay.join(WAD), "source")),
+            99.0,
+            "{order:?}"
+        );
+    }
 }

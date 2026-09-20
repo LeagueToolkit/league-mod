@@ -4,7 +4,7 @@
 //! wrote it. A reference names the value instead, and the build reads it from the installed
 //! game every time, so a later patch that changes the value changes what the mod applies.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use ltk_meta::path::PropertyPath;
 
@@ -16,7 +16,7 @@ use crate::{EntryName, Error, ErrorKind};
 /// value of a `ref` key or a `!ref` tag.
 ///
 /// [ADR-0021]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0021-game-copy-references.md
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reference {
     /// The entry holding the value.
     pub entry: EntryName,
@@ -40,6 +40,22 @@ impl Reference {
         let entry = EntryName::try_from(entry).map_err(|_| shape())?;
         let path = PropertyPath::new(path).map_err(|_| shape())?;
         Ok(Self { entry, path })
+    }
+}
+
+impl TryFrom<&str> for Reference {
+    type Error = Error;
+
+    fn try_from(text: &str) -> Result<Self, Error> {
+        Self::parse(text)
+    }
+}
+
+impl FromStr for Reference {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self, Error> {
+        Self::parse(text)
     }
 }
 

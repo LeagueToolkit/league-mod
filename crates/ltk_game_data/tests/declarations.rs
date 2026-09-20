@@ -16,8 +16,10 @@ fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
 }
 
 /// The caller with no game: every reference reports `ReferenceMissingEntry`.
-fn no_entry(_: &ltk_game_data::EntryName) -> Option<ltk_meta::BinObject> {
-    None
+fn no_entry(
+    _: &ltk_game_data::EntryName,
+) -> Result<Option<ltk_meta::BinObject>, ltk_game_data::Error> {
+    Ok(None)
 }
 
 /// A PROP v3 with one dependency and one object `1` of class `2` whose `speed` is 1.0.

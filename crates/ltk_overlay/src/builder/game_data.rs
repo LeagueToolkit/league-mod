@@ -34,7 +34,8 @@ pub enum GameDataDiagnosticKind {
     EntryUnresolved,
     /// An entry several game bins declare. Every one is edited. Informational.
     EntryFanOut,
-    /// The object index did not load or build. Every `entries` module is skipped.
+    /// The object index did not load or build. An `entries` module is skipped whole; a
+    /// `target` module keeps every edit but its references.
     IndexUnavailable,
     /// An override file the provider cannot supply. The file is skipped.
     OverrideUnreadable,
@@ -47,6 +48,8 @@ pub enum GameDataDiagnosticKind {
     PropertyEditSkipped,
     /// A property typed from the base, the schema saying nothing. Informational.
     SchemaFallback,
+    /// A referenced entry the game declares and the build could not read. Its keys are skipped.
+    ReferenceUnreadable,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -87,6 +90,7 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::OverrideRecordSkipped => Self::OverrideRecordSkipped,
             ApplyDiagnosticKind::PropertyEditSkipped => Self::PropertyEditSkipped,
             ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
+            ApplyDiagnosticKind::ReferenceUnreadable => Self::ReferenceUnreadable,
             _ => Self::Unknown,
         }
     }
@@ -156,12 +160,21 @@ impl Pending {
     }
 }
 
-/// The diagnostic of an `entries` module skipped for want of an object index.
-fn index_unavailable(pending: &Pending, error: &ObjectBuildError) -> GameDataDiagnostic {
+/// The diagnostic of a module the object index failed.
+///
+/// `consequence` says what the module loses, because the two kinds lose different things. An
+/// `entries` module resolves nothing without the index, so every entry is skipped. A `target`
+/// module binds by hash and keeps every edit that is not a reference, so telling its author
+/// that entries are skipped would name a binding the module does not have.
+fn index_unavailable(
+    pending: &Pending,
+    error: &ObjectBuildError,
+    consequence: &str,
+) -> GameDataDiagnostic {
     pending.diagnostic(
         GameDataDiagnosticKind::IndexUnavailable,
         None,
-        format!("Object index is unavailable: {error}; entries are skipped"),
+        format!("Object index is unavailable: {error}; {consequence}"),
     )
 }
 
@@ -395,12 +408,15 @@ impl OverlayBuilder {
             match &pending.module.selector {
                 Selector::Target { target, edits } => {
                     // A target module resolves without the index, but a reference inside one
-                    // does not, so the author hears the same thing an `entries` module hears.
+                    // does not. The module still applies; only its reference keys skip.
                     if let Some(Err(error)) = &object_index
                         && !pending.module.references().is_empty()
                     {
-                        self.last_game_data_diagnostics
-                            .push(index_unavailable(&pending, error));
+                        self.last_game_data_diagnostics.push(index_unavailable(
+                            &pending,
+                            error,
+                            "references cannot resolve, so their keys are skipped",
+                        ));
                     }
                     let hash = WadHash::from(target.chunk_hash());
                     targets.entry(hash).or_default().push(Application {
@@ -413,20 +429,22 @@ impl OverlayBuilder {
                         origin: pending.module.origin,
                     });
                 }
-                Selector::Entries(entries) => match &object_index {
-                    Some(Ok(index)) => lower_entries(
-                        &pending,
-                        entries,
-                        index,
-                        game,
-                        &mut targets,
-                        &mut self.last_game_data_diagnostics,
-                    ),
-                    Some(Err(error)) => self
-                        .last_game_data_diagnostics
-                        .push(index_unavailable(&pending, error)),
-                    None => unreachable!("an entries module loads the object index"),
-                },
+                Selector::Entries(entries) => {
+                    match &object_index {
+                        Some(Ok(index)) => lower_entries(
+                            &pending,
+                            entries,
+                            index,
+                            game,
+                            &mut targets,
+                            &mut self.last_game_data_diagnostics,
+                        ),
+                        Some(Err(error)) => self
+                            .last_game_data_diagnostics
+                            .push(index_unavailable(&pending, error, "entries are skipped")),
+                        None => unreachable!("an entries module loads the object index"),
+                    }
+                }
                 _ => unreachable!("the overlay lowers every selector of its `ltk_game_data`"),
             }
         }
@@ -558,10 +576,14 @@ impl OverlayBuilder {
     /// game directory and not to the bytes the loop is accumulating. Mod content cannot reach
     /// it, which is what makes a reference independent of mod order.
     ///
-    /// An entry the index does not declare, a chunk that does not read, and an object the
-    /// chunk does not hold are all one answer here. Each is a reference the build cannot
-    /// resolve, and coercion reports it as `ReferenceMissingEntry` against the key that
-    /// wrote it.
+    /// An index that did not build and an entry no game bin declares are both `Ok(None)`. The
+    /// author's declaration names an entry this installation does not have, and the key that
+    /// names it reports that. A chunk the index does declare and that then fails to read,
+    /// mount or decode is `Err`, because that is the installation or a stale index cache, and
+    /// no property key can say so.
+    ///
+    /// The read is memoized per entry, so a failure is reported once however many keys
+    /// reference it.
     ///
     /// Takes `game_dir` rather than `&self` because the caller is already holding
     /// `self.enabled_mods` mutably for the override reader.
@@ -571,21 +593,33 @@ impl OverlayBuilder {
         game: &GameIndex,
         cache: &mut HashMap<BinHash, Option<BinObject>>,
         name: &EntryName,
-    ) -> Option<BinObject> {
+    ) -> std::result::Result<Option<BinObject>, ltk_game_data::Error> {
         let object = name.object_hash();
         if let Some(cached) = cache.get(&object) {
-            return cached.clone();
+            return Ok(cached.clone());
         }
-        let read = || {
-            let declaration = index?.declarations(object).first()?;
-            let wad = game.wad_rel_path(declaration.archive);
-            let bytes = game_dir.read_chunk(&wad, declaration.chunk).ok()?;
-            let mut stream = BinStream::mount(Cursor::new(bytes)).ok()?;
-            stream.object(object).ok()??.read().ok()
+        let Some(declaration) = index.and_then(|index| index.declarations(object).first()) else {
+            cache.insert(object, None);
+            return Ok(None);
         };
-        let found = read();
-        cache.insert(object, found.clone());
-        found
+        let wad = game.wad_rel_path(declaration.archive);
+        let failed = |detail: &dyn std::fmt::Display| {
+            ltk_game_data::Error::io(
+                name.as_str(),
+                &format!("{:016x} of {wad}: {detail}", declaration.chunk.0),
+            )
+        };
+        let bytes = game_dir
+            .read_chunk(&wad, declaration.chunk)
+            .map_err(|error| failed(&error))?;
+        let mut stream = BinStream::mount(Cursor::new(bytes)).map_err(|error| failed(&error))?;
+        let mut object_stream = stream
+            .object(object)
+            .map_err(|error| failed(&error))?
+            .ok_or_else(|| failed(&"chunk does not hold the object, so the index is stale"))?;
+        let found = object_stream.read().map_err(|error| failed(&error))?;
+        cache.insert(object, Some(found.clone()));
+        Ok(Some(found))
     }
 
     /// Loads the object index cached in the state directory, or builds it and writes the cache.
@@ -610,7 +644,10 @@ impl OverlayBuilder {
                 Ok(index)
             }
             Err(error) => {
-                tracing::warn!("Object index is unavailable: {error}; entries modules are skipped");
+                tracing::warn!(
+                    "Object index is unavailable: {error}; entries modules are skipped and \
+                     references cannot resolve"
+                );
                 Err(error)
             }
         }
@@ -682,7 +719,11 @@ mod tests {
     #[test]
     fn an_unavailable_object_index_is_one_diagnostic_per_entries_module() {
         let (pending, _entries) = pending(&["Characters/Teemo/Skins/Skin0", "Characters/Ahri"]);
-        let diagnostic = index_unavailable(&pending, &ObjectBuildError::CalledOff);
+        let diagnostic = index_unavailable(
+            &pending,
+            &ObjectBuildError::CalledOff,
+            "entries are skipped",
+        );
         assert_eq!(diagnostic.kind, GameDataDiagnosticKind::IndexUnavailable);
         assert_eq!(diagnostic.target, None);
         assert_eq!(diagnostic.mod_id, "mod");

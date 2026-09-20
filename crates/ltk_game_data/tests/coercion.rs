@@ -21,8 +21,10 @@ fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
 }
 
 /// The caller with no game: every reference reports `ReferenceMissingEntry`.
-fn no_entry(_: &ltk_game_data::EntryName) -> Option<ltk_meta::BinObject> {
-    None
+fn no_entry(
+    _: &ltk_game_data::EntryName,
+) -> Result<Option<ltk_meta::BinObject>, ltk_game_data::Error> {
+    Ok(None)
 }
 
 fn h(name: &str) -> BinHash {
@@ -92,6 +94,8 @@ impl TestSchema {
             (field("C", "names"), list(K::Hash)),
             (field("E", "texture"), Shape::bare(K::String)),
             (field("E", "scale"), Shape::bare(K::F32)),
+            // A Riot field named `ref`. The dotted form is the only way to reach it.
+            (field("E", "ref"), Shape::bare(K::U32)),
         ]);
         Self {
             fields,
@@ -835,8 +839,8 @@ fn referenced_entry() -> BinObject {
 }
 
 /// A reader of one entry, the hand-written stand-in for an installed game.
-fn one_entry(name: &ltk_game_data::EntryName) -> Option<BinObject> {
-    (name.as_str() == "Characters/B").then(referenced_entry)
+fn one_entry(name: &ltk_game_data::EntryName) -> Result<Option<BinObject>, ltk_game_data::Error> {
+    Ok((name.as_str() == "Characters/B").then(referenced_entry))
 }
 
 fn run_referenced(manifest: &str) -> ApplyResult {
@@ -920,13 +924,133 @@ fn both_reference_reasons_and_a_shape_mismatch_are_reported() {
 
 #[test]
 fn the_dotted_form_reaches_a_field_named_ref() {
-    // `a.ref` is a path, not a reference, so it descends and the schema types it.
+    // `a.ref` is a path, not a reference, so it descends and the schema types it. The schema
+    // gives `E` a `ref` field, so the value has to land on it rather than merely not resolve.
     let output = run_referenced(&manifest("mesh.ref: 1\n"));
+    assert_eq!(skips(&output), [], "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "mesh.ref"), values::U32::new(1).into());
+}
+
+#[test]
+fn a_type_pin_over_a_reference_is_refused() {
+    // A pin fixes the kind a literal reads as. A reference has no literal spelling, so a pin
+    // over one asks for nothing. Every position answers the same way.
+    for (key, spelling) in [
+        ("speed", "speed: !f32 {ref: \"Characters/B:speed\"}\n"),
+        ("tags", "tags: !hash {ref: \"Characters/B:tags\"}\n"),
+        ("opt", "opt: !u32 {ref: \"Characters/B:count\"}\n"),
+        (
+            "mesh.scale",
+            "mesh: {embed: {set: {scale: !f32 {ref: \"Characters/B:speed\"}}}}\n",
+        ),
+    ] {
+        let output = run_referenced(&manifest(spelling));
+        let reasons: Vec<Reason> = skips(&output).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(reasons, [Reason::PinMismatch], "{key}: {spelling}");
+    }
+}
+
+#[test]
+fn a_reference_is_a_whole_container_operand() {
+    // The referenced `tags` is a one-item container, and the base's is `[a, b]`.
+    let set = run_referenced(&manifest("tags: !ref Characters/B:tags\n"));
+    assert_eq!(skips(&set), [], "{:?}", set.diagnostics);
+    assert_eq!(value_at(&set, "tags[0]"), values::Hash::new(h("a")).into());
+
+    let added = run_referenced(&manifest("+tags: !ref Characters/B:tags\n"));
+    assert_eq!(skips(&added), [], "{:?}", added.diagnostics);
     assert_eq!(
-        skips(&output),
-        [("mesh.ref", Reason::Untypable)],
+        value_at(&added, "tags[2]"),
+        values::Hash::new(h("a")).into()
+    );
+
+    let removed = run_referenced(&manifest("-tags: !ref Characters/B:tags\n"));
+    assert_eq!(skips(&removed), [], "{:?}", removed.diagnostics);
+    assert_eq!(
+        value_at(&removed, "tags[0]"),
+        values::Hash::new(h("b")).into()
+    );
+}
+
+#[test]
+fn an_entry_the_caller_cannot_read_is_reported_apart_from_one_the_game_lacks() {
+    let declarations = load_declarations(
+        "game_data.yaml",
+        &manifest("speed: !ref Characters/B:speed\n"),
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
+        panic!("expected a target");
+    };
+    let output = apply(
+        &base_bin(),
+        edits,
+        no_override,
+        |name: &ltk_game_data::EntryName| {
+            Err(ltk_game_data::Error::io(name.as_str(), &"wad is corrupt"))
+        },
+        &TestSchema::new(),
+    )
+    .unwrap();
+
+    // The key still skips, because the value never arrived.
+    assert_eq!(skips(&output), [("speed", Reason::ReferenceMissingEntry)]);
+    // The read failure is its own diagnostic, naming the reference and what the reader said.
+    // Without it the author reads only `ReferenceMissingEntry`, which blames the declaration
+    // for an installation the build could not read.
+    let unreadable: Vec<&ApplyDiagnostic> = output
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == ApplyDiagnosticKind::ReferenceUnreadable)
+        .collect();
+    assert_eq!(unreadable.len(), 1, "{:?}", output.diagnostics);
+    assert_eq!(unreadable[0].path, "Characters/B:speed");
+    assert_eq!(unreadable[0].edit_index, 0);
+    assert!(
+        unreadable[0]
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("wad is corrupt")),
         "{:?}",
-        output.diagnostics
+        unreadable[0].detail
+    );
+}
+
+#[test]
+fn the_two_spellings_of_one_entry_are_read_once() {
+    // An entry written once by path and once by hash is one entry, so it is read once and
+    // both references resolve from that reading.
+    let hash_form = format!("{:#010x}", h("Characters/B").0);
+    let declarations = load_declarations(
+        "game_data.yaml",
+        &manifest(&format!(
+            "speed: !ref Characters/B:speed\nname: !ref {hash_form}:name\n"
+        )),
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
+        panic!("expected a target");
+    };
+    let mut reads = 0;
+    let output = apply(
+        &base_bin(),
+        edits,
+        no_override,
+        |name: &ltk_game_data::EntryName| {
+            reads += 1;
+            Ok((name.object_hash() == h("Characters/B")).then(referenced_entry))
+        },
+        &TestSchema::new(),
+    )
+    .unwrap();
+    assert_eq!(skips(&output), [], "{:?}", output.diagnostics);
+    assert_eq!(reads, 1);
+    assert_eq!(value_at(&output, "speed"), values::F32::new(9.0).into());
+    assert_eq!(
+        value_at(&output, "name"),
+        values::String::new("copied".into()).into()
     );
 }
 

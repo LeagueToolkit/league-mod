@@ -14,10 +14,7 @@ use ltk_meta::{
 
 use crate::{BinHash, EntryName, PropertyEdit, Schema, Shape, Sign, Value};
 
-use super::{
-    ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty,
-    coerce::{Coercer, ResolvedReferences},
-};
+use super::{ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, coerce::Coercer};
 
 /// One diagnostic of the phase, before its edit index is known.
 #[derive(Debug)]
@@ -36,16 +33,18 @@ pub(super) struct Outcome {
 }
 
 /// Runs the entry edits of one batch over `bin`.
+///
+/// The coercer carries the schema, so this phase reads it from there rather than taking it
+/// twice. The resolved references reach coercion and nothing else, so they never appear here.
 pub(super) fn run(
     bin: &mut Bin,
-    schema: &dyn Schema,
-    references: &ResolvedReferences,
+    coercer: Coercer<'_>,
     entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
 ) -> Outcome {
     let mut phase = Phase {
         bin,
-        schema,
-        coercer: Coercer { schema, references },
+        schema: coercer.schema,
+        coercer,
         outcome: Outcome::default(),
     };
     for (name, edits) in entries {

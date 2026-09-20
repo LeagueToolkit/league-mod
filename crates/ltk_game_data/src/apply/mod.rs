@@ -31,6 +31,8 @@ pub enum ApplyDiagnosticKind {
     PropertyEditSkipped,
     /// A property typed from the base, the schema saying nothing. Informational.
     SchemaFallback,
+    /// A referenced entry the caller could not read. Every key naming it is skipped.
+    ReferenceUnreadable,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -243,6 +245,7 @@ impl ApplyDiagnosticKind {
             Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
             Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
             Self::SchemaFallback => format!("Property is typed from the base: {path}"),
+            Self::ReferenceUnreadable => format!("Referenced entry cannot be read: {path}"),
             Self::Unknown => format!("Application diagnostic: {path}"),
         }
     }
@@ -325,18 +328,43 @@ impl ApplyResult {
 ///
 /// A reference the name rule refuses is not collected. Coercion reports it as it reports
 /// every other reference it cannot resolve.
+///
+/// The map is keyed by object hash rather than by spelling, because an entry written once by
+/// path and once by hash is one entry. An entry the caller says it lacks is absent from the
+/// map; an entry the caller could not read is absent too, and reported to `diagnostics`
+/// against the first edit naming it.
 fn resolve_references(
     edits: &[Edit],
-    mut read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
+    mut read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
+    diagnostics: &mut Vec<ApplyDiagnostic>,
 ) -> coerce::ResolvedReferences {
     let mut resolved = coerce::ResolvedReferences::new();
     let mut asked = HashSet::new();
-    for reference in edits.iter().flat_map(Edit::references) {
-        if !asked.insert(reference.entry.clone()) {
+    let references = edits.iter().enumerate().flat_map(|(index, edit)| {
+        edit.references()
+            .into_iter()
+            .map(move |reference| (index, reference))
+    });
+    for (index, reference) in references {
+        if !asked.insert(reference.entry.object_hash()) {
             continue;
         }
-        if let Some(object) = read_entry(&reference.entry) {
-            resolved.insert(reference.entry, object);
+        match read_entry(&reference.entry) {
+            Ok(Some(object)) => {
+                resolved.insert(reference.entry.object_hash(), object);
+            }
+            // The game lacking the entry is the author's to fix, and the key that names it
+            // reports it. A read that failed is the installation's, and no property key can
+            // say so, which is what this diagnostic is for.
+            Ok(None) => {}
+            Err(error) => diagnostics.push(ApplyDiagnostic {
+                kind: ApplyDiagnosticKind::ReferenceUnreadable,
+                edit_index: index,
+                path: reference.to_string(),
+                record: None,
+                property: None,
+                detail: Some(error.to_string()),
+            }),
         }
     }
     resolved
@@ -348,8 +376,9 @@ fn resolve_references(
 /// `read_override` supplies the bytes of an override file by its path, once per listed path
 /// in apply order, in any byte container; a caller sharing one file across several targets
 /// hands over an `Arc<[u8]>`. `read_entry` supplies the installed game's copy of an entry a
-/// reference names, once per distinct entry referenced and before any edit applies, and
-/// `None` for an entry the game lacks; a caller with no game passes `|_| None`. `schema`
+/// reference names, once per distinct entry referenced and before any edit applies. It answers
+/// `Ok(None)` for an entry the game lacks and `Err` for one it holds but could not read, which
+/// is reported as `ReferenceUnreadable`; a caller with no game passes `|_| Ok(None)`. `schema`
 /// types every property edit; a caller with no schema passes `&NoSchema`. A target with an
 /// applied override file or an applied property edit is written from the decoded tree at PROP
 /// version 3; a target with neither keeps its object bytes and header version.
@@ -361,10 +390,11 @@ pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     mut read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
-    read_entry: impl FnMut(&EntryName) -> Option<BinObject>,
+    read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
     schema: &dyn Schema,
 ) -> Result<ApplyResult, Error> {
-    let references = resolve_references(edits, read_entry);
+    // Reading a reference costs the caller a chunk read and a decode per entry, so the base
+    // is refused first. A target that is not a PROP v2 or v3 pays nothing for its references.
     let stream = BinStream::mount(Cursor::new(base)).map_err(|e| bin_error(&e))?;
     if !matches!(stream.version(), 2 | 3) {
         return Err(Error::new(ErrorKind::UnsupportedBase));
@@ -380,6 +410,11 @@ pub fn apply<B: AsRef<[u8]>>(
     bin.dependencies
         .retain(|path| seen.insert(path.as_str().to_ascii_lowercase()));
     let mut diagnostics = Vec::new();
+    let references = resolve_references(edits, read_entry, &mut diagnostics);
+    let coercer = coerce::Coercer {
+        schema,
+        references: &references,
+    };
     let mut applied = Applied::default();
     for (index, edit) in edits.iter().enumerate() {
         for path in &edit.overrides {
@@ -437,7 +472,7 @@ pub fn apply<B: AsRef<[u8]>>(
                 );
             }
         }
-        let outcome = entries::run(&mut bin, schema, &references, &edit.entries);
+        let outcome = entries::run(&mut bin, coercer, &edit.entries);
         applied.properties += outcome.properties;
         diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
             kind: report.kind,
