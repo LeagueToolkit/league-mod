@@ -342,6 +342,14 @@ pub enum ErrorKind {
     /// A body key that is neither a binding keyword nor an entry name.
     #[error("unsupported binding `{key}`")]
     UnsupportedBinding { key: String },
+    /// A property path or entry name spelling a binding keyword. A body mapping holds one of
+    /// the two meanings.
+    #[error("`{key}` is a binding keyword")]
+    ReservedBindingKey { key: String },
+    /// Two property edits of one entry under one signed key. An entry body holds one value
+    /// per key.
+    #[error("duplicate property key `{key}`")]
+    DuplicatePropertyKey { key: String },
     /// An entry name whose value is not a mapping.
     #[error("entry body requires a mapping")]
     EntryBodyShape,

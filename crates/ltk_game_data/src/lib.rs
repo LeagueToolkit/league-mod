@@ -44,9 +44,29 @@ pub struct Declarations {
 }
 
 impl Declarations {
+    /// Checks the declaration version and every module's selector.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::UnsupportedVersion`] for a version this crate does not execute,
+    /// [`ErrorKind::EditsEmpty`] for a target module with no edit, and
+    /// [`ErrorKind::EntriesEmpty`] for an entries module with no entry. The error names the
+    /// module index. A manifest refuses both empty selectors, so declarations holding one
+    /// write a manifest that does not load.
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 {
             return Err(Error::new(ErrorKind::UnsupportedVersion));
+        }
+        for (index, module) in self.modules.iter().enumerate() {
+            let empty = match &module.selector {
+                Selector::Target { edits, .. } => edits.is_empty().then_some(ErrorKind::EditsEmpty),
+                Selector::Entries(entries) => entries.is_empty().then_some(ErrorKind::EntriesEmpty),
+            };
+            if let Some(kind) = empty {
+                return Err(Error::new(kind)
+                    .document(module.origin.manifest.clone())
+                    .module(index));
+            }
         }
         Ok(())
     }
@@ -55,9 +75,15 @@ impl Declarations {
     ///
     /// The manifest names no source. Every target module carries an `edits` list; every edit
     /// carries `links`, empty or not.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`validate`](Self::validate) refuses, and [`ErrorKind::Serialize`] for
+    /// declarations the manifest form cannot hold ([`DeclarationDocument::try_from`]).
     pub fn manifest_json(&self) -> Result<String, Error> {
         self.validate()?;
-        serde_json::to_string_pretty(&manifest::Manifest::from(self)).map_err(|error| {
+        let manifest = manifest::Manifest::try_from(self)?;
+        serde_json::to_string_pretty(&manifest).map_err(|error| {
             Error::new(ErrorKind::Serialize {
                 detail: error.to_string(),
             })
@@ -103,8 +129,8 @@ pub struct Origin {
 /// compact binding body: `overrides`, one key per entry name holding its property edits,
 /// `links` (`+links` accepted on input) and `-links`, each present only when nonempty. A
 /// serialized override path is layer-relative.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "document::Bindings", into = "document::Bindings")]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(try_from = "document::Bindings")]
 #[non_exhaustive]
 pub struct Edit {
     /// Override files applied in listed order, the first phase.
@@ -118,14 +144,38 @@ pub struct Edit {
 /// The bindings of one bin entry, applied in every chunk declaring it.
 ///
 /// The serialized form is an entry body: signed property keys beside `links` and `-links`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "document::Bindings", into = "document::Bindings")]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(try_from = "document::Bindings")]
 #[non_exhaustive]
 pub struct EntryEdit {
     /// The entry's property edits, in mapping order.
     pub properties: Vec<PropertyEdit>,
     /// Dependency-list edits of the declaring chunk.
     pub links: LinkEdit,
+}
+
+impl Serialize for Edit {
+    /// # Errors
+    ///
+    /// The body mapping an edit writes holds one value per key. An entry name spelling a
+    /// binding keyword, and one entry holding one signed key twice, are errors.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        document::Bindings::try_from(self.clone())
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl Serialize for EntryEdit {
+    /// # Errors
+    ///
+    /// The body mapping an entry edit writes holds one value per key. A property path
+    /// spelling a binding keyword, and one signed key held twice, are errors.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        document::Bindings::try_from(self.clone())
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 /// Link removals followed by link additions.

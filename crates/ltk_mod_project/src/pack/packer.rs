@@ -288,8 +288,9 @@ impl ProjectPacker {
             files.retain(|file| !declarations.is_declaration_input(file.source()));
             let override_files = declarations.override_files().to_vec();
             let declarations = declarations.declarations?;
-            planned
-                .push(PlannedLayer::new(layer, files).with_game_data(declarations, override_files));
+            planned.push(
+                PlannedLayer::new(layer, files).with_game_data(declarations, override_files)?,
+            );
         }
 
         progress.set_total(planned.iter().map(|layer| layer.files().len() as u32).sum());

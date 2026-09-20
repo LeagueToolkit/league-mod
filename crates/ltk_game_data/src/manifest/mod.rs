@@ -470,51 +470,66 @@ fn written(mut bindings: Bindings) -> Bindings {
     bindings
 }
 
-impl From<&Declarations> for Manifest {
+impl TryFrom<&Declarations> for Manifest {
+    type Error = Error;
+
     /// The direct manifest that loads to `declarations`: no sources, every override path
     /// layer-relative, and an `edits` list for every target module.
-    fn from(declarations: &Declarations) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Whatever the body of an edit or an entry refuses, named by its module index.
+    fn try_from(declarations: &Declarations) -> Result<Self, Error> {
         let modules = declarations
             .modules
             .iter()
-            .map(|module| match &module.selector {
-                Selector::Target { target, edits } => Module {
-                    target: Some(target.clone()),
-                    entries: None,
-                    source: None,
-                    body: Body {
-                        edits: Some(
-                            edits
-                                .iter()
-                                .map(|edit| written(Bindings::from(edit.clone())))
-                                .collect(),
-                        ),
-                        bindings: Bindings::default(),
+            .enumerate()
+            .map(|(index, module)| {
+                let at =
+                    |error: Error| error.document(module.origin.manifest.clone()).module(index);
+                Ok(match &module.selector {
+                    Selector::Target { target, edits } => Module {
+                        target: Some(target.clone()),
+                        entries: None,
+                        source: None,
+                        body: Body {
+                            edits: Some(
+                                edits
+                                    .iter()
+                                    .map(|edit| {
+                                        Bindings::try_from(edit.clone()).map(written).map_err(at)
+                                    })
+                                    .collect::<Result<Vec<_>, Error>>()?,
+                            ),
+                            bindings: Bindings::default(),
+                        },
                     },
-                },
-                Selector::Entries(entries) => Module {
-                    target: None,
-                    entries: Some(Entries(
-                        entries
-                            .iter()
-                            .map(|(name, edit)| {
-                                let entry = Entry {
-                                    source: None,
-                                    bindings: written(Bindings::from(edit.clone())),
-                                };
-                                (name.clone(), entry)
-                            })
-                            .collect(),
-                    )),
-                    source: None,
-                    body: Body::default(),
-                },
+                    Selector::Entries(entries) => Module {
+                        target: None,
+                        entries: Some(Entries(
+                            entries
+                                .iter()
+                                .map(|(name, edit)| {
+                                    let bindings = Bindings::try_from(edit.clone())
+                                        .map_err(|error| at(error.entry(name.as_str())))?;
+                                    let entry = Entry {
+                                        source: None,
+                                        bindings: written(bindings),
+                                    };
+                                    Ok((name.clone(), entry))
+                                })
+                                .collect::<Result<IndexMap<_, _>, Error>>()?,
+                        )),
+                        source: None,
+                        body: Body::default(),
+                    },
+                })
             })
-            .collect();
-        Self {
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(Self {
             version: Version,
             modules,
-        }
+        })
     }
 }
 

@@ -117,14 +117,20 @@ impl PlannedLayer {
         }
     }
 
+    /// # Errors
+    ///
+    /// Whatever the declaration document form refuses
+    /// ([`ltk_game_data::DeclarationDocument::try_from`]).
     pub(crate) fn with_game_data(
         mut self,
         declarations: Option<ltk_game_data::Declarations>,
         override_files: Vec<OverrideFile>,
-    ) -> Self {
-        self.game_data = declarations.map(Into::into);
+    ) -> Result<Self, ltk_game_data::Error> {
+        self.game_data = declarations
+            .map(ltk_game_data::DeclarationDocument::try_from)
+            .transpose()?;
         self.override_files = override_files;
-        self
+        Ok(self)
     }
 
     /// The layer declarations, with sources expanded.

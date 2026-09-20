@@ -95,11 +95,23 @@ impl PropertyEdit {
     }
 
     /// The entry body of edits, in edit order.
-    pub(crate) fn into_body(edits: Vec<Self>) -> IndexMap<String, Value> {
-        edits
-            .into_iter()
-            .map(|edit| (edit.key(), edit.value))
-            .collect()
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::DuplicatePropertyKey`] for two edits under one signed key. A body mapping
+    /// holds one value per key, and the in-memory list holds several.
+    pub(crate) fn try_into_body(edits: Vec<Self>) -> Result<IndexMap<String, Value>, Error> {
+        let mut body = IndexMap::with_capacity(edits.len());
+        for edit in edits {
+            let key = edit.key();
+            if body.insert(key.clone(), edit.value).is_some() {
+                return Err(Error::at_key(
+                    ErrorKind::DuplicatePropertyKey { key: key.clone() },
+                    key,
+                ));
+            }
+        }
+        Ok(body)
     }
 }
 

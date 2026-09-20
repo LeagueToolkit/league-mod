@@ -68,6 +68,10 @@ impl DeclarationDocument {
     pub fn parse(&self) -> Result<Declarations, Error>;
 }
 
+impl TryFrom<Declarations> for DeclarationDocument {
+    type Error = Error;
+}
+
 pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
@@ -98,7 +102,7 @@ pub struct Shape {
     pub item: Option<PropertyKind>,
 }
 
-/// The schema that says nothing. Every property is typed from the base.
+/// The schema that says nothing. Every property is typed from the base, and no class is known.
 pub struct NoSchema;
 
 /// Plaintext for the hashes a rendered value carries (ADR-0020).
@@ -174,9 +178,15 @@ unset displays as the code's statement alone. `Display` is a log rendering; a co
 `kind` and navigates by `location`.
 
 `load_declarations()` expands source files and validates the declarations. `parse()` interprets
-a contained document and validates the result. `Declarations` exposes mutable `version` and
-`modules` fields; `validate()` checks supported declaration versions. `manifest_json()` validates
-and writes a direct JSON manifest. Target and link-path validity is enforced by their
+a contained document and validates the result; reading a document refuses a duplicate mapping
+key anywhere in it. `Declarations` exposes mutable `version` and `modules` fields; `validate()`
+checks supported declaration versions, and refuses a target module with no edit and an entries
+module with no entry. `manifest_json()` validates and writes a direct JSON manifest.
+A conversion to a serialized form refuses what that form cannot carry, and the manifest and
+the document refuse the same things ([ADR-0023](../adr/0023-refusing-serialization.md)): a
+property path or entry name spelling a binding keyword, one signed key held twice by an entry,
+and an integer outside the union of the `i64` and `u64` ranges. `manifest_json()` output loads
+to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each edit over the
 result of the preceding one, returns bytes, and leaves its input unchanged. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`

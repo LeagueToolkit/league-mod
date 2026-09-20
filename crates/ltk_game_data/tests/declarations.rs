@@ -281,7 +281,8 @@ fn scalar_targets_preserve_identifier_kind_and_spelling() {
             let manifest = declarations.manifest_json().unwrap();
             let json: serde_json::Value = serde_json::from_str(&manifest).unwrap();
             assert_eq!(json["modules"][0]["target"], value);
-            let document = ltk_game_data::DeclarationDocument::from(declarations.clone());
+            let document =
+                ltk_game_data::DeclarationDocument::try_from(declarations.clone()).unwrap();
             assert_eq!(document.parse().unwrap(), declarations);
         }
     }
@@ -333,7 +334,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         "Added"
     );
     assert_eq!(
-        serde_json::to_value(DeclarationDocument::from(declarations.clone())).unwrap(),
+        serde_json::to_value(DeclarationDocument::try_from(declarations.clone()).unwrap()).unwrap(),
         wire
     );
     let mut empty = wire.clone();
@@ -412,7 +413,7 @@ links = ["Shared"]
         assert_eq!(edits[1].links.add[0].as_str(), "New");
         assert_eq!(edits[2].links.remove[0].as_str(), "Gone");
 
-        let document = ltk_game_data::DeclarationDocument::from(declarations.clone());
+        let document = ltk_game_data::DeclarationDocument::try_from(declarations.clone()).unwrap();
         let parsed = document.parse().unwrap();
         assert_eq!(parsed, declarations, "{name}");
         assert_eq!(entry_names(&parsed.modules[0]), names, "{name}");
@@ -730,7 +731,7 @@ fn documents_round_trip_overrides_and_manifests_write_them() {
         |_| unreachable!(),
     )
     .unwrap();
-    let document = DeclarationDocument::from(declarations.clone());
+    let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
     let json = serde_json::to_string(&document).unwrap();
     assert!(json.contains(r#""overrides":["a.ptch"]"#), "{json}");
     assert_eq!(document.parse().unwrap(), declarations);

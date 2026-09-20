@@ -284,7 +284,7 @@ fn duplicate_signed_keys_are_errors_in_every_format() {
 #[test]
 fn entry_bodies_round_trip_through_documents_and_manifests() {
     let declarations = load("game_data.yaml", YAML);
-    let document = DeclarationDocument::from(declarations.clone());
+    let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
     assert_eq!(document.parse().unwrap(), declarations);
     let json = serde_json::to_string(&document).unwrap();
     assert!(
@@ -305,8 +305,174 @@ fn entry_bodies_round_trip_through_documents_and_manifests() {
         selectors(&load("game_data.json", &manifest)),
         selectors(&declarations)
     );
-    let document = DeclarationDocument::from(declarations.clone());
+    let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
     assert_eq!(document.parse().unwrap(), declarations);
+}
+
+/// Declarations of one `entries` module editing `Characters/A` with `properties`.
+fn entries_module(properties: Vec<PropertyEdit>) -> Declarations {
+    let mut edit = EntryEdit::default();
+    edit.properties = properties;
+    let mut entries = IndexMap::new();
+    entries.insert(EntryName::try_from("Characters/A").unwrap(), edit);
+    Declarations {
+        version: 1,
+        modules: vec![Module {
+            selector: Selector::Entries(entries),
+            origin: ltk_game_data::Origin {
+                manifest: "game_data.json".into(),
+                source: None,
+                module_index: 0,
+            },
+        }],
+    }
+}
+
+#[test]
+fn a_property_path_spelling_a_binding_keyword_refuses_to_serialize() {
+    for key in ["overrides", "links", "+links", "-links"] {
+        let declarations =
+            entries_module(vec![PropertyEdit::parse(key, Value::Integer(1)).unwrap()]);
+        let error = declarations.manifest_json().unwrap_err();
+        assert!(
+            matches!(&error.kind, ErrorKind::ReservedBindingKey { key: named } if named == key),
+            "{key}: {error:?}"
+        );
+        assert!(
+            DeclarationDocument::try_from(declarations).is_err(),
+            "{key}"
+        );
+    }
+
+    // A property path that merely starts with a keyword still serializes.
+    let declarations = entries_module(vec![
+        PropertyEdit::parse("linksPerSecond", Value::Integer(1)).unwrap(),
+    ]);
+    let manifest = declarations.manifest_json().unwrap();
+    assert_eq!(
+        selectors(&load("game_data.json", &manifest)),
+        selectors(&declarations)
+    );
+}
+
+#[test]
+fn an_entry_name_spelling_a_binding_keyword_refuses_to_serialize() {
+    let mut edit = Edit::default();
+    edit.entries.insert(
+        EntryName::try_from("links").unwrap(),
+        vec![PropertyEdit::parse("a", Value::Integer(1)).unwrap()],
+    );
+    let declarations = Declarations {
+        version: 1,
+        modules: vec![Module {
+            selector: Selector::Target {
+                target: ltk_game_data::Target::try_from("a.bin").unwrap(),
+                edits: vec![edit],
+            },
+            origin: ltk_game_data::Origin {
+                manifest: "game_data.json".into(),
+                source: None,
+                module_index: 0,
+            },
+        }],
+    };
+    let error = declarations.manifest_json().unwrap_err();
+    assert!(
+        matches!(&error.kind, ErrorKind::ReservedBindingKey { key } if key == "links"),
+        "{error:?}"
+    );
+    assert_eq!(error.location.module, Some(0));
+}
+
+#[test]
+fn two_edits_under_one_signed_key_refuse_to_serialize() {
+    let declarations = entries_module(vec![
+        PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(1)])).unwrap(),
+        PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(2)])).unwrap(),
+    ]);
+    let error = declarations.manifest_json().unwrap_err();
+    assert!(
+        matches!(&error.kind, ErrorKind::DuplicatePropertyKey { key } if key == "+mFoo"),
+        "{error:?}"
+    );
+    assert_eq!(error.location.entry.as_deref(), Some("Characters/A"));
+
+    // Two signs on one path are two keys, and both survive.
+    let declarations = entries_module(vec![
+        PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(1)])).unwrap(),
+        PropertyEdit::parse("-mFoo", Value::List(vec![Value::Integer(2)])).unwrap(),
+    ]);
+    let manifest = declarations.manifest_json().unwrap();
+    assert_eq!(
+        selectors(&load("game_data.json", &manifest)),
+        selectors(&declarations)
+    );
+}
+
+#[test]
+fn a_document_refuses_a_duplicate_mapping_key() {
+    let text = r#"{"version":1,"modules":[{"entries":{"a/b":{"x":1},"a/b":{"y":2}},"origin":{"manifest":"m","source":null,"module":0}}]}"#;
+    let error = serde_json::from_str::<DeclarationDocument>(text).unwrap_err();
+    assert!(error.to_string().contains("duplicate key `a/b`"), "{error}");
+
+    // The same document without the duplicate still reads, in spelled order.
+    let text = r#"{"version":1,"modules":[{"entries":{"a/b":{"x":1},"c/d":{"y":2}},"origin":{"manifest":"m","source":null,"module":0}}]}"#;
+    let document: DeclarationDocument = serde_json::from_str(text).unwrap();
+    let Selector::Entries(entries) = &document.parse().unwrap().modules[0].selector else {
+        panic!("expected an entries selector");
+    };
+    assert_eq!(
+        entries.keys().map(EntryName::as_str).collect::<Vec<_>>(),
+        ["a/b", "c/d"]
+    );
+}
+
+#[test]
+fn an_empty_selector_refuses_to_load_and_to_write() {
+    let empty_edits = r#"{"version":1,"modules":[{"target":"a.bin","edits":[],"origin":{"manifest":"m","source":null,"module":0}}]}"#;
+    let document: DeclarationDocument = serde_json::from_str(empty_edits).unwrap();
+    let error = document.parse().unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::EditsEmpty), "{error:?}");
+
+    let empty_entries = r#"{"version":1,"modules":[{"entries":{},"origin":{"manifest":"m","source":null,"module":0}}]}"#;
+    let document: DeclarationDocument = serde_json::from_str(empty_entries).unwrap();
+    let error = document.parse().unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::EntriesEmpty), "{error:?}");
+
+    let declarations = Declarations {
+        version: 1,
+        modules: vec![Module {
+            selector: Selector::Target {
+                target: ltk_game_data::Target::try_from("a.bin").unwrap(),
+                edits: Vec::new(),
+            },
+            origin: ltk_game_data::Origin {
+                manifest: "game_data.json".into(),
+                source: None,
+                module_index: 0,
+            },
+        }],
+    };
+    let error = declarations.manifest_json().unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::EditsEmpty), "{error:?}");
+    assert_eq!(error.location.module, Some(0));
+}
+
+#[test]
+fn an_out_of_range_integer_refuses_to_serialize() {
+    let declarations = entries_module(vec![
+        PropertyEdit::parse("a", Value::Integer(i128::MAX)).unwrap(),
+    ]);
+    let error = declarations.manifest_json().unwrap_err();
+    assert!(
+        matches!(error.kind, ErrorKind::Serialize { .. }),
+        "{error:?}"
+    );
+    let error = DeclarationDocument::try_from(declarations).unwrap_err();
+    assert!(
+        matches!(error.kind, ErrorKind::Serialize { .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
