@@ -590,7 +590,7 @@ fn a_called_off_build_ends_without_writing_state() {
 
 /// A PROP v3 with the dependency `shared` and one object `1` of class `2` whose `speed` is 1.0.
 fn speed_bin() -> Vec<u8> {
-    use ltk_meta::concrete::{Bin, BinObject, values};
+    use ltk_meta::{Bin, BinObject, property::values};
     let bin = Bin::builder()
         .dependency("shared")
         .object(
@@ -611,8 +611,8 @@ fn speed_ptch() -> Vec<u8> {
 
 /// A PTCH setting `speed` to 2.0 on each of `objects`.
 fn speed_ptch_with(objects: &[u32]) -> Vec<u8> {
-    use ltk_meta::{concrete::values, path::PropertyPath};
-    let mut patch = ltk_meta::concrete::BinOverride::builder();
+    use ltk_meta::{path::PropertyPath, property::values};
+    let mut patch = ltk_meta::BinOverride::builder();
     for &object in objects {
         patch = patch.set(
             object,
@@ -628,7 +628,7 @@ fn speed_ptch_with(objects: &[u32]) -> Vec<u8> {
 
 /// The `speed` of object `1` and the dependencies of a PROP.
 fn speed_and_links(bytes: &[u8]) -> (f32, Vec<String>) {
-    use ltk_meta::{concrete::Bin, path::PropertyPath};
+    use ltk_meta::{Bin, path::PropertyPath};
     let bin = Bin::from_reader(&mut Cursor::new(bytes)).unwrap();
     let speed = match bin.objects[&ltk_game_data::BinHash(1)]
         .resolve(&PropertyPath::new("speed").unwrap())
@@ -1085,14 +1085,14 @@ fn entries_property_edits_reach_every_declaring_chunk() {
         result.game_data_diagnostics
     );
     for name in ["data/one.bin", "data/two.bin"] {
-        use ltk_meta::{concrete::Bin, path::PropertyPath};
+        use ltk_meta::{Bin, path::PropertyPath};
         let bin = Bin::from_reader(&mut Cursor::new(chunk(&overlay.join(WAD), name))).unwrap();
         let speed = bin.objects[&ltk_game_data::BinHash(skin)]
             .resolve(&PropertyPath::new("speed").unwrap())
             .unwrap();
         assert_eq!(
             *speed,
-            ltk_meta::concrete::values::F32::new(4.0).into(),
+            ltk_meta::property::values::F32::new(4.0).into(),
             "{name}"
         );
         assert_eq!(bin.dependencies, ["Added"], "{name}");
@@ -1106,7 +1106,7 @@ fn referenced_bin() -> Vec<u8> {
 
 /// The chunk declaring `Characters/B`, whose `speed` a reference reads.
 fn referenced_bin_with(speed: f32) -> Vec<u8> {
-    use ltk_meta::concrete::{Bin, BinObject, values};
+    use ltk_meta::{Bin, BinObject, property::values};
     let bin = Bin::builder()
         .object(
             BinObject::builder(ltk_game_data::BinHash::from("Characters/B"), 2u32)
@@ -1124,7 +1124,7 @@ fn referenced_bin_with(speed: f32) -> Vec<u8> {
 
 /// The `speed` of `Characters/B` in a chunk.
 fn referenced_speed(bytes: &[u8]) -> f32 {
-    use ltk_meta::{concrete::Bin, path::PropertyPath};
+    use ltk_meta::{Bin, path::PropertyPath};
     let bin = Bin::from_reader(&mut Cursor::new(bytes)).unwrap();
     match bin.objects[&ltk_game_data::BinHash::from("Characters/B")]
         .resolve(&PropertyPath::new("speed").unwrap())

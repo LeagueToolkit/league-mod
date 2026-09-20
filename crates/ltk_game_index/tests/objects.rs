@@ -13,12 +13,11 @@ use ltk_game_index::{
     BinHash, BuildOptions, CacheError, Declaration, GameIndex, ObjectBuildError, ObjectIndex,
     ResolveWadPath, WadHash, chunk_hash, for_each_declaration,
 };
-use ltk_meta::property::NoMeta;
 use ltk_meta::{Bin, BinObject, BinOverride};
 
 /// A `PROP` declaring `objects` as `(object, class)` pairs.
 fn prop(objects: &[(u32, u32)]) -> Vec<u8> {
-    let bin = Bin::<NoMeta>::new(
+    let bin = Bin::new(
         objects
             .iter()
             .map(|&(object, class)| BinObject::new(object, class)),
@@ -31,7 +30,7 @@ fn prop(objects: &[(u32, u32)]) -> Vec<u8> {
 
 /// A `PTCH` declaring `objects` as `(object, class)` pairs.
 fn ptch(objects: &[(u32, u32)]) -> Vec<u8> {
-    let mut patch = BinOverride::<NoMeta>::new();
+    let mut patch = BinOverride::new();
     for &(object, class) in objects {
         patch
             .objects

@@ -3,11 +3,7 @@ use ltk_game_data::{
     OverridePath, RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply,
     load_declarations,
 };
-use ltk_meta::{
-    BinOverride,
-    concrete::{Bin, BinObject, values},
-    path::PropertyPath,
-};
+use ltk_meta::{Bin, BinObject, BinOverride, path::PropertyPath, property::values};
 use std::io::Cursor;
 
 /// An override reader for edits without overrides.

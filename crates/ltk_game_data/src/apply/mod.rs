@@ -6,8 +6,7 @@ mod entries;
 use std::{collections::HashSet, io::Cursor};
 
 use ltk_meta::{
-    BinObject, BinOverride,
-    concrete::{Bin, BinStream},
+    Bin, BinObject, BinOverride, BinStream,
     path::{PatchError, ResolveErrorKind},
 };
 use serde::{Deserialize, Serialize};

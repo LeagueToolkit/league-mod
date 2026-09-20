@@ -1474,9 +1474,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_io_ext"
-version = "0.4.4"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "092554284ee9c83dda80408d9370800aa188e5c2da99bee36a3b06c733ced258"
+checksum = "335f639821e042a294bcf35c40a587f6812dacbd2220b6430aa4733ec353101f"
 dependencies = [
  "byteorder",
  "glam",
@@ -1486,9 +1486,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_meta"
-version = "0.8.2"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5956007c9b54bb2c66b7a1787ad56189071846fc5501033a52d89b38befe388e"
+checksum = "1ec1bce664d72b54da64d43dddeb4209a560f718bb4a7aadd6d2280697549d80"
 dependencies = [
  "byteorder",
  "enum_dispatch",

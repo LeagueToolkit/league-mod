@@ -13,7 +13,7 @@ use ltk_game_data::{
     OverridePath, Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
-use ltk_meta::{BinObject, concrete::BinStream};
+use ltk_meta::{BinObject, BinStream};
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
