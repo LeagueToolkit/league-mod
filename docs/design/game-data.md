@@ -116,6 +116,9 @@ pub struct Shape {
 /// The schema that says nothing. Every property is typed from the base, and no class is known.
 pub struct NoSchema;
 
+// Not built. `Names` extends `ltk_meta::path::FieldNames`, which `ltk_meta` does not carry
+// yet, so the rendering half of this section waits on that release ([ADR-0020](../adr/0020-value-rendering.md)).
+
 /// Plaintext for the hashes a rendered value carries (ADR-0020).
 pub trait Names: ltk_meta::path::FieldNames {
     /// The name of a struct's class.
@@ -138,6 +141,24 @@ pub struct Reference {
     pub entry: EntryName,
     pub path: PropertyPath,
 }
+
+/// The object `name` names in a `PROP` chunk, for a caller answering `read_entry`.
+pub fn read_entry(bytes: &[u8], name: &EntryName) -> Option<BinObject>;
+
+impl Module {
+    /// Every reference the module's edits hold, in spelled order.
+    pub fn references(&self) -> Vec<Reference>;
+}
+
+impl Edit {
+    /// Every reference the edit's property edits hold, in spelled order.
+    pub fn references(&self) -> Vec<Reference>;
+}
+
+impl Value {
+    /// Every reference in the value, in spelled order.
+    pub fn references(&self) -> Vec<Reference>;
+}
 ```
 
 `Schema` is implemented for `&S`, `Box<S>`, and `Arc<S>` of any `S: Schema + ?Sized`.
@@ -155,7 +176,14 @@ field or a map key with no spelling is an error whose key is the rendered path
 ([ADR-0020](../adr/0020-value-rendering.md)). `Value::to_yaml` writes block style, a list whose
 items are scalars in flow style, and quotes a string YAML reads as another type.
 `Reference::parse(text)` splits `text` at its first `:`: the part before is an `EntryName`, the
-part after a `PropertyPath`. `Reference` implements `Display` as the same spelling.
+part after a `PropertyPath`. `Reference` implements `Display` as the same spelling. Text with
+no `:`, an entry name the name rule refuses, or a path the path rule refuses is
+`ReferenceShape`. `Value::references()`, `Edit::references()`, and `Module::references()`
+report the references held, in spelled order and duplicates included; a consumer asks the
+module's before a build, to learn whether that build owes an object index. `read_entry(bytes,
+name)` decodes one object out of a `PROP` chunk, which is what a caller answers `apply`'s
+`read_entry` with once it holds the declaring chunk's bytes; bytes that are not a readable
+`PROP` and a chunk without the object are both `None`.
 
 `Error` is a code with a typed place ([ADR-0014](../adr/0014-coded-declaration-errors.md)):
 
@@ -616,7 +644,7 @@ reference from the game.
 | D7 | A module has one selector: `target` or `entries` | Entry names inside `target` | An entry name and a chunk path share a spelling | [section 4](#s4) |
 | D8 | The overlay resolves selectors through `ltk_game_index` | Index access in `ltk_game_data` | The library applies edits without an installation | [section 3](#s3), [ADR-0009](../adr/0009-game-index-crate.md) |
 | D9 | Every declaring chunk of an entry is edited | First declaring chunk only | The client loads copies by load order | [section 6](#s6) |
-| D10 | The object index is built only for a build with an `entries` module | Every build | A full bin read is paid only when used | [section 6](#s6) |
+| D10 | The object index is built only for a build with an `entries` module or a reference | Every build | A full bin read is paid only when used | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md) |
 | D11 | An edit is a phased struct; an entry body takes `links` | Flat operations; entry bodies without `links` | The standard's unit is the batch; an entry names a chunk the author cannot spell | ADR-0010 |
 | D12 | Declaration documents keep mapping order | Sorted JSON objects | `entries` apply in authored order | ADR-0011 |
 | D13 | An override file is referenced by its layer-relative path in every container | Per-container references | One spelling from manifest to build | ADR-0013 |
