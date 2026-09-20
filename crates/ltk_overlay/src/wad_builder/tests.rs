@@ -145,6 +145,90 @@ fn a_passed_through_stored_chunk_reports_equal_sizes() {
     );
 }
 
+/// A zstd frame header carries the content size, so the decode size a
+/// pass-through writes is readable out of the bytes themselves. A container
+/// claiming another number must not be able to put that claim in a WAD the
+/// game loads: the client sizes its buffer from the uncompressed size and the
+/// decompressor then writes a different count into it (ADR-0001).
+#[test]
+fn a_passed_through_zstd_chunk_reports_the_size_its_frame_states() {
+    const CONTENT: &[u8] = b"a chunk whose container lies about its decoded length";
+    let compressed = zstd::encode_all(CONTENT, 3).expect("test content compresses");
+
+    let over = EncodedChunk::pass_through(
+        hash(VFX),
+        CompressedChunk {
+            compressed: compressed.clone(),
+            compression: WadChunkCompression::Zstd,
+            // What a container shipping wrong metadata claims.
+            uncompressed_size: 4096,
+            claimed_checksum: xxh3_64(&compressed),
+        },
+    )
+    .expect("a zstd chunk's sizes fit")
+    .expect("zstd is a codec this crate emits");
+
+    assert_eq!(over.compressed(), compressed);
+    assert_eq!(
+        over.uncompressed_size() as usize,
+        CONTENT.len(),
+        "the TOC size must come from the frame header, not from the source TOC"
+    );
+}
+
+/// A frame header that states no content size, and a buffer holding more than
+/// one frame, still pass through: the decode size is counted from a decode that
+/// keeps no bytes. Bytes that do not decode are not passed through at all.
+#[test]
+fn zstd_bytes_without_a_stated_size_are_counted_by_decoding() {
+    const CONTENT: &[u8] = b"a chunk whose frame header says nothing about its length";
+
+    // `zstd::encode_all` streams, so its frame header states no content size.
+    let headless = zstd::encode_all(CONTENT, 3).expect("test content compresses");
+    assert!(
+        matches!(zstd::zstd_safe::get_frame_content_size(&headless), Ok(None)),
+        "the fixture must be a frame that states no size"
+    );
+
+    let two_frames = {
+        let mut bytes = headless.clone();
+        bytes.extend_from_slice(&headless);
+        bytes
+    };
+
+    for (compressed, decoded) in [(headless, CONTENT.len()), (two_frames, CONTENT.len() * 2)] {
+        let over = EncodedChunk::pass_through(
+            hash(VFX),
+            CompressedChunk {
+                compressed: compressed.clone(),
+                compression: WadChunkCompression::Zstd,
+                uncompressed_size: 4096,
+                claimed_checksum: xxh3_64(&compressed),
+            },
+        )
+        .expect("a zstd chunk's sizes fit")
+        .expect("zstd is a codec this crate emits");
+
+        assert_eq!(over.compressed(), compressed);
+        assert_eq!(over.uncompressed_size() as usize, decoded);
+    }
+
+    let refused = EncodedChunk::pass_through(
+        hash(VFX),
+        CompressedChunk {
+            compressed: b"not a zstd frame".to_vec(),
+            compression: WadChunkCompression::Zstd,
+            uncompressed_size: 16,
+            claimed_checksum: 0,
+        },
+    )
+    .expect("refusing a pass-through is not an error");
+    assert!(
+        refused.is_none(),
+        "bytes that do not decode must fall back to decode-and-compress"
+    );
+}
+
 /// A `ZstdMulti` chunk's bytes mean nothing without the subchunk table in
 /// its own WAD, and GZip and Satellite are codecs this crate never writes.
 /// Refusing them here is what sends those chunks down the decode-and-

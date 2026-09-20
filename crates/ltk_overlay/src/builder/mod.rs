@@ -38,16 +38,17 @@ mod metadata;
 mod resolve;
 
 use crate::builder::incremental::PreviousOverlay;
+use crate::builder::resolve::distribute_prepared_to_wads;
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game::{GameDir, GameIndexExt, SkippedGameArchive, StateDir};
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
-use crate::state::{OverlayState, WadLayoutRecord};
+use crate::state::{OverlayState, OverrideRecord, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
 use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_index::GameIndex;
-use ltk_wad::WadHash;
+use ltk_wad::{EncodedChunk, WadHash};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -502,6 +503,41 @@ pub(crate) type CalledOff = Arc<dyn Fn() -> bool + Send + Sync>;
 /// reused ones carry their previous record forward unchanged, since their file
 /// did not move. A WAD with no usable record is simply absent, which is what
 /// puts it on the full-rebuild path next time.
+/// The reused WADs holding a chunk this build encoded differently.
+///
+/// The game validates a chunk two mounted WADs share against its compressed checksum, so the
+/// copies have to agree. A WAD reused with the previous build's bytes and a WAD rebuilt from
+/// nothing can settle on two encodings of one content: which encoding a build's memo keeps
+/// depends on the order the sources arrive in, and a `zstd` version change moves level-3
+/// output. Rebuilding the reused WAD puts this build's encoding in both
+/// ([ADR-0025](../../docs/adr/0025-per-chunk-checksums-in-the-layout-record.md)).
+///
+/// A reused WAD with no layout record says nothing about what its file holds, so it is
+/// rebuilt whenever it shares any chunk with a WAD this build wrote.
+fn diverged_reuses(
+    wads_to_reuse: &[Utf8PathBuf],
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
+    prev_state: Option<&OverlayState>,
+    prepared: &HashMap<WadHash, EncodedChunk>,
+) -> Vec<Utf8PathBuf> {
+    wads_to_reuse
+        .iter()
+        .filter(
+            |path| match prev_state.and_then(|state| state.wad_layout(path.as_str())) {
+                Some(record) => record.overrides.iter().any(|(hash, recorded)| {
+                    prepared
+                        .get(hash)
+                        .is_some_and(|chunk| chunk.checksum() != recorded.checksum)
+                }),
+                None => wad_hash_sets
+                    .get(*path)
+                    .is_some_and(|hashes| hashes.iter().any(|hash| prepared.contains_key(hash))),
+            },
+        )
+        .cloned()
+        .collect()
+}
+
 fn collect_wad_layouts(
     built: &[resolve::PatchedWad],
     reused: &[Utf8PathBuf],
@@ -522,7 +558,15 @@ fn collect_wad_layouts(
                     overrides: wad
                         .written_overrides
                         .iter()
-                        .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
+                        .filter_map(|&(hash, checksum)| {
+                            Some((
+                                hash,
+                                OverrideRecord {
+                                    content: all_meta.get(&hash)?.content_hash,
+                                    checksum,
+                                },
+                            ))
+                        })
                         .collect(),
                 },
             )
@@ -914,13 +958,45 @@ impl OverlayBuilder {
             .map(|(&hash, prepared)| (hash, prepared.clone()))
             .collect();
 
-        let wad_overrides = self.resolve_overrides_for_wads(
+        let mut wads_to_build = wads_to_build;
+        let mut wads_to_reuse = wads_to_reuse;
+        let mut prepared = self.prepare_overrides(
             &wads_to_build,
             &wad_hash_sets,
             &all_meta,
             &string_plans,
             reused,
+            &HashMap::new(),
         )?;
+
+        // A reused WAD keeps the bytes the previous build wrote. Where this build encoded the
+        // same chunk for a WAD it is rebuilding, the two copies have to be one encoding: the
+        // client validates a chunk two mounted WADs share against its compressed checksum.
+        let diverged = diverged_reuses(
+            &wads_to_reuse,
+            &wad_hash_sets,
+            prev_state.as_ref(),
+            &prepared,
+        );
+        if !diverged.is_empty() {
+            tracing::info!(
+                "Rebuilding {} reused WAD(s) that hold a chunk this build encoded differently",
+                diverged.len()
+            );
+            prepared = self.prepare_overrides(
+                &diverged,
+                &wad_hash_sets,
+                &all_meta,
+                &string_plans,
+                HashMap::new(),
+                &prepared,
+            )?;
+            wads_to_reuse.retain(|path| !diverged.contains(path));
+            wads_to_build.extend(diverged);
+        }
+
+        let wad_overrides = distribute_prepared_to_wads(&wads_to_build, &wad_hash_sets, &prepared);
+        drop(prepared);
 
         let built = self.patch_wads_parallel(wads_to_build, wad_overrides, rewrites)?;
 
@@ -934,7 +1010,11 @@ impl OverlayBuilder {
         // refuses only on a dirty flag, so without one the next build skips over the gap.
         let mut incomplete: BTreeSet<String> = BTreeSet::new();
         for wad in &built {
-            let written: HashSet<WadHash> = wad.written_overrides.iter().copied().collect();
+            let written: HashSet<WadHash> = wad
+                .written_overrides
+                .iter()
+                .map(|&(hash, _)| hash)
+                .collect();
             let routed = wad_hash_sets
                 .get(&wad.relative_path)
                 .map_or(0, HashSet::len);

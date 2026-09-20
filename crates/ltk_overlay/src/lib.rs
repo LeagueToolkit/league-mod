@@ -141,6 +141,6 @@ pub use fantome_content::FantomeContent;
 pub use game::{GameDir, SkippedGameArchive, StateDir};
 pub use linked_bins::LinkedBinOffender;
 pub use modpkg_content::ModpkgContent;
-pub use state::OverlayState;
+pub use state::{OverlayState, OverrideRecord, WadLayoutRecord};
 pub use strings::StringOverrideMode;
 pub use utils::ContentHash;

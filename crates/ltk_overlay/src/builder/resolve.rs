@@ -71,7 +71,7 @@ impl<'a> ChunkSources<'a> {
 
 /// Spread the flat `prepared` map into the per-WAD maps the patch step consumes:
 /// each WAD gets a handle on the prepared override for every hash routed to it.
-fn distribute_prepared_to_wads(
+pub(crate) fn distribute_prepared_to_wads(
     wads_to_build: &[Utf8PathBuf],
     wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
     prepared: &HashMap<WadHash, EncodedChunk>,
@@ -232,6 +232,21 @@ impl<'a> OverrideCompressor<'a> {
         let content_hash = self.record(path_hash);
         self.memo.insert(content_hash, prepared);
         self.passed_through += 1;
+    }
+
+    /// Adopt the encodings an earlier pass of the same build settled on.
+    ///
+    /// A seeded content is not needed, not read and not compressed again, and
+    /// [`finish`](Self::finish) re-emits it for every path hash carrying it. Two passes of
+    /// one build therefore write one encoding of a shared chunk, which is what the client's
+    /// compressed-checksum check on a shared chunk requires.
+    fn seed(&mut self, prepared: &HashMap<WadHash, EncodedChunk>) {
+        for (&path_hash, chunk) in prepared {
+            let content_hash = self.record(path_hash);
+            self.memo
+                .entry(content_hash)
+                .or_insert_with(|| chunk.clone());
+        }
     }
 
     /// Compress the queued batch in parallel and drop its uncompressed bytes.
@@ -424,14 +439,23 @@ impl OverlayBuilder {
     ///
     /// The rest is compressed by the [`OverrideCompressor`], once per distinct
     /// content, and the results are spread across the WADs.
-    pub(crate) fn resolve_overrides_for_wads(
+    /// Resolve and encode every chunk the WADs being rebuilt need.
+    ///
+    /// `seed` holds chunks an earlier call already encoded. A content one call encoded keeps
+    /// that encoding here, and the result carries it forward, so every WAD of one build ends
+    /// up with one encoding of a shared chunk however many calls it takes to reach them all
+    /// ([ADR-0025]).
+    ///
+    /// [ADR-0025]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0025-per-chunk-checksums-in-the-layout-record.md
+    pub(crate) fn prepare_overrides(
         &mut self,
         wads_to_build: &[Utf8PathBuf],
         wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
         string_plans: &HashMap<WadHash, StringPatchPlan>,
         reused: HashMap<WadHash, EncodedChunk>,
-    ) -> Result<BTreeMap<Utf8PathBuf, HashMap<WadHash, EncodedChunk>>> {
+        seed: &HashMap<WadHash, EncodedChunk>,
+    ) -> Result<HashMap<WadHash, EncodedChunk>> {
         // Every unique path hash needed across the WADs being rebuilt, minus
         // the ones a tail rewrite supplies out of the file it is rewriting.
         let needed_hashes: HashSet<WadHash> = wads_to_build
@@ -442,24 +466,19 @@ impl OverlayBuilder {
             .collect();
 
         if needed_hashes.is_empty() && reused.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(seed.clone());
         }
 
         let sources = ChunkSources::classify(&needed_hashes, all_meta);
 
         let mut preparer = OverrideCompressor::new(all_meta, reused, BATCH_BUDGET_BYTES);
+        preparer.seed(seed);
         let mismatches =
             self.resolve_provider_overrides(&sources.by_mod, all_meta, &mut preparer)?;
         self.resolve_string_patches(&sources.string_patches, string_plans, &mut preparer)?;
         self.last_checksum_mismatches.extend(mismatches);
 
-        let prepared = preparer.finish()?;
-
-        Ok(distribute_prepared_to_wads(
-            wads_to_build,
-            wad_hash_sets,
-            &prepared,
-        ))
+        preparer.finish()
     }
 
     /// Resolve overrides read from mod content providers into the preparer,
@@ -750,7 +769,10 @@ impl OverlayBuilder {
                 layout: record.layout,
                 source: record.source,
             },
-            written_overrides: tail.into_iter().map(|(hash, _)| hash).collect(),
+            written_overrides: tail
+                .into_iter()
+                .map(|(hash, over)| (hash, over.checksum()))
+                .collect(),
         })
     }
 
@@ -762,6 +784,10 @@ impl OverlayBuilder {
         mut overrides: HashMap<WadHash, EncodedChunk>,
     ) -> Result<WrittenWad> {
         let src_wad_path = self.game_dir.join(relative_path);
+        let written: Vec<(WadHash, u64)> = overrides
+            .iter()
+            .map(|(&hash, over)| (hash, over.checksum()))
+            .collect();
         let override_hashes: HashSet<WadHash> = overrides.keys().copied().collect();
 
         tracing::info!(
@@ -777,7 +803,7 @@ impl OverlayBuilder {
 
         Ok(WrittenWad {
             stats,
-            written_overrides: override_hashes.into_iter().collect(),
+            written_overrides: written,
         })
     }
 }
@@ -815,9 +841,22 @@ fn try_pass_through(
     };
 
     let claimed = chunk.claimed_checksum;
+    let claimed_size = chunk.uncompressed_size;
     let Some(prepared) = EncodedChunk::pass_through(path_hash, chunk)? else {
         return Ok(None);
     };
+
+    if prepared.uncompressed_size() as usize != claimed_size {
+        tracing::warn!(
+            "Mod '{}' claims {} decoded byte(s) for chunk {:016x} of '{}', but those bytes \
+             decode to {}; the overlay records the computed value",
+            mod_id,
+            claimed_size,
+            path_hash,
+            wad_name,
+            prepared.uncompressed_size(),
+        );
+    }
 
     let computed = prepared.checksum();
     if computed != claimed {
@@ -872,7 +911,7 @@ struct WadWork {
 /// The result of one write, before it is paired with the WAD's paths.
 struct WrittenWad {
     stats: PatchedWadStats,
-    written_overrides: Vec<WadHash>,
+    written_overrides: Vec<(WadHash, u64)>,
 }
 
 impl WrittenWad {
@@ -895,12 +934,13 @@ pub(crate) struct PatchedWad {
     pub(crate) path: Utf8PathBuf,
     /// Metrics, layout and source identity of the write.
     pub(crate) stats: PatchedWadStats,
-    /// The overrides that actually reached the file.
+    /// The overrides that actually reached the file, each with the checksum of
+    /// the compressed bytes written for it.
     ///
     /// Not always the set that was routed to this WAD: an override whose bytes
     /// could not be resolved is skipped. The layout record has to describe what
     /// the file holds, not what the build intended it to hold.
-    pub(crate) written_overrides: Vec<WadHash>,
+    pub(crate) written_overrides: Vec<(WadHash, u64)>,
 }
 
 #[cfg(test)]
