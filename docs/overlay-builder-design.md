@@ -97,9 +97,10 @@ in-place path is not considered at all.
 Per-mod content fingerprints participate in the skip. A mod ID is not enough: a
 workshop project directory keeps its ID while its files change. A content
 fingerprint pairs each file's relative path with its size and its modification
-time in nanoseconds, so an edit that leaves the length alone still moves it.
-The resolution is the filesystem's, 100 nanoseconds on NTFS and one nanosecond
-on ext4.
+time in nanoseconds, so an edit that leaves the length alone still moves it. The
+unit is the nanosecond and the resolution is the platform's, which is coarser:
+Windows advances a file time in system clock ticks, about 1 to 15 milliseconds
+apart.
 
 Each enabled mod's ID names one mod. A build refuses an enabled list holding one
 ID twice: pass 1 keeps a mod's overrides by list position and pass 2 resolves

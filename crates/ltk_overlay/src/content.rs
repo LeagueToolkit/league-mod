@@ -43,9 +43,9 @@ pub struct CompressedChunk {
 /// `0` when the platform reports none, or the timestamp predates the epoch. A fingerprint
 /// pairs it with the file's size, and both sides of every comparison read it the same way.
 ///
-/// The resolution is the filesystem's: NTFS records 100 nanoseconds, ext4 one nanosecond. A
-/// second edit of a file within one clock tick that leaves its length unchanged produces the
-/// fingerprint the first edit produced.
+/// The unit is the nanosecond and the resolution is the platform's, which is coarser: Windows
+/// advances a file time in system clock ticks, about 1 to 15 milliseconds apart. Two edits
+/// inside one tick that leave a file's length unchanged produce one fingerprint.
 pub(crate) fn mtime_nanos(metadata: &std::fs::Metadata) -> u128 {
     metadata
         .modified()

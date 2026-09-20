@@ -497,12 +497,6 @@ pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 /// Polled between the units of a build. `true` calls the build off.
 pub(crate) type CalledOff = Arc<dyn Fn() -> bool + Send + Sync>;
 
-/// The layout records to persist for every WAD the overlay now holds.
-///
-/// Freshly written WADs get a record built from what the writer reported;
-/// reused ones carry their previous record forward unchanged, since their file
-/// did not move. A WAD with no usable record is simply absent, which is what
-/// puts it on the full-rebuild path next time.
 /// The reused WADs holding a chunk this build encoded differently.
 ///
 /// The game validates a chunk two mounted WADs share against its compressed checksum, so the
@@ -538,6 +532,12 @@ fn diverged_reuses(
         .collect()
 }
 
+/// The layout records to persist for every WAD the overlay now holds.
+///
+/// Freshly written WADs get a record built from what the writer reported;
+/// reused ones carry their previous record forward unchanged, since their file
+/// did not move. A WAD with no usable record is simply absent, which is what
+/// puts it on the full-rebuild path next time.
 fn collect_wad_layouts(
     built: &[resolve::PatchedWad],
     reused: &[Utf8PathBuf],
@@ -972,13 +972,20 @@ impl OverlayBuilder {
         // A reused WAD keeps the bytes the previous build wrote. Where this build encoded the
         // same chunk for a WAD it is rebuilding, the two copies have to be one encoding: the
         // client validates a chunk two mounted WADs share against its compressed checksum.
-        let diverged = diverged_reuses(
-            &wads_to_reuse,
-            &wad_hash_sets,
-            prev_state.as_ref(),
-            &prepared,
-        );
-        if !diverged.is_empty() {
+        //
+        // A pass encodes the chunks its own WADs need, and those chunks reach WADs still
+        // marked for reuse, so the answer is taken again over what each pass added. Every
+        // round moves at least one WAD out of `wads_to_reuse`, which is finite.
+        loop {
+            let diverged = diverged_reuses(
+                &wads_to_reuse,
+                &wad_hash_sets,
+                prev_state.as_ref(),
+                &prepared,
+            );
+            if diverged.is_empty() {
+                break;
+            }
             tracing::info!(
                 "Rebuilding {} reused WAD(s) that hold a chunk this build encoded differently",
                 diverged.len()

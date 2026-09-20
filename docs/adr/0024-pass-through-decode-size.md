@@ -57,16 +57,20 @@ header states, and for a header that states nothing it is the count of a decode 
 no bytes. A disagreement with the source TOC is a warning and never a failed build, the
 treatment ADR-0001 gives the checksum. Bytes that do not decode at all are not passed
 through, and the chunk falls through to the ordinary read-and-compress path where the
-failure is reported.
+failure is reported. The count stops at `u32::MAX`, the largest value the TOC's size field
+holds, so a chunk whose ratio would hold the decoder for a long time is refused at that
+point rather than decoded to its end.
 
 ## Consequences
 
 - **Positive:** a container's claimed decode size cannot reach a WAD the game loads.
 - **Positive:** 88% of the chunks measured need no decode at all, and none needs
   compression.
-- **Negative:** the remaining chunks are decoded. Decoding runs several times faster than
-  the level-3 compression a pass-through skips, so the path stays worth taking, and the
-  decode keeps only the decoder's window.
+- **Negative:** the remaining chunks are decoded, in the sequential loop of
+  `resolve_provider_overrides`. Decoding runs several times faster than the level-3
+  compression a pass-through skips, and the decode keeps only the decoder's window, so the
+  path stays worth taking; a container whose every frame is headless pays a serial decode of
+  its whole override set on the builds that resolve it.
 - **Negative:** the doc claim that a pass-through never decodes no longer holds for every
   chunk.
 - **Revisit when:** `ltk_wad::WadBuilder` pledges the source size, which would leave the

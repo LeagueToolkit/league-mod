@@ -265,12 +265,21 @@ fn zstd_decoded_size(compressed: &[u8]) -> Option<usize> {
 ///
 /// The decoder's window is the only allocation. Decoding costs a fraction of the compression
 /// the pass-through exists to avoid.
+///
+/// The count stops at the largest size the WAD TOC's `u32` field holds, so a chunk whose
+/// ratio would run the decoder for a long time answers `None` after that many bytes rather
+/// than to the end.
 fn zstd_decoded_len(compressed: &[u8]) -> Option<usize> {
     struct Counter(usize);
 
     impl Write for Counter {
         fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
             self.0 += buffer.len();
+            if self.0 > u32::MAX as usize {
+                return Err(std::io::Error::other(
+                    "the chunk decodes past the WAD format's size field",
+                ));
+            }
             Ok(buffer.len())
         }
 

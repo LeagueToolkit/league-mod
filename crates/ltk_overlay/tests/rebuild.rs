@@ -139,11 +139,29 @@ fn content_edit_invalidates_exact_match_skip() {
     assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V2_EDITED");
 }
 
+/// Sets `path`'s modification time.
+///
+/// The two timestamps this test compares are set rather than taken from the clock: a
+/// platform advances a file time in its own ticks, and the property under test is what the
+/// fingerprint does with two times inside one second.
+fn set_mtime(path: &Utf8Path, time: std::time::SystemTime) {
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(path.as_std_path())
+        .unwrap();
+    file.set_modified(time).unwrap();
+}
+
 /// A content fingerprint pairs each file's size with its modification time. An edit that
 /// leaves the length alone moves only the timestamp, so the timestamp carries the whole
 /// difference and its resolution is what the skip rests on.
 #[test]
 fn a_same_length_content_edit_invalidates_exact_match_skip() {
+    // One second apart from each other by a millisecond, so a fingerprint counting whole
+    // seconds sees one value for both.
+    let first = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let second = first + std::time::Duration::from_millis(1);
+
     let tmp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
     let game_dir = root.join("Game");
@@ -152,6 +170,12 @@ fn a_same_length_content_edit_invalidates_exact_match_skip() {
     let overlay_root = profile_dir.join("overlay");
 
     let mod_dir = write_mod_dir(&root, "workshop-proj", b"MOD_V1");
+    let override_path = mod_dir
+        .join("content")
+        .join("base")
+        .join(GAME_WAD)
+        .join(CHUNK_PATH);
+    set_mtime(&override_path, first);
 
     let mut builder = OverlayBuilder::new(game_dir, overlay_root.clone(), profile_dir);
     let enabled = || {
@@ -166,14 +190,9 @@ fn a_same_length_content_edit_invalidates_exact_match_skip() {
     builder.build().unwrap();
     assert_eq!(read_overlay_chunk(&overlay_root), b"MOD_V1");
 
-    // Six bytes for six, written back to back, which lands both writes in one wall-clock
-    // second.
-    let override_path = mod_dir
-        .join("content")
-        .join("base")
-        .join(GAME_WAD)
-        .join(CHUNK_PATH);
+    // Six bytes for six, a millisecond later.
     fs::write(override_path.as_std_path(), b"MOD_V2").unwrap();
+    set_mtime(&override_path, second);
 
     builder.set_enabled_mods(enabled());
     let after_edit = builder.build().unwrap();

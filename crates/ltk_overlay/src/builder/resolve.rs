@@ -422,14 +422,17 @@ impl OverlayBuilder {
         (wads_to_build, wads_to_reuse, new_wad_fingerprints)
     }
 
-    /// Resolve the bytes each rebuilding WAD needs (pass 2).
+    /// Resolve and encode every chunk the WADs being rebuilt need (pass 2).
     ///
     /// Every needed chunk is resolved once, from exactly one of two sources
-    /// (see [`ChunkSources`]), into a [`ResolvedChunk`], then the flat result is
-    /// spread across the per-WAD maps the patch step consumes:
+    /// (see [`ChunkSources`]), into a [`ResolvedChunk`]:
     ///
     /// - **Mod overrides** - read from each mod's content provider.
     /// - **String patches** - the game's stringtable rebuilt with merged overrides.
+    ///
+    /// The result is flat, keyed by path hash;
+    /// [`distribute_prepared_to_wads`] spreads it across the per-WAD maps the
+    /// patch step consumes.
     ///
     /// `reused` holds overrides whose compressed bytes a
     /// [tail rewrite](super::incremental) already recovered from an overlay's
@@ -437,14 +440,12 @@ impl OverlayBuilder {
     /// memo, so a WAD building the same content fresh in this build emits the
     /// bytes the reusing WAD is keeping.
     ///
-    /// The rest is compressed by the [`OverrideCompressor`], once per distinct
-    /// content, and the results are spread across the WADs.
-    /// Resolve and encode every chunk the WADs being rebuilt need.
-    ///
     /// `seed` holds chunks an earlier call already encoded. A content one call encoded keeps
     /// that encoding here, and the result carries it forward, so every WAD of one build ends
     /// up with one encoding of a shared chunk however many calls it takes to reach them all
     /// ([ADR-0025]).
+    ///
+    /// The rest is compressed by the [`OverrideCompressor`], once per distinct content.
     ///
     /// [ADR-0025]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0025-per-chunk-checksums-in-the-layout-record.md
     pub(crate) fn prepare_overrides(
