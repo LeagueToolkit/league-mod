@@ -278,6 +278,27 @@ impl Schema for ShapesOnly {
 }
 
 #[test]
+fn a_class_the_base_carries_needs_no_schema_however_the_pin_spells_it() {
+    // `mesh` is an embedded `E` in the base. Naming `E` and leaving it out are one pin.
+    for body in [
+        "mesh: !embed { set: { texture: z } }\n",
+        "mesh: !embed { class: E, set: { texture: z } }\n",
+    ] {
+        let output = run(&manifest(body), &ShapesOnly(TestSchema::new()));
+        assert!(
+            output.diagnostics.is_empty(),
+            "{body}: {:?}",
+            output.diagnostics
+        );
+        assert_eq!(
+            value_at(&output, "mesh.texture"),
+            values::String::new("z".into()).into(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn an_authored_class_needs_the_schema_and_a_base_class_does_not() {
     // `ptr` is a null pointer in the base, so its class can only be the authored one.
     let typo = manifest("ptr: !pointer { class: Typo }\n");
@@ -290,16 +311,7 @@ fn an_authored_class_needs_the_schema_and_a_base_class_does_not() {
         [("ptr", Reason::UnknownClass)]
     );
 
-    // `mesh` is an embedded `E` in the base, which attests the class the pin inherits.
-    let inherited = manifest("mesh: !embed { set: { texture: z } }\n");
-    let output = run(&inherited, &ShapesOnly(TestSchema::new()));
-    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-    assert_eq!(
-        value_at(&output, "mesh.texture"),
-        values::String::new("z".into()).into()
-    );
-
-    // The same schema still refuses a class the author names.
+    // The same schema refuses a class no base value carries.
     assert_eq!(
         skips(&run(
             &manifest("ptr: !pointer { class: E }\n"),

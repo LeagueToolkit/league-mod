@@ -54,6 +54,12 @@ pub(super) fn run(
 /// A bin property name hashes ASCII case-insensitively, so `mFoo` and `MFoo` name one
 /// property. Two spellings of one property share an identity and one [`Group`], whose single
 /// `Bin::patch` carries every edit of that property.
+///
+/// A subscript is compared as written. An index is already canonical, a `u32` however it was
+/// spelled. A `{key}` is the literal text: `{"Key"}` and `{"key"}` select one entry of a map
+/// whose key kind is `hash` and two entries of one whose key kind is `string`, and the
+/// property's kinds come from the schema, which this has no access to. Two spellings of one
+/// map key are two groups, and the second `Bin::patch` of the pair wins.
 fn identity(path: &PropertyPath) -> String {
     path.segments()
         .map(|segment| match &segment.subscript {

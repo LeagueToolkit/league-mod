@@ -224,20 +224,20 @@ impl Coercer<'_> {
             Some(V::Embedded(values::Embedded(embed))) => Some(embed.class_hash),
             _ => None,
         };
-        let (class_hash, authored) = match fields.get("class") {
-            Some(Value::String(name)) => (class_hash(name), true),
+        let class_hash = match fields.get("class") {
+            Some(Value::String(name)) => class_hash(name),
             Some(_) => return Err(Reason::KindMismatch),
-            None => (base_class.ok_or(Reason::Untypable)?, false),
+            None => base_class.ok_or(Reason::Untypable)?,
         };
         if kind == K::Embedded && base_class.is_some_and(|base| base != class_hash) {
             return Err(Reason::PinMismatch);
         }
-        // A class the base tree already carries is attested by the shipped bin. The schema
-        // answers for a class the author names, and refusing one it does not know keeps a
-        // typo out of the written object ([ADR-0022]).
+        // The shipped bin attests the class it already carries, whether the pin names that
+        // class or leaves it out. The schema answers for every other class, and refusing one
+        // it does not know keeps a typo out of the written object ([ADR-0022]).
         //
         // [ADR-0022]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0022-unattested-class-refusal.md
-        if authored && !self.schema.has_class(class_hash) {
+        if base_class != Some(class_hash) && !self.schema.has_class(class_hash) {
             return Err(Reason::UnknownClass);
         }
         let mut properties = indexmap::IndexMap::new();

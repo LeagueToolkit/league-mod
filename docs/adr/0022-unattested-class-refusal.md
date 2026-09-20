@@ -36,7 +36,7 @@ schema has nothing to add to what the bin already attests.
 
 ## Considered options
 
-1. **`NoSchema::has_class` answers `false`, and the gate applies to an authored class alone.**
+1. **`NoSchema::has_class` answers `false`, and the gate spares a class the base carries.**
 2. **`NoSchema::has_class` answers `false`, and the gate applies to every class.** The literal
    reading: a struct pin is refused under the default schema whatever its class source.
 3. **Ship a real schema by default.** `ltk_game_data` carries a class list of the installed
@@ -46,13 +46,16 @@ schema has nothing to add to what the bin already attests.
 
 ## Decision
 
-**A class name the author writes is refused unless the schema knows it. A class the base tree
-carries is written without asking the schema.**
+**A class the base value carries is written without asking the schema. Every other class is
+refused unless the schema knows it.**
 
 `NoSchema::has_class` answers `false` for every class. `Coercer::struct_pin` consults
-`has_class` only for a class taken from the pin's `class` key; a class taken from the base
-value is written as it stands. A refused class is `PropertySkipReason::UnknownClass`, a skip
-report on that property key, and the rest of the edit applies.
+`has_class` only where the pinned class differs from the base value's, which covers a pin on
+a property the base omits, a null pointer repointed at a class, and a pointer moved from one
+class to another. A pin that names the class its base already carries is the same pin as one
+that leaves `class` out, and neither consults the schema. A refused class is
+`PropertySkipReason::UnknownClass`, a skip report on that property key, and the rest of the
+edit applies.
 
 ## Consequences
 
@@ -60,10 +63,10 @@ report on that property key, and the rest of the edit applies.
   one every build runs with today.
 - **Positive:** a partial schema - one that types fields and lists no classes - keeps working
   for the edits that reshape a base object.
-- **Negative:** a struct pin naming its own class needs a schema. Under `NoSchema` the
-  property is skipped where it was previously written. This is the intended change: the blast
-  radius is a pin with an empty or absent `set`, since a pin with a nonempty `set` already
-  needs `expected` and is already refused with `Untypable` under `NoSchema`.
+- **Negative:** a struct pin naming a class the base does not carry needs a schema. Under
+  `NoSchema` the property is skipped where it was previously written. This is the intended
+  change: the blast radius is a pin with an empty or absent `set`, since a pin with a nonempty
+  `set` already needs `expected` and is already refused with `Untypable` under `NoSchema`.
 - **Negative:** a consumer whose `has_class` is conservative refuses a class the game has.
   The report names the class and the property, so the author can pin the class from the base
   instead.
@@ -72,11 +75,12 @@ report on that property key, and the rest of the edit applies.
 
 ## Pros and cons of the options
 
-### `NoSchema::has_class` answers `false`, gate on an authored class alone
+### `NoSchema::has_class` answers `false`, gate spares a class the base carries
 
 - Good: the refusal lands on the one class nothing attests.
-- Good: an edit on an existing struct is unaffected by the absence of a schema.
-- Bad: `struct_pin` carries a second piece of state, where the class came from.
+- Good: an edit on an existing struct is unaffected by the absence of a schema, and spelling
+  the class out does not change the answer.
+- Bad: the rule is a comparison rather than a single question to the schema.
 
 ### `NoSchema::has_class` answers `false`, gate on every class
 
