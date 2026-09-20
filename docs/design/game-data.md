@@ -116,8 +116,7 @@ pub struct Shape {
 /// The schema that says nothing. Every property is typed from the base, and no class is known.
 pub struct NoSchema;
 
-// Not built. `Names` extends `ltk_meta::path::FieldNames`, which `ltk_meta` does not carry
-// yet, so the rendering half of this section waits on that release ([ADR-0020](../adr/0020-value-rendering.md)).
+
 
 /// Plaintext for the hashes a rendered value carries (ADR-0020).
 pub trait Names: ltk_meta::path::FieldNames {
@@ -132,8 +131,8 @@ pub trait Names: ltk_meta::path::FieldNames {
 impl Value {
     /// The literal that coerces back to `value` under the value's own shape.
     pub fn render(value: &PropertyValueEnum, names: &dyn Names) -> Result<Value, Error>;
-    /// The value as YAML text.
-    pub fn to_yaml(&self) -> String;
+        /// The value as YAML text.
+    pub fn to_yaml(&self) -> Result<String, Error>;
 }
 
 /// A value of the installed game, named by entry and path (ADR-0021).
@@ -169,9 +168,12 @@ both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, 
 `FieldNames` is `ltk_meta::path::FieldNames`; `BinObject` is `ltk_meta::BinObject`; both are
 re-exported. `Names` is implemented for `()`, which names nothing, and for `&N` of any
 `N: Names + ?Sized`. `Value::render` follows the rendering table ([section 6](#s6)); a struct
-field or a map key with no spelling is an error whose key is the rendered path
-([ADR-0020](../adr/0020-value-rendering.md)). `Value::to_yaml` writes block style, a list whose
-items are scalars in flow style, and quotes a string YAML reads as another type.
+field with no name is `NamelessField`, a map key with no spelling is `UnrenderableKey`, and a
+value of kind `none` is `UnrenderableValue`, each with the rendered path as its key
+([ADR-0020](../adr/0020-value-rendering.md)). A name that does not hash back to the value it
+names is ignored. `Value::to_yaml` writes one node starting at column 0 with no trailing
+newline: block style, a list whose items are scalars in flow style, and a string YAML reads
+as another type quoted. An integer outside the `i64` and `u64` ranges is `Serialize`.
 `Reference::parse(text)` splits `text` at its first `:`: the part before is an `EntryName`, the
 part after a `PropertyPath`. `TryFrom<&str>` and `FromStr` are the same parse, so a caller
 writes either. `Reference` implements `Display` as the same spelling, and `Hash`, so a
@@ -524,7 +526,8 @@ A type pin on a value fixes the shape: a pin whose type name is not the property
 a map, signed or not, a pin names the item kind. A pin on a map value pins its values. A pin is read by one rule on every property kind,
 including a field inside a struct pin's `set`
 ([ADR-0019](../adr/0019-uniform-type-pins.md)). An `option` pin wraps one bare or pinned
-value, or null.
+value, or null. On an option of `pointer` or `embed`, a pin of that name is the element's
+struct pin.
 
 **Rendering.** A property value renders to a `Value` by these rules
 ([ADR-0020](../adr/0020-value-rendering.md)). A rendered value coerces back to the same value
@@ -542,7 +545,7 @@ under the value's own shape, and carries no type pin.
 | `link` | `Names::entry` of the value, else `0x` and 8 hexadecimal digits |
 | `file` | `Names::file` of the value, else `0x` and 16 hexadecimal digits |
 | `list`, `list2` | A list of the rendered items |
-| `option` | Null when empty; else the rendered element, or a one-element list where the element renders as a list |
+| `option` | Null when empty; else the rendered element, or a one-element list where the element renders as a list or as null |
 | `map` | A mapping of each key, rendered as a string, to its rendered value |
 | `pointer` | Null for the null pointer; else `{pointer: {class, set}}` |
 | `embed` | `{embed: {class, set}}` |
@@ -550,8 +553,9 @@ under the value's own shape, and carries no type pin.
 A struct's `class` is `Names::class`, else `0x` and 8 hexadecimal digits. Its `set` holds one
 key per field, the name `FieldNames::field` answers for the field on the class, and is absent
 for a struct with no fields. A map key renders as a `bool`, integer, or `f32` spelling, or as a
-`string`, `hash`, or `file` value renders. A field with no name, and a key of any other kind,
-is an error.
+`string`, `hash`, or `file` value renders. A field with no name is an error. So is a key of
+any other kind, a key the map holds twice, and the one key of a map where that key is a type
+name or `ref`, which reads back as a pin or a reference.
 
 **Additions and removals.** `+` on a list appends each element, coerced to the item kind, to
 the base's elements; on a map it adds or replaces by key; on a property the base omits it

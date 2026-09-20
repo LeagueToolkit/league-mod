@@ -362,6 +362,16 @@ pub enum ErrorKind {
     /// A `ref` key whose value is not an entry name, a `:`, and a property path.
     #[error("a ref takes `<entry>:<property path>`")]
     ReferenceShape,
+    /// A struct field no name is known for, which a `set` key cannot spell.
+    #[error("a struct field has no known name")]
+    NamelessField,
+    /// A map key no string spells: a key of a kind the key rule refuses, a key the map
+    /// holds twice, or the one key of a map that reads as a pin or a reference.
+    #[error("a map key has no spelling")]
+    UnrenderableKey,
+    /// A value of kind `none`, which no literal reads back as.
+    #[error("a value of kind none has no literal")]
+    UnrenderableValue,
     /// An application base that is not a `PROP` version 2 or 3.
     #[error("expected PROP version 2 or 3")]
     UnsupportedBase,

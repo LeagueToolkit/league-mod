@@ -1474,9 +1474,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_io_ext"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "335f639821e042a294bcf35c40a587f6812dacbd2220b6430aa4733ec353101f"
+checksum = "c32624bb75dffedecaa426fc96999ec51f5a68868e0e8ba065a096906b7ef9fd"
 dependencies = [
  "byteorder",
  "glam",
@@ -1486,9 +1486,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_meta"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ec1bce664d72b54da64d43dddeb4209a560f718bb4a7aadd6d2280697549d80"
+checksum = "0b1d0e53647a428b4fea0d0da52281d5e0df8031105824e88ac22c1508a9c272"
 dependencies = [
  "byteorder",
  "enum_dispatch",
@@ -1597,9 +1597,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_primitives"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c42f3eddcad904acfbdaa7d62efa643e8cad771b27b6a56a24eeabcfc80f94"
+checksum = "db5421839880b81f09ece49f767b380c3b2912ee5ea905b865ba6a185c200412"
 dependencies = [
  "byteorder",
  "glam",
@@ -1794,6 +1794,12 @@ checksum = "47b6b097ecb1cbfed438542d16e84fd7ad9b0c76c8a65b7f9039212a3d14dc7f"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "ntapi"
@@ -2568,11 +2574,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3afb591f9cdb6223c88ba39269aff895620c7f0716dc42b705b5733d5c7c0823"
 dependencies = [
  "annotate-snippets",
+ "base64",
  "encoding_rs_io",
  "granit-parser",
+ "nohash-hasher",
  "num-traits",
  "serde_core",
  "smallvec",
+ "zmij",
 ]
 
 [[package]]

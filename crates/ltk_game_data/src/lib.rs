@@ -17,8 +17,10 @@ mod error;
 mod manifest;
 mod property;
 mod reference;
+mod render;
 mod schema;
 mod value;
+mod yaml;
 
 pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
 pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
@@ -26,10 +28,14 @@ pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
 pub use ltk_hash::BinHash;
-pub use ltk_meta::{BinObject, PropertyKind, path::PropertyPath};
+pub use ltk_meta::{
+    BinObject, PropertyKind,
+    path::{FieldNames, PropertyPath},
+};
 pub use manifest::{MANIFEST_NAMES, ReferencedInputs, load_declarations};
 pub use property::{PropertyEdit, Sign};
 pub use reference::Reference;
+pub use render::Names;
 pub use schema::{NoSchema, Schema, Shape};
 pub use value::{Value, kind_named, name_of};
 

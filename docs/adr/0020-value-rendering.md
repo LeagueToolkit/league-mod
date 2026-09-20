@@ -1,6 +1,6 @@
 # ADR-0020: Value rendering
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-19
 - **Crates:** `ltk_game_data`
 - **Related:** ADR-0015, ADR-0016, ADR-0019, league-toolkit PR #240 (`FieldNames`), LTK Manager

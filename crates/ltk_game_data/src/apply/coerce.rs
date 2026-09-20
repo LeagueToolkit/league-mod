@@ -94,8 +94,16 @@ impl Coercer<'_> {
                 Value::Mapping(fields) if fields.is_empty() => self.optional(&Value::Null, shape),
                 inner => self.optional(inner, shape),
             },
+            // A struct pin on an option of structs is the element's own spelling, so the
+            // element keeps it. Any other pin names the item kind and wraps a bare element.
             K::Optional if Some(pin) == shape.item => {
-                self.optional(&Value::List(vec![inner.clone()]), shape)
+                let element = match pin {
+                    K::Struct | K::Embedded => {
+                        Value::Mapping([(name.to_owned(), inner.clone())].into())
+                    }
+                    _ => inner.clone(),
+                };
+                self.optional(&Value::List(vec![element]), shape)
             }
             K::Optional => Err(Reason::PinMismatch),
             kind if pin == kind => self.bare(inner, shape),
@@ -265,7 +273,7 @@ impl Coercer<'_> {
             _ => None,
         };
         let class_hash = match fields.get("class") {
-            Some(Value::String(name)) => class_hash(name),
+            Some(Value::String(name)) => hash32_of(name),
             Some(_) => return Err(Reason::KindMismatch),
             None => base_class.ok_or(Reason::Untypable)?,
         };
@@ -313,8 +321,8 @@ fn null_pointer() -> V {
     values::Struct::default().into()
 }
 
-/// The hash of a class name, or the hash a `0x` and 8 hexadecimal digits spell.
-fn class_hash(name: &str) -> BinHash {
+/// The hash of a name, or the hash a `0x` and 8 hexadecimal digits spell.
+pub(crate) fn hash32_of(name: &str) -> BinHash {
     hex32(name).unwrap_or_else(|| BinHash::from(name))
 }
 
@@ -329,6 +337,11 @@ fn hex(text: &str, digits: usize) -> Option<u64> {
     (spelled.len() == digits && spelled.bytes().all(|c| c.is_ascii_hexdigit()))
         .then(|| u64::from_str_radix(spelled, 16).ok())
         .flatten()
+}
+
+/// The hash of a chunk path, or the hash a `0x` and 16 hexadecimal digits spell.
+pub(crate) fn hash64_of(path: &str) -> u64 {
+    hex(path, 16).unwrap_or_else(|| path_hash(path))
 }
 
 /// An integer in the range of `T`.
@@ -373,7 +386,7 @@ fn hash32(value: &Value) -> Result<BinHash, Reason> {
     match value {
         Value::Null => Ok(BinHash(0)),
         Value::String(text) if text.is_empty() => Ok(BinHash(0)),
-        Value::String(text) => Ok(class_hash(text)),
+        Value::String(text) => Ok(hash32_of(text)),
         _ => Err(Reason::KindMismatch),
     }
 }
@@ -383,7 +396,7 @@ fn hash64(value: &Value) -> Result<WadHash, Reason> {
     match value {
         Value::Null => Ok(WadHash(0)),
         Value::String(text) if text.is_empty() => Ok(WadHash(0)),
-        Value::String(text) => Ok(WadHash(hex(text, 16).unwrap_or_else(|| path_hash(text)))),
+        Value::String(text) => Ok(WadHash(hash64_of(text))),
         _ => Err(Reason::KindMismatch),
     }
 }

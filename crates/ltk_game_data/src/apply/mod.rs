@@ -3,6 +3,8 @@
 mod coerce;
 mod entries;
 
+pub(crate) use coerce::{hash32_of, hash64_of};
+
 use std::{collections::HashSet, io::Cursor};
 
 use ltk_meta::{

@@ -72,6 +72,14 @@ impl TestSchema {
                     item: Some(K::U32),
                 },
             ),
+            (
+                field("C", "optptr"),
+                Shape {
+                    kind: K::Optional,
+                    key: None,
+                    item: Some(K::Struct),
+                },
+            ),
             (field("C", "color"), Shape::bare(K::Color)),
             (field("C", "pos"), Shape::bare(K::Vector3)),
             (field("C", "mat"), Shape::bare(K::Matrix44)),
@@ -432,6 +440,13 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             )
             .unwrap()
             .into(),
+        ),
+        (
+            "optptr: !pointer {class: E, set: {texture: t}}",
+            "optptr",
+            values::Optional::new(K::Struct, Some(embed("t").0.into()))
+                .unwrap()
+                .into(),
         ),
         ("ptr: null", "ptr", values::Struct::default().into()),
         ("ptr: !pointer {}", "ptr", values::Struct::default().into()),

@@ -20,7 +20,7 @@ ltk_primitives = "0.3"
 glam = "0.27"
 ltk_wad = "0.5.4"
 ltk_file = "0.2.11"
-ltk_meta = "0.8.4"
+ltk_meta = "0.8.5"
 ltk_io_ext = "0.4.4"
 ltk_rst = "0.2.0"
 
