@@ -268,22 +268,30 @@ impl<'de, E: Deserialize<'de>> Fields<E> {
                 "entries" if accepts.selector => fill(&mut fields.entries, &mut map, &key)?,
                 "source" if accepts.source => fill(&mut fields.source, &mut map, &key)?,
                 "edits" if accepts.edits => fill(&mut fields.edits, &mut map, &key)?,
-                "overrides" => fill(&mut fields.bindings.overrides, &mut map, &key)?,
-                "links" | "+links" => {
-                    if fields.bindings.add_links.is_some() {
-                        return Err(de::Error::custom(
-                            "a body holds one of `links` and `+links`, once",
-                        ));
+                _ => match BindingKeyword::of(&key) {
+                    Some(BindingKeyword::Overrides) => {
+                        fill(&mut fields.bindings.overrides, &mut map, &key)?;
                     }
-                    fields.bindings.add_links = Some(map.next_value()?);
-                }
-                "-links" => fill(&mut fields.bindings.remove_links, &mut map, &key)?,
-                _ => {
-                    let value: Value = map.next_value()?;
-                    if fields.bindings.rest.insert(key.clone(), value).is_some() {
-                        return Err(de::Error::custom(format!("duplicate key `{key}`")));
+                    // Not `fill`: the two spellings are one binding, so the message names
+                    // the pair rather than whichever of them came second.
+                    Some(BindingKeyword::AddLinks) => {
+                        if fields.bindings.add_links.is_some() {
+                            return Err(de::Error::custom(
+                                "a body holds one of `links` and `+links`, once",
+                            ));
+                        }
+                        fields.bindings.add_links = Some(map.next_value()?);
                     }
-                }
+                    Some(BindingKeyword::RemoveLinks) => {
+                        fill(&mut fields.bindings.remove_links, &mut map, &key)?;
+                    }
+                    None => {
+                        let value: Value = map.next_value()?;
+                        if fields.bindings.rest.insert(key.clone(), value).is_some() {
+                            return Err(de::Error::custom(format!("duplicate key `{key}`")));
+                        }
+                    }
+                },
             }
         }
         Ok(fields)
@@ -456,15 +464,41 @@ impl TryFrom<Edit> for Bindings {
     }
 }
 
-/// The binding keywords a body mapping reserves.
-const BINDING_KEYWORDS: [&str; 4] = ["overrides", "links", "+links", "-links"];
+/// A key a body mapping reserves for a binding rather than for an entry name or a signed
+/// property path.
+///
+/// A body carries the binding keys beside the entry names or the property paths, so one
+/// spelling holds one meaning, and this is where the spellings are. The reader that routes
+/// a key and the writer that refuses one have to agree about which keys are which; they
+/// agree by both asking here, so a keyword gained or respelled is one edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingKeyword {
+    /// `overrides`: the override files the edit applies.
+    Overrides,
+    /// `links` or `+links`: the dependencies the edit adds.
+    AddLinks,
+    /// `-links`: the dependencies the edit removes.
+    RemoveLinks,
+}
+
+impl BindingKeyword {
+    /// The keyword `key` spells, or `None` for an entry name or a property path.
+    ///
+    /// [`Bindings`] spells the same three in its `serde` renames, which take a literal and
+    /// so cannot read them from here. Those renames and this function are the whole of it.
+    pub(crate) fn of(key: &str) -> Option<Self> {
+        match key {
+            "overrides" => Some(Self::Overrides),
+            "links" | "+links" => Some(Self::AddLinks),
+            "-links" => Some(Self::RemoveLinks),
+            _ => None,
+        }
+    }
+}
 
 /// Refuses a body key that spells a binding keyword.
-///
-/// A body mapping carries the binding keys beside the entry names or the signed property
-/// paths. One spelling holds one meaning.
 fn reserved(key: &str) -> Result<(), Error> {
-    if BINDING_KEYWORDS.contains(&key) {
+    if BindingKeyword::of(key).is_some() {
         return Err(Error::at_key(
             ErrorKind::ReservedBindingKey {
                 key: key.to_owned(),
