@@ -1,6 +1,6 @@
 # ADR-0021: Game-copy references
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-19
 - **Crates:** `ltk_game_data`, `ltk_overlay`
 - **Related:** ADR-0009, ADR-0016, ADR-0019, ADR-0020, LTK Manager ADR-0042,

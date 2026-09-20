@@ -3,6 +3,9 @@
 //! A [`Value`] is what the author wrote: null, boolean, integer, float, string, list, or
 //! mapping, in spelled order. The build reads it by the property's type. A YAML local tag on a
 //! value loads as the one-key mapping of its name, the type pin's document form.
+//!
+//! Two one-key mappings mean more than a mapping. A type name pins the type the value reads
+//! as, and `ref` names a value of the installed game to read instead of a literal.
 
 use std::fmt;
 
@@ -14,7 +17,7 @@ use serde::{
     ser,
 };
 
-use crate::ErrorKind;
+use crate::{ErrorKind, Reference};
 
 /// The literal of a property edit, or of one element, key, or field inside it.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +36,9 @@ pub enum Value {
     /// A mapping in spelled order. A duplicate key does not deserialize.
     Mapping(IndexMap<String, Value>),
 }
+
+/// The one-key mapping key a reference spells. Not a type name, so not a pin.
+pub(crate) const REFERENCE_KEY: &str = "ref";
 
 /// The type names a pin spells, each with the kind it names.
 const TYPE_NAMES: [(&str, PropertyKind); 23] = [
@@ -107,16 +113,84 @@ impl Value {
         matches!(self.pin(), Some("pointer" | "embed"))
     }
 
-    /// Checks every struct pin in the value.
+    /// The text of a one-key mapping keyed `ref`, or `None`.
+    ///
+    /// The build reads such a mapping as the value the text names in the installed game,
+    /// whatever the property's type. `ref` is not a type name, so a reference is not a pin
+    /// and [`pin`](Self::pin) does not report one.
+    #[must_use]
+    pub fn reference(&self) -> Option<&str> {
+        match self {
+            Self::Mapping(mapping) if mapping.len() == 1 => match mapping.iter().next() {
+                Some((key, Self::String(text))) if key == REFERENCE_KEY => Some(text.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Every reference in the value, in spelled order, duplicates included.
+    ///
+    /// A reference sits anywhere a value does, so this descends lists, mappings, and the
+    /// `set` of a struct pin. A `ref` whose text does not parse is not one, and is left for
+    /// the build to report where the author can see which key it was under.
+    #[must_use]
+    pub fn references(&self) -> Vec<Reference> {
+        let mut found = Vec::new();
+        self.collect_references(&mut found);
+        found
+    }
+
+    fn collect_references(&self, found: &mut Vec<Reference>) {
+        if let Some(text) = self.reference() {
+            if let Ok(reference) = Reference::parse(text) {
+                found.push(reference);
+            }
+            return;
+        }
+        match self {
+            Self::List(items) => items.iter().for_each(|item| item.collect_references(found)),
+            Self::Mapping(mapping) => mapping
+                .values()
+                .for_each(|item| item.collect_references(found)),
+            _ => {}
+        }
+    }
+
+    /// Whether the value is a one-key mapping keyed `ref`, whatever its value.
+    ///
+    /// [`reference`](Self::reference) answers only for the well-formed shape, so the check
+    /// that refuses a malformed one asks this first.
+    fn is_reference_key(&self) -> bool {
+        match self {
+            Self::Mapping(mapping) if mapping.len() == 1 => mapping
+                .keys()
+                .next()
+                .is_some_and(|key| key == REFERENCE_KEY),
+            _ => false,
+        }
+    }
+
+    /// Checks every struct pin and every reference in the value.
     ///
     /// A `pointer` pin's value is null, the empty mapping, or a mapping; an `embed` pin's
     /// value is a mapping. The mapping holds `class`, a string, or `set`, a mapping, or both,
-    /// and nothing else. The empty mapping is the null pointer.
+    /// and nothing else. The empty mapping is the null pointer. A `ref` key's value is a
+    /// string [`Reference::parse`](crate::Reference::parse) accepts.
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::StructPinShape`] for a struct pin of any other shape.
+    /// [`ErrorKind::StructPinShape`] for a struct pin of any other shape, and
+    /// [`ErrorKind::ReferenceShape`] for a `ref` of any other shape.
     pub fn check_pins(&self) -> Result<(), ErrorKind> {
+        if self.is_reference_key() {
+            return match self.reference() {
+                Some(text) => Reference::parse(text)
+                    .map(|_| ())
+                    .map_err(|error| error.kind),
+                None => Err(ErrorKind::ReferenceShape),
+            };
+        }
         match self {
             Self::List(items) => items.iter().try_for_each(Self::check_pins),
             Self::Mapping(mapping) => match self.pinned() {
@@ -215,7 +289,7 @@ impl<'de> Deserialize<'de> for Value {
             return Ok(value);
         }
         let name = tag.trim_start_matches('!');
-        if kind_named(name).is_none() {
+        if kind_named(name).is_none() && name != REFERENCE_KEY {
             return Err(de::Error::custom(format!("unknown type pin `{tag}`")));
         }
         Ok(Self::Mapping(IndexMap::from([(name.to_owned(), value)])))

@@ -17,6 +17,7 @@ ltk_game_index = { workspace = true, features = ["objects"] }
 
 # LeagueToolkit crates
 ltk_wad = { workspace = true, features = ["serde"] }
+ltk_meta = { workspace = true }
 ltk_file = { workspace = true }
 ltk_mod_project = { workspace = true, features = ["fantome"] }
 ltk_modpkg = { workspace = true }
@@ -55,6 +56,5 @@ memmap2 = "0.9"
 rayon = { workspace = true }
 
 [dev-dependencies]
-ltk_meta = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

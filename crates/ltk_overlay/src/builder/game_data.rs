@@ -4,20 +4,22 @@
 //! chunk declaring it, through the object index (`docs/design/game-data.md` section 6).
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::Cursor;
 use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use ltk_game_data::{
-    ApplyDiagnosticKind, Edit, EntryEdit, EntryName, IndexMap, Module, Origin, OverridePath,
-    Selector, SkippedProperty, SkippedRecord,
+    ApplyDiagnosticKind, BinHash, Edit, EntryEdit, EntryName, IndexMap, Module, Origin,
+    OverridePath, Selector, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
+use ltk_meta::{BinObject, concrete::BinStream};
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
 use super::{OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource};
-use crate::{error::Result, game::GameIndexExt, utils::ContentHash};
+use crate::{error::Result, game::GameDir, game::GameIndexExt, utils::ContentHash};
 
 /// The category of a declaration diagnostic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +34,8 @@ pub enum GameDataDiagnosticKind {
     EntryUnresolved,
     /// An entry several game bins declare. Every one is edited. Informational.
     EntryFanOut,
-    /// The object index did not load or build. Every `entries` module is skipped.
+    /// The object index did not load or build. An `entries` module is skipped whole; a
+    /// `target` module keeps every edit but its references.
     IndexUnavailable,
     /// An override file the provider cannot supply. The file is skipped.
     OverrideUnreadable,
@@ -45,6 +48,8 @@ pub enum GameDataDiagnosticKind {
     PropertyEditSkipped,
     /// A property typed from the base, the schema saying nothing. Informational.
     SchemaFallback,
+    /// A referenced entry the game declares and the build could not read. Its keys are skipped.
+    ReferenceUnreadable,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -85,6 +90,7 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::OverrideRecordSkipped => Self::OverrideRecordSkipped,
             ApplyDiagnosticKind::PropertyEditSkipped => Self::PropertyEditSkipped,
             ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
+            ApplyDiagnosticKind::ReferenceUnreadable => Self::ReferenceUnreadable,
             _ => Self::Unknown,
         }
     }
@@ -154,12 +160,21 @@ impl Pending {
     }
 }
 
-/// The diagnostic of an `entries` module skipped for want of an object index.
-fn index_unavailable(pending: &Pending, error: &ObjectBuildError) -> GameDataDiagnostic {
+/// The diagnostic of a module the object index failed.
+///
+/// `consequence` says what the module loses, because the two kinds lose different things. An
+/// `entries` module resolves nothing without the index, so every entry is skipped. A `target`
+/// module binds by hash and keeps every edit that is not a reference, so telling its author
+/// that entries are skipped would name a binding the module does not have.
+fn index_unavailable(
+    pending: &Pending,
+    error: &ObjectBuildError,
+    consequence: &str,
+) -> GameDataDiagnostic {
     pending.diagnostic(
         GameDataDiagnosticKind::IndexUnavailable,
         None,
-        format!("Object index is unavailable: {error}; entries are skipped"),
+        format!("Object index is unavailable: {error}; {consequence}"),
     )
 }
 
@@ -376,9 +391,14 @@ impl OverlayBuilder {
             }
         }
 
+        // A reference needs the index for the same reason an `entries` module does: it names
+        // an entry, and only the index says which chunk declares it.
         let object_index = pending
             .iter()
-            .any(|pending| matches!(pending.module.selector, Selector::Entries(_)))
+            .any(|pending| {
+                matches!(pending.module.selector, Selector::Entries(_))
+                    || !pending.module.references().is_empty()
+            })
             .then(|| self.load_object_index(game));
         if matches!(object_index, Some(Err(_))) {
             self.check_called_off()?;
@@ -387,6 +407,17 @@ impl OverlayBuilder {
         for pending in pending {
             match &pending.module.selector {
                 Selector::Target { target, edits } => {
+                    // A target module resolves without the index, but a reference inside one
+                    // does not. The module still applies; only its reference keys skip.
+                    if let Some(Err(error)) = &object_index
+                        && !pending.module.references().is_empty()
+                    {
+                        self.last_game_data_diagnostics.push(index_unavailable(
+                            &pending,
+                            error,
+                            "references cannot resolve, so their keys are skipped",
+                        ));
+                    }
                     let hash = WadHash::from(target.chunk_hash());
                     targets.entry(hash).or_default().push(Application {
                         mod_id: pending.mod_id,
@@ -398,20 +429,22 @@ impl OverlayBuilder {
                         origin: pending.module.origin,
                     });
                 }
-                Selector::Entries(entries) => match &object_index {
-                    Some(Ok(index)) => lower_entries(
-                        &pending,
-                        entries,
-                        index,
-                        game,
-                        &mut targets,
-                        &mut self.last_game_data_diagnostics,
-                    ),
-                    Some(Err(error)) => self
-                        .last_game_data_diagnostics
-                        .push(index_unavailable(&pending, error)),
-                    None => unreachable!("an entries module loads the object index"),
-                },
+                Selector::Entries(entries) => {
+                    match &object_index {
+                        Some(Ok(index)) => lower_entries(
+                            &pending,
+                            entries,
+                            index,
+                            game,
+                            &mut targets,
+                            &mut self.last_game_data_diagnostics,
+                        ),
+                        Some(Err(error)) => self
+                            .last_game_data_diagnostics
+                            .push(index_unavailable(&pending, error, "entries are skipped")),
+                        None => unreachable!("an entries module loads the object index"),
+                    }
+                }
                 _ => unreachable!("the overlay lowers every selector of its `ltk_game_data`"),
             }
         }
@@ -429,6 +462,10 @@ impl OverlayBuilder {
         }
         let subchunktoc_blocked = game.subchunktoc_blocked();
         let mut resources = ResourceCache::default();
+        // One decode per referenced entry for the whole build, not one per target that
+        // references it.
+        let mut entries: HashMap<BinHash, Option<BinObject>> = HashMap::new();
+        let declaring_index = object_index.as_ref().and_then(|index| index.as_ref().ok());
         for (hash, applications) in targets {
             let original = bases.remove(&hash).or_else(|| metadata.get(&hash).cloned());
             let game_wad = game
@@ -462,10 +499,20 @@ impl OverlayBuilder {
             let mut applied = false;
             for application in &applications {
                 let enabled_mods = &mut self.enabled_mods;
+                let game_dir = &self.game_dir;
                 let read_override =
                     |path: &OverridePath| resources.read(enabled_mods, application, path);
+                let read_entry = |name: &EntryName| {
+                    Self::read_referenced_entry(game_dir, declaring_index, game, &mut entries, name)
+                };
                 let schema = &self.game_data_schema;
-                match ltk_game_data::apply(&bytes, &application.edits, read_override, schema) {
+                match ltk_game_data::apply(
+                    &bytes,
+                    &application.edits,
+                    read_override,
+                    read_entry,
+                    schema,
+                ) {
                     Ok(output) => {
                         let changed = output.changed();
                         self.last_game_data_diagnostics.extend(
@@ -523,6 +570,58 @@ impl OverlayBuilder {
         Ok(())
     }
 
+    /// Reads the game's copy of a referenced entry, once per entry.
+    ///
+    /// A reference reads the shipped game, never the overlay being built, so this goes to the
+    /// game directory and not to the bytes the loop is accumulating. Mod content cannot reach
+    /// it, which is what makes a reference independent of mod order.
+    ///
+    /// An index that did not build and an entry no game bin declares are both `Ok(None)`. The
+    /// author's declaration names an entry this installation does not have, and the key that
+    /// names it reports that. A chunk the index does declare and that then fails to read,
+    /// mount or decode is `Err`, because that is the installation or a stale index cache, and
+    /// no property key can say so.
+    ///
+    /// The read is memoized per entry, so a failure is reported once however many keys
+    /// reference it.
+    ///
+    /// Takes `game_dir` rather than `&self` because the caller is already holding
+    /// `self.enabled_mods` mutably for the override reader.
+    fn read_referenced_entry(
+        game_dir: &GameDir,
+        index: Option<&ObjectIndex>,
+        game: &GameIndex,
+        cache: &mut HashMap<BinHash, Option<BinObject>>,
+        name: &EntryName,
+    ) -> std::result::Result<Option<BinObject>, ltk_game_data::Error> {
+        let object = name.object_hash();
+        if let Some(cached) = cache.get(&object) {
+            return Ok(cached.clone());
+        }
+        let Some(declaration) = index.and_then(|index| index.declarations(object).first()) else {
+            cache.insert(object, None);
+            return Ok(None);
+        };
+        let wad = game.wad_rel_path(declaration.archive);
+        let failed = |detail: &dyn std::fmt::Display| {
+            ltk_game_data::Error::io(
+                name.as_str(),
+                &format!("{:016x} of {wad}: {detail}", declaration.chunk.0),
+            )
+        };
+        let bytes = game_dir
+            .read_chunk(&wad, declaration.chunk)
+            .map_err(|error| failed(&error))?;
+        let mut stream = BinStream::mount(Cursor::new(bytes)).map_err(|error| failed(&error))?;
+        let mut object_stream = stream
+            .object(object)
+            .map_err(|error| failed(&error))?
+            .ok_or_else(|| failed(&"chunk does not hold the object, so the index is stale"))?;
+        let found = object_stream.read().map_err(|error| failed(&error))?;
+        cache.insert(object, Some(found.clone()));
+        Ok(Some(found))
+    }
+
     /// Loads the object index cached in the state directory, or builds it and writes the cache.
     ///
     /// Reported as [`OverlayStage::IndexingObjects`]. A failure is logged at warn.
@@ -545,7 +644,10 @@ impl OverlayBuilder {
                 Ok(index)
             }
             Err(error) => {
-                tracing::warn!("Object index is unavailable: {error}; entries modules are skipped");
+                tracing::warn!(
+                    "Object index is unavailable: {error}; entries modules are skipped and \
+                     references cannot resolve"
+                );
                 Err(error)
             }
         }
@@ -617,7 +719,11 @@ mod tests {
     #[test]
     fn an_unavailable_object_index_is_one_diagnostic_per_entries_module() {
         let (pending, _entries) = pending(&["Characters/Teemo/Skins/Skin0", "Characters/Ahri"]);
-        let diagnostic = index_unavailable(&pending, &ObjectBuildError::CalledOff);
+        let diagnostic = index_unavailable(
+            &pending,
+            &ObjectBuildError::CalledOff,
+            "entries are skipped",
+        );
         assert_eq!(diagnostic.kind, GameDataDiagnosticKind::IndexUnavailable);
         assert_eq!(diagnostic.target, None);
         assert_eq!(diagnostic.mod_id, "mod");

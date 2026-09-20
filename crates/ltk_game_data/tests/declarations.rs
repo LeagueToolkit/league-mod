@@ -15,6 +15,13 @@ fn no_override(path: &OverridePath) -> Result<Vec<u8>, ltk_game_data::Error> {
     unreachable!("no override is read: {path}")
 }
 
+/// The caller with no game: every reference reports `ReferenceMissingEntry`.
+fn no_entry(
+    _: &ltk_game_data::EntryName,
+) -> Result<Option<ltk_meta::BinObject>, ltk_game_data::Error> {
+    Ok(None)
+}
+
 /// A PROP v3 with one dependency and one object `1` of class `2` whose `speed` is 1.0.
 fn base_bin() -> Vec<u8> {
     let bin = Bin::builder()
@@ -101,7 +108,7 @@ fn yaml_requires_strings_for_lookup_paths_and_hashes() {
 #[test]
 fn duplicate_base_links_keep_the_first_casing() {
     let base = b"PROP\x03\0\0\0\x02\0\0\0\x01\0A\x01\0a\0\0\0\0";
-    let output = apply(base, &[], no_override, &NoSchema).unwrap();
+    let output = apply(base, &[], no_override, no_entry, &NoSchema).unwrap();
     assert_eq!(output.dependencies, ["A"]);
 }
 
@@ -169,7 +176,7 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
         b"PROP\x01\0\0\0\0\0\0\0",
         b"PROP\x03\0\0\0",
     ] {
-        assert!(apply(bytes, &[], no_override, &NoSchema).is_err());
+        assert!(apply(bytes, &[], no_override, no_entry, &NoSchema).is_err());
     }
 }
 
@@ -228,6 +235,7 @@ modules:
         base,
         target_of(&declarations.modules[0]).1,
         no_override,
+        no_entry,
         &NoSchema,
     )
     .unwrap();
@@ -655,6 +663,7 @@ fn overrides_rewrite_objects_and_report_skipped_records() {
                 other => panic!("{other}"),
             })
         },
+        no_entry,
         &NoSchema,
     )
     .unwrap();
@@ -700,6 +709,7 @@ fn unavailable_overrides_are_reported_and_links_still_apply() {
             )),
             _ => Ok(base_bin()),
         },
+        no_entry,
         &NoSchema,
     )
     .unwrap();

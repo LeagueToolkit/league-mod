@@ -33,15 +33,18 @@ pub(super) struct Outcome {
 }
 
 /// Runs the entry edits of one batch over `bin`.
+///
+/// The coercer carries the schema, so this phase reads it from there rather than taking it
+/// twice. The resolved references reach coercion and nothing else, so they never appear here.
 pub(super) fn run(
     bin: &mut Bin,
-    schema: &dyn Schema,
+    coercer: Coercer<'_>,
     entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
 ) -> Outcome {
     let mut phase = Phase {
         bin,
-        schema,
-        coercer: Coercer { schema },
+        schema: coercer.schema,
+        coercer,
         outcome: Outcome::default(),
     };
     for (name, edits) in entries {
@@ -201,8 +204,11 @@ impl Phase<'_> {
             None => edit.path.clone(),
         };
         let key = || format!("{}{}", edit.sign.as_str(), path.as_str());
+        // A reference is a one-key mapping, so it would descend as a block and have `ref`
+        // read as a field name. It names a value instead, and coercion resolves it.
         if let Value::Mapping(block) = &edit.value
             && edit.value.pin().is_none()
+            && edit.value.reference().is_none()
         {
             let base = self.bin.objects[&hash].resolve(&path).ok();
             match base {

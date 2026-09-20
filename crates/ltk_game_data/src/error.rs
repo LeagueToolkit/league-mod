@@ -359,6 +359,9 @@ pub enum ErrorKind {
     /// A `pointer` or `embed` pin that is not null or a mapping of `class` and `set`.
     #[error("a pointer or embed pin takes `class` and `set`")]
     StructPinShape,
+    /// A `ref` key whose value is not an entry name, a `:`, and a property path.
+    #[error("a ref takes `<entry>:<property path>`")]
+    ReferenceShape,
     /// An application base that is not a `PROP` version 2 or 3.
     #[error("expected PROP version 2 or 3")]
     UnsupportedBase,

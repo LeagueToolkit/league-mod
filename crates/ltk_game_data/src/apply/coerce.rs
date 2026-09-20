@@ -18,24 +18,68 @@ use super::PropertySkipReason as Reason;
 /// A coerced value, or why the value does not coerce.
 pub(super) type Coerced = Result<V, Reason>;
 
+/// The game's copy of each entry the edits reference, read once before any edit applies.
+///
+/// A reference reads the game, never the target being built, so every reference of a batch
+/// answers from one reading taken before the first edit. An entry the caller does not supply
+/// is absent here, which is what `ReferenceMissingEntry` reports.
+///
+/// Keyed by object hash, so the path form and the `0x` form of one entry are one key.
+pub(super) type ResolvedReferences = indexmap::IndexMap<BinHash, ltk_meta::BinObject>;
+
 /// Coerces values against a schema.
 #[derive(Clone, Copy)]
 pub(super) struct Coercer<'a> {
     pub(super) schema: &'a dyn Schema,
+    pub(super) references: &'a ResolvedReferences,
 }
 
 impl Coercer<'_> {
     /// Reads `value` as `shape`. `base` is the property's base value, the class source of a
     /// struct pin without `class`.
+    ///
+    /// Every element, key, field, and operand reaches its own value through here, so the
+    /// reference row is read once and holds everywhere a value is.
     pub(super) fn coerce(&self, value: &Value, shape: Shape, base: Option<&V>) -> Coerced {
+        if let Some(text) = value.reference() {
+            return self.referenced(text, shape);
+        }
         match value.pinned() {
             Some((name, inner)) => self.pinned(name, inner, shape, base),
             None => self.bare(value, shape),
         }
     }
 
+    /// Reads the game's copy of the value `text` names.
+    ///
+    /// The game's value carries its own kinds, so it is read as it is rather than coerced.
+    /// What the property asks of it is that the two shapes agree.
+    fn referenced(&self, text: &str, shape: Shape) -> Coerced {
+        // Loading parses every reference it reads, so this only refuses one built by hand.
+        let reference = crate::Reference::parse(text).map_err(|_| Reason::ReferenceUnresolved)?;
+        let object = self
+            .references
+            .get(&reference.entry.object_hash())
+            .ok_or(Reason::ReferenceMissingEntry)?;
+        let value = object
+            .resolve(&reference.path)
+            .map_err(|_| Reason::ReferenceUnresolved)?;
+        if Shape::of(value) == shape {
+            Ok(value.clone())
+        } else {
+            Err(Reason::KindMismatch)
+        }
+    }
+
     /// Reads a pinned value: the pin fixes the kind, then the bare rules apply.
     fn pinned(&self, name: &str, inner: &Value, shape: Shape, base: Option<&V>) -> Coerced {
+        // A pin fixes the kind a literal reads as. A reference has no literal spelling and
+        // carries the game's own kinds, so a pin over one asks for nothing and is refused.
+        // Without this the inner value would reach `bare` as a mapping and read as a kind
+        // mismatch, which names the shape rather than the pin that is the real fault.
+        if inner.reference().is_some() {
+            return Err(Reason::PinMismatch);
+        }
         let pin = kind_named(name).expect("a pin names a kind");
         match shape.kind {
             K::Struct | K::Embedded => match name {
