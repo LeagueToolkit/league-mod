@@ -170,11 +170,13 @@ pub trait OverrideEncoding: sealed::Sealed + Sized {
     /// `None` when the chunk is stored under a codec this crate does not emit,
     /// which leaves the caller to decode and compress it as usual.
     ///
-    /// A stored chunk's uncompressed size is derived from its own byte count
-    /// rather than carried over: the two are the same number by definition, and
-    /// a TOC where they differ makes the client read past the buffer it
-    /// allocated for the chunk. Every other size is the source's, which is the
-    /// trust a pass-through accepts in exchange for never decoding.
+    /// The uncompressed size is derived from the bytes, never carried over from
+    /// the source TOC: a TOC where the two sizes disagree makes the client read
+    /// past the buffer it allocated for the chunk. A stored chunk's is its own
+    /// byte count. A zstd chunk's is what its frame header states, or, for a
+    /// header that states nothing, the count of a decode that keeps no bytes
+    /// (`docs/adr/0024-*`). Compression, which is what a pass-through exists to
+    /// skip, is never run either way.
     ///
     /// # Errors
     ///
@@ -228,7 +230,10 @@ impl OverrideEncoding for EncodedChunk {
         let compressed = chunk.compressed;
         let uncompressed_size = match codec {
             OverrideCodec::Stored => compressed.len(),
-            OverrideCodec::Zstd => chunk.uncompressed_size,
+            OverrideCodec::Zstd => match zstd_decoded_size(&compressed) {
+                Some(size) => size,
+                None => return Ok(None),
+            },
         };
         ensure_chunk_fits(path_hash, compressed.len(), uncompressed_size)?;
 
@@ -238,6 +243,54 @@ impl OverrideEncoding for EncodedChunk {
             codec.as_wad_compression(),
         )))
     }
+}
+
+/// What `compressed` decodes to, taken from the bytes themselves.
+///
+/// A zstd frame header carries the content size when the encoder knew it, which is the
+/// number without decompressing anything. Riot's own chunks all carry one; a container built
+/// by a streaming encoder carries none, and that size is counted by decoding. `None` for
+/// bytes that do not decode, which sends the chunk down the decode-and-compress path where
+/// the failure is reported.
+fn zstd_decoded_size(compressed: &[u8]) -> Option<usize> {
+    if zstd::zstd_safe::find_frame_compressed_size(compressed).ok() == Some(compressed.len())
+        && let Ok(Some(stated)) = zstd::zstd_safe::get_frame_content_size(compressed)
+    {
+        return usize::try_from(stated).ok();
+    }
+    zstd_decoded_len(compressed)
+}
+
+/// The number of bytes `compressed` decodes to, counted without keeping them.
+///
+/// The decoder's window is the only allocation. Decoding costs a fraction of the compression
+/// the pass-through exists to avoid.
+///
+/// The count stops at the largest size the WAD TOC's `u32` field holds, so a chunk whose
+/// ratio would run the decoder for a long time answers `None` after that many bytes rather
+/// than to the end.
+fn zstd_decoded_len(compressed: &[u8]) -> Option<usize> {
+    struct Counter(usize);
+
+    impl Write for Counter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0 += buffer.len();
+            if self.0 > u32::MAX as usize {
+                return Err(std::io::Error::other(
+                    "the chunk decodes past the WAD format's size field",
+                ));
+            }
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut counter = Counter(0);
+    zstd::stream::copy_decode(compressed, &mut counter).ok()?;
+    Some(counter.0)
 }
 
 /// A codec this crate writes an override with.

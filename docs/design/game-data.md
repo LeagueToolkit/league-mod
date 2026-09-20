@@ -68,6 +68,10 @@ impl DeclarationDocument {
     pub fn parse(&self) -> Result<Declarations, Error>;
 }
 
+impl TryFrom<Declarations> for DeclarationDocument {
+    type Error = Error;
+}
+
 pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
@@ -86,7 +90,7 @@ pub struct ApplyResult {
 pub trait Schema {
     /// The shape of `field` on `class`. `None` is "the schema says nothing", never a mismatch.
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape>;
-    /// Whether the schema knows `class`.
+    /// Whether the schema knows `class`. Asked of a pinned class the base value lacks.
     fn has_class(&self, class: BinHash) -> bool;
 }
 
@@ -98,7 +102,7 @@ pub struct Shape {
     pub item: Option<PropertyKind>,
 }
 
-/// The schema that says nothing. Every property is typed from the base.
+/// The schema that says nothing. Every property is typed from the base, and no class is known.
 pub struct NoSchema;
 
 /// Plaintext for the hashes a rendered value carries (ADR-0020).
@@ -130,7 +134,8 @@ pub struct Reference {
 `PropertyKind` is `ltk_meta::PropertyKind`; `PropertyPath` is `ltk_meta::path::PropertyPath`;
 both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, and
 `Shape::bare(kind)` is the shape with no key and no item. `NoSchema` implements `Schema` with
-`expected` answering `None` and `has_class` answering `true`.
+`expected` answering `None` and `has_class` answering `false`
+([ADR-0022](../adr/0022-unattested-class-refusal.md)).
 
 `FieldNames` is `ltk_meta::path::FieldNames`; `BinObject` is `ltk_meta::BinObject`; both are
 re-exported. `Names` is implemented for `()`, which names nothing, and for `&N` of any
@@ -173,9 +178,15 @@ unset displays as the code's statement alone. `Display` is a log rendering; a co
 `kind` and navigates by `location`.
 
 `load_declarations()` expands source files and validates the declarations. `parse()` interprets
-a contained document and validates the result. `Declarations` exposes mutable `version` and
-`modules` fields; `validate()` checks supported declaration versions. `manifest_json()` validates
-and writes a direct JSON manifest. Target and link-path validity is enforced by their
+a contained document and validates the result; reading a document refuses a duplicate mapping
+key anywhere in it. `Declarations` exposes mutable `version` and `modules` fields; `validate()`
+checks supported declaration versions, and refuses a target module with no edit and an entries
+module with no entry. `manifest_json()` validates and writes a direct JSON manifest.
+A conversion to a serialized form refuses what that form cannot carry, and the manifest and
+the document refuse the same things ([ADR-0023](../adr/0023-refusing-serialization.md)): a
+property path or entry name spelling a binding keyword, one signed key held twice by an entry,
+and an integer outside the union of the `i64` and `u64` ranges. `manifest_json()` output loads
+to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each edit over the
 result of the preceding one, returns bytes, and leaves its input unchanged. `schema` types
 every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
@@ -188,7 +199,8 @@ retained base entries.
 ## <a id="s4"></a>4. Authoring
 
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
-`game_data.json`. The manifest requires integer `version: 1` and a `modules` array.
+`game_data.json`. A manifest or source file's extension names its format, compared ASCII
+case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one selector. A `target` selector takes a compact binding body, `edits`, or
 `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. A module with both keys, or neither, is an
@@ -213,11 +225,13 @@ file lexically; a loaded declaration and a declaration document carry the layer-
 spelling ([ADR-0013](../adr/0013-override-file-placement.md)). `OverridePath` has the same
 construction and string-access traits as `LinkPath` and implements `Display`. It is nonempty,
 relative, has no backslash, no empty, `.`, or `..` segment, and a nonempty file stem ending
-in `.ptch`, compared ASCII case-insensitively. A `.rito` path is an error naming the unsupported extension. A path that
-leaves the layer is a loading error.
+in `.ptch`, compared ASCII case-insensitively. A first segment holding a `:` spells a drive
+path, `C:/a.ptch` or `C:a.ptch`, and is an error. A `.rito` path is an error naming the
+unsupported extension. A path that leaves the layer is a loading error.
 
 An entry name is one nonempty string. `0x` followed by exactly 8 ASCII hexadecimal digits
-identifies an object hash; every other spelling identifies an object path. `EntryName` has the
+identifies an object hash; every other spelling identifies an object path. A hash-form entry
+name requires quotes in YAML, as a numeric-looking target does. `EntryName` has the
 same construction and string-access traits as `Target`, implements `Display`, and
 `object_hash()` returns its `BinHash`.
 
@@ -266,7 +280,9 @@ pub enum Value {
 A key's path is parsed by `PropertyPath::new` and a refused path is an error; the sign is not
 part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
 refuses a duplicate key in every format; an integer past the ranges named is what the format's
-parser makes of it, a float. A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
+parser makes of it, a float. `Value::Integer` holds an `i128`; serializing one outside the
+union of the `i64` and `u64` ranges is an error.
+A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
 loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`; a tag whose name is neither a
 type name nor `ref` is an error. `Value::pin()` is the
 type name of a one-key mapping whose key is a type name, or `None`; `Value::reference()` is the
@@ -412,8 +428,12 @@ struct holding it. Where the schema says nothing the base value's shape is the t
 `SchemaFallback` diagnostic names the path. A property the base omits with no schema answer is
 `Untypable`. A subscripted path is typed by the container's item kind, or the map's value
 kind. A struct pin's `class` is a name, hashed FNV-1a lowercased, or `0x` and 8 hexadecimal
-digits; a class the schema does not know is `UnknownClass`. Inside a `set`, each key is one
-field name of the pinned class typed by the schema; a nested struct is a nested struct pin.
+digits; a pin without a `class` key takes the class of the base value. A pinned class the
+base value already carries is attested by the shipped bin and the schema is not consulted;
+every other pinned class the schema does not know is `UnknownClass`
+([ADR-0022](../adr/0022-unattested-class-refusal.md)). Inside a `set`, each
+key is one field name of the pinned class typed by the schema; a nested struct is a nested
+struct pin.
 
 **Coercion.** A value coerces to a shape by these rules; any other pair is `KindMismatch`.
 

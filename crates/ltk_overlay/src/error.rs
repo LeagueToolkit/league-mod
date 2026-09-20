@@ -97,6 +97,15 @@ pub enum Error {
     #[error("Invalid mod directory: {0}")]
     InvalidModDir(Utf8PathBuf),
 
+    /// Two enabled mods share an identifier.
+    ///
+    /// A build keys a mod's content provider, its metadata cache entry and its saved
+    /// fingerprint by the id. Two mods under one id resolve one mod's overrides from the
+    /// other's provider, which is either a read failure or bytes that do not match the
+    /// fingerprint the state records.
+    #[error("Two enabled mods share the id '{id}'")]
+    DuplicateModId { id: String },
+
     /// A mod project's `.modignore` could not be loaded (used by
     /// [`FsModContent`](crate::FsModContent)). Failing beats filtering
     /// differently than packing would: what the overlay injects for testing

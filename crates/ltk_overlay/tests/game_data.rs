@@ -173,7 +173,7 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
                         display_name: None,
                         description: None,
                         string_overrides: Default::default(),
-                        game_data: Some(declarations.into()),
+                        game_data: Some(declarations.try_into().unwrap()),
                     }],
                     ..Default::default()
                 })
@@ -188,7 +188,7 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
                         "base".into(),
                         FantomeLayerInfo {
                             name: "base".into(),
-                            game_data: Some(declarations.into()),
+                            game_data: Some(declarations.try_into().unwrap()),
                             ..Default::default()
                         },
                     )]
@@ -783,7 +783,7 @@ fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
                         display_name: None,
                         description: None,
                         string_overrides: Default::default(),
-                        game_data: Some(declarations.into()),
+                        game_data: Some(declarations.try_into().unwrap()),
                     }],
                     ..Default::default()
                 })
@@ -803,7 +803,7 @@ fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
                         "base".into(),
                         FantomeLayerInfo {
                             name: "base".into(),
-                            game_data: Some(declarations.into()),
+                            game_data: Some(declarations.try_into().unwrap()),
                             ..Default::default()
                         },
                     )]

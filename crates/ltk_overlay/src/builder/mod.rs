@@ -38,18 +38,19 @@ mod metadata;
 mod resolve;
 
 use crate::builder::incremental::PreviousOverlay;
+use crate::builder::resolve::distribute_prepared_to_wads;
 use crate::content::ModContentProvider;
 use crate::error::{Error, Result};
 use crate::game::{GameDir, GameIndexExt, SkippedGameArchive, StateDir};
 use crate::linked_bins::{LinkedBinOffender, collect_linked_bin_offenders};
-use crate::state::{OverlayState, WadLayoutRecord};
+use crate::state::{OverlayState, OverrideRecord, WadLayoutRecord};
 use crate::strings::{self, StringOverrideMode, StringPatchPlan};
-use crate::utils::ContentHash;
+use crate::utils::{ContentHash, compute_wad_fingerprint_from_meta};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_index::GameIndex;
-use ltk_wad::WadHash;
+use ltk_wad::{EncodedChunk, WadHash};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -496,6 +497,41 @@ pub(crate) type ProgressCallback = Arc<dyn Fn(OverlayProgress) + Send + Sync>;
 /// Polled between the units of a build. `true` calls the build off.
 pub(crate) type CalledOff = Arc<dyn Fn() -> bool + Send + Sync>;
 
+/// The reused WADs holding a chunk this build encoded differently.
+///
+/// The game validates a chunk two mounted WADs share against its compressed checksum, so the
+/// copies have to agree. A WAD reused with the previous build's bytes and a WAD rebuilt from
+/// nothing can settle on two encodings of one content: which encoding a build's memo keeps
+/// depends on the order the sources arrive in, and a `zstd` version change moves level-3
+/// output. Rebuilding the reused WAD puts this build's encoding in both
+/// ([ADR-0025](../../docs/adr/0025-per-chunk-checksums-in-the-layout-record.md)).
+///
+/// A reused WAD with no layout record says nothing about what its file holds, so it is
+/// rebuilt whenever it shares any chunk with a WAD this build wrote.
+fn diverged_reuses(
+    wads_to_reuse: &[Utf8PathBuf],
+    wad_hash_sets: &BTreeMap<Utf8PathBuf, HashSet<WadHash>>,
+    prev_state: Option<&OverlayState>,
+    prepared: &HashMap<WadHash, EncodedChunk>,
+) -> Vec<Utf8PathBuf> {
+    wads_to_reuse
+        .iter()
+        .filter(
+            |path| match prev_state.and_then(|state| state.wad_layout(path.as_str())) {
+                Some(record) => record.overrides.iter().any(|(hash, recorded)| {
+                    prepared
+                        .get(hash)
+                        .is_some_and(|chunk| chunk.checksum() != recorded.checksum)
+                }),
+                None => wad_hash_sets
+                    .get(*path)
+                    .is_some_and(|hashes| hashes.iter().any(|hash| prepared.contains_key(hash))),
+            },
+        )
+        .cloned()
+        .collect()
+}
+
 /// The layout records to persist for every WAD the overlay now holds.
 ///
 /// Freshly written WADs get a record built from what the writer reported;
@@ -522,7 +558,15 @@ fn collect_wad_layouts(
                     overrides: wad
                         .written_overrides
                         .iter()
-                        .filter_map(|&hash| Some((hash, all_meta.get(&hash)?.content_hash)))
+                        .filter_map(|&(hash, checksum)| {
+                            Some((
+                                hash,
+                                OverrideRecord {
+                                    content: all_meta.get(&hash)?.content_hash,
+                                    checksum,
+                                },
+                            ))
+                        })
                         .collect(),
                 },
             )
@@ -732,6 +776,9 @@ impl OverlayBuilder {
     ///
     /// Order matters: the first mod in the list (index 0) has the highest priority.
     /// When two mods override the same chunk, the mod closer to the front wins.
+    ///
+    /// Each [`EnabledMod::id`] names one mod. [`build`](Self::build) refuses a list holding
+    /// one id twice with [`Error::DuplicateModId`].
     pub fn set_enabled_mods(&mut self, mods: Vec<EnabledMod>) {
         self.enabled_mods = mods;
     }
@@ -751,6 +798,8 @@ impl OverlayBuilder {
         self.last_checksum_mismatches = Vec::new();
         self.last_skipped_archives = Vec::new();
         self.last_game_data_diagnostics.clear();
+
+        self.check_mod_ids_are_distinct()?;
 
         let effective_blocked = self.effective_blocked_wads();
 
@@ -885,7 +934,7 @@ impl OverlayBuilder {
             );
         }
 
-        let (wads_to_build, wads_to_reuse, new_wad_fingerprints) =
+        let (wads_to_build, wads_to_reuse, mut new_wad_fingerprints) =
             self.partition_wads_from_meta(&wad_hash_sets, &all_meta, &prev_state, can_incremental);
 
         // Which of them can keep their file and rewrite only their tail. Decided
@@ -909,15 +958,87 @@ impl OverlayBuilder {
             .map(|(&hash, prepared)| (hash, prepared.clone()))
             .collect();
 
-        let wad_overrides = self.resolve_overrides_for_wads(
+        let mut wads_to_build = wads_to_build;
+        let mut wads_to_reuse = wads_to_reuse;
+        let mut prepared = self.prepare_overrides(
             &wads_to_build,
             &wad_hash_sets,
             &all_meta,
             &string_plans,
             reused,
+            &HashMap::new(),
         )?;
 
+        // A reused WAD keeps the bytes the previous build wrote. Where this build encoded the
+        // same chunk for a WAD it is rebuilding, the two copies have to be one encoding: the
+        // client validates a chunk two mounted WADs share against its compressed checksum.
+        //
+        // A pass encodes the chunks its own WADs need, and those chunks reach WADs still
+        // marked for reuse, so the answer is taken again over what each pass added. Every
+        // round moves at least one WAD out of `wads_to_reuse`, which is finite.
+        loop {
+            let diverged = diverged_reuses(
+                &wads_to_reuse,
+                &wad_hash_sets,
+                prev_state.as_ref(),
+                &prepared,
+            );
+            if diverged.is_empty() {
+                break;
+            }
+            tracing::info!(
+                "Rebuilding {} reused WAD(s) that hold a chunk this build encoded differently",
+                diverged.len()
+            );
+            prepared = self.prepare_overrides(
+                &diverged,
+                &wad_hash_sets,
+                &all_meta,
+                &string_plans,
+                HashMap::new(),
+                &prepared,
+            )?;
+            wads_to_reuse.retain(|path| !diverged.contains(path));
+            wads_to_build.extend(diverged);
+        }
+
+        let wad_overrides = distribute_prepared_to_wads(&wads_to_build, &wad_hash_sets, &prepared);
+        drop(prepared);
+
         let built = self.patch_wads_parallel(wads_to_build, wad_overrides, rewrites)?;
+
+        // A saved fingerprint describes the overrides the file holds, not the ones this build
+        // routed to it. An override whose bytes never resolved - a locale stringtable the
+        // game would not hand over, say - is absent from `written_overrides`, and the
+        // fingerprint of the complete set would make the next build reuse an incomplete file.
+        //
+        // A WAD short of an override is also marked dirty. The fingerprint alone is not
+        // enough: the exact-match skip compares the mod set, the game and the locales, and
+        // refuses only on a dirty flag, so without one the next build skips over the gap.
+        let mut incomplete: BTreeSet<String> = BTreeSet::new();
+        for wad in &built {
+            let written: HashSet<WadHash> = wad
+                .written_overrides
+                .iter()
+                .map(|&(hash, _)| hash)
+                .collect();
+            let routed = wad_hash_sets
+                .get(&wad.relative_path)
+                .map_or(0, HashSet::len);
+            if written.len() < routed {
+                tracing::warn!(
+                    "{} was written with {} of {} override(s); it is marked for a rebuild",
+                    wad.relative_path,
+                    written.len(),
+                    routed,
+                );
+                incomplete.insert(wad.relative_path.as_str().to_string());
+            }
+            new_wad_fingerprints.insert(
+                wad.relative_path.as_str().to_string(),
+                compute_wad_fingerprint_from_meta(&written, &all_meta),
+            );
+        }
 
         self.sweep_unexpected_overlay_files(&new_wad_fingerprints);
 
@@ -938,6 +1059,7 @@ impl OverlayBuilder {
         state.game_data_diagnostics = self.last_game_data_diagnostics.clone();
         state.wad_layouts =
             collect_wad_layouts(&built, &wads_to_reuse, &all_meta, prev_state.as_ref());
+        state.dirty_wads = incomplete;
         state.save(&state_path)?;
 
         let built_paths: Vec<Utf8PathBuf> = built.into_iter().map(|wad| wad.path).collect();
@@ -986,6 +1108,27 @@ impl OverlayBuilder {
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /// Refuses two enabled mods sharing an id.
+    ///
+    /// Pass 1 keeps a mod's overrides by its position in the enabled list and pass 2 resolves
+    /// their bytes by id. The metadata cache and the saved fingerprints key on the id too.
+    /// One id names one mod.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::DuplicateModId`] naming the first id two mods share.
+    fn check_mod_ids_are_distinct(&self) -> Result<()> {
+        let mut seen = HashSet::with_capacity(self.enabled_mods.len());
+        for enabled in &self.enabled_mods {
+            if !seen.insert(enabled.id.as_str()) {
+                return Err(Error::DuplicateModId {
+                    id: enabled.id.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
 
     /// Compute each enabled mod's content fingerprint, in parallel.
     fn collect_active_mod_fingerprints(&self) -> (Vec<Option<u64>>, Option<BTreeMap<String, u64>>) {

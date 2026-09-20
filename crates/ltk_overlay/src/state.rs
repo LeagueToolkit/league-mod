@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// incompatibly, or when build semantics change such that WADs on disk may no
 /// longer match what a fresh build would produce - any state file with a
 /// different version triggers a full rebuild.
-const CURRENT_VERSION: u32 = 8;
+const CURRENT_VERSION: u32 = 9;
 
 /// What one overlay WAD on disk is, so a later build can rebuild it in place.
 ///
@@ -41,7 +41,7 @@ pub struct WadLayoutRecord {
     /// Where the copied source region and the override tail sit in the file.
     pub layout: WadTailLayout,
 
-    /// `path_hash -> content_hash` for every override currently in the tail.
+    /// One [`OverrideRecord`] per override currently in the tail.
     ///
     /// The key is a [`WadHash`], which serializes as the bare integer a `u64`
     /// key would: the newtype is transparent to serde, so it costs the on-disk
@@ -50,7 +50,24 @@ pub struct WadLayoutRecord {
     /// Comparing this against the next build's override set is what splits it
     /// into overrides whose compressed bytes can be lifted straight out of the
     /// old tail and overrides that have to be resolved and compressed again.
-    pub overrides: BTreeMap<WadHash, ContentHash>,
+    pub overrides: BTreeMap<WadHash, OverrideRecord>,
+}
+
+/// One override a WAD's tail holds: the content it came from and the bytes written.
+///
+/// The content hash answers whether the next build wants the same content here, which is
+/// what a tail rewrite lifts bytes on. The checksum answers whether another WAD of this
+/// build encoded that content the same way: the client validates a chunk two mounted WADs
+/// share against its compressed checksum, so a reused WAD holding one encoding beside a
+/// rebuilt WAD holding another is a crash
+/// (`docs/adr/0025-per-chunk-checksums-in-the-layout-record.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverrideRecord {
+    /// The hash of the override's uncompressed content, as pass 1 computed it.
+    pub content: ContentHash,
+    /// `xxh3_64` of the compressed bytes in the file, the chunk's TOC checksum field.
+    pub checksum: u64,
 }
 
 /// Snapshot of the overlay build configuration, persisted as `overlay.json`.
@@ -58,11 +75,11 @@ pub struct WadLayoutRecord {
 /// Used to determine whether the existing overlay can be reused, incrementally
 /// updated, or needs a full rebuild.
 ///
-/// # JSON format (v8)
+/// # JSON format (v9)
 ///
 /// ```json
 /// {
-///   "version": 8,
+///   "version": 9,
 ///   "enabledMods": ["mod-a", "mod-b"],
 ///   "modFingerprints": {
 ///     "mod-a": 1122334455,
@@ -84,7 +101,9 @@ pub struct WadLayoutRecord {
 ///         "tailOffset": 41203712,
 ///         "tocCapacity": 1222
 ///       },
-///       "overrides": { "1234605616436508552": 8526495041147787000 }
+///       "overrides": {
+///         "1234605616436508552": { "content": 8526495041147787000, "checksum": 411721825 }
+///       }
 ///     }
 ///   },
 ///   "dirtyWads": []
@@ -716,7 +735,7 @@ mod tests {
         );
         let json = serde_json::to_string(&state).unwrap();
 
-        assert!(json.contains("\"version\":8"));
+        assert!(json.contains("\"version\":9"));
         assert!(json.contains("\"enabledMods\""));
         assert!(json.contains("\"modFingerprints\""));
         assert!(json.contains("\"gameFingerprint\""));
@@ -742,7 +761,15 @@ mod tests {
             },
             overrides: overrides
                 .iter()
-                .map(|&(path_hash, content_hash)| (path_hash, ContentHash(content_hash)))
+                .map(|&(path_hash, content_hash)| {
+                    (
+                        path_hash,
+                        OverrideRecord {
+                            content: ContentHash(content_hash),
+                            checksum: content_hash ^ 0xFFFF,
+                        },
+                    )
+                })
                 .collect(),
         }
     }
@@ -771,7 +798,7 @@ mod tests {
         );
     }
 
-    /// The layout's four keys are a wire format `ltk_wad` now owns.
+    /// The layout's four keys are a wire format `ltk_wad` owns.
     ///
     /// A rename there would not fail a build here: the record would simply stop
     /// deserializing, `wad_layout` would answer `None`, and every WAD would
@@ -780,11 +807,10 @@ mod tests {
     ///
     /// So the compatibility direction is pinned against bytes rather than
     /// against a round trip, which would agree with itself whatever names
-    /// `ltk_wad` chose. This JSON is what league-mod wrote before the layout
-    /// moved out of `wad_builder`.
+    /// `ltk_wad` chose.
     #[test]
-    fn a_layout_written_before_the_move_still_loads() {
-        const WRITTEN_BY_932574F: &str = r#"{
+    fn a_layout_record_reads_back_from_its_written_keys() {
+        const ON_DISK: &str = r#"{
             "source": {"len": 4096, "mtime": 1700000000000000000, "tocHash": 118230807},
             "layout": {
                 "dataRegionOffset": 500,
@@ -792,11 +818,11 @@ mod tests {
                 "tailOffset": 4000,
                 "tocCapacity": 7
             },
-            "overrides": {"43690": 4369}
+            "overrides": {"43690": {"content": 4369, "checksum": 61166}}
         }"#;
 
         let loaded: WadLayoutRecord =
-            serde_json::from_str(WRITTEN_BY_932574F).expect("an older record still deserializes");
+            serde_json::from_str(ON_DISK).expect("a record on disk deserializes");
         assert_eq!(loaded, layout_record(&[(WadHash(0xAAAA), 0x1111)]));
 
         // And the writing direction, so a rename cannot land silently either.
@@ -821,19 +847,22 @@ mod tests {
     /// itself whatever shape serde chose.
     #[test]
     fn override_entries_serialize_as_bare_integers() {
-        // 0xAAAA is 43690 and 0x1111 is 4369.
+        // 0xAAAA is 43690, 0x1111 is 4369 and 0x1111 ^ 0xFFFF is 61166.
         let record = layout_record(&[(WadHash(0xAAAA), 0x1111)]);
         let json = serde_json::to_string(&record).expect("a record serializes");
         assert!(
-            json.contains(r#""overrides":{"43690":4369}"#),
-            "overrides must serialize as integer -> integer, got {json}"
+            json.contains(r#""overrides":{"43690":{"content":4369,"checksum":61166}}"#),
+            "an override key must serialize as an integer, got {json}"
         );
 
         // And the same bytes read back, which is the compatibility direction.
         let loaded: WadLayoutRecord = serde_json::from_str(&json).expect("a record deserializes");
         assert_eq!(
             loaded.overrides.get(&WadHash(0xAAAA)),
-            Some(&ContentHash(0x1111))
+            Some(&OverrideRecord {
+                content: ContentHash(0x1111),
+                checksum: 0x1111 ^ 0xFFFF,
+            })
         );
     }
 

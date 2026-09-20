@@ -11,6 +11,7 @@ use ltk_meta::PropertyKind;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, MapAccess, SeqAccess, Visitor},
+    ser,
 };
 
 use crate::ErrorKind;
@@ -184,11 +185,12 @@ impl Serialize for Value {
         match self {
             Self::Null => serializer.serialize_unit(),
             Self::Bool(value) => serializer.serialize_bool(*value),
-            Self::Integer(value) => match i64::try_from(*value) {
-                Ok(value) => serializer.serialize_i64(value),
-                Err(_) => serializer.serialize_u64(
-                    u64::try_from(*value).expect("an integer is within the i64 or u64 range"),
-                ),
+            Self::Integer(value) => match (i64::try_from(*value), u64::try_from(*value)) {
+                (Ok(value), _) => serializer.serialize_i64(value),
+                (_, Ok(value)) => serializer.serialize_u64(value),
+                _ => Err(ser::Error::custom(format!(
+                    "integer {value} is outside the i64 and u64 ranges"
+                ))),
             },
             Self::Float(value) => serializer.serialize_f64(*value),
             Self::String(value) => serializer.serialize_str(value),
@@ -341,5 +343,16 @@ mod tests {
         );
         assert_eq!(serde_json::to_string(&Value::Integer(-1)).unwrap(), "-1");
         assert_eq!(serde_json::to_string(&Value::Null).unwrap(), "null");
+    }
+
+    #[test]
+    fn an_integer_outside_both_ranges_refuses_to_serialize() {
+        for value in [i128::MAX, i128::MIN, i128::from(u64::MAX) + 1] {
+            let error = serde_json::to_string(&Value::Integer(value)).unwrap_err();
+            assert!(
+                error.to_string().contains("outside the i64 and u64 ranges"),
+                "{error}"
+            );
+        }
     }
 }

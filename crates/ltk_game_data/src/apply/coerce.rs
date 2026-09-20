@@ -232,7 +232,12 @@ impl Coercer<'_> {
         if kind == K::Embedded && base_class.is_some_and(|base| base != class_hash) {
             return Err(Reason::PinMismatch);
         }
-        if !self.schema.has_class(class_hash) {
+        // The shipped bin attests the class it already carries, whether the pin names that
+        // class or leaves it out. The schema answers for every other class, and refusing one
+        // it does not know keeps a typo out of the written object ([ADR-0022]).
+        //
+        // [ADR-0022]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0022-unattested-class-refusal.md
+        if base_class != Some(class_hash) && !self.schema.has_class(class_hash) {
             return Err(Reason::UnknownClass);
         }
         let mut properties = indexmap::IndexMap::new();

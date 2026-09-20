@@ -1,6 +1,7 @@
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, Module, NoSchema, OverridePath,
-    RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply, load_declarations,
+    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, ErrorKind, Module, NoSchema,
+    OverridePath, RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply,
+    load_declarations,
 };
 use ltk_meta::{
     BinOverride,
@@ -280,7 +281,8 @@ fn scalar_targets_preserve_identifier_kind_and_spelling() {
             let manifest = declarations.manifest_json().unwrap();
             let json: serde_json::Value = serde_json::from_str(&manifest).unwrap();
             assert_eq!(json["modules"][0]["target"], value);
-            let document = ltk_game_data::DeclarationDocument::from(declarations.clone());
+            let document =
+                ltk_game_data::DeclarationDocument::try_from(declarations.clone()).unwrap();
             assert_eq!(document.parse().unwrap(), declarations);
         }
     }
@@ -332,7 +334,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         "Added"
     );
     assert_eq!(
-        serde_json::to_value(DeclarationDocument::from(declarations.clone())).unwrap(),
+        serde_json::to_value(DeclarationDocument::try_from(declarations.clone()).unwrap()).unwrap(),
         wire
     );
     let mut empty = wire.clone();
@@ -411,7 +413,7 @@ links = ["Shared"]
         assert_eq!(edits[1].links.add[0].as_str(), "New");
         assert_eq!(edits[2].links.remove[0].as_str(), "Gone");
 
-        let document = ltk_game_data::DeclarationDocument::from(declarations.clone());
+        let document = ltk_game_data::DeclarationDocument::try_from(declarations.clone()).unwrap();
         let parsed = document.parse().unwrap();
         assert_eq!(parsed, declarations, "{name}");
         assert_eq!(entry_names(&parsed.modules[0]), names, "{name}");
@@ -729,7 +731,7 @@ fn documents_round_trip_overrides_and_manifests_write_them() {
         |_| unreachable!(),
     )
     .unwrap();
-    let document = DeclarationDocument::from(declarations.clone());
+    let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
     let json = serde_json::to_string(&document).unwrap();
     assert!(json.contains(r#""overrides":["a.ptch"]"#), "{json}");
     assert_eq!(document.parse().unwrap(), declarations);
@@ -768,6 +770,58 @@ fn override_discovery_retains_paths_in_rejected_documents() {
             overrides: vec!["d.ptch".into(), "e.ptch".into()],
         }
     );
+}
+
+#[test]
+fn override_discovery_reaches_an_overrides_list_inside_an_entries_entry() {
+    let yaml = "version: 1\nmodules:\n- entries:\n    'a/b':\n      overrides: [inside.ptch]\n";
+    let error = load_declarations("game_data.yaml", yaml, |_| unreachable!()).unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::OverridesInEntry));
+    assert_eq!(
+        ReferencedInputs::discover("game_data.yaml", yaml)
+            .unwrap()
+            .overrides,
+        ["inside.ptch"]
+    );
+}
+
+#[test]
+fn a_document_extension_is_compared_without_case() {
+    let yaml = "version: 1\nmodules:\n- target: shared\n  links: [a]\n";
+    assert!(load_declarations("game_data.YAML", yaml, |_| unreachable!()).is_ok());
+    assert!(load_declarations("game_data.YML", yaml, |_| unreachable!()).is_ok());
+    let json = r#"{"version":1,"modules":[{"target":"shared","links":["a"]}]}"#;
+    assert!(load_declarations("game_data.JSON", json, |_| unreachable!()).is_ok());
+    let manifest = "version: 1\nmodules:\n- target: shared\n  source: Shared.YAML\n";
+    assert!(
+        load_declarations("game_data.yaml", manifest, |name| {
+            assert_eq!(name, "Shared.YAML");
+            Ok("version: 1\nlinks: [a]\n".to_string())
+        })
+        .is_ok()
+    );
+    let error = load_declarations("game_data.rito", yaml, |_| unreachable!()).unwrap_err();
+    assert!(matches!(error.kind, ErrorKind::UnknownFormat));
+}
+
+#[test]
+fn a_json_error_span_points_at_the_offending_byte_of_a_multibyte_line() {
+    let text = "{\n  \"version\": 1,\n  \"modules\": [{\"target\": \"\u{e9}\u{e9}\u{e9}\u{e9}\", \"links\": }]\n}";
+    let error = load_declarations("game_data.json", text, |_| unreachable!()).unwrap_err();
+    let span = error.location.span.expect("a syntax error carries a span");
+    assert_eq!(&text[span.start..span.end], "}");
+    assert!(span.end <= text.len());
+}
+
+#[test]
+fn an_override_path_refuses_a_drive_prefix() {
+    for spelled in ["C:/evil.ptch", "C:evil.ptch", "c:\u{5c}evil.ptch", "C:"] {
+        assert!(
+            OverridePath::try_from(spelled).is_err(),
+            "accepted `{spelled}`"
+        );
+    }
+    assert!(OverridePath::try_from("a/b.ptch").is_ok());
 }
 
 #[test]

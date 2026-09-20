@@ -34,7 +34,9 @@ A build runs in two passes over the mods, with the routing decisions in between.
 4. **Route.** Each override is distributed to every game WAD that holds its path
    hash, plus the mod's declared WAD for new entries and cross-WAD imports. A
    per-WAD fingerprint over `(path_hash, content_hash)` pairs decides which WADs
-   need rebuilding at all.
+   need rebuilding at all. The fingerprint a build saves covers the overrides the
+   file holds, not the ones the route sent it; a WAD written short of one is also
+   marked dirty.
 
 5. **Pass 2 - bytes.** Only the WADs being rebuilt have their override bytes
    re-read, from mod content providers or, for stringtable patches, generated
@@ -59,13 +61,18 @@ A build runs in two passes over the mods, with the routing decisions in between.
    compressed a single time, in parallel, memoized on its content hash.
 
    An override whose container already holds it as a WAD chunk skips that
-   entirely: its stored bytes are *passed through* into the overlay verbatim,
-   never decoded and never re-encoded. Only codecs this crate writes qualify -
-   stored and plain Zstd - so a `ZstdMulti` chunk, whose subchunk table lives in
-   the WAD it came from, still takes the decode-and-compress path. The checksum
-   the overlay TOC records is always recomputed over the bytes being written; a
-   container that claimed a different one is reported in the build result and
-   never fails the build (see `adr/0001-pass-through-recomputes-checksums-and-warns.md`).
+   entirely: its stored bytes are *passed through* into the overlay unchanged and
+   never re-encoded. Only codecs this crate writes qualify - stored and plain
+   Zstd - so a `ZstdMulti` chunk, whose subchunk table lives in the WAD it came
+   from, still takes the decode-and-compress path.
+
+   Every number the overlay TOC records for a passed-through chunk is derived
+   from its bytes, and a container that claimed another one is reported and never
+   fails the build. The checksum is recomputed over the bytes being written
+   (`adr/0001-pass-through-recomputes-checksums-and-warns.md`). The decode size
+   is a stored chunk's own byte count, or a zstd frame header's stated content
+   size, or, for a header that states nothing, the count of a decode that keeps
+   no bytes (`adr/0024-pass-through-decode-size.md`).
 
 7. **Write.** WADs are patched in parallel, each either rewritten in full or
    updated in place. See [Patched WAD layout](#patched-wad-layout).
@@ -87,8 +94,18 @@ rewritten in place (tail only) or rebuilt in full. A full rebuild empties the
 overlay directory first, so no file survives for a rewrite to keep and the
 in-place path is not considered at all.
 
-Per-mod content fingerprints participate in the skip because a mod ID is not
-enough: a workshop project directory keeps its ID while its files change.
+Per-mod content fingerprints participate in the skip. A mod ID is not enough: a
+workshop project directory keeps its ID while its files change. A content
+fingerprint pairs each file's relative path with its size and its modification
+time in nanoseconds, so an edit that leaves the length alone still moves it. The
+unit is the nanosecond and the resolution is the platform's, which is coarser:
+Windows advances a file time in system clock ticks, about 1 to 15 milliseconds
+apart.
+
+Each enabled mod's ID names one mod. A build refuses an enabled list holding one
+ID twice: pass 1 keeps a mod's overrides by list position and pass 2 resolves
+their bytes by ID, and the metadata cache and the saved fingerprints key on the
+ID as well.
 
 ## Patched WAD layout
 
@@ -187,17 +204,23 @@ before the marker is written.
 ## Invariants
 
 1. A chunk routed to several WADs has byte-identical compressed data in every
-   output of the same build. The game validates a shared chunk by its compressed
-   checksum, so divergent copies crash the client. Compressing once per content
-   hash makes this structural rather than a bet on the compressor being
-   deterministic; bytes reused from an old tail seed the same memo, so they hold
-   even across a zstd version change.
+   overlay WAD holding it. The game validates a shared chunk by its compressed
+   checksum, so divergent copies crash the client. Within one build, compressing
+   once per content hash makes this structural rather than a bet on the
+   compressor being deterministic; bytes reused from an old tail seed the same
+   memo, and a second resolution pass seeds from the first. Across builds, each
+   override's compressed checksum is recorded, and a reused WAD whose record
+   disagrees with this build's encoding is rebuilt
+   ([ADR-0025](adr/0025-per-chunk-checksums-in-the-layout-record.md)).
 2. The TOC is strictly ascending by path hash, the chunk count matches the
    entries, and every entry's data range is inside the file.
 3. The source WAD's signature and checksum reach every rebuild of its overlay.
 4. The builder writes only under `overlay_root` and the state directory, and
    never opens a game WAD for writing.
 5. Every trust decision has a full-rebuild fallback.
+6. A saved fingerprint and layout record describe the file on disk. A build that
+   drops an override records the reduced set and marks the WAD dirty, so neither
+   the skip nor the per-WAD reuse reads the file as complete.
 
 ## Deliberately absent
 

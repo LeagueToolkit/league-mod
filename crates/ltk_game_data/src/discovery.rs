@@ -23,14 +23,24 @@ impl Node {
         })
     }
 
-    /// The text items of every `overrides` list of a body: the compact body's own and each
-    /// edit's under the `edits` key.
+    /// The text items of every `overrides` list of a body: the compact body's own, each
+    /// edit's under the `edits` key, and each entry body's under the `entries` key.
+    ///
+    /// Loading refuses an `overrides` list inside an `entries` entry. Discovery reports the
+    /// paths of a refused declaration, which the packer excludes from ordinary content.
     fn body_overrides(&self, paths: &mut Vec<String>) {
         self.texts("overrides", paths);
         for edits in self.fields("edits") {
             if let Self::Sequence(edits) = edits {
                 for edit in edits {
                     edit.texts("overrides", paths);
+                }
+            }
+        }
+        for entries in self.fields("entries") {
+            if let Self::Map(entries) = entries {
+                for (_, body) in entries {
+                    body.texts("overrides", paths);
                 }
             }
         }

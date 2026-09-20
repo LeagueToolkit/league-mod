@@ -374,7 +374,7 @@ fn reuse_unchanged_overrides<S: std::io::Read + std::io::Seek>(
         let Some(meta) = all_meta.get(&path_hash) else {
             continue;
         };
-        if record.overrides.get(&path_hash) != Some(&meta.content_hash) {
+        if record.overrides.get(&path_hash).map(|over| over.content) != Some(meta.content_hash) {
             continue;
         }
         let Some(chunk) = overlay.chunks().get(path_hash).copied() else {
@@ -394,6 +394,7 @@ fn reuse_unchanged_overrides<S: std::io::Read + std::io::Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::OverrideRecord;
     use crate::test_support::{hash, write_game_wad};
     use crate::utils::ContentHash;
     use crate::wad_builder::build_patched_wad;
@@ -441,7 +442,13 @@ mod tests {
                 WadLayoutRecord {
                     source: stats.source,
                     layout: stats.layout,
-                    overrides: BTreeMap::from([(hash(SKIN), ContentHash(0xC0FFEE))]),
+                    overrides: BTreeMap::from([(
+                        hash(SKIN),
+                        OverrideRecord {
+                            content: ContentHash(0xC0FFEE),
+                            checksum: prepared.checksum(),
+                        },
+                    )]),
                 },
             );
 

@@ -8,7 +8,7 @@
 use indexmap::IndexMap;
 use serde::{
     Deserialize, Deserializer, Serialize,
-    de::{self, MapAccess, Visitor},
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
 
 use crate::{
@@ -17,7 +17,11 @@ use crate::{
 };
 
 /// An archive's versioned declarations, including fields an older consumer cannot execute.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Reading refuses a duplicate mapping key anywhere in the document, the rule a manifest
+/// obeys ([`crate::load_declarations`]). The archive metadata a document arrives in is not
+/// necessarily written by this crate.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct DeclarationDocument(serde_json::Value);
 
@@ -35,12 +39,107 @@ impl DeclarationDocument {
     }
 }
 
-impl From<Declarations> for DeclarationDocument {
-    fn from(declarations: Declarations) -> Self {
-        Self(
-            serde_json::to_value(declarations)
-                .expect("declarations contain JSON-compatible fields"),
-        )
+impl TryFrom<Declarations> for DeclarationDocument {
+    type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`ErrorKind::Serialize`] for declarations the document form cannot hold: a binding
+    /// keyword spelled as an entry name or a property path, one signed key held twice, and an
+    /// integer outside the union of the `i64` and `u64` ranges.
+    fn try_from(declarations: Declarations) -> Result<Self, Error> {
+        serde_json::to_value(declarations)
+            .map(Self)
+            .map_err(|error| {
+                Error::new(ErrorKind::Serialize {
+                    detail: error.to_string(),
+                })
+            })
+    }
+}
+
+impl<'de> Deserialize<'de> for DeclarationDocument {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(JsonVisitor).map(Self)
+    }
+}
+
+/// Reads any self-describing value as JSON, refusing a duplicate mapping key.
+///
+/// `serde_json::Value`'s own visitor keeps the last of a duplicate pair. A document is written
+/// by an author, and dropping the first of two bindings drops what the author wrote.
+struct JsonVisitor;
+
+impl<'de> Visitor<'de> for JsonVisitor {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a declaration document")
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(Self)
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Bool(value))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::from(value))
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::from(value))
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| de::Error::custom(format!("{value} is not a JSON number")))
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::String(value))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+        let mut items = Vec::new();
+        while let Some(item) = sequence.next_element_seed(Self)? {
+            items.push(item);
+        }
+        Ok(serde_json::Value::Array(items))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut entries = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let value = map.next_value_seed(Self)?;
+            if entries.insert(key.clone(), value).is_some() {
+                return Err(de::Error::custom(format!("duplicate key `{key}`")));
+            }
+        }
+        Ok(serde_json::Value::Object(entries))
+    }
+}
+
+impl<'de> de::DeserializeSeed<'de> for JsonVisitor {
+    type Value = serde_json::Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(self)
     }
 }
 
@@ -333,24 +432,47 @@ impl TryFrom<Bindings> for Edit {
     }
 }
 
-impl From<Edit> for Bindings {
-    fn from(edit: Edit) -> Self {
-        Self {
+impl TryFrom<Edit> for Bindings {
+    type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`ErrorKind::ReservedBindingKey`] for an entry name spelling a binding keyword, and
+    /// [`ErrorKind::DuplicatePropertyKey`] for an entry holding one signed key twice.
+    fn try_from(edit: Edit) -> Result<Self, Error> {
+        let mut rest = IndexMap::with_capacity(edit.entries.len());
+        for (name, edits) in edit.entries {
+            reserved(name.as_str())?;
+            let body =
+                PropertyEdit::try_into_body(edits).map_err(|error| error.entry(name.as_str()))?;
+            rest.insert(String::from(name), Value::Mapping(body));
+        }
+        Ok(Self {
             overrides: (!edit.overrides.is_empty())
                 .then(|| edit.overrides.into_iter().map(String::from).collect()),
-            rest: edit
-                .entries
-                .into_iter()
-                .map(|(name, edits)| {
-                    (
-                        String::from(name),
-                        Value::Mapping(PropertyEdit::into_body(edits)),
-                    )
-                })
-                .collect(),
+            rest,
             ..Self::from_links(edit.links)
-        }
+        })
     }
+}
+
+/// The binding keywords a body mapping reserves.
+const BINDING_KEYWORDS: [&str; 4] = ["overrides", "links", "+links", "-links"];
+
+/// Refuses a body key that spells a binding keyword.
+///
+/// A body mapping carries the binding keys beside the entry names or the signed property
+/// paths. One spelling holds one meaning.
+fn reserved(key: &str) -> Result<(), Error> {
+    if BINDING_KEYWORDS.contains(&key) {
+        return Err(Error::at_key(
+            ErrorKind::ReservedBindingKey {
+                key: key.to_owned(),
+            },
+            key,
+        ));
+    }
+    Ok(())
 }
 
 impl TryFrom<Bindings> for EntryEdit {
@@ -368,11 +490,21 @@ impl TryFrom<Bindings> for EntryEdit {
     }
 }
 
-impl From<EntryEdit> for Bindings {
-    fn from(edit: EntryEdit) -> Self {
-        Self {
-            rest: PropertyEdit::into_body(edit.properties),
-            ..Self::from_links(edit.links)
+impl TryFrom<EntryEdit> for Bindings {
+    type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`ErrorKind::ReservedBindingKey`] for a property path spelling a binding keyword, and
+    /// [`ErrorKind::DuplicatePropertyKey`] for one signed key held twice.
+    fn try_from(edit: EntryEdit) -> Result<Self, Error> {
+        let rest = PropertyEdit::try_into_body(edit.properties)?;
+        for key in rest.keys() {
+            reserved(key)?;
         }
+        Ok(Self {
+            rest,
+            ..Self::from_links(edit.links)
+        })
     }
 }

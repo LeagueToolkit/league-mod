@@ -103,7 +103,7 @@ fn fantome_import_uses_the_declared_layer_name() {
             "alias".into(),
             FantomeLayerInfo {
                 name: "base".into(),
-                game_data: Some(declarations.into()),
+                game_data: Some(declarations.try_into().unwrap()),
                 ..Default::default()
             },
         )]

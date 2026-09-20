@@ -11,7 +11,7 @@ use ltk_game_data::{
     ApplyDiagnosticKind, Edit, EntryEdit, EntryName, IndexMap, Module, Origin, OverridePath,
     Selector, SkippedProperty, SkippedRecord,
 };
-use ltk_game_index::{BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
+use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
@@ -164,33 +164,39 @@ fn lower_entries(
     diagnostics: &mut Vec<GameDataDiagnostic>,
 ) {
     for (name, edit) in entries {
-        let declarations = index.declarations(name.object_hash());
-        let mut chunks: Vec<WadHash> = declarations.iter().map(|d| d.chunk).collect();
-        chunks.dedup();
-        match chunks.as_slice() {
-            [] => diagnostics.push(pending.diagnostic(
+        // The index reports declarations in storage order and names one chunk more than once
+        // for an entry several of its archives declare. Each distinct chunk is edited once; a
+        // second application over the accumulating bytes lands every `+` edit twice.
+        let chunks: IndexMap<WadHash, ArchiveId> = index
+            .declarations(name.object_hash())
+            .iter()
+            .map(|declaration| (declaration.chunk, declaration.archive))
+            .collect();
+        match chunks.len() {
+            0 => diagnostics.push(pending.diagnostic(
                 GameDataDiagnosticKind::EntryUnresolved,
                 Some(name),
                 "No game bin declares the entry; edits are skipped",
             )),
-            [_] => {}
-            _ => {
-                let named: Vec<String> = declarations
+            1 => {}
+            count => {
+                let named: Vec<String> = chunks
                     .iter()
-                    .map(|d| format!("{:016x} ({})", d.chunk.0, game.archive(d.archive).name))
+                    .map(|(chunk, archive)| {
+                        format!("{:016x} ({})", chunk.0, game.archive(*archive).name)
+                    })
                     .collect();
                 diagnostics.push(pending.diagnostic(
                     GameDataDiagnosticKind::EntryFanOut,
                     Some(name),
                     format!(
-                        "Entry is declared in {} chunks, each edited: {}",
-                        chunks.len(),
+                        "Entry is declared in {count} chunks, each edited: {}",
                         named.join(", ")
                     ),
                 ));
             }
         }
-        for chunk in chunks {
+        for chunk in chunks.into_keys() {
             let mut chunk_edit = Edit::default();
             chunk_edit
                 .entries
