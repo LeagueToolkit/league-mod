@@ -1098,3 +1098,58 @@ fn entries_property_edits_reach_every_declaring_chunk() {
         assert_eq!(bin.dependencies, ["Added"], "{name}");
     }
 }
+
+/// A PROP v3 whose one object is the entry `Characters/B`, with `speed` 9.0.
+fn referenced_bin() -> Vec<u8> {
+    use ltk_meta::concrete::{Bin, BinObject, values};
+    let bin = Bin::builder()
+        .object(
+            BinObject::builder(ltk_game_data::BinHash::from("Characters/B"), 2u32)
+                .property(ltk_game_data::BinHash::from("speed"), values::F32::new(9.0))
+                .build(),
+        )
+        .build();
+    let mut cursor = Cursor::new(Vec::new());
+    bin.to_writer(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+/// A reference reads the installed game, so the build resolves it from a chunk no mod ships
+/// and no mod edits.
+///
+/// The object index is what turns the entry name into that chunk, so a build declaring a
+/// reference loads the index even with no `entries` module in it.
+#[test]
+fn an_overlay_build_resolves_a_reference_from_the_game() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    common::write_game_wad(
+        &game.join(WAD),
+        &[("shared", &speed_bin()), ("source", &referenced_bin())],
+    );
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(
+            r#"{"version":1,"modules":[{"target":"shared",
+               "0x00000001":{"speed":{"ref":"Characters/B:speed"}}}]}"#,
+        ),
+    );
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+
+    assert_eq!(
+        result
+            .game_data_diagnostics
+            .iter()
+            .filter(|d| d.kind != ltk_overlay::game_data::GameDataDiagnosticKind::SchemaFallback)
+            .collect::<Vec<_>>(),
+        Vec::<&ltk_overlay::game_data::GameDataDiagnostic>::new()
+    );
+    // The game's 9.0, not the base's 1.0 and not a literal the author wrote.
+    assert_eq!(speed_and_links(&chunk(&overlay.join(WAD), "shared")).0, 9.0);
+}

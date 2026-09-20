@@ -208,7 +208,7 @@ fn root_keys_that_are_not_entry_names_are_unsupported_bindings() {
 #[test]
 fn structural_refusals_name_the_key() {
     type Expected = fn(&ErrorKind) -> bool;
-    let cases: [(&str, &str, Expected); 5] = [
+    let cases: [(&str, &str, Expected); 8] = [
         (
             "game_data.yaml",
             "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      '+a[b': [1]\n",
@@ -233,6 +233,24 @@ fn structural_refusals_name_the_key() {
             "game_data.yaml",
             "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: [{pointer: {class: X, set: {f: 1}, extra: 2}}]\n",
             |kind| *kind == ErrorKind::StructPinShape,
+        ),
+        // A `ref` whose value is not a string at all.
+        (
+            "game_data.json",
+            r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"a": {"ref": 5}}}]}"#,
+            |kind| *kind == ErrorKind::ReferenceShape,
+        ),
+        // A string with no `:` to split at.
+        (
+            "game_data.toml",
+            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { a = { ref = \"nocolon\" } }\n",
+            |kind| *kind == ErrorKind::ReferenceShape,
+        ),
+        // A reference nested in a list, whose path half does not parse.
+        (
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: [{ref: \"entry:b[\"}]\n",
+            |kind| *kind == ErrorKind::ReferenceShape,
         ),
     ];
     for (name, text, expected) in cases {
@@ -486,4 +504,79 @@ fn integers_span_the_i64_and_u64_ranges() {
     let body = &target_edits(&declarations.modules[0])[0].entries[0];
     assert_eq!(body[0].value, Value::Integer(u64::MAX.into()));
     assert_eq!(body[1].value, Value::Integer(i64::MIN.into()));
+}
+
+/// A reference is one value however the document spells it.
+///
+/// The YAML tag and the one-key mapping are the same value, as a type pin's two spellings
+/// are, and JSON and TOML have only the mapping.
+#[test]
+fn a_reference_loads_from_every_format_as_one_value() {
+    let expected = Value::Mapping(IndexMap::from([(
+        "ref".to_owned(),
+        Value::String("Characters/B:speed".to_owned()),
+    )]));
+    let cases = [
+        (
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      speed: !ref Characters/B:speed\n",
+        ),
+        (
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      speed: {ref: \"Characters/B:speed\"}\n",
+        ),
+        (
+            "game_data.json",
+            r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"speed": {"ref": "Characters/B:speed"}}}]}"#,
+        ),
+        (
+            "game_data.toml",
+            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { speed = { ref = \"Characters/B:speed\" } }\n",
+        ),
+    ];
+    for (name, text) in cases {
+        let declarations = load(name, text);
+        let edit = &target_edits(&declarations.modules[0])[0];
+        let body = &edit.entries[&EntryName::try_from("Characters/A").unwrap()];
+        assert_eq!(body[0].value, expected, "{name}");
+        assert_eq!(
+            body[0].value.reference(),
+            Some("Characters/B:speed"),
+            "{name}"
+        );
+        // A reference is not a pin, whatever spelling it arrived in.
+        assert_eq!(body[0].value.pin(), None, "{name}");
+    }
+}
+
+/// The dotted form reaches a field named `ref`, as it reaches a field named for a type.
+#[test]
+fn the_dotted_form_escapes_the_reference_key() {
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a.ref: 1\n";
+    let declarations = load("game_data.yaml", text);
+    let body = &target_edits(&declarations.modules[0])[0].entries
+        [&EntryName::try_from("Characters/A").unwrap()];
+    assert_eq!(keys(body), ["a.ref"]);
+    assert_eq!(body[0].value, Value::Integer(1));
+    assert_eq!(body[0].value.reference(), None);
+}
+
+/// A module reports the references its edits hold, which is how a build learns it needs the
+/// object index before it starts reading chunks.
+#[test]
+fn a_module_reports_the_references_it_holds() {
+    let text = "version: 1\nmodules:\n  - entries:\n      Characters/A:\n        speed: !ref Characters/B:speed\n        +tags: [!ref \"Characters/C:tags[0]\"]\n        name: plain\n";
+    let declarations = load("game_data.yaml", text);
+    let references: Vec<String> = declarations.modules[0]
+        .references()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(references, ["Characters/B:speed", "Characters/C:tags[0]"]);
+
+    let plain = load(
+        "game_data.yaml",
+        "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      speed: 1\n",
+    );
+    assert!(plain.modules[0].references().is_empty());
 }

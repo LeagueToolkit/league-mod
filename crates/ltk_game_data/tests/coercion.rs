@@ -815,3 +815,144 @@ fn an_override_that_applies_nothing_leaves_the_bytes_alone() {
     // The skip carries what the tree said, which no code of this crate holds.
     assert!(output.diagnostics[0].detail.is_some());
 }
+
+/// The game's copy of `Characters/B`, the entry every reference test names.
+///
+/// Its values are deliberately the shapes `Characters/A` declares, so a reference lands
+/// wherever the coercion table would take a literal of the same shape.
+fn referenced_entry() -> BinObject {
+    BinObject::builder(h("Characters/B"), h("C"))
+        .property(h("speed"), values::F32::new(9.0))
+        .property(h("name"), values::String::new("copied".into()))
+        .property(
+            h("tags"),
+            values::Container::new(K::Hash, vec![values::Hash::new(h("a")).into()]).unwrap(),
+        )
+        .property(h("mesh"), embed("copied"))
+        .property(h("count"), values::U8::new(7))
+        .property(h("link"), values::ObjectLink::new(h("copied")))
+        .build()
+}
+
+/// A reader of one entry, the hand-written stand-in for an installed game.
+fn one_entry(name: &ltk_game_data::EntryName) -> Option<BinObject> {
+    (name.as_str() == "Characters/B").then(referenced_entry)
+}
+
+fn run_referenced(manifest: &str) -> ApplyResult {
+    let declarations = load_declarations("game_data.yaml", manifest, |_| unreachable!())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
+        panic!("expected a target");
+    };
+    apply(
+        &base_bin(),
+        edits,
+        no_override,
+        one_entry,
+        &TestSchema::new(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_reference_reads_the_games_copy_wherever_a_value_goes() {
+    // A set, a list item, a map value, and a `set` field of a struct pin.
+    let output = run_referenced(&manifest(
+        "speed: {ref: \"Characters/B:speed\"}\n\
+         name: !ref Characters/B:name\n\
+         +tags: [!ref \"Characters/B:tags[0]\"]\n\
+         +resources:\n  y: !ref Characters/B:link\n\
+         mesh: {embed: {set: {texture: !ref Characters/B:name}}}\n",
+    ));
+    assert_eq!(skips(&output), [], "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "speed"), values::F32::new(9.0).into());
+    assert_eq!(
+        value_at(&output, "name"),
+        values::String::new("copied".into()).into()
+    );
+    assert_eq!(
+        value_at(&output, "tags[2]"),
+        values::Hash::new(h("a")).into()
+    );
+    assert_eq!(
+        value_at(&output, "resources{\"y\"}"),
+        values::ObjectLink::new(h("copied")).into()
+    );
+    assert_eq!(
+        value_at(&output, "mesh.texture"),
+        values::String::new("copied".into()).into()
+    );
+}
+
+#[test]
+fn a_reference_is_an_operand_of_an_addition_and_a_removal() {
+    let output = run_referenced(&manifest("-tags: [!ref \"Characters/B:tags[0]\"]\n"));
+    assert_eq!(skips(&output), [], "{:?}", output.diagnostics);
+    // `a` was the referenced value, so the base's remaining tag is `b`.
+    assert_eq!(
+        value_at(&output, "tags[0]"),
+        values::Hash::new(h("b")).into()
+    );
+}
+
+#[test]
+fn both_reference_reasons_and_a_shape_mismatch_are_reported() {
+    // The entry the reader does not supply.
+    let output = run_referenced(&manifest("speed: !ref Characters/Missing:speed\n"));
+    assert_eq!(skips(&output), [("speed", Reason::ReferenceMissingEntry)]);
+
+    // The entry resolves, the path inside it does not.
+    let output = run_referenced(&manifest("speed: !ref Characters/B:absent\n"));
+    assert_eq!(skips(&output), [("speed", Reason::ReferenceUnresolved)]);
+
+    // The reference resolves to an `f32` where the property is a string.
+    let output = run_referenced(&manifest("name: !ref Characters/B:speed\n"));
+    assert_eq!(skips(&output), [("name", Reason::KindMismatch)]);
+
+    // A caller with no game resolves nothing.
+    let output = run(
+        &manifest("speed: !ref Characters/B:speed\n"),
+        &TestSchema::new(),
+    );
+    assert_eq!(skips(&output), [("speed", Reason::ReferenceMissingEntry)]);
+}
+
+#[test]
+fn the_dotted_form_reaches_a_field_named_ref() {
+    // `a.ref` is a path, not a reference, so it descends and the schema types it.
+    let output = run_referenced(&manifest("mesh.ref: 1\n"));
+    assert_eq!(
+        skips(&output),
+        [("mesh.ref", Reason::Untypable)],
+        "{:?}",
+        output.diagnostics
+    );
+}
+
+#[test]
+fn an_entry_is_read_once_however_many_references_name_it() {
+    let declarations = load_declarations(
+        "game_data.yaml",
+        &manifest("speed: !ref Characters/B:speed\nname: !ref Characters/B:name\n"),
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
+        panic!("expected a target");
+    };
+    let mut reads = Vec::new();
+    let output = apply(
+        &base_bin(),
+        edits,
+        no_override,
+        |name: &ltk_game_data::EntryName| {
+            reads.push(name.as_str().to_owned());
+            one_entry(name)
+        },
+        &TestSchema::new(),
+    )
+    .unwrap();
+    assert_eq!(skips(&output), []);
+    assert_eq!(reads, ["Characters/B"]);
+}
