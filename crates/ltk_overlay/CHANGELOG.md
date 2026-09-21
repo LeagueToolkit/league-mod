@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.11.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.10.0...ltk_overlay-v0.11.0) - 2026-09-20
+
+### Fixed
+
+- *(game_data)* [**breaking**] report whether an application changed anything
+- *(overlay)* settle shared-chunk divergence to a fixpoint
+- *(overlay)* [**breaking**] take chunk sizes and checksums from the bytes
+- *(overlay)* record what a build wrote, not what it planned
+- *(game_data)* [**breaking**] refuse declarations the document form cannot carry
+- *(overlay)* apply an entry once per declaring chunk
+
+### Other
+
+- rewrite the new comments in simplified technical english
+- *(overlay)* give the entry fan-out a name
+- *(overlay)* one layer-ordering module
+- Merge pull request #241 from LeagueToolkit/release-plz-2026-09-16T14-47-06Z
+
 ## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.9.8...ltk_overlay-v0.10.0) - 2026-09-16
 
 ### Added
