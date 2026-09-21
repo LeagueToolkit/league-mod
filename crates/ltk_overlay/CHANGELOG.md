@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.12.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.11.0...ltk_overlay-v0.12.0) - 2026-09-21
+
+### Added
+
+- *(game_data)* [**breaking**] a value can reference the installed game's copy
+
+### Fixed
+
+- *(game_data)* [**breaking**] refuse a pinned reference and report an entry that cannot be read
+
+### Other
+
+- *(deps)* bump ltk_meta to 0.8.4
+- *(overlay)* decode a referenced entry with ltk_meta
+- *(game_data)* cover references in every format, position, and failure
+- updated the following local packages: ltk_game_data, ltk_game_index, ltk_modpkg, ltk_fantome, ltk_mod_project
+
 ## [0.11.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_overlay-v0.10.0...ltk_overlay-v0.11.0) - 2026-09-20
 
 ### Fixed
