@@ -267,8 +267,21 @@ fn structural_refusals_name_the_key() {
         }
     }
     // Well-formed struct pins load.
-    let text = "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: !pointer null\n      b: !pointer {class: X, set: {f: 1}}\n      c: {embed: {set: {g: !pointer {class: Y}}}}\n";
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: !pointer null\n      b: !pointer(X) {f: 1}\n      c: {embed: {set: {g: !pointer(Y)}}}\n      d: !embed {f: 1}\n";
     load("game_data.yaml", text);
+}
+
+#[test]
+fn a_class_tag_and_the_struct_pin_load_as_one_value() {
+    let tagged = "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      +components:\n        - !pointer(0x50db156b)\n          options: !embed(PostEffectOptions)\n            HeightFog: true\n      ptr: !pointer(X)\n";
+    let spelled = r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"+components": [{"pointer": {"class": "0x50db156b", "set": {"options": {"embed": {"class": "PostEffectOptions", "set": {"HeightFog": true}}}}}}], "ptr": {"pointer": {"class": "X"}}}}]}"#;
+    let tagged = load("game_data.yaml", tagged);
+    let spelled = load("game_data.json", spelled);
+    let name = EntryName::try_from("Characters/A").unwrap();
+    assert_eq!(
+        target_edits(&tagged.modules[0])[0].entries[&name],
+        target_edits(&spelled.modules[0])[0].entries[&name]
+    );
 }
 
 #[test]

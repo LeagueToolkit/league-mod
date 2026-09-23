@@ -461,7 +461,7 @@ fn a_struct_renders_as_a_struct_pin_with_named_fields() {
     let rendered = Value::render(&embed("t", 0.5).into(), &Table::new()).unwrap();
     assert_eq!(
         rendered.to_yaml().unwrap(),
-        "embed:\n  class: E\n  set:\n    texture: t\n    scale: 0.5"
+        "!embed(E)\ntexture: t\nscale: 0.5"
     );
 
     let empty = values::Struct {
@@ -473,8 +473,22 @@ fn a_struct_renders_as_a_struct_pin_with_named_fields() {
             .unwrap()
             .to_yaml()
             .unwrap(),
-        "pointer:\n  class: \"0xdeadbeef\""
+        "!pointer(0xdeadbeef) {}"
     );
+}
+
+#[test]
+fn a_class_a_tag_cannot_carry_stays_in_the_document_form() {
+    let pin: Value =
+        serde_json::from_str(r#"{"pointer": {"class": "A, B", "set": {"f": 1}}}"#).unwrap();
+    assert_eq!(
+        pin.to_yaml().unwrap(),
+        "pointer:\n  class: A, B\n  set:\n    f: 1"
+    );
+    assert_eq!(reloaded(&pin), pin);
+    let null: Value = serde_json::from_str(r#"{"pointer": null}"#).unwrap();
+    assert_eq!(null.to_yaml().unwrap(), "!pointer null");
+    assert_eq!(reloaded(&null), null);
 }
 
 #[test]

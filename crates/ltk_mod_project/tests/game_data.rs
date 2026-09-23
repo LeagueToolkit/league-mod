@@ -487,7 +487,7 @@ fn property_fixture(root: &Utf8Path) -> ModProject {
     fs::create_dir_all(root.join("content/base")).unwrap();
     fs::write(
         root.join("content/base/game_data.yaml"),
-        "version: 1\nmodules:\n  - target: data/characters/teemo/skins/skin0.bin\n    Characters/Teemo/Skins/Skin0:\n      skinMeshProperties:\n        selfIllumination: !f32 1.0\n        +tagEventList: [Jade_Teemo]\n      healthBarData.unitHealthBarStyle: 12\n      ptr: !pointer {class: X, set: {a: 1}}\n  - entries:\n      Characters/Teemo/Skins/Skin0/Resources:\n        links: [x.bin]\n        +resourceMap:\n          Teemo_R_Mis: !link Characters/Jade_Teemo/Particles/R_Mis\n          Teemo_R_Debuff: null\n",
+        "version: 1\nmodules:\n  - target: data/characters/teemo/skins/skin0.bin\n    Characters/Teemo/Skins/Skin0:\n      skinMeshProperties:\n        selfIllumination: !f32 1.0\n        +tagEventList: [Jade_Teemo]\n      healthBarData.unitHealthBarStyle: 12\n      ptr: !pointer(X) {a: 1}\n  - entries:\n      Characters/Teemo/Skins/Skin0/Resources:\n        links: [x.bin]\n        +resourceMap:\n          Teemo_R_Mis: !link Characters/Jade_Teemo/Particles/R_Mis\n          Teemo_R_Debuff: null\n",
     )
     .unwrap();
     ModProject {

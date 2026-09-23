@@ -296,8 +296,8 @@ impl Schema for ShapesOnly {
 fn a_class_the_base_carries_needs_no_schema_however_the_pin_spells_it() {
     // `mesh` is an embedded `E` in the base. Naming `E` and leaving it out are one pin.
     for body in [
-        "mesh: !embed { set: { texture: z } }\n",
-        "mesh: !embed { class: E, set: { texture: z } }\n",
+        "mesh: !embed { texture: z }\n",
+        "mesh: !embed(E) { texture: z }\n",
     ] {
         let output = run(&manifest(body), &ShapesOnly(TestSchema::new()));
         assert!(
@@ -316,7 +316,7 @@ fn a_class_the_base_carries_needs_no_schema_however_the_pin_spells_it() {
 #[test]
 fn an_authored_class_needs_the_schema_and_a_base_class_does_not() {
     // `ptr` is a null pointer in the base, so its class can only be the authored one.
-    let typo = manifest("ptr: !pointer { class: Typo }\n");
+    let typo = manifest("ptr: !pointer(Typo)\n");
     assert_eq!(
         skips(&run(&typo, &TestSchema::new())),
         [("ptr", Reason::UnknownClass)]
@@ -329,7 +329,7 @@ fn an_authored_class_needs_the_schema_and_a_base_class_does_not() {
     // The same schema refuses a class no base value carries.
     assert_eq!(
         skips(&run(
-            &manifest("ptr: !pointer { class: E }\n"),
+            &manifest("ptr: !pointer(E)\n"),
             &ShapesOnly(TestSchema::new())
         )),
         [("ptr", Reason::UnknownClass)]
@@ -442,14 +442,18 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             .into(),
         ),
         (
-            "optptr: !pointer {class: E, set: {texture: t}}",
+            "optptr: !pointer(E) {texture: t}",
             "optptr",
             values::Optional::new(K::Struct, Some(embed("t").0.into()))
                 .unwrap()
                 .into(),
         ),
         ("ptr: null", "ptr", values::Struct::default().into()),
-        ("ptr: !pointer {}", "ptr", values::Struct::default().into()),
+        (
+            "ptr: !pointer null",
+            "ptr",
+            values::Struct::default().into(),
+        ),
         (
             "opt: !option {}",
             "opt",
@@ -479,7 +483,7 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             .into(),
         ),
         (
-            "ptr: !pointer {class: E, set: {texture: v, scale: 2}}",
+            "ptr: !pointer(E) {texture: v, scale: 2}",
             "ptr",
             values::Struct {
                 class_hash: h("E"),
@@ -491,11 +495,7 @@ fn every_coercion_row_passes_and_every_reason_fails() {
             }
             .into(),
         ),
-        (
-            "mesh: !embed {set: {texture: w}}",
-            "mesh",
-            embed("w").into(),
-        ),
+        ("mesh: !embed {texture: w}", "mesh", embed("w").into()),
         ("mesh: {texture: w}", "mesh", embed("w").into()),
         ("mesh.texture: w", "mesh", embed("w").into()),
         ("units[1].texture: w", "units[1]", embed("w").into()),
@@ -533,27 +533,19 @@ fn every_coercion_row_passes_and_every_reason_fails() {
         ("mesh2: !string q", "mesh2", Reason::PinMismatch),
         ("+names: [x]", "+names", Reason::TypeMismatch),
         ("-names: [n]", "-names", Reason::TypeMismatch),
-        ("ptr: !pointer {class: Nope}", "ptr", Reason::UnknownClass),
-        (
-            "ptr: !pointer {class: E, set: {nope: 1}}",
-            "ptr",
-            Reason::Untypable,
-        ),
-        (
-            "ptr: !pointer {class: E, set: {'a.b': 1}}",
-            "ptr",
-            Reason::InvalidPath,
-        ),
-        ("mesh: !embed {class: C}", "mesh", Reason::PinMismatch),
+        ("ptr: !pointer(Nope)", "ptr", Reason::UnknownClass),
+        ("ptr: !pointer(E) {nope: 1}", "ptr", Reason::Untypable),
+        ("ptr: !pointer(E) {'a.b': 1}", "ptr", Reason::InvalidPath),
+        ("mesh: !embed(C)", "mesh", Reason::PinMismatch),
         ("mesh: !hash x", "mesh", Reason::PinMismatch),
         ("mesh: {hash: x}", "mesh", Reason::PinMismatch),
         ("mesh: {string: x}", "mesh", Reason::PinMismatch),
         (
-            "ptr: !pointer {class: E, set: {texture: {hash: x}}}",
+            "ptr: !pointer(E) {texture: {hash: x}}",
             "ptr",
             Reason::PinMismatch,
         ),
-        ("mesh: !pointer {class: E}", "mesh", Reason::PinMismatch),
+        ("mesh: !pointer(E)", "mesh", Reason::PinMismatch),
         ("count.x: 1", "count.x", Reason::CannotDescend),
         ("tags[5]: a", "tags[5]", Reason::IndexOutOfRange),
         ("nope: 1", "nope", Reason::Untypable),
