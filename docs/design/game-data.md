@@ -14,7 +14,9 @@ to a value of the installed game.
 - **Declaration document:** Preserved serialized declarations, including unsupported fields.
 - **Module:** One selector with its edits and its origin.
 - **Selector:** What a module edits: a chunk target with edits, or a mapping of entry names to entry edits.
-- **Edit:** One batch of bindings on a chunk, applied phase by phase. The phases are override files, then entry edits, then link removals followed by additions.
+- **Edit:** One batch of bindings on a chunk, applied phase by phase. The phases are override files, then object creations, then entry edits, then object removals, then link removals followed by additions.
+- **Object edit:** The creation of an object in a chunk, cloned from an entry of the chunk or constructed from a class, with a `set` of property edits; or the removal of an object.
+- **Own path:** The path of an object held by the object itself: a top-level `hash` property holding its object hash, or a top-level `string` property spelling its path.
 - **Override file:** A `.ptch` file in a layer holding `PTCH` records applied over a target.
 - **Override path:** The layer-relative, forward-slash path of an override file.
 - **Entry edit:** The bindings of one entry: its property edits and, in an `entries` module, its links.
@@ -235,11 +237,12 @@ keyword is refused earlier, at construction
 ([ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md)).
 `manifest_json()` output loads
 to the declarations it was written from. Target and link-path validity is enforced by their
-types ([section 4](#s4)). `apply()` runs each edit's phases in field order, each edit over the
+types ([section 4](#s4)). `apply()` runs each edit's phases in phase order, each edit over the
 result of the preceding one, returns bytes, and leaves its input unchanged. `applied` counts
 what the edits changed, and `changed()` is whether any did; an `Ok` result reports that the
 base decoded, not that an edit landed. `schema` types
-every property edit ([section 6](#s6)); a caller with no schema passes `&NoSchema`. `read_override`
+every property edit and knows every constructed class ([section 6](#s6)); a caller with no
+schema passes `&NoSchema`. `read_override`
 supplies the bytes of an override file by its path in any `AsRef<[u8]>` container; it is
 called once per listed path, in apply order. `read_entry` supplies the installed game's copy
 of an entry a reference names, once per distinct entry and before any edit applies. It answers
@@ -259,8 +262,10 @@ A module contains one selector. A `target` selector takes a compact binding body
 `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. A module with both keys, or neither, is an
 error. A compact body and every edit carry at least one binding. A binding body's keys are
-`overrides`, `links`, `+links`, `-links`, and entry names; an entry name at a body root carries
-a slash or is hash-form, and every other key is an unsupported binding and an error.
+`overrides`, `objects`, `links`, `+links`, `-links`, and entry names; an entry name at a body
+root carries a slash or is hash-form, and every other key is an unsupported binding and an
+error. Binding keywords compare case-sensitively: `Objects` and `Overrides` in an entry body
+are property paths, the spelling of two Riot fields.
 A target is one nonempty string. Exactly 16 ASCII hexadecimal characters identify a chunk
 hash without a prefix; every other spelling identifies a literal path. Hash-shaped spellings
 are reserved and cannot identify literal paths. Objects and non-string values are errors.
@@ -298,12 +303,29 @@ same construction and string-access traits as `Target`, implements `Display`, an
 `Selector::Target { target: Target, edits: Vec<Edit> }` edits one chunk.
 `Selector::Entries(IndexMap<EntryName, EntryEdit>)` edits each named entry in every declaring
 chunk, in mapping order.
-`Edit` is one batch. It is non-exhaustive, implements `Default`, and its fields are its phases
-in apply order: `overrides: Vec<OverridePath>`, then
-`entries: IndexMap<EntryName, Vec<PropertyEdit>>`, then `links: LinkEdit`. `EntryEdit` is the
+`Edit` is one batch ([ADR-0029](../adr/0029-object-bindings.md)). It is non-exhaustive,
+implements `Default`, and its fields are `overrides: Vec<OverridePath>`,
+`objects: IndexMap<EntryName, ObjectEdit>`, `entries: IndexMap<EntryName, Vec<PropertyEdit>>`,
+and `links: LinkEdit`. `EntryEdit` is the
 bindings of one entry, non-exhaustive with `Default`, with the fields
 `properties: Vec<PropertyEdit>` and `links: LinkEdit`, the links as an extension of the
-game-data reference; `overrides` in an entry body is an error. `LinkEdit` contains
+game-data reference; `overrides` in an entry body is an error, and `objects` in an entry body
+of an `entries` module is `ObjectsInEntry`. In a `target` body an entry body reads both keys as
+property paths.
+
+`objects` is a mapping of entry names to object bodies, in mapping order, and belongs to a
+`target` body. An object body is `clone`, an entry name, or `class`, a class name, beside an
+optional `set` mapping; or `remove: true` alone. Any other shape is `ObjectBodyShape`, naming
+the object as its entry. `set` is an entry body: the same signed keys, blocks, pins, and
+references. `ObjectEdit` is non-exhaustive:
+`ObjectEdit::Clone { source: EntryName, properties: Vec<PropertyEdit> }`,
+`ObjectEdit::Construct { class: ClassName, properties: Vec<PropertyEdit> }`, and
+`ObjectEdit::Remove`; `ObjectEdit::properties()` is the `set`, empty for a removal. A
+`ClassName` is one nonempty string, `EmptyClassName` otherwise, with the construction and
+string-access traits of `EntryName`; `class_hash()` is the spelled hash for `0x` and 8
+hexadecimal digits, else the FNV-1a of the ASCII-lowercased name. An object name is an
+`EntryName`. A new object's name is the author's to choose; the game-data reference
+recommends `Mods/<mod id>/` as its prefix, and loading does not check it. `LinkEdit` contains
 `add: Vec<LinkPath>` and `remove: Vec<LinkPath>`. `Origin` contains `manifest`, optional
 `source`, and `module_index`.
 
@@ -414,6 +436,10 @@ Rust names and serialized names have the following mapping:
 | Rust field | Serialized field |
 | --- | --- |
 | `Edit::overrides` | `overrides` |
+| `Edit::objects` | `objects`, a mapping of entry name to object body |
+| `ObjectEdit::Clone` | `clone` and `set` |
+| `ObjectEdit::Construct` | `class` and `set` |
+| `ObjectEdit::Remove` | `remove: true` |
 | `Edit::entries` | one key per entry name at the body root, its value the entry body |
 | `EntryEdit::properties` | the signed property keys of an entry body |
 | `PropertyEdit` | `path: value`, `+path: value`, or `-path: value` |
@@ -457,7 +483,11 @@ under the `IndexingObjects` build stage. An object index that fails to load and 
 `IndexUnavailable` for every `entries` module and every module holding a reference, and a
 warning in the log; the build continues. An object index build the cancellation poll stops
 ends the build. The overlay also loads or builds the object index for a build in which an
-enabled layer declares a reference. It answers `read_entry` with the entry's object in the
+enabled layer declares a reference, and for a build in which a `target` module creates an
+object. A created object whose name the object index declares in a chunk other than the
+target produces `ObjectShadowsGame`, naming those chunks; the object is created
+([ADR-0031](../adr/0031-game-shadowing-report.md)). With the index unavailable, such a module
+produces `IndexUnavailable` and its objects are created unchecked. It answers `read_entry` with the entry's object in the
 first of its declaring chunks in `ltk_game_index` archive order, read from the game before any
 mod content applies; a build reads and decodes each such chunk once. An entry no chunk
 declares is `Ok(None)`; a chunk the index does declare and that then fails to read, mount or
@@ -473,17 +503,38 @@ The target must be PROP version 2 or 3. Invalid declarations refuse the layer's 
 ordinary content remains available. Missing or invalid targets produce diagnostics and retain
 their original bytes. `ltk_meta` decodes the complete base.
 
-Each edit applies its override files in listed order, then its entry edits, then its link
-edits. An override file
+Each edit applies its override files in listed order, then its object creations, then its
+entry edits, then its object removals, then its link edits. An override file
 the provider cannot supply produces `OverrideUnreadable`; one that does not read as a `PTCH`
 produces `OverrideInvalid`; either file is skipped. `ltk_meta` lays an override over the
 target in the client's order: deletions, added objects, then records in file order. A record
 that does not apply produces `OverrideRecordSkipped` carrying a `SkippedRecord`: the record
 index, object hash, property path, and a `RecordSkipReason` code; the remaining records
 continue. Records apply as authored, without coercion. A target with an applied
-override file or an applied property edit is written from the decoded tree at PROP version 3
-([ADR-0012](../adr/0012-eager-tree-override-application.md)). A target with neither keeps its
-object bytes and PROP version; application replaces only the dependency header.
+override file, an applied object edit, or an applied property edit is written from the decoded
+tree at PROP version 3 ([ADR-0012](../adr/0012-eager-tree-override-application.md)). A target
+with none keeps its object bytes and PROP version; application replaces only the dependency
+header.
+
+**Object edits.** The creation phase reads the target as the override files leave it. A
+creation whose name the target holds, or that the phase creates under another spelling of one
+object hash, is `ObjectExists`. A clone whose source the target does not hold at the start of
+the phase is `SourceMissing`; a clone of an object the same phase creates is `SourceMissing`,
+and a later edit clones it. A construction whose class the schema does not know
+(`Schema::has_class`) is `UnknownClass`. A clone copies the source's class and properties
+under the new object hash, and rewrites its own path
+([ADR-0030](../adr/0030-own-path-rewrite.md)): a top-level `hash` property holding the source's
+object hash holds the new object hash, and a top-level `string` property equal to the source's
+path, ASCII case-insensitively, holds the new name. A string is left as it is where either
+name is hash-form. A construction holds its class and no property. The phase inserts every
+created object in mapping order, then runs each object's `set` as the entry edits of its name;
+a `set` edit that does not apply is `PropertyEditSkipped` under the object's name, and the
+object stays created. The entry edits phase edits a created object as any other entry. The
+removal phase removes each `remove` object after the entry edits; an object the target does
+not hold is `RemovalUnmatched`. Each skip is one `ObjectSkipped` diagnostic carrying a
+`SkippedObject` whose `name` is the object as spelled and whose `reason` is an
+`ObjectSkipReason`; its `path` is the object name. `Applied::objects` counts created and
+removed objects beside the objects an override file changes.
 
 **Entry edits.** Each entry of `Edit::entries` names an object of the target by its hash; an
 absent object skips every edit of the entry with `MissingObject`. The entry's property edits
@@ -600,20 +651,25 @@ about, absent from a module-level diagnostic; it serializes as the `WadHash` num
 absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
 `DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
-`PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, and `Unknown`. `EntryFanOut`
-and `SchemaFallback` are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
-`SkippedRecord` in its optional `record` field, and one of kind `PropertyEditSkipped` carries
-the `SkippedProperty` in its optional `property` field; each is absent otherwise and decodes
-absent as `None`. `NoEffect` names a target whose every edit was skipped; the chunk is left
+`PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, `ObjectSkipped`,
+`ObjectShadowsGame`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
+are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
+`SkippedRecord` in its optional `record` field, one of kind `PropertyEditSkipped` carries
+the `SkippedProperty` in its optional `property` field, and one of kind `ObjectSkipped`
+carries the `SkippedObject` in its optional `object` field; each is absent otherwise and
+decodes absent as `None`. `NoEffect` names a target whose every edit was skipped; the chunk is left
 as the game ships it. `ApplyDiagnostic` contains `kind`, `edit_index`, `path`, optional
-`record`, optional `property`, and optional `detail`; `path` is the link path, the override
-path, or the signed property key the diagnostic is about, a block's inner key joined to its
+`record`, optional `property`, optional `object`, and optional `detail`; `path` is the link
+path, the override path, the object name, or the signed property key the diagnostic is about, a block's inner key joined to its
 outer path, and `detail` is what a lower layer said where no code of this crate carries it.
 `ApplyDiagnosticKind::message()` writes the statement of a category about a path, and
 `ApplyDiagnostic` implements `Display` as that statement with its `detail`. Its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `OverrideUnreadable`, `OverrideInvalid`,
 `OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`,
-`ReferenceUnreadable`, and `Unknown` ([ADR-0018](../adr/0018-property-edit-diagnostics.md)).
+`ReferenceUnreadable`, `ObjectSkipped`, and `Unknown`
+([ADR-0018](../adr/0018-property-edit-diagnostics.md)). The non-exhaustive `ObjectSkipReason`
+distinguishes `ObjectExists`, `SourceMissing`, `UnknownClass`, `RemovalUnmatched`, and
+`Unknown`.
 `ReferenceUnreadable` carries the reference spelling as its `path` and the reader's statement
 as its `detail`, one per distinct entry that failed to read. `SkippedProperty` contains
 `entry`, an `EntryName`, and `reason`; the non-exhaustive `PropertySkipReason` distinguishes
@@ -655,7 +711,11 @@ construction, serialized field compatibility, target selection, enabled layers, 
 diagnostics, cached builds with missing or unknown diagnostic kinds, a called-off build,
 override path resolution, override application with skipped records and unreadable files,
 override files round-tripping through both archives, entry bodies in every format with tags
-and one-key pins loading to one model, hash-form names in a dotted path, a block, a
+and one-key pins loading to one model, object bodies in every format loading to one model and
+refusing every other shape, `objects` refused in an `entries` module, clones, constructions,
+removals, own-path rewrites, every `ObjectSkipReason`, a clone of an object created by an
+earlier edit, entry edits between creation and removal, an overlay build reporting a created
+object the game declares in another chunk, hash-form names in a dotted path, a block, a
 subscripted path, a map-keyed path, a struct pin's `set`, and a reference, a field with no
 known name edited by its hash, struct tags loading as the struct pin they spell, struct pins written as struct tags and loaded back, block and dotted forms loading to one edit, structural
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
@@ -685,7 +745,7 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D7 | A module has one selector: `target` or `entries` | Entry names inside `target` | An entry name and a chunk path share a spelling | [section 4](#s4) |
 | D8 | The overlay resolves selectors through `ltk_game_index` | Index access in `ltk_game_data` | The library applies edits without an installation | [section 3](#s3), [ADR-0009](../adr/0009-game-index-crate.md) |
 | D9 | Every declaring chunk of an entry is edited | First declaring chunk only | The client loads copies by load order | [section 6](#s6) |
-| D10 | The object index is built only for a build with an `entries` module or a reference | Every build | A full bin read is paid only when used | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md) |
+| D10 | The object index is built only for a build with an `entries` module, a reference, or a created object | Every build | A full bin read is paid only when used | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md), [ADR-0031](../adr/0031-game-shadowing-report.md) |
 | D11 | An edit is a phased struct; an entry body takes `links` | Flat operations; entry bodies without `links` | The standard's unit is the batch; an entry names a chunk the author cannot spell | ADR-0010 |
 | D12 | Declaration documents keep mapping order | Sorted JSON objects | `entries` apply in authored order | ADR-0011 |
 | D13 | An override file is referenced by its layer-relative path in every container | Per-container references | One spelling from manifest to build | ADR-0013 |
@@ -709,4 +769,8 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D32 | An entry the caller cannot read is a diagnostic, not a missing entry | One reason for both | A read that failed is the installation's, and no property key can name it | [section 3](#s3), [section 6](#s6) |
 | D33 | A YAML struct tag names the class in parentheses and tags the pin's `set` | `class` and `set` under the tag; a class in brackets | A tag carries no `[` or `]`; the document form keeps one shape | [ADR-0027](../adr/0027-struct-tags.md) |
 | D34 | A hash-form name in a declaration path names the field with that hash; a path resolves and patches as a `ValuePath` | A path resolved as the client resolves it; a walk in this crate | A field with no known name is reachable, and `ltk_meta` keeps the client's reading of a `PropertyPath` | [section 6](#s6), [ADR-0028](../adr/0028-hash-form-field-names.md) |
+| D35 | An edit creates objects after its override files and removes them after its entry edits; a clone reads the target at the start of the creation phase | Objects as override files only; creation and removal in one phase | The standard's phase order; an entry edit reaches a created object and an object removed in the same batch | [section 6](#s6), [ADR-0029](../adr/0029-object-bindings.md) |
+| D36 | A clone rewrites a top-level `hash` or `string` property naming its source to name the clone | A per-class field list; no rewrite | The value names the object whatever the field is called; no schema is needed | [section 6](#s6), [ADR-0030](../adr/0030-own-path-rewrite.md) |
+| D37 | A created name the game declares in another chunk is `ObjectShadowsGame`, and the object is created | A packing error with an opt-in; a skip | Packing has no game; the build has the index | [section 6](#s6), [ADR-0031](../adr/0031-game-shadowing-report.md) |
+| D38 | `Mods/<mod id>/` is the recommended prefix of a created name, unchecked | A load-time rule | Loading does not know the mod id | [section 4](#s4) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |

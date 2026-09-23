@@ -1,8 +1,10 @@
-//! Application of edits over a `PROP`: override files, entry edits, then link edits.
+//! Application of edits over a `PROP`: override files, object creations, entry edits, object
+//! removals, then link edits.
 
 mod address;
 mod coerce;
 mod entries;
+mod objects;
 
 pub(crate) use coerce::{hash32_of, hash64_of};
 
@@ -35,6 +37,8 @@ pub enum ApplyDiagnosticKind {
     SchemaFallback,
     /// A referenced entry the caller could not read. Every key naming it is skipped.
     ReferenceUnreadable,
+    /// One object creation or removal that does not apply. The remaining objects apply.
+    ObjectSkipped,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -188,6 +192,35 @@ impl From<&PatchError> for PropertySkipReason {
     }
 }
 
+/// Why an object creation or removal does not apply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum ObjectSkipReason {
+    /// The target holds an object of the created name, or the batch creates it twice.
+    ObjectExists,
+    /// The clone source is absent from the target at the start of the creation phase.
+    SourceMissing,
+    /// A constructed class the schema does not know.
+    UnknownClass,
+    /// A removed object the target does not hold.
+    RemovalUnmatched,
+    /// A reason this crate does not name.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// One object creation or removal that does not apply. The diagnostic's `path` is its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedObject {
+    /// The object, as spelled.
+    pub name: EntryName,
+    /// Why the creation or removal does not apply.
+    pub reason: ObjectSkipReason,
+}
+
 /// One property edit that does not apply. The diagnostic's `path` is its signed key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -219,7 +252,8 @@ pub struct ApplyDiagnostic {
     pub kind: ApplyDiagnosticKind,
     #[serde(rename = "edit")]
     pub edit_index: usize,
-    /// The link path, the override path, or the signed property key the diagnostic is about.
+    /// The link path, the override path, the object name, or the signed property key the
+    /// diagnostic is about.
     pub path: String,
     /// The record of an `OverrideRecordSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,6 +261,9 @@ pub struct ApplyDiagnostic {
     /// The property of a `PropertyEditSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property: Option<SkippedProperty>,
+    /// The object of an `ObjectSkipped` diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<SkippedObject>,
     /// What a lower layer said, when it said something this crate's codes do not carry. An
     /// unreadable override carries the reader's error. An invalid one carries the decoder's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,6 +285,7 @@ impl ApplyDiagnosticKind {
             Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
             Self::SchemaFallback => format!("Property is typed from the base: {path}"),
             Self::ReferenceUnreadable => format!("Referenced entry cannot be read: {path}"),
+            Self::ObjectSkipped => format!("Object edit is skipped: {path}"),
             Self::Unknown => format!("Application diagnostic: {path}"),
         }
     }
@@ -273,7 +311,8 @@ impl std::fmt::Display for ApplyDiagnostic {
 pub struct Applied {
     /// Override records that applied, over every override file of every edit.
     pub records: usize,
-    /// Objects an override file added to, replaced in, or deleted from the target.
+    /// Objects an override file added to, replaced in, or deleted from the target, and
+    /// objects an `objects` binding created or removed.
     pub objects: usize,
     /// Property keys whose patch landed. One key is one patch, whatever its sign.
     pub properties: usize,
@@ -365,6 +404,7 @@ fn resolve_references(
                 path: reference.to_string(),
                 record: None,
                 property: None,
+                object: None,
                 detail: Some(error.to_string()),
             }),
         }
@@ -374,16 +414,18 @@ fn resolve_references(
 
 /// Applies ordered edits to a PROP v2 or v3.
 ///
-/// Each edit runs its phases in field order and reads the result of the preceding edit.
+/// Each edit runs its phases, the override files, the object creations, the entry edits, the
+/// object removals, and the link edits, and reads the result of the preceding edit.
 /// `read_override` supplies the bytes of an override file by its path, once per listed path
 /// in apply order, in any byte container; a caller sharing one file across several targets
 /// hands over an `Arc<[u8]>`. `read_entry` supplies the installed game's copy of an entry a
 /// reference names, once per distinct entry referenced and before any edit applies. It answers
 /// `Ok(None)` for an entry the game lacks and `Err` for one it holds but could not read, which
 /// is reported as `ReferenceUnreadable`; a caller with no game passes `|_| Ok(None)`. `schema`
-/// types every property edit; a caller with no schema passes `&NoSchema`. A target with an
-/// applied override file or an applied property edit is written from the decoded tree at PROP
-/// version 3; a target with neither keeps its object bytes and header version.
+/// types every property edit and knows every constructed class; a caller with no schema
+/// passes `&NoSchema`. A target with an applied override file, an applied object edit, or an
+/// applied property edit is written from the decoded tree at PROP version 3; a target with
+/// none keeps its object bytes and header version.
 ///
 /// # Errors
 ///
@@ -427,6 +469,7 @@ pub fn apply<B: AsRef<[u8]>>(
                     path: path.as_str().to_owned(),
                     record,
                     property: None,
+                    object: None,
                     detail,
                 });
             };
@@ -474,16 +517,24 @@ pub fn apply<B: AsRef<[u8]>>(
                 );
             }
         }
-        let outcome = entries::run(&mut bin, coercer, &edit.entries);
-        applied.properties += outcome.properties;
-        diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
-            kind: report.kind,
-            edit_index: index,
-            path: report.path,
-            record: None,
-            property: report.property,
-            detail: report.detail,
-        }));
+        let created = objects::create(&mut bin, coercer, &edit.objects);
+        applied.objects += created.objects;
+        report_objects(&mut diagnostics, index, created.skipped);
+        for outcome in [created.sets, entries::run(&mut bin, coercer, &edit.entries)] {
+            applied.properties += outcome.properties;
+            diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
+                kind: report.kind,
+                edit_index: index,
+                path: report.path,
+                record: None,
+                property: report.property,
+                object: None,
+                detail: report.detail,
+            }));
+        }
+        let (skipped, removed) = objects::remove(&mut bin, &edit.objects);
+        applied.objects += removed;
+        report_objects(&mut diagnostics, index, skipped);
         for path in &edit.links.remove {
             let count = bin.dependencies.len();
             bin.dependencies
@@ -497,6 +548,7 @@ pub fn apply<B: AsRef<[u8]>>(
                     path: path.as_str().to_owned(),
                     record: None,
                     property: None,
+                    object: None,
                     detail: None,
                 });
             }
@@ -530,6 +582,23 @@ pub fn apply<B: AsRef<[u8]>>(
         applied,
         diagnostics,
     })
+}
+
+/// Reports each skipped object of edit `index` as an `ObjectSkipped` diagnostic.
+fn report_objects(
+    diagnostics: &mut Vec<ApplyDiagnostic>,
+    index: usize,
+    skipped: Vec<SkippedObject>,
+) {
+    diagnostics.extend(skipped.into_iter().map(|object| ApplyDiagnostic {
+        kind: ApplyDiagnosticKind::ObjectSkipped,
+        edit_index: index,
+        path: object.name.as_str().to_owned(),
+        record: None,
+        property: None,
+        object: Some(object),
+        detail: None,
+    }));
 }
 
 /// The error of a base or output `ltk_meta` refuses.

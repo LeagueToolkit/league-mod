@@ -354,7 +354,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         serde_json::json!({"version":1,"modules":[{"target":"shared","edits":[{"links":["Added"],"-links":["Removed"]}]}]})
     );
     let mut unsupported = wire;
-    unsupported["modules"][0]["edits"][0]["objects"] = serde_json::json!({});
+    unsupported["modules"][0]["edits"][0]["modes"] = serde_json::json!({});
     let document: DeclarationDocument = serde_json::from_value(unsupported.clone()).unwrap();
     assert_eq!(serde_json::to_value(&document).unwrap(), unsupported);
     assert!(document.parse().is_err());

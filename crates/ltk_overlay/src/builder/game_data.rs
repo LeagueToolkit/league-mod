@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, Edit, EntryEdit, EntryName, IndexMap, Module, Origin,
-    OverridePath, Selector, SkippedProperty, SkippedRecord,
+    ApplyDiagnosticKind, BinHash, Edit, EntryEdit, EntryName, IndexMap, Module, ObjectEdit, Origin,
+    OverridePath, Selector, SkippedObject, SkippedProperty, SkippedRecord,
 };
 use ltk_game_index::{ArchiveId, BuildOptions, GameIndex, ObjectBuildError, ObjectIndex};
 use ltk_meta::{BinObject, BinStream};
@@ -50,6 +50,11 @@ pub enum GameDataDiagnosticKind {
     SchemaFallback,
     /// A referenced entry the game declares and the build could not read. Its keys are skipped.
     ReferenceUnreadable,
+    /// One object creation or removal that does not apply. The remaining objects apply.
+    ObjectSkipped,
+    /// A created object whose name a game bin other than the target declares. The object is
+    /// created. Informational.
+    ObjectShadowsGame,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -78,6 +83,9 @@ pub struct GameDataDiagnostic {
     /// The property of a `PropertyEditSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property: Option<SkippedProperty>,
+    /// The object of an `ObjectSkipped` diagnostic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<SkippedObject>,
     pub message: String,
 }
 
@@ -91,6 +99,7 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::PropertyEditSkipped => Self::PropertyEditSkipped,
             ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
             ApplyDiagnosticKind::ReferenceUnreadable => Self::ReferenceUnreadable,
+            ApplyDiagnosticKind::ObjectSkipped => Self::ObjectSkipped,
             _ => Self::Unknown,
         }
     }
@@ -134,6 +143,7 @@ impl Pending {
             edit_index: None,
             record: None,
             property: None,
+            object: None,
             message: message.to_string(),
         }
     }
@@ -176,6 +186,55 @@ fn index_unavailable(
         None,
         format!("Object index is unavailable: {error}; {consequence}"),
     )
+}
+
+/// The names a `target` module's edits create, clones and constructions, in edit order.
+fn created_objects(module: &Module) -> impl Iterator<Item = &EntryName> {
+    let edits: &[Edit] = match &module.selector {
+        Selector::Target { edits, .. } => edits,
+        _ => &[],
+    };
+    edits.iter().flat_map(|edit| {
+        edit.objects
+            .iter()
+            .filter(|(_, object)| !matches!(object, ObjectEdit::Remove))
+            .map(|(name, _)| name)
+    })
+}
+
+/// The `ObjectShadowsGame` diagnostic of an object `name` created in `chunk`, or `None` when
+/// no other game bin declares it.
+///
+/// A game bin declaring the name loads its own object under the same hash. Which of the two
+/// the game reads is the game's load order, not the declaration's.
+fn shadowed(
+    pending: &Pending,
+    name: &EntryName,
+    chunk: WadHash,
+    index: &ObjectIndex,
+    game: &GameIndex,
+) -> Option<GameDataDiagnostic> {
+    let others: IndexMap<WadHash, ArchiveId> = index
+        .declarations(name.object_hash())
+        .iter()
+        .filter(|declaration| declaration.chunk != chunk)
+        .map(|declaration| (declaration.chunk, declaration.archive))
+        .collect();
+    if others.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = others
+        .iter()
+        .map(|(chunk, archive)| format!("{:016x} ({})", chunk.0, game.archive(*archive).name))
+        .collect();
+    Some(pending.diagnostic(
+        GameDataDiagnosticKind::ObjectShadowsGame,
+        Some(name),
+        format!(
+            "Game bins declare the created object: {}; the object is created",
+            named.join(", ")
+        ),
+    ))
 }
 
 /// The chunks one entry is edited in, and what that is worth reporting.
@@ -275,6 +334,7 @@ impl Application {
             edit_index,
             record: None,
             property: None,
+            object: None,
             message: message.to_string(),
         }
     }
@@ -288,6 +348,7 @@ impl Application {
         let mut lowered = self.diagnostic(kind, Some(diagnostic.edit_index), message);
         lowered.record = diagnostic.record;
         lowered.property = diagnostic.property;
+        lowered.object = diagnostic.object;
         lowered
     }
 }
@@ -383,6 +444,7 @@ impl OverlayBuilder {
                         edit_index: None,
                         record: None,
                         property: None,
+                        object: None,
                         message: format!(
                             "Layer declarations refused: {error}; update the consumer for unsupported bindings"
                         ),
@@ -392,12 +454,14 @@ impl OverlayBuilder {
         }
 
         // A reference needs the index for the same reason an `entries` module does: it names
-        // an entry, and only the index says which chunk declares it.
+        // an entry, and only the index says which chunk declares it. A created object is
+        // checked against the entries the game declares.
         let object_index = pending
             .iter()
             .any(|pending| {
                 matches!(pending.module.selector, Selector::Entries(_))
                     || !pending.module.references().is_empty()
+                    || created_objects(&pending.module).next().is_some()
             })
             .then(|| self.load_object_index(game));
         if matches!(object_index, Some(Err(_))) {
@@ -419,6 +483,25 @@ impl OverlayBuilder {
                         ));
                     }
                     let hash = WadHash::from(target.chunk_hash());
+                    match &object_index {
+                        Some(Ok(index)) => {
+                            for name in created_objects(&pending.module) {
+                                if let Some(diagnostic) =
+                                    shadowed(&pending, name, hash, index, game)
+                                {
+                                    self.last_game_data_diagnostics.push(diagnostic);
+                                }
+                            }
+                        }
+                        Some(Err(error)) if created_objects(&pending.module).next().is_some() => {
+                            self.last_game_data_diagnostics.push(index_unavailable(
+                                &pending,
+                                error,
+                                "created objects are not checked against the game's entries",
+                            ));
+                        }
+                        _ => {}
+                    }
                     targets.entry(hash).or_default().push(Application {
                         mod_id: pending.mod_id,
                         layer: pending.layer,

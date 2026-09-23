@@ -270,6 +270,9 @@ pub enum ErrorKind {
     /// An entry name that is the empty string.
     #[error("expected a nonempty entry name")]
     EmptyEntryName,
+    /// A class name that is the empty string.
+    #[error("expected a nonempty class name")]
+    EmptyClassName,
     /// A link path that is empty or longer than the header's limit.
     #[error("link paths require 1 to 65535 UTF-8 bytes")]
     LinkPathLength,
@@ -321,6 +324,13 @@ pub enum ErrorKind {
     /// An entry body with an `overrides` key.
     #[error("overrides is not permitted inside entries")]
     OverridesInEntry,
+    /// An entry body with an `objects` key.
+    #[error("objects is not permitted inside entries")]
+    ObjectsInEntry,
+    /// An object body that is not `clone` or `class` with an optional `set` mapping, or
+    /// `remove: true` alone.
+    #[error("an object takes `clone` or `class` with `set`, or `remove: true`")]
+    ObjectBodyShape,
     /// A module with `source` and a local binding.
     #[error("source and local bindings are mutually exclusive")]
     SourceWithBindings,

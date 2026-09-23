@@ -1237,3 +1237,50 @@ fn a_reference_ignores_another_mods_copy_of_the_entry() {
         );
     }
 }
+
+#[test]
+fn a_created_object_the_game_declares_elsewhere_is_created_and_reported() {
+    use ltk_overlay::game_data::GameDataDiagnosticKind;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let skin = ltk_game_data::BinHash::from("Characters/Teemo/Skins/Skin0");
+    let other = ltk_game_data::BinHash::from("Characters/Ahri/Skins/Skin0");
+    common::write_game_wad(
+        &game.join(WAD),
+        &[
+            ("data/one.bin", &bin_declaring(&[], &[(skin.0, 1)])),
+            ("data/two.bin", &bin_declaring(&[], &[(other.0, 1)])),
+        ],
+    );
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(
+            r#"{"version":1,"modules":[{"target":"data/two.bin","objects":{
+                "Characters/Teemo/Skins/Skin0":{"clone":"Characters/Ahri/Skins/Skin0"},
+                "Mods/Top/Fresh":{"clone":"Characters/Ahri/Skins/Skin0"}}}]}"#,
+        ),
+    );
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+
+    let reports = result.game_data_diagnostics;
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert_eq!(reports[0].kind, GameDataDiagnosticKind::ObjectShadowsGame);
+    assert_eq!(
+        reports[0].target.as_deref(),
+        Some("Characters/Teemo/Skins/Skin0")
+    );
+    let one = format!("{:016x}", common::hash("data/one.bin").0);
+    assert!(reports[0].message.contains(&one), "{}", reports[0].message);
+
+    let two = chunk(&overlay.join(WAD), "data/two.bin");
+    let written = ltk_meta::Bin::from_reader(&mut Cursor::new(two)).unwrap();
+    for object in [other, skin, ltk_game_data::BinHash::from("Mods/Top/Fresh")] {
+        assert!(written.objects.contains_key(&object), "{object:?}");
+    }
+}

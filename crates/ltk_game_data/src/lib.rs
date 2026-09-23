@@ -23,7 +23,10 @@ mod value;
 mod yaml;
 
 pub use apply::{Applied, ApplyDiagnostic, ApplyDiagnosticKind, ApplyResult, apply};
-pub use apply::{PropertySkipReason, RecordSkipReason, SkippedProperty, SkippedRecord};
+pub use apply::{
+    ObjectSkipReason, PropertySkipReason, RecordSkipReason, SkippedObject, SkippedProperty,
+    SkippedRecord,
+};
 pub use document::DeclarationDocument;
 pub use error::{Error, ErrorKind, Location, Span};
 pub use indexmap::IndexMap;
@@ -141,12 +144,14 @@ impl Module {
 }
 
 impl Edit {
-    /// Every reference the edit's property edits hold, in spelled order.
+    /// Every reference the edit's property edits hold, in spelled order: the `set` of each
+    /// object, then each entry.
     #[must_use]
     pub fn references(&self) -> Vec<Reference> {
-        self.entries
+        self.objects
             .values()
-            .flatten()
+            .flat_map(ObjectEdit::properties)
+            .chain(self.entries.values().flatten())
             .flat_map(|property| property.value.references())
             .collect()
     }
@@ -162,22 +167,115 @@ pub struct Origin {
     pub module_index: usize,
 }
 
-/// One edit of a chunk: every binding of one batch, applied phase by phase in field order.
+/// One edit of a chunk: every binding of one batch, applied phase by phase.
 ///
-/// Each edit of a target reads the result of the preceding one. The serialized form is the
-/// compact binding body: `overrides`, one key per entry name holding its property edits,
-/// `links` (`+links` accepted on input) and `-links`, each present only when nonempty. A
-/// serialized override path is layer-relative.
+/// The phases are the override files, the object creations, the entry edits, the object
+/// removals, and the dependency-list edits. Each edit of a target reads the result of the
+/// preceding one. The serialized form is the compact binding body: `overrides`, `objects`,
+/// one key per entry name holding its property edits, `links` (`+links` accepted on input)
+/// and `-links`, each present only when nonempty. A serialized override path is
+/// layer-relative.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(try_from = "document::Bindings")]
 #[non_exhaustive]
 pub struct Edit {
     /// Override files applied in listed order, the first phase.
     pub overrides: Vec<OverridePath>,
-    /// The property edits of each entry of the chunk, in mapping order, the second phase.
+    /// Objects created or removed in the chunk, in mapping order. Creations are the second
+    /// phase and removals the fourth.
+    pub objects: IndexMap<EntryName, ObjectEdit>,
+    /// The property edits of each entry of the chunk, in mapping order, the third phase.
     pub entries: IndexMap<EntryName, Vec<PropertyEdit>>,
     /// Dependency-list edits, the last phase.
     pub links: LinkEdit,
+}
+
+/// A new object of a chunk, or the removal of one.
+///
+/// The serialized form is an object body: `clone` or `class` beside an optional `set`, or
+/// `remove: true`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ObjectEdit {
+    /// A copy of the entry `source` holds at the start of the creation phase, with
+    /// `properties` applied.
+    Clone {
+        source: EntryName,
+        properties: Vec<PropertyEdit>,
+    },
+    /// An object of `class` holding no property but `properties`.
+    Construct {
+        class: ClassName,
+        properties: Vec<PropertyEdit>,
+    },
+    /// The removal of the object.
+    Remove,
+}
+
+impl ObjectEdit {
+    /// The property edits of a creation's `set`, empty for a removal.
+    #[must_use]
+    pub fn properties(&self) -> &[PropertyEdit] {
+        match self {
+            Self::Clone { properties, .. } | Self::Construct { properties, .. } => properties,
+            Self::Remove => &[],
+        }
+    }
+}
+
+/// A bin class: a name, or its hash as `0x` and 8 hexadecimal digits.
+///
+/// The class hash of a name is the FNV-1a of its ASCII-lowercased spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ClassName(String);
+
+impl TryFrom<String> for ClassName {
+    type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`ErrorKind::EmptyClassName`] for an empty spelling.
+    fn try_from(value: String) -> Result<Self, Error> {
+        if value.is_empty() {
+            return Err(Error::at_key(ErrorKind::EmptyClassName, "class"));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl TryFrom<&str> for ClassName {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Error> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+impl From<ClassName> for String {
+    fn from(name: ClassName) -> Self {
+        name.0
+    }
+}
+
+impl fmt::Display for ClassName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl ClassName {
+    /// The name's spelling.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The class hash: the spelled hash, or FNV-1a over the ASCII-lowercased name.
+    #[must_use]
+    pub fn class_hash(&self) -> BinHash {
+        apply::hash32_of(&self.0)
+    }
 }
 
 /// The bindings of one bin entry, applied in every chunk declaring it.
