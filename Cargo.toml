@@ -20,7 +20,7 @@ ltk_primitives = "0.3"
 glam = "0.27"
 ltk_wad = "0.5.4"
 ltk_file = "0.2.11"
-ltk_meta = "0.8.5"
+ltk_meta = "0.8.6"
 ltk_io_ext = "0.4.4"
 ltk_rst = "0.2.0"
 
@@ -54,8 +54,3 @@ walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 zip = "2.4"
 zstd = "0.13"
-
-[patch.crates-io]
-ltk_meta = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/253/head" }
-ltk_hash = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/253/head" }
-ltk_primitives = { git = "https://github.com/LeagueToolkit/league-toolkit", rev = "refs/pull/253/head" }

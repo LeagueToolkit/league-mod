@@ -1452,7 +1452,8 @@ dependencies = [
 [[package]]
 name = "ltk_hash"
 version = "0.4.0"
-source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F253%2Fhead#0c9906f72ce8e4191bb38e7504e79db0e3755c08"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ada44666d233f89786fdfd6784346a140ddfc7c31d31ac23dfa7b066f9fbe41b"
 dependencies = [
  "byteorder",
  "serde",
@@ -1484,20 +1485,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ltk_io_ext"
-version = "0.4.7"
-source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F253%2Fhead#0c9906f72ce8e4191bb38e7504e79db0e3755c08"
-dependencies = [
- "byteorder",
- "glam",
- "ltk_primitives",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "ltk_meta"
-version = "0.8.5"
-source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F253%2Fhead#0c9906f72ce8e4191bb38e7504e79db0e3755c08"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a25eb8ecd8ce79a18144e316af8be673a2be4ef91a46d7e8b9e78e9dda35480"
 dependencies = [
  "byteorder",
  "enum_dispatch",
@@ -1505,7 +1496,7 @@ dependencies = [
  "indexmap",
  "log",
  "ltk_hash",
- "ltk_io_ext 0.4.7 (git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F253%2Fhead)",
+ "ltk_io_ext",
  "ltk_primitives",
  "miette",
  "num_enum",
@@ -1560,7 +1551,7 @@ dependencies = [
  "itertools",
  "ltk_game_data",
  "ltk_hashtable",
- "ltk_io_ext 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ltk_io_ext",
  "proptest",
  "proptest-derive",
  "rmp-serde",
@@ -1607,7 +1598,8 @@ dependencies = [
 [[package]]
 name = "ltk_primitives"
 version = "0.3.6"
-source = "git+https://github.com/LeagueToolkit/league-toolkit?rev=refs%2Fpull%2F253%2Fhead#0c9906f72ce8e4191bb38e7504e79db0e3755c08"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db5421839880b81f09ece49f767b380c3b2912ee5ea905b865ba6a185c200412"
 dependencies = [
  "byteorder",
  "glam",
@@ -1638,7 +1630,7 @@ dependencies = [
  "itertools",
  "ltk_file",
  "ltk_hash",
- "ltk_io_ext 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ltk_io_ext",
  "memchr",
  "num_enum",
  "rsa",
