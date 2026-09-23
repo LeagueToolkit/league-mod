@@ -2,7 +2,9 @@
 //!
 //! A [`Value`] is what the author wrote: null, boolean, integer, float, string, list, or
 //! mapping, in spelled order. The build reads it by the property's type. A YAML local tag on a
-//! value loads as the one-key mapping of its name, the type pin's document form.
+//! value loads as the one-key mapping of its name, the type pin's document form. A struct tag,
+//! `!pointer`, `!embed`, or either with a class, `!pointer(C)`, loads as the struct pin with
+//! the value as its `set`.
 //!
 //! Two one-key mappings mean more than a mapping. A type name pins the type the value reads
 //! as, and `ref` names a value of the installed game to read instead of a literal.
@@ -289,11 +291,51 @@ impl<'de> Deserialize<'de> for Value {
             return Ok(value);
         }
         let name = tag.trim_start_matches('!');
+        if let Some((name, class)) = struct_tag(name) {
+            return Ok(Self::struct_pin(name, class, value));
+        }
         if kind_named(name).is_none() && name != REFERENCE_KEY {
             return Err(de::Error::custom(format!("unknown type pin `{tag}`")));
         }
         Ok(Self::Mapping(IndexMap::from([(name.to_owned(), value)])))
     }
+}
+
+impl Value {
+    /// The struct pin a struct tag spells, with the tagged value as its `set`.
+    ///
+    /// A null value is the pin's `set` left out. Under a bare tag it is the null value
+    /// itself: `!pointer null` is the null pointer.
+    fn struct_pin(name: &str, class: Option<&str>, set: Self) -> Self {
+        let mut fields = IndexMap::new();
+        if let Some(class) = class {
+            fields.insert("class".to_owned(), Self::String(class.to_owned()));
+        }
+        if set != Self::Null {
+            fields.insert("set".to_owned(), set);
+        }
+        let pinned = if fields.is_empty() {
+            Self::Null
+        } else {
+            Self::Mapping(fields)
+        };
+        Self::Mapping(IndexMap::from([(name.to_owned(), pinned)]))
+    }
+}
+
+/// Splits a struct tag, `pointer`, `embed`, `pointer(C)`, or `embed(C)`, into the struct
+/// pin name and the class it names.
+///
+/// A class is nonempty. Every other tag name is `None`.
+fn struct_tag(name: &str) -> Option<(&str, Option<&str>)> {
+    let (pin, class) = match name.split_once('(') {
+        None => (name, None),
+        Some((pin, rest)) => {
+            let class = rest.strip_suffix(')').filter(|class| !class.is_empty())?;
+            (pin, Some(class))
+        }
+    };
+    matches!(pin, "pointer" | "embed").then_some((pin, class))
 }
 
 /// A value read without its tag.
@@ -406,6 +448,54 @@ mod tests {
         ] {
             let value: Value = serde_json::from_str(text).unwrap();
             assert_eq!(value.check_pins(), Err(ErrorKind::StructPinShape), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_struct_tag_loads_its_value_as_the_set() {
+        let cases = [
+            (
+                "!pointer(0x50db156b)\n  a: 1\n",
+                r#"{"pointer": {"class": "0x50db156b", "set": {"a": 1}}}"#,
+            ),
+            (
+                "!embed(PostEffectOptions) {a: !f32 1}",
+                r#"{"embed": {"class": "PostEffectOptions", "set": {"a": {"f32": 1}}}}"#,
+            ),
+            ("!pointer(X)", r#"{"pointer": {"class": "X"}}"#),
+            (
+                "!pointer(X) {}",
+                r#"{"pointer": {"class": "X", "set": {}}}"#,
+            ),
+            ("!embed {a: 1}", r#"{"embed": {"set": {"a": 1}}}"#),
+            ("!pointer null", r#"{"pointer": null}"#),
+            ("!pointer {}", r#"{"pointer": {"set": {}}}"#),
+        ];
+        for (yaml, json) in cases {
+            let loaded: Value = serde_saphyr::from_str(yaml).unwrap();
+            let expected: Value = serde_json::from_str(json).unwrap();
+            assert_eq!(loaded, expected, "{yaml}");
+            loaded.check_pins().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_class_tag_needs_a_struct_pin_and_a_class() {
+        for yaml in [
+            "!f32(X) 1",
+            "!pointer() {}",
+            "!pointer(X {}",
+            "!widget(X) {}",
+        ] {
+            let error = serde_saphyr::from_str::<Value>(yaml).unwrap_err();
+            assert!(
+                error.to_string().contains("unknown type pin"),
+                "{yaml}: {error}"
+            );
+        }
+        for yaml in ["!embed(X) 5", "!pointer 5", "!embed null"] {
+            let value: Value = serde_saphyr::from_str(yaml).unwrap();
+            assert_eq!(value.check_pins(), Err(ErrorKind::StructPinShape), "{yaml}");
         }
     }
 

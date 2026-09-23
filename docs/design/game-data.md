@@ -26,6 +26,7 @@ to a value of the installed game.
 - **Type name:** One of `bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `vec2`, `vec3`, `vec4`, `mtx44`, `rgba`, `string`, `hash`, `file`, `link`, `flag`, `option`, `pointer`, `embed`.
 - **Type pin:** A one-key mapping whose key is a type name. In YAML a local tag `!name` on a value is the same pin. A pin fixes the type a value must have.
 - **Struct pin:** A `pointer` or `embed` pin. Its value is null, or a mapping of `class` and `set`.
+- **Struct tag:** The YAML spelling of a struct pin: `!pointer` or `!embed`, with an optional class in parentheses, `!embed(C)`, on the mapping of the pin's `set`.
 - **Schema:** The class schema of the installed patch: the shape of each field of each class, reached through the `Schema` trait.
 - **Shape:** A property type: a kind, and for a container or an option its item kind, for a map its key kind and item kind.
 - **Coercion:** The reading of a value as the shape of its property.
@@ -172,8 +173,11 @@ field with no name is `NamelessField`, a map key with no spelling is `Unrenderab
 value of kind `none` is `UnrenderableValue`, each with the rendered path as its key
 ([ADR-0020](../adr/0020-value-rendering.md)). A name that does not hash back to the value it
 names is ignored. `Value::to_yaml` writes one node starting at column 0 with no trailing
-newline: block style, a list whose items are scalars in flow style, and a string YAML reads
-as another type quoted. An integer outside the `i64` and `u64` ranges is `Serialize`.
+newline: block style, a list whose items are scalars in flow style, a string YAML reads
+as another type quoted, and a struct pin as its struct tag over its `set`. A struct pin with a
+class and no fields is written `!pointer(C) {}`, the null pointer `!pointer null`, and a class
+spelled with a character other than an ASCII letter, a digit, `_`, `-`, `.`, `:`, or `/` in
+the one-key mapping form. An integer outside the `i64` and `u64` ranges is `Serialize`.
 `Reference::parse(text)` splits `text` at its first `:`: the part before is an `EntryName`, the
 part after a `PropertyPath`. `TryFrom<&str>` and `FromStr` are the same parse, so a caller
 writes either. `Reference` implements `Display` as the same spelling, and `Hash`, so a
@@ -334,8 +338,14 @@ refuses a duplicate key in every format; an integer past the ranges named is wha
 parser makes of it, a float. `Value::Integer` holds an `i128`; serializing one outside the
 union of the `i64` and `u64` ranges is an error.
 A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
-loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`; a tag whose name is neither a
-type name nor `ref` is an error. `Value::pin()` is the
+loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`. A struct tag's value is the
+pin's `set` ([ADR-0027](../adr/0027-struct-tags.md)): `!pointer(C) {f: 1}` loads as
+`{pointer: {class: C, set: {f: 1}}}`, and `!embed {f: 1}` as `{embed: {set: {f: 1}}}`. A null
+value loads with no `set`: `!pointer(C)` alone is `{pointer: {class: C}}`, and `!pointer null`
+is `{pointer: null}`, the null pointer. The class is the nonempty text between the first `(`
+and a closing `)` that ends the tag. A tag carries no `[`, `]`, `{`, `}`, or `,`. A mapping
+under a struct tag is fields of the class; a `class` or `set` key in it names a field. A tag whose name is none of a type name,
+`ref`, or a struct tag is an error. `Value::pin()` is the
 type name of a one-key mapping whose key is a type name, or `None`; `Value::reference()` is the
 text of a one-key mapping keyed `ref`, or `None`; `Value::is_struct_pin()`
 is whether that name is `pointer` or `embed`; `Value::check_pins()` is the struct-pin and
@@ -403,7 +413,7 @@ Rust names and serialized names have the following mapping:
 | `Edit::entries` | one key per entry name at the body root, its value the entry body |
 | `EntryEdit::properties` | the signed property keys of an entry body |
 | `PropertyEdit` | `path: value`, `+path: value`, or `-path: value` |
-| `Value` | the JSON literal; a YAML tag `!name value` is written `{name: value}` |
+| `Value` | the JSON literal; a YAML tag `!name value` is written `{name: value}`, a struct tag `!name(C) value` is written `{name: {class: C, set: value}}` |
 | `LinkEdit::add` | `links` (`+links` accepted on input) |
 | `LinkEdit::remove` | `-links` |
 | `Selector::Target` | `target` and `edits`, one compact body per edit |
@@ -637,7 +647,7 @@ construction, serialized field compatibility, target selection, enabled layers, 
 diagnostics, cached builds with missing or unknown diagnostic kinds, a called-off build,
 override path resolution, override application with skipped records and unreadable files,
 override files round-tripping through both archives, entry bodies in every format with tags
-and one-key pins loading to one model, block and dotted forms loading to one edit, structural
+and one-key pins loading to one model, struct tags loading as the struct pin they spell, struct pins written as struct tags and loaded back, block and dotted forms loading to one edit, structural
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
 hand-written schema and against the base alone, additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
@@ -686,4 +696,5 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D29 | A reference splits at its first `:` | A split at a `.` | LTK Manager's Copy path writes `<entry>:<path>`; no known entry name holds a `:` | [section 4](#s4) |
 | D31 | A type pin over a reference is `PinMismatch` | A pin that resolves the reference and re-types it | A pin fixes the kind a literal reads as; a reference carries the game's own kinds | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md) |
 | D32 | An entry the caller cannot read is a diagnostic, not a missing entry | One reason for both | A read that failed is the installation's, and no property key can name it | [section 3](#s3), [section 6](#s6) |
+| D33 | A YAML struct tag names the class in parentheses and tags the pin's `set` | `class` and `set` under the tag; a class in brackets | A tag carries no `[` or `]`; the document form keeps one shape | [ADR-0027](../adr/0027-struct-tags.md) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |
