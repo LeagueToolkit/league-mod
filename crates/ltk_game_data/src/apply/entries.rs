@@ -14,7 +14,9 @@ use ltk_meta::{
 
 use crate::{BinHash, EntryName, PropertyEdit, Schema, Shape, Sign, Value};
 
-use super::{ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, coerce::Coercer};
+use super::{
+    ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, address, coerce::Coercer,
+};
 
 /// One diagnostic of the phase, before its edit index is known.
 #[derive(Debug)]
@@ -67,8 +69,8 @@ pub(super) fn run(
 fn identity(path: &PropertyPath) -> String {
     path.segments()
         .map(|segment| match &segment.subscript {
-            Some(subscript) => format!("{:08x}{subscript}", segment.name_hash().0),
-            None => format!("{:08x}", segment.name_hash().0),
+            Some(subscript) => format!("{:08x}{subscript}", address::field(&segment).0),
+            None => format!("{:08x}", address::field(&segment).0),
         })
         .collect::<Vec<_>>()
         .join(".")
@@ -210,7 +212,7 @@ impl Phase<'_> {
             && edit.value.pin().is_none()
             && edit.value.reference().is_none()
         {
-            let base = self.bin.objects[&hash].resolve(&path).ok();
+            let base = address::resolve(&self.bin.objects[&hash], &path).ok();
             match base {
                 Some(V::Struct(pointer)) if *pointer.class_hash == 0 => {
                     self.skip(name, key(), Reason::NullPointer);
@@ -258,19 +260,19 @@ impl Phase<'_> {
                 .collect::<Vec<_>>()
                 .join(".");
             let parent = PropertyPath::new(parent).expect("a prefix of a path is a path");
-            match object.resolve(&parent) {
+            match address::resolve(object, &parent) {
                 Ok(V::Struct(pointer)) if *pointer.class_hash == 0 => {
                     return Err(Reason::NullPointer);
                 }
                 Ok(V::Struct(pointer)) => (pointer.class_hash, &pointer.properties),
                 Ok(V::Embedded(values::Embedded(embed))) => (embed.class_hash, &embed.properties),
                 Ok(_) => return Err(Reason::CannotDescend),
-                Err(error) => return Err(error.kind().into()),
+                Err(kind) => return Err(kind.into()),
             }
         };
-        let field = last.name_hash();
+        let field = address::field(last);
         if last.subscript.is_some() {
-            let element = object.resolve(path).map_err(|error| error.kind())?;
+            let element = address::resolve(object, path)?;
             return Ok(Site {
                 shape: Shape::of(element),
                 base: Some(element.clone()),
@@ -341,8 +343,10 @@ impl Phase<'_> {
             current = Some(contained.into_value());
         }
         let value = current.expect("a group has a set, a removal, or an addition");
+        let at = address::value_path(&self.bin.objects[&hash], &group.path)
+            .map_err(|kind| (group.first_sign(), kind.into()))?;
         self.bin
-            .patch(hash, &group.path, value)
+            .patch_at(hash, &at, value)
             .map_err(|error| (group.first_sign(), Reason::from(&error)))?;
         Ok(())
     }

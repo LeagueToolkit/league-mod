@@ -21,6 +21,9 @@ fn h(name: &str) -> BinHash {
     BinHash::from(name)
 }
 
+/// The hash of a field of class `P` no plaintext name is known for.
+const NAMELESS: BinHash = BinHash(0x1234_5678);
+
 /// The names of a test: fields by class, and every other hash by its text.
 #[derive(Default)]
 struct Table {
@@ -85,6 +88,7 @@ impl Schema for StructSchema {
             (class, field) if class == h("E") && field == h("scale") => bare(K::F32),
             (class, field) if class == h("E") && field == h("inner") => bare(K::Struct),
             (class, field) if class == h("P") && field == h("count") => bare(K::U8),
+            (class, field) if class == h("P") && field == NAMELESS => bare(K::U8),
             _ => None,
         }
     }
@@ -492,21 +496,28 @@ fn a_class_a_tag_cannot_carry_stays_in_the_document_form() {
 }
 
 #[test]
-fn a_nameless_field_is_an_error_naming_its_path() {
+fn a_nameless_field_renders_as_its_hash_and_round_trips() {
     let mut value = embed("t", 0.5);
     value.0.properties.insert(
         h("inner"),
         values::Struct {
             class_hash: h("P"),
-            properties: [(BinHash(0x1234_5678), V::from(values::U8::new(1)))].into(),
+            properties: [(NAMELESS, V::from(values::U8::new(1)))].into(),
         }
         .into(),
     );
-    let items = list(K::Embedded, vec![embed("a", 1.0).into(), value.into()]);
+    let rendered = Value::render(&value.clone().into(), &Table::new()).unwrap();
+    assert!(
+        rendered.to_yaml().unwrap().contains("\"0x12345678\": 1"),
+        "{}",
+        rendered.to_yaml().unwrap()
+    );
 
-    let error = Value::render(&items, &Table::new()).unwrap_err();
-    assert_eq!(error.kind, ErrorKind::NamelessField);
-    assert_eq!(error.location.key.as_deref(), Some("[1].inner.0x12345678"));
+    let seed = embed("s", 1.0);
+    assert_eq!(
+        round_trip(&value.clone().into(), &seed.into(), &StructSchema),
+        value.into()
+    );
 }
 
 #[test]
@@ -557,8 +568,8 @@ fn a_name_that_does_not_hash_back_is_ignored() {
         properties: [(BinHash(9), V::from(values::U8::new(1)))].into(),
     };
     assert_eq!(
-        render(pointer.into()).unwrap_err().kind,
-        ErrorKind::NamelessField
+        render(pointer.into()).unwrap().to_yaml().unwrap(),
+        "!pointer(P)\n\"0x00000009\": 1"
     );
 }
 
