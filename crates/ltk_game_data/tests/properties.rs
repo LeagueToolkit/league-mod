@@ -175,7 +175,7 @@ fn root_keys_that_are_not_entry_names_are_unsupported_bindings() {
     for (name, text) in [
         (
             "game_data.yaml",
-            "version: 1\nmodules:\n  - target: a.bin\n    objects: {}\n",
+            "version: 1\nmodules:\n  - target: a.bin\n    clone: {}\n",
         ),
         (
             "game_data.json",
@@ -188,7 +188,7 @@ fn root_keys_that_are_not_entry_names_are_unsupported_bindings() {
     ] {
         let error = load_declarations(name, text, no_source).unwrap_err();
         assert!(
-            matches!(&error.kind, ErrorKind::UnsupportedBinding { key } if key == "objects" || key == "speed" || key == "modes"),
+            matches!(&error.kind, ErrorKind::UnsupportedBinding { key } if key == "clone" || key == "speed" || key == "modes"),
             "{name}: {error}"
         );
         assert_eq!(error.location.module, Some(0), "{name}: {error}");

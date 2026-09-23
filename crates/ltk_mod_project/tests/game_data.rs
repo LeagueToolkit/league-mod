@@ -570,7 +570,7 @@ fn invalid_entry_bodies_refuse_the_layer_with_typed_kinds() {
             },
         ),
         (
-            "version: 1\nmodules:\n  - target: a.bin\n    objects: {}\n",
+            "version: 1\nmodules:\n  - target: a.bin\n    modes: {}\n",
             |kind: &ltk_game_data::ErrorKind| {
                 matches!(kind, ltk_game_data::ErrorKind::UnsupportedBinding { .. })
             },

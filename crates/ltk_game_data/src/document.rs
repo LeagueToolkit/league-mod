@@ -12,8 +12,8 @@ use serde::{
 };
 
 use crate::{
-    Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, LinkEdit, LinkPath, Origin,
-    OverridePath, PropertyEdit, Selector, Target, Value,
+    ClassName, Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, LinkEdit, LinkPath,
+    ObjectEdit, Origin, OverridePath, PropertyEdit, Selector, Target, Value,
 };
 
 /// An archive's versioned declarations, including fields an older consumer cannot execute.
@@ -272,6 +272,9 @@ impl<'de, E: Deserialize<'de>> Fields<E> {
                     Some(BindingKeyword::Overrides) => {
                         fill(&mut fields.bindings.overrides, &mut map, &key)?;
                     }
+                    Some(BindingKeyword::Objects) => {
+                        fill(&mut fields.bindings.objects, &mut map, &key)?;
+                    }
                     // `fill` would name whichever spelling came second. The two spellings
                     // are one binding, so the message names the pair instead.
                     Some(BindingKeyword::AddLinks) => {
@@ -347,6 +350,10 @@ impl<'de, E: Deserialize<'de>> Visitor<'de> for FieldsVisitor<E> {
 pub(crate) struct Bindings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) overrides: Option<Vec<String>>,
+    /// The `objects` mapping as read. A [`Value`] refuses a duplicate object name, and keeps
+    /// a YAML tag inside a `set`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) objects: Option<Value>,
     #[serde(rename = "links", skip_serializing_if = "Option::is_none")]
     pub(crate) add_links: Option<Vec<LinkPath>>,
     #[serde(rename = "-links", skip_serializing_if = "Option::is_none")]
@@ -367,6 +374,7 @@ impl Bindings {
     /// Whether any binding key or entry key is written, empty or not.
     pub(crate) fn is_present(&self) -> bool {
         self.overrides.is_some()
+            || self.objects.is_some()
             || self.add_links.is_some()
             || self.remove_links.is_some()
             || !self.rest.is_empty()
@@ -382,6 +390,7 @@ impl Bindings {
     fn from_links(links: LinkEdit) -> Self {
         Self {
             overrides: None,
+            objects: None,
             add_links: (!links.add.is_empty()).then_some(links.add),
             remove_links: (!links.remove.is_empty()).then_some(links.remove),
             rest: IndexMap::new(),
@@ -425,13 +434,108 @@ impl Bindings {
             .iter()
             .map(|path| resolve(path))
             .collect::<Result<Vec<_>, _>>()?;
+        let objects = self
+            .objects
+            .take()
+            .map(objects_of)
+            .transpose()?
+            .unwrap_or_default();
         let entries = Self::entries_of(std::mem::take(&mut self.rest))?;
         Ok(Edit {
             overrides,
+            objects,
             entries,
             links: self.into_links(),
         })
     }
+}
+
+/// The object edits of an `objects` mapping, in mapping order.
+///
+/// # Errors
+///
+/// [`ErrorKind::ObjectBodyShape`] for an `objects` value that is not a mapping, and for an
+/// object body that is not `clone` or `class` with an optional `set` mapping, or
+/// `remove: true` alone. The error of a body names its object.
+fn objects_of(value: Value) -> Result<IndexMap<EntryName, ObjectEdit>, Error> {
+    let shape = || Error::at_key(ErrorKind::ObjectBodyShape, "objects");
+    let Value::Mapping(objects) = value else {
+        return Err(shape());
+    };
+    objects
+        .into_iter()
+        .map(|(key, body)| {
+            let name = EntryName::try_from(key.as_str())?;
+            let edit = object_of(body).map_err(|error| error.entry(name.as_str()))?;
+            Ok((name, edit))
+        })
+        .collect()
+}
+
+/// The object edit of one object body.
+fn object_of(body: Value) -> Result<ObjectEdit, Error> {
+    let shape = || Error::at_key(ErrorKind::ObjectBodyShape, "objects");
+    let Value::Mapping(mut body) = body else {
+        return Err(shape());
+    };
+    let text = |value: Value| match value {
+        Value::String(text) => Ok(text),
+        _ => Err(shape()),
+    };
+    let clone = body.shift_remove("clone").map(text).transpose()?;
+    let class = body.shift_remove("class").map(text).transpose()?;
+    let set = body.shift_remove("set");
+    let remove = body.shift_remove("remove");
+    if !body.is_empty() {
+        return Err(shape());
+    }
+    let properties = || match set.clone() {
+        None => Ok(Vec::new()),
+        Some(Value::Mapping(set)) => PropertyEdit::body(set),
+        Some(_) => Err(shape()),
+    };
+    match (clone, class, remove) {
+        (Some(source), None, None) => Ok(ObjectEdit::Clone {
+            source: EntryName::try_from(source)?,
+            properties: properties()?,
+        }),
+        (None, Some(class), None) => Ok(ObjectEdit::Construct {
+            class: ClassName::try_from(class)?,
+            properties: properties()?,
+        }),
+        (None, None, Some(Value::Bool(true))) if set.is_none() => Ok(ObjectEdit::Remove),
+        _ => Err(shape()),
+    }
+}
+
+/// The object body of one object edit.
+///
+/// # Errors
+///
+/// [`ErrorKind::DuplicatePropertyKey`] for a `set` holding one signed key twice.
+fn object_body(edit: ObjectEdit) -> Result<Value, Error> {
+    let mut body = IndexMap::new();
+    let properties = match edit {
+        ObjectEdit::Clone { source, properties } => {
+            body.insert("clone".to_owned(), Value::String(source.into()));
+            properties
+        }
+        ObjectEdit::Construct { class, properties } => {
+            body.insert("class".to_owned(), Value::String(class.into()));
+            properties
+        }
+        ObjectEdit::Remove => {
+            body.insert("remove".to_owned(), Value::Bool(true));
+            Vec::new()
+        }
+    };
+    if !properties.is_empty() {
+        body.insert(
+            "set".to_owned(),
+            Value::Mapping(PropertyEdit::try_into_body(properties)?),
+        );
+    }
+    Ok(Value::Mapping(body))
 }
 
 impl TryFrom<Bindings> for Edit {
@@ -451,6 +555,12 @@ impl TryFrom<Edit> for Bindings {
     /// [`ErrorKind::ReservedBindingKey`] for an entry name spelling a binding keyword, and
     /// [`ErrorKind::DuplicatePropertyKey`] for an entry holding one signed key twice.
     fn try_from(edit: Edit) -> Result<Self, Error> {
+        let mut objects = IndexMap::with_capacity(edit.objects.len());
+        for (name, object) in edit.objects {
+            reserved(name.as_str())?;
+            let body = object_body(object).map_err(|error| error.entry(name.as_str()))?;
+            objects.insert(String::from(name), body);
+        }
         let mut rest = IndexMap::with_capacity(edit.entries.len());
         for (name, edits) in edit.entries {
             reserved(name.as_str())?;
@@ -461,6 +571,7 @@ impl TryFrom<Edit> for Bindings {
         Ok(Self {
             overrides: (!edit.overrides.is_empty())
                 .then(|| edit.overrides.into_iter().map(String::from).collect()),
+            objects: (!objects.is_empty()).then_some(Value::Mapping(objects)),
             rest,
             ..Self::from_links(edit.links)
         })
@@ -478,6 +589,8 @@ impl TryFrom<Edit> for Bindings {
 pub(crate) enum BindingKeyword {
     /// The override files the edit applies, spelled `overrides`.
     Overrides,
+    /// The objects the edit creates or removes, spelled `objects`.
+    Objects,
     /// The dependencies the edit adds, spelled `links` or `+links`.
     AddLinks,
     /// The dependencies the edit removes, spelled `-links`.
@@ -487,12 +600,13 @@ pub(crate) enum BindingKeyword {
 impl BindingKeyword {
     /// The keyword `key` spells, or `None` for an entry name or a property path.
     ///
-    /// [`Bindings`] spells the same three in its `serde` renames, which take a literal and
+    /// [`Bindings`] spells the same keywords in its `serde` renames, which take a literal and
     /// so cannot read them from here. Those renames and this function are the only two
     /// places the spellings appear.
     pub(crate) fn of(key: &str) -> Option<Self> {
         match key {
             "overrides" => Some(Self::Overrides),
+            "objects" => Some(Self::Objects),
             "links" | "+links" => Some(Self::AddLinks),
             "-links" => Some(Self::RemoveLinks),
             _ => None,
@@ -519,6 +633,9 @@ impl TryFrom<Bindings> for EntryEdit {
     fn try_from(mut bindings: Bindings) -> Result<Self, Error> {
         if bindings.overrides.is_some() {
             return Err(Error::at_key(ErrorKind::OverridesInEntry, "overrides"));
+        }
+        if bindings.objects.is_some() {
+            return Err(Error::at_key(ErrorKind::ObjectsInEntry, "objects"));
         }
         let properties = PropertyEdit::body(std::mem::take(&mut bindings.rest))?;
         Ok(Self {
