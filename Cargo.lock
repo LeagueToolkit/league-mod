@@ -1486,9 +1486,9 @@ dependencies = [
 
 [[package]]
 name = "ltk_meta"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b1d0e53647a428b4fea0d0da52281d5e0df8031105824e88ac22c1508a9c272"
+checksum = "7a25eb8ecd8ce79a18144e316af8be673a2be4ef91a46d7e8b9e78e9dda35480"
 dependencies = [
  "byteorder",
  "enum_dispatch",

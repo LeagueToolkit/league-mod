@@ -362,9 +362,6 @@ pub enum ErrorKind {
     /// A `ref` key whose value is not an entry name, a `:`, and a property path.
     #[error("a ref takes `<entry>:<property path>`")]
     ReferenceShape,
-    /// A struct field no name is known for, which a `set` key cannot spell.
-    #[error("a struct field has no known name")]
-    NamelessField,
     /// A map key no string spells: a key of a kind the key rule refuses, a key the map
     /// holds twice, or the one key of a map that reads as a pin or a reference.
     #[error("a map key has no spelling")]

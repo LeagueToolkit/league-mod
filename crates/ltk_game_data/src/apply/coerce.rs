@@ -57,8 +57,7 @@ impl Coercer<'_> {
             .references
             .get(&reference.entry.object_hash())
             .ok_or(Reason::ReferenceMissingEntry)?;
-        let value = object
-            .resolve(&reference.path)
+        let value = super::address::resolve(object, &reference.path)
             .map_err(|_| Reason::ReferenceUnresolved)?;
         if Shape::of(value) == shape {
             Ok(value.clone())
@@ -294,7 +293,9 @@ impl Coercer<'_> {
                 let path = PropertyPath::new(key.as_str()).map_err(|_| Reason::InvalidPath)?;
                 let mut segments = path.segments();
                 let field = match (segments.next(), segments.next()) {
-                    (Some(segment), None) if segment.subscript.is_none() => segment.name_hash(),
+                    (Some(segment), None) if segment.subscript.is_none() => {
+                        super::address::field(&segment)
+                    }
                     _ => return Err(Reason::InvalidPath),
                 };
                 let shape = self

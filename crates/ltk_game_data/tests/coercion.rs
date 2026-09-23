@@ -30,6 +30,14 @@ fn h(name: &str) -> BinHash {
     BinHash::from(name)
 }
 
+/// The hash of a field of class `C` no plaintext name is known for.
+const NAMELESS: BinHash = BinHash(0x1234_5678);
+
+/// The hash form of the field `name`: `0x` and 8 hexadecimal digits.
+fn hashed(name: &str) -> String {
+    format!("0x{:08x}", *h(name))
+}
+
 /// A field on a class, as the hand-written schema keys it.
 fn field(class: &str, name: &str) -> (BinHash, BinHash) {
     (h(class), h(name))
@@ -103,6 +111,8 @@ impl TestSchema {
             (field("E", "scale"), Shape::bare(K::F32)),
             // A Riot field named `ref`. The dotted form is the only way to reach it.
             (field("E", "ref"), Shape::bare(K::U32)),
+            // A field no name is known for.
+            ((h("C"), NAMELESS), Shape::bare(K::U8)),
         ]);
         Self {
             fields,
@@ -1083,4 +1093,56 @@ fn an_entry_is_read_once_however_many_references_name_it() {
     .unwrap();
     assert_eq!(skips(&output), []);
     assert_eq!(reads, ["Characters/B"]);
+}
+
+#[test]
+fn a_hash_form_segment_names_the_field_with_that_hash() {
+    let body = [
+        format!("'{}': 2.5", hashed("speed")),
+        format!("mesh.{}: z", hashed("texture")),
+        format!("units[1]:\n  '{}': q", hashed("texture")),
+        format!("'{}{{\"x\"}}': Y", hashed("resources")),
+        format!("ptr: !pointer(E) {{'{}': v}}", hashed("texture")),
+    ]
+    .join("\n");
+    let output = run(&manifest(&body), &TestSchema::new());
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "speed"), values::F32::new(2.5).into());
+    assert_eq!(
+        value_at(&output, "mesh.texture"),
+        values::String::new("z".into()).into()
+    );
+    assert_eq!(
+        value_at(&output, "units[1].texture"),
+        values::String::new("q".into()).into()
+    );
+    assert_eq!(
+        value_at(&output, r#"resources{"x"}"#),
+        values::ObjectLink::new(h("Y")).into()
+    );
+    assert_eq!(
+        value_at(&output, "ptr.texture"),
+        values::String::new("v".into()).into()
+    );
+}
+
+#[test]
+fn a_field_with_no_known_name_is_edited_by_its_hash() {
+    let output = run(&manifest("'0x12345678': 9"), &TestSchema::new());
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    assert_eq!(
+        bin.objects[&h("Characters/A")].properties[&NAMELESS],
+        values::U8::new(9).into()
+    );
+}
+
+#[test]
+fn a_reference_path_reads_a_hash_form_segment() {
+    let output = run_referenced(&manifest(&format!(
+        "speed: !ref Characters/B:{}",
+        hashed("speed")
+    )));
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "speed"), values::F32::new(9.0).into());
 }

@@ -1,5 +1,6 @@
 //! Application of edits over a `PROP`: override files, entry edits, then link edits.
 
+mod address;
 mod coerce;
 mod entries;
 

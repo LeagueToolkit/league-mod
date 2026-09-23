@@ -20,7 +20,8 @@ to a value of the installed game.
 - **Entry edit:** The bindings of one entry: its property edits and, in an `entries` module, its links.
 - **Entry body:** The mapping under an entry name: signed property paths to values, and in an `entries` module the link keys.
 - **Property edit:** One signed property path with its value, on one entry.
-- **Property path:** Riot's property path: dot-separated segments, each a name with an optional `[index]` or `{key}` subscript. `ltk_meta::path::PropertyPath` is normative.
+- **Property path:** Riot's property path: dot-separated segments, each a name with an optional `[index]` or `{key}` subscript. `ltk_meta::path::PropertyPath` is normative for the grammar. A name spelled `0x` and 8 hexadecimal digits is a hash-form name.
+- **Hash-form name:** A property path segment name spelled `0x` and 8 hexadecimal digits. It names the field with that hash, and reaches a field no plaintext name is known for.
 - **Sign:** The operation of a property edit. A leading `+` on the key adds, a leading `-` removes, no sign sets.
 - **Value:** The literal a property edit carries: null, boolean, integer, float, string, list, or mapping in spelled order.
 - **Type name:** One of `bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `vec2`, `vec3`, `vec4`, `mtx44`, `rgba`, `string`, `hash`, `file`, `link`, `flag`, `option`, `pointer`, `embed`.
@@ -169,8 +170,9 @@ both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, 
 `FieldNames` is `ltk_meta::path::FieldNames`; `BinObject` is `ltk_meta::BinObject`; both are
 re-exported. `Names` is implemented for `()`, which names nothing, and for `&N` of any
 `N: Names + ?Sized`. `Value::render` follows the rendering table ([section 6](#s6)); a struct
-field with no name is `NamelessField`, a map key with no spelling is `UnrenderableKey`, and a
-value of kind `none` is `UnrenderableValue`, each with the rendered path as its key
+field with no name renders under its hash-form name, a map key with no spelling is
+`UnrenderableKey`, and a value of kind `none` is `UnrenderableValue`, each with the rendered path
+as its key
 ([ADR-0020](../adr/0020-value-rendering.md)). A name that does not hash back to the value it
 names is ignored. `Value::to_yaml` writes one node starting at column 0 with no trailing
 newline: block style, a list whose items are scalars in flow style, a string YAML reads
@@ -333,7 +335,9 @@ pub enum Value {
 `Sign::of(key)` splits a leading `+` or `-` from a key and returns the sign with the rest;
 `Sign::as_str()` is `""`, `"+"`, or `"-"`. `PropertyEdit::key()` is the signed key as spelled.
 A key's path is parsed by `PropertyPath::new` and a refused path is an error; the sign is not
-part of the path. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
+part of the path. A hash-form name in a path, or in a struct pin's `set` key, names the field
+with that hash ([ADR-0028](../adr/0028-hash-form-field-names.md)); a bare hash-form key
+requires quotes in YAML, as a hash-form entry name does. `Value` implements `PartialEq`, `Serialize`, and `Deserialize`; a mapping
 refuses a duplicate key in every format; an integer past the ranges named is what the format's
 parser makes of it, a float. `Value::Integer` holds an `i128`; serializing one outside the
 union of the `i64` and `u64` ranges is an error.
@@ -488,7 +492,11 @@ property is a `pointer` or `embed` in the base and whose value is a mapping that
 type pin descends, each key a signed path relative to the struct, joined to the outer path;
 a null pointer in the base is `NullPointer`. Leaf edits are grouped by path in first-occurrence
 order. Per path: the set value, coerced, replaces the base value; the removals then the
-additions apply to the result; one `Bin::patch` sets the property. A property the object
+additions apply to the result; one `Bin::patch_at` sets the property. A path resolves and
+patches as an `ltk_meta` `ValuePath`: each segment name is a field hash, the hash a hash-form
+name spells or the FNV-1a of the lowercased name, and each `{key}` literal is the key of the
+map's key kind that `MapKey::from_literal` converts it to. A reference path resolves the same
+way against the game's copy. A property the object
 lacks is created; a path with a subscript the base lacks is a report by its resolution
 reason. A sign on a property whose shape is not a list, list2, or map is `SignOnScalar`.
 A map edit is a whole-map replacement; no `{key}` record is emitted.
@@ -578,7 +586,7 @@ the base's list, and one out of range is `RemovalUnmatched`. `-` on a map remove
 key the base lacks is `RemovalUnmatched`. A report on any of a key's operations skips the
 key: its set, removals, and additions together. The diagnostic's `path` carries the sign of
 the operation that failed; a base container whose kinds are not the schema's shape, and a
-value `Bin::patch` refuses, are `TypeMismatch` under the sign of the key's first operation.
+value `Bin::patch_at` refuses, are `TypeMismatch` under the sign of the key's first operation.
 
 Removals compare ASCII-lowercased paths; missing removals produce diagnostics. Additions
 retain written casing and order and omit case-insensitive duplicates. The overlay reads each
@@ -614,7 +622,7 @@ as its `detail`, one per distinct entry that failed to read. `SkippedProperty` c
 `UnknownClass`, `PinMismatch`, `SignOnScalar`, `ContainerAbsent`, `RemovalUnmatched`,
 `KindMismatch`, `OutOfRange`, `PrecisionLoss`, `ArityMismatch`, `ReferenceMissingEntry`,
 `ReferenceUnresolved`, and `Unknown`. The first nine
-are the `RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch`
+are the `RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch_at`
 refuses; `InvalidPath` is a key inside a block or a `set` that is not a property path.
 `SkippedRecord` contains `index`, `object` (a `BinHash`), `property`, and `reason`; the
 non-exhaustive `RecordSkipReason` distinguishes `MissingObject`, `MissingProperty`,
@@ -647,13 +655,16 @@ construction, serialized field compatibility, target selection, enabled layers, 
 diagnostics, cached builds with missing or unknown diagnostic kinds, a called-off build,
 override path resolution, override application with skipped records and unreadable files,
 override files round-tripping through both archives, entry bodies in every format with tags
-and one-key pins loading to one model, struct tags loading as the struct pin they spell, struct pins written as struct tags and loaded back, block and dotted forms loading to one edit, structural
+and one-key pins loading to one model, hash-form names in a dotted path, a block, a
+subscripted path, a map-keyed path, a struct pin's `set`, and a reference, a field with no
+known name edited by its hash, struct tags loading as the struct pin they spell, struct pins written as struct tags and loaded back, block and dotted forms loading to one edit, structural
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
 hand-written schema and against the base alone, additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, and an overlay build with a schema and a cached replay of the two kinds.
 Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
-spellings, an `option` of a vector, a nameless field, and YAML output reloaded. Reference cases
+spellings, an `option` of a vector, a nameless field rendered under its hash-form name and
+applied back, and YAML output reloaded. Reference cases
 cover the tag and the one-key mapping in every format, the dotted escape, a reference through a
 hand-written `read_entry` as a set, an addition, a removal, a map value, a list item, a whole
 container operand, and a `set` field, both reference reasons, a shape mismatch, a type pin
@@ -684,7 +695,7 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D17 | An error is a code with a typed location | A location string and a message | The consumer matches the code and navigates by the place | [ADR-0014](../adr/0014-coded-declaration-errors.md) |
 | D18 | The class schema enters through a `Schema` trait | A schema crate; schema data | The library is testable without a dump; the manager adapts what it holds | [ADR-0015](../adr/0015-schema-trait.md) |
 | D19 | A property edit carries a literal value; a YAML tag lowers to the one-key mapping | Load-time coercion; a pinned document form | The type is the installed patch's on the day of the build | [ADR-0016](../adr/0016-literal-property-values.md) |
-| D20 | Property edits lower to one `Bin::patch` per key; a container edit is a whole replacement | In-place container operations; `{key}` records | The format crate performs every write | [ADR-0017](../adr/0017-per-key-patch-lowering.md) |
+| D20 | Property edits lower to one `Bin::patch_at` per key; a container edit is a whole replacement | In-place container operations; `{key}` records | The format crate performs every write | [ADR-0017](../adr/0017-per-key-patch-lowering.md) |
 | D21 | A skipped property edit is one `PropertyEditSkipped` with a reason code | One kind per condition | The override pattern | [ADR-0018](../adr/0018-property-edit-diagnostics.md) |
 | D22 | An entry name at a body root carries a slash or is hash-form | Any key | The standard's words and the game's never share a mapping | [section 4](#s4) |
 | D23 | A struct pin's `set` keys are single field names | Dotted paths in a `set` | A new struct has no base to descend through | [section 6](#s6) |
@@ -697,4 +708,5 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D31 | A type pin over a reference is `PinMismatch` | A pin that resolves the reference and re-types it | A pin fixes the kind a literal reads as; a reference carries the game's own kinds | [section 6](#s6), [ADR-0021](../adr/0021-game-copy-references.md) |
 | D32 | An entry the caller cannot read is a diagnostic, not a missing entry | One reason for both | A read that failed is the installation's, and no property key can name it | [section 3](#s3), [section 6](#s6) |
 | D33 | A YAML struct tag names the class in parentheses and tags the pin's `set` | `class` and `set` under the tag; a class in brackets | A tag carries no `[` or `]`; the document form keeps one shape | [ADR-0027](../adr/0027-struct-tags.md) |
+| D34 | A hash-form name in a declaration path names the field with that hash; a path resolves and patches as a `ValuePath` | A path resolved as the client resolves it; a walk in this crate | A field with no known name is reachable, and `ltk_meta` keeps the client's reading of a `PropertyPath` | [section 6](#s6), [ADR-0028](../adr/0028-hash-form-field-names.md) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |

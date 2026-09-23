@@ -72,14 +72,14 @@ impl Value {
     /// The literal that coerces back to `value` under the value's own shape.
     ///
     /// The literal carries no type pin. A struct renders as a struct pin, whose fields a
-    /// schema types when the literal is read back.
+    /// schema types when the literal is read back. A struct field `names` has no name for
+    /// renders as `0x` and its 8 hexadecimal digits.
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::NamelessField`] for a struct field `names` has no name for,
     /// [`ErrorKind::UnrenderableKey`] for a map key with no spelling, and
     /// [`ErrorKind::UnrenderableValue`] for a value of kind `none`. The error's key is the
-    /// path to the field, the key, or the value inside `value`.
+    /// path to the key or the value inside `value`.
     pub fn render(value: &V, names: &dyn Names) -> Result<Self, Error> {
         Renderer {
             names,
@@ -213,16 +213,13 @@ impl Renderer<'_> {
         )]);
         let mut set = IndexMap::with_capacity(value.properties.len());
         for (&field, property) in &value.properties {
-            let Some(name) = self
+            let name = self
                 .names
                 .field(field, Some(class))
                 .filter(|name| names_field(name, field))
-            else {
-                let step = format!("0x{:08x}", *field);
-                return Err(self.error_under(&step, ErrorKind::NamelessField));
-            };
+                .map_or_else(|| format!("0x{:08x}", *field), Cow::into_owned);
             let rendered = self.under(&name, |this| this.value(property))?;
-            set.insert(name.into_owned(), rendered);
+            set.insert(name, rendered);
         }
         if !set.is_empty() {
             fields.insert("set".to_owned(), Value::Mapping(set));
@@ -284,7 +281,9 @@ fn spelled32(hash: BinHash, name: Option<Cow<'_, str>>) -> String {
     }
 }
 
-/// Whether `name` is one field name a `set` key spells, hashing to `field`.
+/// Whether `name` is one field name a `set` key spells, naming `field`.
+///
+/// A name spelled `0x` and 8 hexadecimal digits names the field with that hash.
 fn names_field(name: &str, field: BinHash) -> bool {
     let Ok(path) = PropertyPath::new(name) else {
         return false;
@@ -292,7 +291,7 @@ fn names_field(name: &str, field: BinHash) -> bool {
     let mut segments = path.segments();
     matches!(
         (segments.next(), segments.next()),
-        (Some(segment), None) if segment.subscript.is_none() && segment.name_hash() == field
+        (Some(segment), None) if segment.subscript.is_none() && hash32_of(segment.name) == field
     )
 }
 
