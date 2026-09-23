@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.5.0...ltk_game_data-v0.6.0) - 2026-09-23
+
+### Added
+
+- *(game_data)* [**breaking**] create and remove objects
+
+### Fixed
+
+- *(game_data)* [**breaking**] resolve hash-form field names
+
+### Other
+
+- Merge pull request #272 from LeagueToolkit/release-plz-2026-09-23T06-57-00Z
+
 ## [0.5.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.4.0...ltk_game_data-v0.5.0) - 2026-09-23
 
 ### Added
