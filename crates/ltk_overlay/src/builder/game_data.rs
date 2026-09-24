@@ -788,6 +788,7 @@ mod tests {
             mod_id: "mod".into(),
             layer: "base".into(),
             module: Module {
+                name: None,
                 selector: Selector::Entries(entries.clone()),
                 origin: Origin {
                     manifest: "game_data.yaml".into(),

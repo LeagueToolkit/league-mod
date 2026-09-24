@@ -18,8 +18,8 @@ use serde::{
 };
 
 use crate::{
-    Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, Origin, OverridePath, Selector,
-    Span, Target,
+    Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, ModuleName, Origin, OverridePath,
+    Selector, Span, Target,
     document::{Accepts, Bindings, Fields, SelectorKey},
 };
 
@@ -240,10 +240,12 @@ pub(crate) struct Manifest {
     modules: Vec<Module>,
 }
 
-/// A manifest module. A key that is not a selector, `source`, `edits`, or a binding is an
-/// entry name.
+/// A manifest module. A key that is not `name`, a selector, `source`, `edits`, or a binding
+/// is an entry name.
 #[derive(Debug, Serialize)]
 struct Module {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<Target>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +259,7 @@ struct Module {
 impl<'de> Deserialize<'de> for Module {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let accepts = Accepts {
+            name: true,
             selector: true,
             source: true,
             edits: true,
@@ -264,6 +267,7 @@ impl<'de> Deserialize<'de> for Module {
         };
         let fields: Fields<Entries> = deserializer.deserialize_map(Fields::visitor(accepts))?;
         Ok(Self {
+            name: fields.name,
             target: fields.target,
             entries: fields.entries,
             source: fields.source,
@@ -417,15 +421,20 @@ impl<R: FnMut(&str) -> Result<String, Error>> Loading<'_, R> {
 
     fn module(&mut self, index: usize, module: Module) -> Result<crate::Module, Error> {
         let Module {
+            name,
             target,
             entries,
             source,
             body,
         } = module;
+        let manifest = self.manifest;
+        let at = |error: Error| error.document(manifest.as_str()).module(index);
+        let name = name.map(ModuleName::try_from).transpose().map_err(at)?;
         let selector = self
             .selector(target, entries, source.as_deref(), body)
-            .map_err(|error| error.document(self.manifest.as_str()).module(index))?;
+            .map_err(at)?;
         Ok(crate::Module {
+            name,
             selector,
             origin: Origin {
                 manifest: self.manifest.as_str().to_owned(),
@@ -489,6 +498,7 @@ impl TryFrom<&Declarations> for Manifest {
                     |error: Error| error.document(module.origin.manifest.clone()).module(index);
                 Ok(match &module.selector {
                     Selector::Target { target, edits } => Module {
+                        name: module.name.clone().map(String::from),
                         target: Some(target.clone()),
                         entries: None,
                         source: None,
@@ -505,6 +515,7 @@ impl TryFrom<&Declarations> for Manifest {
                         },
                     },
                     Selector::Entries(entries) => Module {
+                        name: module.name.clone().map(String::from),
                         target: None,
                         entries: Some(Entries(
                             entries

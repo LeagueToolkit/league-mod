@@ -349,6 +349,7 @@ fn entries_module(properties: Vec<PropertyEdit>) -> Declarations {
     Declarations {
         version: 1,
         modules: vec![Module {
+            name: None,
             selector: Selector::Entries(entries),
             origin: ltk_game_data::Origin {
                 manifest: "game_data.json".into(),
@@ -468,6 +469,7 @@ fn an_empty_selector_refuses_to_load_and_to_write() {
     let declarations = Declarations {
         version: 1,
         modules: vec![Module {
+            name: None,
             selector: Selector::Target {
                 target: ltk_game_data::Target::try_from("a.bin").unwrap(),
                 edits: Vec::new(),

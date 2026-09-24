@@ -12,7 +12,8 @@ to a value of the installed game.
 
 - **Declarations:** The versioned, ordered modules belonging to one layer.
 - **Declaration document:** Preserved serialized declarations, including unsupported fields.
-- **Module:** One selector with its edits and its origin.
+- **Module:** One selector with its edits, an optional name, and its origin.
+- **Module name:** A nonempty label an author gives a module in the manifest. It has no effect on loading or application. Several modules of a layer may hold one name.
 - **Selector:** What a module edits: a chunk target with edits, or a mapping of entry names to entry edits.
 - **Edit:** One batch of bindings on a chunk, applied phase by phase. The phases are override files, then object creations, then entry edits, then object removals, then link removals followed by additions.
 - **Object edit:** The creation of an object in a chunk, cloned from an entry of the chunk or constructed from a class, with a `set` of property edits; or the removal of an object.
@@ -258,8 +259,8 @@ spellings, including retained base entries.
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 `game_data.json`. A manifest or source file's extension names its format, compared ASCII
 case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
-A module contains one selector. A `target` selector takes a compact binding body, `edits`, or
-`source`. An `entries` selector is a mapping of entry names to entry bodies and takes
+A module contains one selector and an optional `name`. A `target` selector takes a compact
+binding body, `edits`, or `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. A module with both keys, or neither, is an
 error. A compact body and every edit carry at least one binding. A binding body's keys are
 `overrides`, `objects`, `links`, `+links`, `-links`, and entry names; an entry name at a body
@@ -297,8 +298,18 @@ target body tells an entry name from a key that names neither an entry nor a bin
 same construction and string-access traits as `Target`, implements `Display`, and
 `object_hash()` returns its `BinHash`.
 
-`Module` contains `selector: Selector` and `origin: Origin`
-([ADR-0010](../adr/0010-phased-declaration-edits.md)).
+A module name is one nonempty string beside the selector of a manifest module, compared
+and kept as written ([ADR-0032](../adr/0032-module-names.md)). An empty name is
+`EmptyModuleName` at the module and the key `name`; any other value is a syntax error.
+Names are not unique: two modules of one manifest may hold the same name. A source file
+and an item of `edits` take no `name`, and there the key is an unsupported binding. In an
+entry body `name` is a property path. `ModuleName` has the construction and string-access
+traits of `EntryName`, and implements `Display`, `Eq`, and `Hash`.
+
+`Module` contains `name: Option<ModuleName>`, `selector: Selector`, and `origin: Origin`
+([ADR-0010](../adr/0010-phased-declaration-edits.md)). An `Origin`'s `module_index` is the
+module's position in `Declarations::modules`, and a consumer holding a diagnostic's origin
+reaches the module's name there.
 `Selector` is non-exhaustive.
 `Selector::Target { target: Target, edits: Vec<Edit> }` edits one chunk.
 `Selector::Entries(IndexMap<EntryName, EntryEdit>)` edits each named entry in every declaring
@@ -395,8 +406,8 @@ name is a pin; the dotted form `a.hash: 1` reaches a field with a type's name. A
 only key is `ref` is a reference; the dotted form `a.ref: 1` reaches a field named `ref`. An index stays
 a path segment, `bankUnits[0]: {...}`.
 
-Source files require their own version and a compact body or `edits`. Sources have no target
-or recursive includes. Source paths remain within the layer through symlink resolution.
+Source files require their own version and a compact body or `edits`. Sources have no target,
+no `name`, and no recursive includes. Source paths remain within the layer through symlink resolution.
 Duplicate target/source assignments, duplicate mapping keys, unknown keys, mixed bodies,
 unsupported versions, missing inputs, and ignored required inputs are errors.
 `links` and `+links` are aliases; a body cannot contain both.
@@ -426,7 +437,8 @@ Modpkg metadata uses schema version 4. Absent fields represent no declarations.
 `DeclarationDocument` retains unsupported fields; its `parse()` method validates the complete
 layer before execution. A document and a manifest carry an `entries` mapping in authored
 order ([ADR-0011](../adr/0011-insertion-ordered-declaration-documents.md)). An edit with no
-binding is a legal document value; `manifest_json()` writes `links` for every edit,
+binding is a legal document value; `manifest_json()` writes `name` for a named module,
+`links` for every edit,
 `overrides` for an edit with override paths, and one key per entry name for an edit with
 entry edits, each value the entry body with every `Value` as its literal.
 Declaration version 1 identifies the supported format.
@@ -446,6 +458,7 @@ Rust names and serialized names have the following mapping:
 | `Value` | the JSON literal; a YAML tag `!name value` is written `{name: value}`, a struct tag `!name(C) value` is written `{name: {class: C, set: value}}` |
 | `LinkEdit::add` | `links` (`+links` accepted on input) |
 | `LinkEdit::remove` | `-links` |
+| `Module::name` | `name`, beside the selector key, absent for an unnamed module |
 | `Selector::Target` | `target` and `edits`, one compact body per edit |
 | `Selector::Entries` | `entries`, a mapping of entry name to one compact body |
 | `Origin::module_index` | `module` |
@@ -721,7 +734,9 @@ known name edited by its hash, struct tags loading as the struct pin they spell,
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
 hand-written schema and against the base alone, additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
-through both archives, and an overlay build with a schema and a cached replay of the two kinds.
+through both archives, module names in every format, through the document, the manifest,
+both archives, and extraction, an empty module name, a `name` in a source file and in an
+`edits` item, and an overlay build with a schema and a cached replay of the two kinds.
 Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
 spellings, an `option` of a vector, a nameless field rendered under its hash-form name and
 applied back, and YAML output reloaded. Reference cases
@@ -774,3 +789,4 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D37 | A created name the game declares in another chunk is `ObjectShadowsGame`, and the object is created | A packing error with an opt-in; a skip | Packing has no game; the build has the index | [section 6](#s6), [ADR-0031](../adr/0031-game-shadowing-report.md) |
 | D38 | `Mods/<mod id>/` is the recommended prefix of a created name, unchecked | A load-time rule | Loading does not know the mod id | [section 4](#s4) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |
+| D39 | A manifest module takes an optional `name`, carried by every serialized form, uniqueness unchecked | A unique key; names in a separate table; a `name` in a source file | A name labels a module for its author; modules execute by position | [section 4](#s4), [ADR-0032](../adr/0032-module-names.md) |

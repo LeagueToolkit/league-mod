@@ -1,11 +1,12 @@
 //! Ordered game-data declarations shared by projects, archives, and overlay consumers.
 //!
 //! A layer's [`Declarations`] are modules in execution order. A [`Module`] carries one
-//! [`Selector`], which names what is edited and holds the edits, and its [`Origin`]. An
-//! [`Edit`] is one batch of phased bindings on a chunk; an [`EntryEdit`] is the bindings of one
-//! bin entry, applied in every chunk declaring it. A [`PropertyEdit`] is one signed property
-//! path with its [`Value`]. [`apply`] runs edits over a `PROP`; an edit's override files
-//! ([`OverridePath`]) are read through a caller-supplied reader.
+//! [`Selector`], which names what is edited and holds the edits, an optional [`ModuleName`],
+//! and its [`Origin`]. An [`Edit`] is one batch of phased bindings on a chunk; an
+//! [`EntryEdit`] is the bindings of one bin entry, applied in every chunk declaring it. A
+//! [`PropertyEdit`] is one signed property path with its [`Value`]. [`apply`] runs edits over
+//! a `PROP`; an edit's override files ([`OverridePath`]) are read through a caller-supplied
+//! reader.
 //!
 //! The `manifest` module loads the file a layer is edited through and its sources; the
 //! `document` module carries the serialized [`DeclarationDocument`] an archive stores.
@@ -102,13 +103,15 @@ impl Declarations {
     }
 }
 
-/// One selector with its edits and its origin.
+/// One selector with its edits, its optional name, and its origin.
 ///
-/// The serialized shape is `target` with `edits`, or `entries`, beside `origin`. A module
-/// with both selector keys, or neither, does not deserialize.
+/// The serialized shape is an optional `name`, then `target` with `edits`, or `entries`,
+/// beside `origin`. A module with both selector keys, or neither, does not deserialize.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "document::Module", into = "document::Module")]
 pub struct Module {
+    /// The author's label for the module. Several modules of a layer may hold one name.
+    pub name: Option<ModuleName>,
     pub selector: Selector,
     pub origin: Origin,
 }
@@ -482,6 +485,56 @@ impl EntryName {
                 BinHash(u32::from_str_radix(&hash[2..], 16).expect("validated hex"))
             }
         }
+    }
+}
+
+/// An author's nonempty label for a module, kept as written.
+///
+/// A name carries no meaning for loading or application. Two modules of one layer may hold
+/// the same name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ModuleName(String);
+
+impl TryFrom<String> for ModuleName {
+    type Error = Error;
+
+    /// # Errors
+    ///
+    /// [`ErrorKind::EmptyModuleName`] for an empty spelling.
+    fn try_from(value: String) -> Result<Self, Error> {
+        if value.is_empty() {
+            return Err(Error::at_key(ErrorKind::EmptyModuleName, "name"));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl TryFrom<&str> for ModuleName {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Error> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+impl From<ModuleName> for String {
+    fn from(name: ModuleName) -> Self {
+        name.0
+    }
+}
+
+impl fmt::Display for ModuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl ModuleName {
+    /// The name's spelling.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
