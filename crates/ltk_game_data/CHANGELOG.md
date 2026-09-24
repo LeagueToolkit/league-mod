@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.7.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.6.0...ltk_game_data-v0.7.0) - 2026-09-24
+
+### Added
+
+- *(game_data)* [**breaking**] support module names
+
+### Other
+
+- Merge pull request #276 from LeagueToolkit/feat/module-names
+
 ## [0.6.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.5.0...ltk_game_data-v0.6.0) - 2026-09-23
 
 ### Added

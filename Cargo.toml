@@ -25,13 +25,13 @@ ltk_io_ext = "0.4.4"
 ltk_rst = "0.2.0"
 
 # Workspace crates
-ltk_fantome = { version = "0.14.2", path = "crates/ltk_fantome" }
-ltk_game_data = { version = "0.6.0", path = "crates/ltk_game_data" }
+ltk_fantome = { version = "0.14.3", path = "crates/ltk_fantome" }
+ltk_game_data = { version = "0.7.0", path = "crates/ltk_game_data" }
 ltk_game_index = { version = "0.1.3", path = "crates/ltk_game_index" }
 ltk_hashtable = { version = "0.1.3", path = "crates/ltk_hashtable" }
 ltk_mod_core = { version = "0.1.1", path = "crates/ltk_mod_core" }
-ltk_mod_project = { version = "0.14.0", path = "crates/ltk_mod_project" }
-ltk_modpkg = { version = "0.12.2", path = "crates/ltk_modpkg" }
+ltk_mod_project = { version = "0.15.0", path = "crates/ltk_mod_project" }
+ltk_modpkg = { version = "0.12.3", path = "crates/ltk_modpkg" }
 
 # Shared
 binrw = "0.14.1"
