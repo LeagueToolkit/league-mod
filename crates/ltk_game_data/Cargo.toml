@@ -1,6 +1,6 @@
 [package]
 name = "ltk_game_data"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Game-data declarations and BIN application for League Toolkit mods"
