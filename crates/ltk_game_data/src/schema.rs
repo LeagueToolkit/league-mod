@@ -11,11 +11,22 @@ use ltk_meta::{PropertyKind, PropertyValueEnum, path::ValueShape};
 
 /// The class schema of the installed patch.
 ///
-/// `expected` returning `None` is "the schema says nothing", never a mismatch; the base
-/// value's shape is the fallback.
+/// `expected` returning `None` is "the schema says nothing", never a mismatch. The base
+/// value's shape types a property the base holds, and `fallback` types one the base omits.
 pub trait Schema {
     /// The shape of `field` on `class`.
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape>;
+
+    /// The best-known shape of `field` on `class`, for a build the schema does not describe.
+    ///
+    /// Asked only where `expected` answers `None` and the base omits the property. A shape
+    /// the base holds types its property, and `expected` outranks this answer. A property
+    /// typed through it is reported as `SchemaFallback`. The default answers `None`, and a
+    /// property the base omits is then `Untypable`.
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        let _ = (class, field);
+        None
+    }
 
     /// Whether the schema knows `class`.
     fn has_class(&self, class: BinHash) -> bool;
@@ -24,6 +35,10 @@ pub trait Schema {
 impl<S: Schema + ?Sized> Schema for &S {
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape> {
         (**self).expected(class, field)
+    }
+
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        (**self).fallback(class, field)
     }
 
     fn has_class(&self, class: BinHash) -> bool {
@@ -36,6 +51,10 @@ impl<S: Schema + ?Sized> Schema for Box<S> {
         (**self).expected(class, field)
     }
 
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        (**self).fallback(class, field)
+    }
+
     fn has_class(&self, class: BinHash) -> bool {
         (**self).has_class(class)
     }
@@ -44,6 +63,10 @@ impl<S: Schema + ?Sized> Schema for Box<S> {
 impl<S: Schema + ?Sized> Schema for Arc<S> {
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape> {
         (**self).expected(class, field)
+    }
+
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        (**self).fallback(class, field)
     }
 
     fn has_class(&self, class: BinHash) -> bool {

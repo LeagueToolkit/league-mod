@@ -3,6 +3,8 @@
 //! The rules are the coercion table of `docs/design/game-data.md` section 6. A value that no
 //! row accepts is a [`PropertySkipReason`], never a wrapped or narrowed value.
 
+use std::cell::Cell;
+
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use ltk_hash::{BinHash, WadHash};
 use ltk_meta::{PropertyKind as K, PropertyValueEnum as V, path::PropertyPath, property::values};
@@ -28,6 +30,8 @@ pub(super) type ResolvedReferences = indexmap::IndexMap<BinHash, ltk_meta::BinOb
 pub(super) struct Coercer<'a> {
     pub(super) schema: &'a dyn Schema,
     pub(super) references: &'a ResolvedReferences,
+    /// Set when a struct pin's `set` field is typed through `Schema::fallback`.
+    pub(super) fell_back: &'a Cell<bool>,
 }
 
 impl Coercer<'_> {
@@ -298,10 +302,17 @@ impl Coercer<'_> {
                     }
                     _ => return Err(Reason::InvalidPath),
                 };
-                let shape = self
-                    .schema
-                    .expected(class_hash, field)
-                    .ok_or(Reason::Untypable)?;
+                let shape = match self.schema.expected(class_hash, field) {
+                    Some(shape) => shape,
+                    None => {
+                        let shape = self
+                            .schema
+                            .fallback(class_hash, field)
+                            .ok_or(Reason::Untypable)?;
+                        self.fell_back.set(true);
+                        shape
+                    }
+                };
                 properties.insert(field, self.coerce(value, shape, None)?);
             }
         }

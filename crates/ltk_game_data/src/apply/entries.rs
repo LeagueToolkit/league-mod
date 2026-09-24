@@ -130,6 +130,8 @@ enum Typing {
     Schema,
     /// The base value's shape, the schema saying nothing.
     Base,
+    /// The schema's fallback shape, the schema saying nothing and the base omitting the field.
+    Fallback,
 }
 
 /// Where a leaf edit lands: the property's shape and its base value.
@@ -292,7 +294,17 @@ impl Phase<'_> {
                     base: Some(value.clone()),
                     typing: Typing::Base,
                 }),
-                None => Err(Reason::Untypable),
+                None => {
+                    let shape = self
+                        .schema
+                        .fallback(class, field)
+                        .ok_or(Reason::Untypable)?;
+                    Ok(Site {
+                        shape,
+                        base: None,
+                        typing: Typing::Fallback,
+                    })
+                }
             },
         }
     }
@@ -302,14 +314,30 @@ impl Phase<'_> {
         let site = self
             .locate(hash, &group.path)
             .map_err(|reason| (group.first_sign(), reason))?;
-        if site.typing == Typing::Base {
-            self.outcome.reports.push(Report {
-                kind: ApplyDiagnosticKind::SchemaFallback,
-                path: group.path.as_str().to_owned(),
-                property: None,
-                detail: None,
-            });
+        if site.typing != Typing::Schema {
+            self.report_fallback(&group.path);
         }
+
+        self.coercer.fell_back.set(false);
+        let written = self.write(hash, group, &site);
+        if site.typing == Typing::Schema && self.coercer.fell_back.get() {
+            self.report_fallback(&group.path);
+        }
+        written
+    }
+
+    /// Reports the property key at `path` as typed without the schema's answer.
+    fn report_fallback(&mut self, path: &PropertyPath) {
+        self.outcome.reports.push(Report {
+            kind: ApplyDiagnosticKind::SchemaFallback,
+            path: path.as_str().to_owned(),
+            property: None,
+            detail: None,
+        });
+    }
+
+    /// Computes the value of one located property key and patches it into object `hash`.
+    fn write(&mut self, hash: BinHash, group: &Group, site: &Site) -> Result<(), (Sign, Reason)> {
         let mut current = site.base.clone();
         if let Some(set) = &group.set {
             let value = self

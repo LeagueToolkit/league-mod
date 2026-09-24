@@ -106,6 +106,9 @@ pub struct Applied {
 pub trait Schema {
     /// The shape of `field` on `class`. `None` is "the schema says nothing", never a mismatch.
     fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape>;
+    /// The best-known shape of `field` on `class`, for a build the schema does not describe.
+    /// Asked only where `expected` is `None` and the base omits the property. Defaults to `None`.
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> { None }
     /// Whether the schema knows `class`. Asked of a pinned class the base value lacks.
     fn has_class(&self, class: BinHash) -> bool;
 }
@@ -566,16 +569,21 @@ reason. A sign on a property whose shape is not a list, list2, or map is `SignOn
 A map edit is a whole-map replacement; no `{key}` record is emitted.
 
 **Typing.** The shape of a property is the schema's answer for the field on the class of the
-struct holding it. Where the schema says nothing the base value's shape is the type and one
-`SchemaFallback` diagnostic names the path. A property the base omits with no schema answer is
-`Untypable`. A subscripted path is typed by the container's item kind, or the map's value
+struct holding it: `Schema::expected`. Where `expected` is `None` and the base holds the
+property, the base value's shape is the type. Where `expected` is `None` and the base omits
+the property, `Schema::fallback` is the type: the best-known shape of the field for a build the
+schema does not describe ([ADR-0033](../adr/0033-schema-fallback-shape.md)). A property typed
+from the base or through `fallback` is one `SchemaFallback` diagnostic naming the path. A
+property the base omits with no answer from either is `Untypable`. `NoSchema` answers neither.
+A subscripted path is typed by the container's item kind, or the map's value
 kind. A struct pin's `class` is a name, hashed FNV-1a lowercased, or `0x` and 8 hexadecimal
 digits; a pin without a `class` key takes the class of the base value. A pinned class the
 base value already carries is attested by the shipped bin and the schema is not consulted;
 every other pinned class the schema does not know is `UnknownClass`
 ([ADR-0022](../adr/0022-unattested-class-refusal.md)). Inside a `set`, each
-key is one field name of the pinned class typed by the schema; a nested struct is a nested
-struct pin.
+key is one field name of the pinned class typed by `expected`, or by `fallback` where
+`expected` is `None`; a nested struct is a nested struct pin. A `set` field typed through
+`fallback` is one `SchemaFallback` diagnostic naming the property that holds the pin.
 
 **Coercion.** A value coerces to a shape by these rules; any other pair is `KindMismatch`.
 
@@ -641,7 +649,8 @@ name or `ref`, which reads back as a pin or a reference.
 
 **Additions and removals.** `+` on a list appends each element, coerced to the item kind, to
 the base's elements; on a map it adds or replaces by key; on a property the base omits it
-creates the container with the schema's shape, or is `Untypable`. `-` on a property the base
+creates the container with the shape `expected` or `fallback` answers, or is `Untypable`.
+`-` on a property the base
 omits is `ContainerAbsent`. `-` on a list removes by value where the item kind is not `pointer` or
 `embed`: each removal coerces to the item kind and removes every equal element; a removal
 that matches nothing is `RemovalUnmatched`. Where the item kind is `pointer` or `embed`, `-`
@@ -732,7 +741,12 @@ object the game declares in another chunk, hash-form names in a dotted path, a b
 subscripted path, a map-keyed path, a struct pin's `set`, and a reference, a field with no
 known name edited by its hash, struct tags loading as the struct pin they spell, struct pins written as struct tags and loaded back, block and dotted forms loading to one edit, structural
 refusals of paths, tags, and struct pins, coercion of every row of the table against a
-hand-written schema and against the base alone, additions and removals on lists and maps,
+hand-written schema and against the base alone, a property the base omits typed through
+`fallback` as a scalar, a list with its item kind, an embed with its class, a field reached by
+block descent, a struct pin's `set` field, and an object construction's `set`, `expected`
+outranking `fallback`, a property the base holds typed from the base whatever `fallback`
+answers, a `fallback` answering `None` leaving the property `Untypable`,
+additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, module names in every format, through the document, the manifest,
 both archives, and extraction, an empty module name, a `name` in a source file and in an
@@ -790,3 +804,4 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D38 | `Mods/<mod id>/` is the recommended prefix of a created name, unchecked | A load-time rule | Loading does not know the mod id | [section 4](#s4) |
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |
 | D39 | A manifest module takes an optional `name`, carried by every serialized form, uniqueness unchecked | A unique key; names in a separate table; a `name` in a source file | A name labels a module for its author; modules execute by position | [section 4](#s4), [ADR-0032](../adr/0032-module-names.md) |
+| D40 | A property the base omits takes `Schema::fallback` where `expected` is `None`; `expected` and a held base value outrank it | `Untypable` until the schema describes the build; the newest described build answered inside `expected` | A game build newer than the schema keeps its added fields typable; the guess is an answer of its own, reported as `SchemaFallback` | [section 6](#s6), [ADR-0033](../adr/0033-schema-fallback-shape.md) |

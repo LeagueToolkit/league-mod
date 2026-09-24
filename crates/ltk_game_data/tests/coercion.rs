@@ -263,6 +263,148 @@ fn the_schema_types_absent_properties_and_the_base_types_the_rest() {
     );
 }
 
+/// A schema for a build it does not describe: [`TestSchema`]'s shapes answer only as fallbacks.
+struct FallbackOnly(TestSchema);
+
+impl Schema for FallbackOnly {
+    fn expected(&self, _: BinHash, _: BinHash) -> Option<Shape> {
+        None
+    }
+
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        self.0.expected(class, field)
+    }
+
+    fn has_class(&self, class: BinHash) -> bool {
+        self.0.has_class(class)
+    }
+}
+
+/// A schema whose fallback answers `string` for every field and whose `expected` is `S`'s.
+struct StringFallback<S>(S);
+
+impl<S: Schema> Schema for StringFallback<S> {
+    fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        self.0.expected(class, field)
+    }
+
+    fn fallback(&self, _: BinHash, _: BinHash) -> Option<Shape> {
+        Some(Shape::bare(K::String))
+    }
+
+    fn has_class(&self, class: BinHash) -> bool {
+        self.0.has_class(class)
+    }
+}
+
+#[test]
+fn the_fallback_types_properties_the_base_omits_on_an_undescribed_build() {
+    let body = "iconAvatar: assets/a.tex\n\
+                +extras: [1, 2]\n\
+                mesh2: !embed(E) { texture: z, scale: 2 }\n\
+                mesh: { scale: 3 }\n";
+    let output = run(&manifest(body), &FallbackOnly(TestSchema::new()));
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        fallbacks(&output),
+        ["iconAvatar", "extras", "mesh2", "mesh.scale"]
+    );
+    assert_eq!(
+        value_at(&output, "iconAvatar"),
+        values::WadChunkLink::new(ltk_game_data::path_hash("assets/a.tex")).into()
+    );
+    assert_eq!(
+        value_at(&output, "extras"),
+        values::Container::new(
+            K::U16,
+            vec![values::U16::new(1).into(), values::U16::new(2).into()]
+        )
+        .unwrap()
+        .into()
+    );
+    assert_eq!(
+        value_at(&output, "mesh2"),
+        Embedded(values::Struct {
+            class_hash: h("E"),
+            properties: [
+                (h("texture"), V::from(values::String::new("z".into()))),
+                (h("scale"), V::from(values::F32::new(2.0))),
+            ]
+            .into(),
+        })
+        .into()
+    );
+    assert_eq!(
+        value_at(&output, "mesh.scale"),
+        values::F32::new(3.0).into()
+    );
+}
+
+#[test]
+fn expected_outranks_the_fallback() {
+    let output = run(
+        &manifest("iconAvatar: assets/a.tex\n"),
+        &StringFallback(TestSchema::new()),
+    );
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        value_at(&output, "iconAvatar"),
+        values::WadChunkLink::new(ltk_game_data::path_hash("assets/a.tex")).into()
+    );
+}
+
+#[test]
+fn the_base_types_a_property_it_holds_whatever_the_fallback_answers() {
+    let output = run(&manifest("speed: 2.5\n"), &StringFallback(NoSchema));
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(fallbacks(&output), ["speed"]);
+    assert_eq!(value_at(&output, "speed"), values::F32::new(2.5).into());
+}
+
+/// A schema describing class `C` and knowing class `E` only through its fallback.
+struct EmbedFallback(TestSchema);
+
+impl Schema for EmbedFallback {
+    fn expected(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        (class == h("C"))
+            .then(|| self.0.expected(class, field))
+            .flatten()
+    }
+
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        self.0.expected(class, field)
+    }
+
+    fn has_class(&self, class: BinHash) -> bool {
+        self.0.has_class(class)
+    }
+}
+
+#[test]
+fn a_set_field_typed_through_the_fallback_reports_its_property() {
+    let output = run(
+        &manifest("mesh2: !embed(E) { texture: z }\n"),
+        &EmbedFallback(TestSchema::new()),
+    );
+    assert!(skips(&output).is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(fallbacks(&output), ["mesh2"]);
+    assert_eq!(
+        value_at(&output, "mesh2.texture"),
+        values::String::new("z".into()).into()
+    );
+}
+
+#[test]
+fn no_fallback_answer_leaves_an_omitted_property_untypable() {
+    let body = "nope: 1\nmesh2: !embed(E) { nope: 1 }\n";
+    let output = run(&manifest(body), &FallbackOnly(TestSchema::new()));
+    assert_eq!(
+        skips(&output),
+        [("nope", Reason::Untypable), ("mesh2", Reason::Untypable)]
+    );
+    assert_eq!(fallbacks(&output), ["mesh2"]);
+}
+
 /// The hash of a container of `K::Hash` items.
 fn hashes(names: &[&str]) -> V {
     values::Container::new(

@@ -301,6 +301,38 @@ fn a_construction_holds_its_class_and_set_only() {
     assert!(!output.changed());
 }
 
+/// [`TestSchema`] for a build it does not describe: its shapes answer only as fallbacks.
+struct FallbackOnly;
+
+impl Schema for FallbackOnly {
+    fn expected(&self, _: BinHash, _: BinHash) -> Option<Shape> {
+        None
+    }
+
+    fn fallback(&self, class: BinHash, field: BinHash) -> Option<Shape> {
+        TestSchema.expected(class, field)
+    }
+
+    fn has_class(&self, class: BinHash) -> bool {
+        TestSchema.has_class(class)
+    }
+}
+
+#[test]
+fn a_construction_types_its_set_through_the_fallback_on_an_undescribed_build() {
+    let text = manifest("objects:\n  Characters/New:\n    class: C\n    set: {label: fresh}");
+    let output = run(&text, &FallbackOnly);
+    let fallbacks: Vec<_> = output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.kind, diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(fallbacks, [(ApplyDiagnosticKind::SchemaFallback, "label")]);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    let new = object(&bin, "Characters/New");
+    assert_eq!(at(new, "label"), values::String::new("fresh".into()).into());
+}
+
 #[test]
 fn a_set_edit_that_does_not_apply_is_reported_under_the_new_object() {
     let output = run(
