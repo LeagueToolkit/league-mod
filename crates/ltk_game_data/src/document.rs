@@ -13,7 +13,7 @@ use serde::{
 
 use crate::{
     ClassName, Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, LinkEdit, LinkPath,
-    ObjectEdit, Origin, OverridePath, PropertyEdit, Selector, Target, Value,
+    ModuleName, ObjectEdit, Origin, OverridePath, PropertyEdit, Selector, Target, Value,
 };
 
 /// An archive's versioned declarations, including fields an older consumer cannot execute.
@@ -148,6 +148,8 @@ impl<'de> de::DeserializeSeed<'de> for JsonVisitor {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Module {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<ModuleName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     target: Option<Target>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     edits: Option<Vec<Edit>>,
@@ -180,6 +182,7 @@ impl TryFrom<Module> for crate::Module {
             }
         };
         Ok(Self {
+            name: module.name,
             selector,
             origin: module.origin,
         })
@@ -193,6 +196,7 @@ impl From<crate::Module> for Module {
             Selector::Entries(entries) => (None, None, Some(entries)),
         };
         Self {
+            name: module.name,
             target,
             edits,
             entries,
@@ -224,6 +228,7 @@ impl<T, E> SelectorKey<T, E> {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Accepts {
     pub(crate) version: bool,
+    pub(crate) name: bool,
     pub(crate) selector: bool,
     pub(crate) source: bool,
     pub(crate) edits: bool,
@@ -237,6 +242,7 @@ pub(crate) struct Accepts {
 #[derive(Debug)]
 pub(crate) struct Fields<E> {
     pub(crate) version: Option<u32>,
+    pub(crate) name: Option<String>,
     pub(crate) target: Option<Target>,
     pub(crate) entries: Option<E>,
     pub(crate) source: Option<String>,
@@ -248,6 +254,7 @@ impl<E> Default for Fields<E> {
     fn default() -> Self {
         Self {
             version: None,
+            name: None,
             target: None,
             entries: None,
             source: None,
@@ -264,6 +271,7 @@ impl<'de, E: Deserialize<'de>> Fields<E> {
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "version" if accepts.version => fill(&mut fields.version, &mut map, &key)?,
+                "name" if accepts.name => fill(&mut fields.name, &mut map, &key)?,
                 "target" if accepts.selector => fill(&mut fields.target, &mut map, &key)?,
                 "entries" if accepts.selector => fill(&mut fields.entries, &mut map, &key)?,
                 "source" if accepts.source => fill(&mut fields.source, &mut map, &key)?,

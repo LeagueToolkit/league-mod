@@ -273,6 +273,9 @@ pub enum ErrorKind {
     /// A class name that is the empty string.
     #[error("expected a nonempty class name")]
     EmptyClassName,
+    /// A module name that is the empty string.
+    #[error("expected a nonempty module name")]
+    EmptyModuleName,
     /// A link path that is empty or longer than the header's limit.
     #[error("link paths require 1 to 65535 UTF-8 bytes")]
     LinkPathLength,

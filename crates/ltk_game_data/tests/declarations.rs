@@ -1,7 +1,7 @@
 use ltk_game_data::{
-    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, ErrorKind, Module, NoSchema,
-    OverridePath, RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target, apply,
-    load_declarations,
+    ApplyDiagnosticKind, BinHash, DeclarationDocument, Edit, ErrorKind, Module, ModuleName,
+    NoSchema, OverridePath, RecordSkipReason, ReferencedInputs, Selector, SkippedRecord, Target,
+    apply, load_declarations,
 };
 use ltk_meta::{Bin, BinObject, BinOverride, path::PropertyPath, property::values};
 use std::io::Cursor;
@@ -959,4 +959,108 @@ fn errors_carry_codes_and_typed_locations() {
     let error = Target::try_from("").unwrap_err();
     assert_eq!(error.kind, ErrorKind::EmptyTarget);
     assert_eq!(error.location.key.as_deref(), Some("target"));
+}
+
+/// The name of every module, in order.
+fn module_names(declarations: &ltk_game_data::Declarations) -> Vec<Option<&str>> {
+    declarations
+        .modules
+        .iter()
+        .map(|module| module.name.as_ref().map(ModuleName::as_str))
+        .collect()
+}
+
+#[test]
+fn every_format_reads_an_optional_module_name_beside_either_selector() {
+    let manifests = [
+        (
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - name: Ahri recolor\n    target: a.bin\n    links: [x]\n  - entries:\n      Characters/Ahri:\n        speed: 2\n    name: Ahri recolor\n  - target: b.bin\n    links: [y]\n",
+        ),
+        (
+            "game_data.toml",
+            "version = 1\n\n[[modules]]\nname = \"Ahri recolor\"\ntarget = \"a.bin\"\nlinks = [\"x\"]\n\n[[modules]]\nname = \"Ahri recolor\"\nentries = { \"Characters/Ahri\" = { speed = 2 } }\n\n[[modules]]\ntarget = \"b.bin\"\nlinks = [\"y\"]\n",
+        ),
+        (
+            "game_data.json",
+            r#"{"version":1,"modules":[{"name":"Ahri recolor","target":"a.bin","links":["x"]},{"name":"Ahri recolor","entries":{"Characters/Ahri":{"speed":2}}},{"target":"b.bin","links":["y"]}]}"#,
+        ),
+    ];
+    for (name, text) in manifests {
+        let declarations = load_declarations(name, text, |_| unreachable!()).unwrap();
+        assert_eq!(
+            module_names(&declarations),
+            [Some("Ahri recolor"), Some("Ahri recolor"), None],
+            "{name}"
+        );
+        assert_eq!(target_of(&declarations.modules[0]).0.as_str(), "a.bin");
+        assert_eq!(entry_names(&declarations.modules[1]), ["Characters/Ahri"]);
+    }
+}
+
+#[test]
+fn an_empty_module_name_is_refused_at_its_module() {
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    links: [x]\n  - name: ''\n    target: a.bin\n    links: [x]\n";
+    let error = load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::EmptyModuleName);
+    assert_eq!(error.location.document.as_deref(), Some("game_data.yaml"));
+    assert_eq!(error.location.module, Some(1));
+    assert_eq!(error.location.key.as_deref(), Some("name"));
+
+    let error = ModuleName::try_from("").unwrap_err();
+    assert_eq!(error.kind, ErrorKind::EmptyModuleName);
+
+    let document: DeclarationDocument = serde_json::from_str(
+        r#"{"version":1,"modules":[{"name":"","target":"a.bin","edits":[{"links":["x"]}],"origin":{"manifest":"m","source":null,"module":0}}]}"#,
+    )
+    .unwrap();
+    assert!(document.parse().is_err());
+
+    let text = "version: 1\nmodules:\n  - name: [a]\n    target: a.bin\n    links: [x]\n";
+    assert!(load_declarations("game_data.yaml", text, |_| unreachable!()).is_err());
+}
+
+#[test]
+fn a_name_outside_a_manifest_module_is_an_unsupported_binding() {
+    let unsupported = |error: ltk_game_data::Error| {
+        assert_eq!(
+            error.kind,
+            ErrorKind::UnsupportedBinding { key: "name".into() },
+            "{error}"
+        );
+    };
+
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    source: shared.yaml\n";
+    let error = load_declarations("game_data.yaml", text, |_| {
+        Ok("version: 1\nname: Shared\nlinks: [x]\n".to_owned())
+    })
+    .unwrap_err();
+    assert_eq!(error.location.document.as_deref(), Some("shared.yaml"));
+    unsupported(error);
+
+    let text = "version: 1\nmodules:\n  - target: a.bin\n    edits:\n      - name: First\n        links: [x]\n";
+    unsupported(load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap_err());
+}
+
+#[test]
+fn module_names_round_trip_through_the_document_and_the_manifest() {
+    let text = "version: 1\nmodules:\n  - name: Ahri recolor\n    target: a.bin\n    links: [x]\n  - name: Ahri recolor\n    entries:\n      Characters/Ahri:\n        speed: 2\n  - target: b.bin\n    links: [y]\n";
+    let declarations = load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap();
+
+    let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
+    let json = serde_json::to_string(&document).unwrap();
+    assert!(
+        json.contains(r#""name":"Ahri recolor","target":"a.bin""#),
+        "{json}"
+    );
+    let reread: DeclarationDocument = serde_json::from_str(&json).unwrap();
+    assert_eq!(reread.parse().unwrap(), declarations);
+
+    let manifest = declarations.manifest_json().unwrap();
+    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    assert_eq!(
+        module_names(&reloaded),
+        [Some("Ahri recolor"), Some("Ahri recolor"), None]
+    );
+    assert_eq!(reloaded.manifest_json().unwrap(), manifest);
 }

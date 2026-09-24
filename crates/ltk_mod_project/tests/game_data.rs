@@ -587,3 +587,64 @@ fn invalid_entry_bodies_refuse_the_layer_with_typed_kinds() {
         assert!(expected(&error.kind), "{manifest}: {error}");
     }
 }
+
+#[test]
+fn module_names_round_trip_through_both_archives_and_extraction() {
+    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
+    let names = |declarations: &ltk_game_data::Declarations| -> Vec<Option<String>> {
+        declarations
+            .modules
+            .iter()
+            .map(|module| module.name.as_ref().map(|name| name.as_str().to_owned()))
+            .collect()
+    };
+    let expected = [Some("Teemo recolor".to_owned()), None];
+    for format in ["modpkg", "fantome"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let source = root.join("source");
+        fs::create_dir_all(source.join("content/base")).unwrap();
+        fs::write(
+            source.join("content/base/game_data.yaml"),
+            "version: 1\nmodules:\n  - name: Teemo recolor\n    entries:\n      Characters/Teemo:\n        speed: 2\n  - target: shared\n    links: [x]\n",
+        )
+        .unwrap();
+        let project = ModProject {
+            name: "names".into(),
+            display_name: "Names".into(),
+            version: "1.0.0".into(),
+            layers: vec![ModProjectLayer::base()],
+            ..Default::default()
+        };
+        let mut archive = Cursor::new(Vec::new());
+        let packer = ProjectPacker::new(project, source);
+        if format == "modpkg" {
+            packer.pack(ModpkgFormat::new(&mut archive)).unwrap();
+        } else {
+            packer.pack(FantomeFormat::new(&mut archive)).unwrap();
+        }
+        archive.set_position(0);
+        let document = if format == "modpkg" {
+            let mut package = Modpkg::mount_from_reader(archive.clone()).unwrap();
+            package.load_metadata().unwrap().layers[0].game_data.clone()
+        } else {
+            let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
+            reader.read_info().unwrap().layers["base"].game_data.clone()
+        };
+        let carried = document.unwrap().parse().unwrap();
+        assert_eq!(names(&carried), expected, "{format}");
+
+        let output = root.join("output");
+        let importer = ProjectImporter::new(output.clone());
+        if format == "modpkg" {
+            importer.import(ModpkgImporter::new(archive)).unwrap();
+        } else {
+            importer.import(FantomeImporter::new(archive)).unwrap();
+        }
+        let extracted = load_layer(&output, "base", &ModIgnore::empty(&output))
+            .declarations
+            .unwrap()
+            .unwrap();
+        assert_eq!(names(&extracted), expected, "{format}");
+    }
+}
