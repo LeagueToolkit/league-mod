@@ -46,7 +46,8 @@ pub enum GameDataDiagnosticKind {
     LinkRemovalUnmatched,
     /// One property key whose edit does not apply. The remaining keys apply.
     PropertyEditSkipped,
-    /// A property typed from the base, the schema saying nothing. Informational.
+    /// A property typed without the schema's answer: from the base value, or from the
+    /// schema's fallback shape where the base omits it. Informational.
     SchemaFallback,
     /// A referenced entry the game declares and the build could not read. Its keys are skipped.
     ReferenceUnreadable,

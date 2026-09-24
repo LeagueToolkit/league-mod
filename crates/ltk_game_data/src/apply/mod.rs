@@ -33,7 +33,8 @@ pub enum ApplyDiagnosticKind {
     LinkRemovalUnmatched,
     /// One property key whose edit does not apply. The remaining keys apply.
     PropertyEditSkipped,
-    /// A property typed from the base, the schema saying nothing. Informational.
+    /// A property typed without the schema's answer: from the base value, or from
+    /// `Schema::fallback` where the base omits it. Informational.
     SchemaFallback,
     /// A referenced entry the caller could not read. Every key naming it is skipped.
     ReferenceUnreadable,
@@ -129,7 +130,8 @@ pub enum PropertySkipReason {
     TypeMismatch,
     /// A key inside a block or a `set` that is not a property path.
     InvalidPath,
-    /// The property has no type: the base omits it and the schema says nothing.
+    /// The property has no type: the base omits it, and neither `Schema::expected` nor
+    /// `Schema::fallback` answers.
     Untypable,
     /// A struct pin's class the schema does not know.
     UnknownClass,
@@ -283,7 +285,7 @@ impl ApplyDiagnosticKind {
             Self::OverrideRecordSkipped => format!("Override record is skipped: {path}"),
             Self::LinkRemovalUnmatched => format!("Link removal is absent: {path}"),
             Self::PropertyEditSkipped => format!("Property edit is skipped: {path}"),
-            Self::SchemaFallback => format!("Property is typed from the base: {path}"),
+            Self::SchemaFallback => format!("Property is typed without the schema: {path}"),
             Self::ReferenceUnreadable => format!("Referenced entry cannot be read: {path}"),
             Self::ObjectSkipped => format!("Object edit is skipped: {path}"),
             Self::Unknown => format!("Application diagnostic: {path}"),
@@ -455,9 +457,11 @@ pub fn apply<B: AsRef<[u8]>>(
         .retain(|path| seen.insert(path.as_str().to_ascii_lowercase()));
     let mut diagnostics = Vec::new();
     let references = resolve_references(edits, read_entry, &mut diagnostics);
+    let fell_back = std::cell::Cell::new(false);
     let coercer = coerce::Coercer {
         schema,
         references: &references,
+        fell_back: &fell_back,
     };
     let mut applied = Applied::default();
     for (index, edit) in edits.iter().enumerate() {
