@@ -319,11 +319,9 @@ impl Entry {
 struct Entries(IndexMap<EntryName, Entry>);
 
 impl Entries {
-    /// The edit of every entry, in mapping order. An error names its entry.
+    /// The edit of every entry, in mapping order, none for an empty mapping. An error names
+    /// its entry.
     fn into_edits(self) -> Result<IndexMap<EntryName, EntryEdit>, Error> {
-        if self.0.is_empty() {
-            return Err(Error::new(ErrorKind::EntriesEmpty));
-        }
         self.0
             .into_iter()
             .map(|(name, entry)| {

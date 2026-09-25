@@ -460,7 +460,7 @@ impl OverlayBuilder {
         let object_index = pending
             .iter()
             .any(|pending| {
-                matches!(pending.module.selector, Selector::Entries(_))
+                matches!(&pending.module.selector, Selector::Entries(entries) if !entries.is_empty())
                     || !pending.module.references().is_empty()
                     || created_objects(&pending.module).next().is_some()
             })

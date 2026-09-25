@@ -455,16 +455,35 @@ fn a_document_refuses_a_duplicate_mapping_key() {
 }
 
 #[test]
-fn an_empty_selector_refuses_to_load_and_to_write() {
+fn an_empty_entries_module_loads_writes_and_reads_back() {
+    let empty_entries = r#"{"version":1,"modules":[{"entries":{},"origin":{"manifest":"m","source":null,"module":0}}]}"#;
+    let document: DeclarationDocument = serde_json::from_str(empty_entries).unwrap();
+    let declarations = document.parse().unwrap();
+    assert!(
+        matches!(&declarations.modules[0].selector, Selector::Entries(entries) if entries.is_empty())
+    );
+
+    let yaml = "version: 1\nmodules:\n  - name: Particles\n    entries: {}\n";
+    let loaded =
+        ltk_game_data::load_declarations("game_data.yaml", yaml, |_| unreachable!()).unwrap();
+    let written = loaded.manifest_json().unwrap();
+    let reloaded =
+        ltk_game_data::load_declarations("game_data.json", &written, |_| unreachable!()).unwrap();
+    assert_eq!(
+        reloaded.modules[0].name.as_ref().map(|name| name.as_str()),
+        Some("Particles")
+    );
+    assert!(
+        matches!(&reloaded.modules[0].selector, Selector::Entries(entries) if entries.is_empty())
+    );
+}
+
+#[test]
+fn an_empty_target_refuses_to_load_and_to_write() {
     let empty_edits = r#"{"version":1,"modules":[{"target":"a.bin","edits":[],"origin":{"manifest":"m","source":null,"module":0}}]}"#;
     let document: DeclarationDocument = serde_json::from_str(empty_edits).unwrap();
     let error = document.parse().unwrap_err();
     assert!(matches!(error.kind, ErrorKind::EditsEmpty), "{error:?}");
-
-    let empty_entries = r#"{"version":1,"modules":[{"entries":{},"origin":{"manifest":"m","source":null,"module":0}}]}"#;
-    let document: DeclarationDocument = serde_json::from_str(empty_entries).unwrap();
-    let error = document.parse().unwrap_err();
-    assert!(matches!(error.kind, ErrorKind::EntriesEmpty), "{error:?}");
 
     let declarations = Declarations {
         version: 1,

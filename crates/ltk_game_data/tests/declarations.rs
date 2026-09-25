@@ -474,7 +474,6 @@ fn entry_bodies_refuse_sources_unknown_keys_and_empty_names() {
         r#"{"version":1,"modules":[{"entries":{"x":{"overrides":["a"]}}}]}"#,
         r#"{"version":1,"modules":[{"entries":{"":{"links":["a"]}}}]}"#,
         r#"{"version":1,"modules":[{"entries":{"x":{"links":["a"]},"x":{"links":["b"]}}}]}"#,
-        r#"{"version":1,"modules":[{"entries":{}}]}"#,
     ] {
         assert!(
             load_declarations("game_data.json", text, |_| panic!(

@@ -315,7 +315,9 @@ pub enum ErrorKind {
     /// An `entries` module with `source`, `edits`, or a binding beside the mapping.
     #[error("entries takes no other bindings")]
     EntriesWithBindings,
-    /// An `entries` mapping with no entry.
+    /// An `entries` mapping with no entry. No longer raised: an empty `entries` module loads
+    /// and applies nothing.
+    #[deprecated(note = "an empty `entries` module loads and applies nothing")]
     #[error("entries requires at least one entry")]
     EntriesEmpty,
     /// An entry body with a `source` key.
