@@ -264,8 +264,10 @@ A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one selector and an optional `name`. A `target` selector takes a compact
 binding body, `edits`, or `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
-nothing else; an `entries` module is one batch. A module with both keys, or neither, is an
-error. A compact body and every edit carry at least one binding. A binding body's keys are
+nothing else; an `entries` module is one batch. The mapping may be empty, and such a module
+loads and applies nothing ([ADR-0034](../adr/0034-an-empty-entries-module-loads.md)). A
+module with both keys, or neither, is an error. A compact body and every edit carry at least
+one binding. A binding body's keys are
 `overrides`, `objects`, `links`, `+links`, `-links`, and entry names; an entry name at a body
 root carries a slash or is hash-form, and every other key is an unsupported binding and an
 error. Binding keywords compare case-sensitively: `Objects` and `Overrides` in an entry body
@@ -750,7 +752,8 @@ additions and removals on lists and maps,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, module names in every format, through the document, the manifest,
 both archives, and extraction, an empty module name, a `name` in a source file and in an
-`edits` item, and an overlay build with a schema and a cached replay of the two kinds.
+`edits` item, an empty `entries` module loaded, written and read back, an empty `edits`
+refused, and an overlay build with a schema and a cached replay of the two kinds.
 Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
 spellings, an `option` of a vector, a nameless field rendered under its hash-form name and
 applied back, and YAML output reloaded. Reference cases
@@ -805,3 +808,4 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D30 | An entry name refuses a binding keyword at construction | A refusal at serialization only | Every identifier enforces its own invariant; the report names what the caller wrote | [ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md) |
 | D39 | A manifest module takes an optional `name`, carried by every serialized form, uniqueness unchecked | A unique key; names in a separate table; a `name` in a source file | A name labels a module for its author; modules execute by position | [section 4](#s4), [ADR-0032](../adr/0032-module-names.md) |
 | D40 | A property the base omits takes `Schema::fallback` where `expected` is `None`; `expected` and a held base value outrank it | `Untypable` until the schema describes the build; the newest described build answered inside `expected` | A game build newer than the schema keeps its added fields typable; the guess is an answer of its own, reported as `SchemaFallback` | [section 6](#s6), [ADR-0033](../adr/0033-schema-fallback-shape.md) |
+| D41 | An `entries` module may hold no entry, and applies nothing | `EntriesEmpty` at loading | An author names a module before filling it, and a tool writes it as it is named | [section 4](#s4), [ADR-0034](../adr/0034-an-empty-entries-module-loads.md) |

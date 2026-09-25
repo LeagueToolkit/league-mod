@@ -58,24 +58,23 @@ pub struct Declarations {
 impl Declarations {
     /// Checks the declaration version and every module's selector.
     ///
+    /// An `entries` module with no entry is valid and applies nothing.
+    ///
     /// # Errors
     ///
-    /// [`ErrorKind::UnsupportedVersion`] for a version this crate does not execute,
-    /// [`ErrorKind::EditsEmpty`] for a target module with no edit, and
-    /// [`ErrorKind::EntriesEmpty`] for an entries module with no entry. The error names the
-    /// module index. A manifest refuses both empty selectors, so declarations holding one
-    /// write a manifest that does not load.
+    /// [`ErrorKind::UnsupportedVersion`] for a version this crate does not execute, and
+    /// [`ErrorKind::EditsEmpty`] for a target module with no edit. The error names the
+    /// module index. A manifest refuses an empty `edits`, so declarations holding one write a
+    /// manifest that does not load.
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 {
             return Err(Error::new(ErrorKind::UnsupportedVersion));
         }
         for (index, module) in self.modules.iter().enumerate() {
-            let empty = match &module.selector {
-                Selector::Target { edits, .. } => edits.is_empty().then_some(ErrorKind::EditsEmpty),
-                Selector::Entries(entries) => entries.is_empty().then_some(ErrorKind::EntriesEmpty),
-            };
-            if let Some(kind) = empty {
-                return Err(Error::new(kind)
+            if let Selector::Target { edits, .. } = &module.selector
+                && edits.is_empty()
+            {
+                return Err(Error::new(ErrorKind::EditsEmpty)
                     .document(module.origin.manifest.clone())
                     .module(index));
             }
