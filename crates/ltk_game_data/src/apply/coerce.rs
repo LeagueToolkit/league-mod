@@ -338,6 +338,11 @@ pub(crate) fn hash32_of(name: &str) -> BinHash {
     hex32(name).unwrap_or_else(|| BinHash::from(name))
 }
 
+/// Whether `name` is hash-form: `0x` and exactly 8 hexadecimal digits.
+pub(crate) fn is_hash_form(name: &str) -> bool {
+    hex32(name).is_some()
+}
+
 /// The hash `0x` and exactly 8 hexadecimal digits spell.
 fn hex32(text: &str) -> Option<BinHash> {
     hex(text, 8).and_then(|hash| u32::try_from(hash).ok().map(BinHash))
