@@ -5,8 +5,12 @@ mod address;
 mod coerce;
 mod entries;
 mod objects;
+mod patch;
 
 pub(crate) use coerce::{hash32_of, hash64_of};
+
+/// The magic a `PTCH` file opens with.
+const PTCH_MAGIC: &[u8] = b"PTCH";
 
 use std::{collections::HashSet, io::Cursor};
 
@@ -40,6 +44,11 @@ pub enum ApplyDiagnosticKind {
     ReferenceUnreadable,
     /// One object creation or removal that does not apply. The remaining objects apply.
     ObjectSkipped,
+    /// A link edit on a `PTCH` target. A `PTCH` holds no dependency list. The edit continues.
+    LinkUnsupported,
+    /// An entry of a `PTCH` target's base the caller could not read. Every edit naming it is
+    /// skipped.
+    EntryUnreadable,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -156,6 +165,9 @@ pub enum PropertySkipReason {
     ReferenceMissingEntry,
     /// A reference whose path the supplied entry does not resolve.
     ReferenceUnresolved,
+    /// A path with a hash-form segment, on an object a `PTCH` target patches with a record.
+    /// A record carries its path as text, and the client hashes that text.
+    HashFormPath,
     /// A reason this crate does not name.
     #[default]
     #[serde(other)]
@@ -288,6 +300,8 @@ impl ApplyDiagnosticKind {
             Self::SchemaFallback => format!("Property is typed without the schema: {path}"),
             Self::ReferenceUnreadable => format!("Referenced entry cannot be read: {path}"),
             Self::ObjectSkipped => format!("Object edit is skipped: {path}"),
+            Self::LinkUnsupported => format!("Link edit on a PTCH is skipped: {path}"),
+            Self::EntryUnreadable => format!("Base entry cannot be read: {path}"),
             Self::Unknown => format!("Application diagnostic: {path}"),
         }
     }
@@ -344,9 +358,10 @@ impl Applied {
 /// changed, and every nonfatal outcome.
 #[derive(Debug)]
 pub struct ApplyResult {
-    /// The target after every edit, a `PROP`.
+    /// The target after every edit, a `PROP` for a `PROP` target and a `PTCH` for a `PTCH` one.
     pub bytes: Vec<u8>,
-    /// The dependency spellings of `bytes`, retained base entries included.
+    /// The dependency spellings of `bytes`, retained base entries included. A `PTCH` holds
+    /// none.
     pub dependencies: Vec<String>,
     /// What the edits changed.
     pub applied: Applied,
@@ -378,7 +393,7 @@ impl ApplyResult {
 /// against the first edit naming it.
 fn resolve_references(
     edits: &[Edit],
-    mut read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
+    read_entry: &mut impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
     diagnostics: &mut Vec<ApplyDiagnostic>,
 ) -> coerce::ResolvedReferences {
     let mut resolved = coerce::ResolvedReferences::new();
@@ -414,10 +429,12 @@ fn resolve_references(
     resolved
 }
 
-/// Applies ordered edits to a PROP v2 or v3.
+/// Applies ordered edits to a PROP v2 or v3, or to a `PTCH`.
 ///
 /// Each edit runs its phases, the override files, the object creations, the entry edits, the
-/// object removals, and the link edits, and reads the result of the preceding edit.
+/// object removals, and the link edits, and reads the result of the preceding edit. A `PTCH`
+/// target takes every edit as its own deletions, objects and records, per
+/// `docs/design/game-data.md` section 6.
 /// `read_override` supplies the bytes of an override file by its path, once per listed path
 /// in apply order, in any byte container; a caller sharing one file across several targets
 /// hands over an `Arc<[u8]>`. `read_entry` supplies the installed game's copy of an entry a
@@ -431,14 +448,18 @@ fn resolve_references(
 ///
 /// # Errors
 ///
-/// The base is not a PROP version 2 or 3, or its object table does not decode.
+/// The base is neither a PROP version 2 or 3 nor a `PTCH`, or it does not decode.
 pub fn apply<B: AsRef<[u8]>>(
     base: &[u8],
     edits: &[Edit],
     mut read_override: impl FnMut(&OverridePath) -> Result<B, Error>,
-    read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
+    mut read_entry: impl FnMut(&EntryName) -> Result<Option<BinObject>, Error>,
     schema: &dyn Schema,
 ) -> Result<ApplyResult, Error> {
+    if base.starts_with(PTCH_MAGIC) {
+        return patch::apply(base, edits, read_override, read_entry, schema);
+    }
+
     // Reading a reference costs the caller a chunk read and a decode per entry, so the base
     // is refused first. A target that is not a PROP v2 or v3 pays nothing for its references.
     let stream = BinStream::mount(Cursor::new(base)).map_err(|e| bin_error(&e))?;
@@ -456,7 +477,7 @@ pub fn apply<B: AsRef<[u8]>>(
     bin.dependencies
         .retain(|path| seen.insert(path.as_str().to_ascii_lowercase()));
     let mut diagnostics = Vec::new();
-    let references = resolve_references(edits, read_entry, &mut diagnostics);
+    let references = resolve_references(edits, &mut read_entry, &mut diagnostics);
     let fell_back = std::cell::Cell::new(false);
     let coercer = coerce::Coercer {
         schema,
@@ -466,41 +487,9 @@ pub fn apply<B: AsRef<[u8]>>(
     let mut applied = Applied::default();
     for (index, edit) in edits.iter().enumerate() {
         for path in &edit.overrides {
-            let mut report = |kind, record, detail| {
-                diagnostics.push(ApplyDiagnostic {
-                    kind,
-                    edit_index: index,
-                    path: path.as_str().to_owned(),
-                    record,
-                    property: None,
-                    object: None,
-                    detail,
-                });
-            };
-            // The reader's own error says why the file could not be supplied. It can be
-            // missing, outside the layer, or unreadable, and the caller has no other way
-            // to learn which.
-            let bytes = match read_override(path) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    report(
-                        ApplyDiagnosticKind::OverrideUnreadable,
-                        None,
-                        Some(error.to_string()),
-                    );
-                    continue;
-                }
-            };
-            let patch = match BinOverride::from_reader(&mut Cursor::new(bytes.as_ref())) {
-                Ok(patch) => patch,
-                Err(error) => {
-                    report(
-                        ApplyDiagnosticKind::OverrideInvalid,
-                        None,
-                        Some(error.to_string()),
-                    );
-                    continue;
-                }
+            let Some(patch) = read_override_file(path, &mut read_override, index, &mut diagnostics)
+            else {
+                continue;
             };
             let report_of_patch = patch.apply(&mut bin);
             applied.records += report_of_patch.applied;
@@ -509,32 +498,27 @@ pub fn apply<B: AsRef<[u8]>>(
                 + report_of_patch.deleted.len();
             for skipped in report_of_patch.skipped {
                 let detail = skipped.error.to_string();
-                report(
-                    ApplyDiagnosticKind::OverrideRecordSkipped,
-                    Some(SkippedRecord {
+                diagnostics.push(ApplyDiagnostic {
+                    kind: ApplyDiagnosticKind::OverrideRecordSkipped,
+                    edit_index: index,
+                    path: path.as_str().to_owned(),
+                    record: Some(SkippedRecord {
                         index: skipped.index,
                         object: skipped.object_hash,
                         property: skipped.path.as_str().to_owned(),
                         reason: RecordSkipReason::from(&skipped.error),
                     }),
-                    Some(detail),
-                );
+                    property: None,
+                    object: None,
+                    detail: Some(detail),
+                });
             }
         }
         let created = objects::create(&mut bin, coercer, &edit.objects);
         applied.objects += created.objects;
         report_objects(&mut diagnostics, index, created.skipped);
         for outcome in [created.sets, entries::run(&mut bin, coercer, &edit.entries)] {
-            applied.properties += outcome.properties;
-            diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
-                kind: report.kind,
-                edit_index: index,
-                path: report.path,
-                record: None,
-                property: report.property,
-                object: None,
-                detail: report.detail,
-            }));
+            applied.properties += report_properties(&mut diagnostics, index, outcome);
         }
         let (skipped, removed) = objects::remove(&mut bin, &edit.objects);
         applied.objects += removed;
@@ -586,6 +570,53 @@ pub fn apply<B: AsRef<[u8]>>(
         applied,
         diagnostics,
     })
+}
+
+/// The override file at `path` of edit `index`, decoded, or `None` with its diagnostic.
+///
+/// The reader's own error says why the file could not be supplied: it can be missing, outside
+/// the layer, or unreadable, and the caller has no other way to learn which.
+fn read_override_file<B: AsRef<[u8]>>(
+    path: &OverridePath,
+    read_override: &mut impl FnMut(&OverridePath) -> Result<B, Error>,
+    index: usize,
+    diagnostics: &mut Vec<ApplyDiagnostic>,
+) -> Option<BinOverride> {
+    let failed = match read_override(path) {
+        Ok(bytes) => match BinOverride::from_reader(&mut Cursor::new(bytes.as_ref())) {
+            Ok(patch) => return Some(patch),
+            Err(error) => (ApplyDiagnosticKind::OverrideInvalid, error.to_string()),
+        },
+        Err(error) => (ApplyDiagnosticKind::OverrideUnreadable, error.to_string()),
+    };
+    diagnostics.push(ApplyDiagnostic {
+        kind: failed.0,
+        edit_index: index,
+        path: path.as_str().to_owned(),
+        record: None,
+        property: None,
+        object: None,
+        detail: Some(failed.1),
+    });
+    None
+}
+
+/// Reports the entry-edit outcome of edit `index`, and answers how many property keys it set.
+fn report_properties(
+    diagnostics: &mut Vec<ApplyDiagnostic>,
+    index: usize,
+    outcome: entries::Outcome,
+) -> usize {
+    diagnostics.extend(outcome.reports.into_iter().map(|report| ApplyDiagnostic {
+        kind: report.kind,
+        edit_index: index,
+        path: report.path,
+        record: None,
+        property: report.property,
+        object: None,
+        detail: report.detail,
+    }));
+    outcome.properties
 }
 
 /// Reports each skipped object of edit `index` as an `ObjectSkipped` diagnostic.

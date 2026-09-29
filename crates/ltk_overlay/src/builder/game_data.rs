@@ -56,6 +56,10 @@ pub enum GameDataDiagnosticKind {
     /// A created object whose name a game bin other than the target declares. The object is
     /// created. Informational.
     ObjectShadowsGame,
+    /// A link edit on a `PTCH` target. A `PTCH` holds no dependency list. The edit continues.
+    LinkUnsupported,
+    /// An entry of a `PTCH` target's base the build could not read. Its edits are skipped.
+    EntryUnreadable,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -101,6 +105,8 @@ impl From<ApplyDiagnosticKind> for GameDataDiagnosticKind {
             ApplyDiagnosticKind::SchemaFallback => Self::SchemaFallback,
             ApplyDiagnosticKind::ReferenceUnreadable => Self::ReferenceUnreadable,
             ApplyDiagnosticKind::ObjectSkipped => Self::ObjectSkipped,
+            ApplyDiagnosticKind::LinkUnsupported => Self::LinkUnsupported,
+            ApplyDiagnosticKind::EntryUnreadable => Self::EntryUnreadable,
             _ => Self::Unknown,
         }
     }
@@ -457,7 +463,7 @@ impl OverlayBuilder {
         // A reference needs the index for the same reason an `entries` module does: it names
         // an entry, and only the index says which chunk declares it. A created object is
         // checked against the entries the game declares.
-        let object_index = pending
+        let mut object_index = pending
             .iter()
             .any(|pending| {
                 matches!(&pending.module.selector, Selector::Entries(entries) if !entries.is_empty())
@@ -549,7 +555,6 @@ impl OverlayBuilder {
         // One decode per referenced entry for the whole build, not one per target that
         // references it.
         let mut entries: HashMap<BinHash, Option<BinObject>> = HashMap::new();
-        let declaring_index = object_index.as_ref().and_then(|index| index.as_ref().ok());
         for (hash, applications) in targets {
             let original = bases.remove(&hash).or_else(|| metadata.get(&hash).cloned());
             let game_wad = game
@@ -579,6 +584,15 @@ impl OverlayBuilder {
                 }
                 continue;
             }
+            // A `PTCH` target reads every object its edits name from the game, and only the
+            // index says which chunk declares one.
+            if object_index.is_none() && bytes.starts_with(b"PTCH") {
+                object_index = Some(self.load_object_index(game));
+                if matches!(object_index, Some(Err(_))) {
+                    self.check_called_off()?;
+                }
+            }
+            let declaring_index = object_index.as_ref().and_then(|index| index.as_ref().ok());
             let mut dependencies = Vec::new();
             let mut applied = false;
             for application in &applications {

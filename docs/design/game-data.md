@@ -40,6 +40,7 @@ to a value of the installed game.
 - **Leaf edit:** A property edit with block descent applied: a full path from the entry, a sign, and a value that is not a descent.
 - **Origin:** A manifest, optional source, and zero-based module index.
 - **Target:** A nonempty literal game path or bare chunk hash.
+- **Patch target:** A target whose chunk is a `PTCH`: a variant the client lays over a base `PROP`.
 - **Entry name:** A nonempty bin object path that is not a binding keyword, or its hash as `0x` and 8 hexadecimal digits. The object hash of a path is the FNV-1a of its ASCII-lowercased spelling.
 - **Declaring chunk:** A game bin chunk containing an entry, reported by the object index.
 - **Link path:** An authored dependency path containing 1 to 65535 UTF-8 bytes.
@@ -501,8 +502,8 @@ under the `IndexingObjects` build stage. An object index that fails to load and 
 `IndexUnavailable` for every `entries` module and every module holding a reference, and a
 warning in the log; the build continues. An object index build the cancellation poll stops
 ends the build. The overlay also loads or builds the object index for a build in which an
-enabled layer declares a reference, and for a build in which a `target` module creates an
-object. A created object whose name the object index declares in a chunk other than the
+enabled layer declares a reference, for a build in which a `target` module creates an
+object, and at the first patch target of a build. A created object whose name the object index declares in a chunk other than the
 target produces `ObjectShadowsGame`, naming those chunks; the object is created
 ([ADR-0031](../adr/0031-game-shadowing-report.md)). With the index unavailable, such a module
 produces `IndexUnavailable` and its objects are created unchecked. It answers `read_entry` with the entry's object in the
@@ -517,9 +518,27 @@ A reference stands where a value stands: a whole property, a list item, a map va
 field of a struct pin, and the whole operand of a signed edit. It does not stand where a key
 or an index stands, so a map removal and a struct list removal, which name keys and indices,
 read a reference as `KindMismatch`.
-The target must be PROP version 2 or 3. Invalid declarations refuse the layer's declarations;
-ordinary content remains available. Missing or invalid targets produce diagnostics and retain
-their original bytes. `ltk_meta` decodes the complete base.
+The target is a PROP version 2 or 3, or a `PTCH` ([ADR-0035](../adr/0035-patch-targets.md)).
+Invalid declarations refuse the layer's declarations; ordinary content remains available.
+Missing or invalid targets produce diagnostics and retain their original bytes. `ltk_meta`
+decodes the complete base.
+
+**Patch targets.** A `PTCH` target is a variant the client lays over a base `PROP`. Its
+application output is a `PTCH`, and its dependency list is empty. The edits run over a view:
+the patch's own objects, and `read_entry`'s copy of each other object an edit names, entry or
+object binding or clone source, with the patch's records laid over it in file order. A record
+that copy does not fit is left out of the view. An object the patch deletes is absent from the
+view. An object the patch holds takes an edit in place. Every settled property key of any other
+object is one record `{object, path, value}`: the patch drops each held record of that object
+at the key's path or under it, and appends the new record. A key of such an object whose path
+holds a hash-form segment is `HashFormPath`. A record carries its path as text, and the client
+hashes that text. An override file adds its deletions, objects and records to the patch, and
+`Applied::records` counts its records. A created object is one the patch holds, and a created
+name the patch deletes leaves its deletions. A removal drops an object the patch holds with its
+records, and adds any other object to the patch's deletions. A link edit is one
+`LinkUnsupported` diagnostic per path, and the edit continues. An entry `read_entry` fails to
+read is one `EntryUnreadable` diagnostic, and every key naming it is `MissingObject`. A target
+where no edit applies keeps its bytes.
 
 Each edit applies its override files in listed order, then its object creations, then its
 entry edits, then its object removals, then its link edits. An override file
@@ -676,7 +695,7 @@ absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
 `DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
 `PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, `ObjectSkipped`,
-`ObjectShadowsGame`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
+`ObjectShadowsGame`, `LinkUnsupported`, `EntryUnreadable`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
 are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field, and one of kind `ObjectSkipped`
@@ -690,7 +709,7 @@ outer path, and `detail` is what a lower layer said where no code of this crate 
 `ApplyDiagnostic` implements `Display` as that statement with its `detail`. Its non-exhaustive
 `ApplyDiagnosticKind` distinguishes `OverrideUnreadable`, `OverrideInvalid`,
 `OverrideRecordSkipped`, `LinkRemovalUnmatched`, `PropertyEditSkipped`, `SchemaFallback`,
-`ReferenceUnreadable`, `ObjectSkipped`, and `Unknown`
+`ReferenceUnreadable`, `ObjectSkipped`, `LinkUnsupported`, `EntryUnreadable`, and `Unknown`
 ([ADR-0018](../adr/0018-property-edit-diagnostics.md)). The non-exhaustive `ObjectSkipReason`
 distinguishes `ObjectExists`, `SourceMissing`, `UnknownClass`, `RemovalUnmatched`, and
 `Unknown`.
@@ -701,7 +720,7 @@ as its `detail`, one per distinct entry that failed to read. `SkippedProperty` c
 `IndexOutOfRange`, `InvalidKey`, `KeyNotFound`, `TypeMismatch`, `InvalidPath`, `Untypable`,
 `UnknownClass`, `PinMismatch`, `SignOnScalar`, `ContainerAbsent`, `RemovalUnmatched`,
 `KindMismatch`, `OutOfRange`, `PrecisionLoss`, `ArityMismatch`, `ReferenceMissingEntry`,
-`ReferenceUnresolved`, and `Unknown`. The first nine
+`ReferenceUnresolved`, `HashFormPath`, and `Unknown`. The first nine
 are the `RecordSkipReason` codes of a path that does not resolve or a value `Bin::patch_at`
 refuses; `InvalidPath` is a key inside a block or a `set` that is not a property path.
 `SkippedRecord` contains `index`, `object` (a `BinHash`), `property`, and `reason`; the

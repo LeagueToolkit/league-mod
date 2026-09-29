@@ -5,9 +5,11 @@
 //!
 //! [ADR-0017]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0017-per-key-patch-lowering.md
 
+use std::collections::HashSet;
+
 use indexmap::IndexMap;
 use ltk_meta::{
-    Bin, PropertyKind as K, PropertyValueEnum as V,
+    Bin, PropertyKind as K, PropertyPatch, PropertyValueEnum as V,
     path::{PropertyPath, Segment},
     property::values,
 };
@@ -15,7 +17,8 @@ use ltk_meta::{
 use crate::{BinHash, EntryName, PropertyEdit, Schema, Shape, Sign, Value};
 
 use super::{
-    ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, address, coerce::Coercer,
+    ApplyDiagnosticKind, PropertySkipReason as Reason, SkippedProperty, address,
+    coerce::{Coercer, is_hash_form},
 };
 
 /// One diagnostic of the phase, before its edit index is known.
@@ -43,16 +46,41 @@ pub(super) fn run(
     coercer: Coercer<'_>,
     entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
 ) -> Outcome {
+    run_with(bin, coercer, entries, None).0
+}
+
+/// Runs the entry edits of one batch over `bin`, and answers the record each settled key of an
+/// object outside `owned` lowers to, in settle order.
+///
+/// A key of such an object whose path holds a hash-form segment is `HashFormPath`. A record
+/// carries its path as text, and the client hashes that text.
+pub(super) fn run_recording(
+    bin: &mut Bin,
+    coercer: Coercer<'_>,
+    entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
+    owned: &HashSet<BinHash>,
+) -> (Outcome, Vec<PropertyPatch>) {
+    run_with(bin, coercer, entries, Some(owned))
+}
+
+fn run_with(
+    bin: &mut Bin,
+    coercer: Coercer<'_>,
+    entries: &IndexMap<EntryName, Vec<PropertyEdit>>,
+    owned: Option<&HashSet<BinHash>>,
+) -> (Outcome, Vec<PropertyPatch>) {
     let mut phase = Phase {
         bin,
         schema: coercer.schema,
         coercer,
         outcome: Outcome::default(),
+        owned,
+        records: Vec::new(),
     };
     for (name, edits) in entries {
         phase.entry(name, edits);
     }
-    phase.outcome
+    (phase.outcome, phase.records)
 }
 
 /// The property a path names, independent of how the path spells it.
@@ -66,7 +94,7 @@ pub(super) fn run(
 /// whose key kind is `hash` and two entries of one whose key kind is `string`, and the
 /// property's kinds come from the schema, which this has no access to. Two spellings of one
 /// map key are two groups, and the second `Bin::patch` of the pair wins.
-fn identity(path: &PropertyPath) -> String {
+pub(super) fn identity(path: &PropertyPath) -> String {
     path.segments()
         .map(|segment| match &segment.subscript {
             Some(subscript) => format!("{:08x}{subscript}", address::field(&segment).0),
@@ -146,6 +174,10 @@ struct Phase<'a> {
     schema: &'a dyn Schema,
     coercer: Coercer<'a>,
     outcome: Outcome,
+    /// The objects a `PTCH` target holds itself, `None` for a `PROP` target.
+    owned: Option<&'a HashSet<BinHash>>,
+    /// The records the settled keys of every other object lower to.
+    records: Vec<PropertyPatch>,
 }
 
 impl Phase<'_> {
@@ -371,11 +403,26 @@ impl Phase<'_> {
             current = Some(contained.into_value());
         }
         let value = current.expect("a group has a set, a removal, or an addition");
+        let recorded = self.owned.is_some_and(|owned| !owned.contains(&hash));
+        if recorded
+            && group
+                .path
+                .segments()
+                .any(|segment| is_hash_form(segment.name))
+        {
+            return Err((group.first_sign(), Reason::HashFormPath));
+        }
+
         let at = address::value_path(&self.bin.objects[&hash], &group.path)
             .map_err(|kind| (group.first_sign(), kind.into()))?;
+        let record = recorded.then(|| value.clone());
         self.bin
             .patch_at(hash, &at, value)
             .map_err(|error| (group.first_sign(), Reason::from(&error)))?;
+        if let Some(value) = record {
+            self.records
+                .push(PropertyPatch::new(hash, group.path.clone(), value));
+        }
         Ok(())
     }
 }
