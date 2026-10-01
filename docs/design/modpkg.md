@@ -166,8 +166,8 @@ Every term this document uses in a specific sense. The definitions agree with th
 - **layer** - a named, prioritized slice of the mod's content. Every package has `base`.
 - **WAD target**, **WAD** - the game archive a chunk belongs in, named as the game names the
   file: `Aatrox.wad.client`.
-- **slug** - a layer name: non-empty, ASCII lowercase letters, digits and `-`, neither starting
-  nor ending with `-`.
+- **slug** - a layer name: non-empty, ASCII lowercase letters, digits, `-` and `_`, neither
+  starting nor ending with `-` or `_`.
 
 **The metadata**
 

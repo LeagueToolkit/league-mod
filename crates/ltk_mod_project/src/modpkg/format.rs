@@ -41,7 +41,7 @@ pub enum ModpkgPackError {
     Builder(#[from] ModpkgBuilderError),
 
     /// A layer name is not a valid modpkg slug.
-    #[error("Invalid layer name")]
+    #[error("Invalid layer name: {}", .0.value())]
     InvalidLayerName(#[source] InvalidSlugError),
 
     /// The project's version is not valid semver, which modpkg metadata

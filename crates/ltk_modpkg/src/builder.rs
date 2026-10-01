@@ -42,7 +42,7 @@ pub enum ModpkgBuilderError {
     #[error("invalid chunk name: {0}")]
     InvalidChunkName(String),
 
-    #[error("invalid layer name")]
+    #[error("invalid layer name: {}", .0.value())]
     InvalidLayerName(#[from] crate::error::InvalidSlugError),
 
     /// A hashtable manifest named a chunk path outside `_meta_/hashes/`.

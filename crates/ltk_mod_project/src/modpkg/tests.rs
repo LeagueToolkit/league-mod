@@ -87,6 +87,35 @@ fn invalid_layer_slug_fails_the_pack() {
     );
 }
 
+#[test]
+fn invalid_layer_name_error_names_the_layer() {
+    let error = ModpkgPackError::InvalidLayerName(ltk_modpkg::Slug::new("High Res").unwrap_err());
+
+    assert_eq!(error.to_string(), "Invalid layer name: High Res");
+}
+
+#[test]
+fn layer_name_with_underscores_packs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+
+    create_content_file(&root, "base", "Aatrox.wad.client/data/skin0.bin", b"s");
+    create_content_file(&root, "item_shop", "Aatrox.wad.client/data/shop.bin", b"i");
+
+    let project = test_mod_project(vec![
+        ModProjectLayer::base(),
+        ModProjectLayer {
+            name: "item_shop".to_string(),
+            priority: 1,
+            ..Default::default()
+        },
+    ]);
+
+    let (modpkg, _) = pack(project, &root);
+
+    assert!(modpkg.layer_index("item_shop").is_some());
+}
+
 /// A file shared by several WADs (the game requires it to be byte-identical
 /// in all of them) packs as one chunk registered under each WAD.
 #[test]
