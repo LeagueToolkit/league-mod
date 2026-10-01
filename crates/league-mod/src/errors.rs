@@ -16,7 +16,7 @@ pub enum CliError {
     #[error("Invalid layer name: {name}")]
     #[diagnostic(
         code(layer::invalid_name),
-        help("Layer names must be alphanumeric and contain no spaces or special characters")
+        help("Layer names hold lowercase letters, digits, hyphens and underscores, and neither start nor end with a hyphen or an underscore")
     )]
     InvalidLayerName {
         name: String,

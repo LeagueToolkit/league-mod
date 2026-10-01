@@ -3,33 +3,35 @@ use std::str::FromStr;
 
 use crate::error::InvalidSlugError;
 
-/// A lowercase, hyphen-separated identifier.
+/// Lowercase words joined by hyphens or underscores.
 ///
-/// Layer names use this shape. Validating in the constructor means a layer
-/// name that the packer would reject cannot be smuggled in through the
-/// builder instead.
+/// Layer names use this shape. The constructor validates it, and a layer
+/// name the packer rejects cannot enter through the builder either.
 ///
 /// ```
 /// use ltk_modpkg::Slug;
 ///
 /// assert!(Slug::new("high-res").is_ok());
+/// assert!(Slug::new("item_shop").is_ok());
 /// assert!(Slug::new("High Res").is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Slug(String);
 
 impl Slug {
-    /// Validate `value` as a slug: non-empty, ASCII lowercase alphanumeric or
-    /// hyphens, and not starting or ending with a hyphen.
+    /// Validate `value` as a slug: non-empty, ASCII lowercase letters, digits,
+    /// hyphens or underscores, and not starting or ending with a hyphen or an
+    /// underscore.
     pub fn new(value: impl AsRef<str>) -> Result<Self, InvalidSlugError> {
         let value = value.as_ref();
+        let is_separator = |c: char| c == '-' || c == '_';
 
         let valid = !value.is_empty()
             && value
                 .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            && !value.starts_with('-')
-            && !value.ends_with('-');
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || is_separator(c))
+            && !value.starts_with(is_separator)
+            && !value.ends_with(is_separator);
 
         match valid {
             true => Ok(Self(value.to_string())),
@@ -106,14 +108,29 @@ mod tests {
 
     #[test]
     fn accepts_valid_slugs() {
-        for value in ["base", "my-layer", "layer123", "high-res"] {
+        for value in [
+            "base",
+            "my-layer",
+            "layer123",
+            "high-res",
+            "item_shop",
+            "high_res-textures",
+        ] {
             assert!(Slug::new(value).is_ok(), "{value} should be valid");
         }
     }
 
     #[test]
     fn rejects_invalid_slugs() {
-        for value in ["", "-invalid", "invalid-", "UPPERCASE", "has spaces"] {
+        for value in [
+            "",
+            "-invalid",
+            "invalid-",
+            "_invalid",
+            "invalid_",
+            "UPPERCASE",
+            "has spaces",
+        ] {
             assert!(Slug::new(value).is_err(), "{value} should be invalid");
         }
     }

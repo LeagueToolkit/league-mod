@@ -491,7 +491,10 @@ impl ModProjectHashtable {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProjectLayer {
     /// The name of the layer
-    /// Must not contain spaces or special characters except for underscores and hyphens
+    ///
+    /// A layer name is non-empty and holds ASCII lowercase letters, digits,
+    /// hyphens and underscores. It neither starts nor ends with a hyphen or an
+    /// underscore.
     ///
     /// Example: `base`, `high_res_textures`, `gameplay_overhaul`
     pub name: String,
