@@ -138,19 +138,16 @@ RSA signature covers the *original* TOC, so it does not validate the patched
 one - it is provenance, letting a verifier prove which signed WAD an overlay
 came from.
 
-**TOC slack is zero.** The `TOC_SLACK_ENTRIES` constant reserves no spare
-entries. Reserving some would let a WAD gain or lose a chunk without moving
-data, but it leaves a gap between the last TOC entry and the first data byte,
-and the game has not been observed tolerating that gap in a real session. The
-capacity is recorded and honoured throughout, and both writers zero the slots
-they leave unfilled, so enabling slack later is that constant plus an in-game
-test. Nothing exercises that zero-fill while the constant is zero, because
-capacity then equals the entry count exactly.
+**TOC slack.** A full build reserves `TOC_SLACK_ENTRIES` (16384) TOC slots
+beyond the entry count, 512 KiB per WAD. A WAD gains or loses entries without
+moving data while the count fits the capacity. The client reads `chunk_count`
+entries and ignores the zeroed slots between the last entry and the first data
+byte. Both writers zero the slots they leave unfilled.
 
 ## Rebuilding a WAD in place
 
-When a WAD's override *bytes* change but its chunk set does not, the file keeps
-its header and its copied region: only the tail and the TOC are rewritten. That
+When a WAD's overrides change and its entry count fits the reserved TOC, the file
+keeps its header and its copied region: only the tail and the TOC are rewritten. That
 is the difference between writing a mod's own bytes and copying 2.4 GiB.
 
 `overlay.json` records a `WadLayoutRecord` per WAD - the source WAD's identity,
@@ -173,8 +170,7 @@ re-verified:
 5. Every transient entry in the overlay's TOC equals the source entry shifted
    by the recorded delta. Two TOCs compared in memory, milliseconds even for the
    largest map WAD.
-6. The new override set's entry count fits the reserved capacity - with slack at
-   zero, that means the entry set is unchanged.
+6. The new override set's entry count fits the reserved capacity.
 
 Any failure drops the WAD onto the full-rebuild path, which is the same code
 that wrote it the first time. There is no repair path to get wrong.

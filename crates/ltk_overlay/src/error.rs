@@ -310,9 +310,6 @@ pub enum WadLimitError {
 
     /// The rebuild needs more TOC entries than the file reserved.
     ///
-    /// While `TOC_SLACK_ENTRIES` is zero this also fires when the set *shrinks*,
-    /// because capacity is then exactly the entry count.
-    ///
     /// Unconstructible for the same reason as
     /// [`ChunkUnaddressable`](Self::ChunkUnaddressable): the capacity check runs
     /// inside a rebase now, and reports

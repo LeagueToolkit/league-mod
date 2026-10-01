@@ -162,14 +162,13 @@ fn the_patched_wad_stays_well_formed() {
     assert_eq!(patched.chunks().len(), 4);
 }
 
-/// With TOC slack at zero the reserved capacity is exactly the entry count, so
-/// no gap exists between the last TOC entry and the first data byte. Enabling
-/// slack is gated on proving the game tolerates that gap.
+/// The reserved capacity exceeds the entry count, which leaves a gap between the
+/// last TOC entry and the first data byte.
 #[test]
-fn toc_capacity_is_the_entry_count_while_slack_is_zero() {
+fn toc_capacity_reserves_slack_beyond_the_entry_count() {
     let tmp = tempfile::tempdir().unwrap();
     let (_src, _dst, stats) =
         patch_fixture(&tmp, &[(REPLACED, OVERRIDE_BYTES), (ADDED, ADDED_BYTES)]);
 
-    assert_eq!(stats.layout.toc_capacity as usize, stats.chunks_written);
+    assert!(stats.layout.toc_capacity as usize > stats.chunks_written);
 }

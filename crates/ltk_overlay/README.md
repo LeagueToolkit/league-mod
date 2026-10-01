@@ -95,10 +95,9 @@ There is no standalone health check or repair entry point either. An overlay is
 verified only where a build is about to trust it, and the remedy is always the
 same full rebuild - see the design document's trust rules.
 
-TOC slack is disabled (`TOC_SLACK_ENTRIES = 0`), so a mod that adds or removes a
-chunk from a WAD takes the full-rebuild path. Enabling it needs an in-game test
-that the client tolerates a gap between the last TOC entry and the first data
-byte.
+Each patched WAD reserves `TOC_SLACK_ENTRIES` (16384) TOC slots beyond its entry
+count. A mod that adds or removes chunks rewrites the WAD's tail in place while the
+count fits; past it, the WAD takes the full-rebuild path.
 
 ## License
 
