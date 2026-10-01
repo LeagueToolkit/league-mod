@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.14.6...ltk_fantome-v0.15.0) - 2026-10-01
+
+### Added
+
+- *(fantome)* [**breaking**] store layer WAD directories
+
 ## [0.14.6](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.14.5...ltk_fantome-v0.14.6) - 2026-09-29
 
 ### Other
