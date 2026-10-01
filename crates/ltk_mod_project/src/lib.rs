@@ -418,9 +418,6 @@ impl ModProject {
     }
 
     /// The project's layers other than the base layer.
-    ///
-    /// Useful for warning about data loss when targeting a format that only
-    /// stores the base layer, like Fantome.
     pub fn non_base_layers(&self) -> Vec<&ModProjectLayer> {
         self.layers
             .iter()
@@ -580,8 +577,9 @@ impl ModProjectLayer {
     /// the base layer.
     ///
     /// Its files are named by game asset path rather than by their location
-    /// inside a WAD, and are routed to a WAD when an overlay is built. The
-    /// Fantome format carries no layers, so only the base layer has one.
+    /// inside a WAD, and are routed to a WAD when an overlay is built. A
+    /// Fantome archive has one `RAW/` directory, and only the base layer
+    /// holds it.
     pub const RAW_DIR_NAME: &'static str = "raw";
 
     /// Composes the path to a layer's content directory, under `project_root`.

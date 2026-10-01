@@ -34,7 +34,7 @@ league-mod pack --format fantome
 league-mod pack --format fantome --file-name "my-mod.fantome"
 ```
 
-Fantome stores only a project's base layer; the CLI warns when a project contains additional layers that will not be included.
+Every layer travels. The base layer's WADs are stored under `WAD/` and every other layer's under `WAD_<layer>/`, with the layer table in `META/info.json`. A Fantome reader that predates layers loads the base layer alone.
 
 ## Contributing
 

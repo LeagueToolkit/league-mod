@@ -178,17 +178,15 @@ let report = packer.pack(ModpkgFormat::new(file))?;
 println!("{} files ignored", report.ignored_count());
 ```
 
-Fantome is the same call with the other backend. It stores only the base layer, so a caller warns
-about what a pack drops:
+Fantome is the same call with the other backend. It stores every layer, the base layer's WADs
+under `WAD/` and every other layer's under `WAD_<layer>/`, and drops files outside WAD
+directories:
 
 ```rust
 use ltk_mod_project::fantome::FantomeFormat;
 use ltk_mod_project::ProjectPacker;
 
 let packer = ProjectPacker::from_dir("my-mod")?;
-for layer in packer.project().non_base_layers() {
-    eprintln!("layer {} is not stored in a Fantome archive", layer.name);
-}
 packer.pack(FantomeFormat::new(std::fs::File::create("my-mod.fantome")?))?;
 ```
 

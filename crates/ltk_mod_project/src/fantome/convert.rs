@@ -192,9 +192,8 @@ fn meta_hashes_tail(archive_path: &str) -> Option<&str> {
 
 /// The layer table an archive's `META/info.json` declares.
 ///
-/// Fantome stores content for the base layer alone, but it does carry the
-/// other layers' names, priorities and string overrides, and nothing
-/// downstream can recover an override the import dropped.
+/// Each layer's names, priority and string overrides travel in the table. Its
+/// WAD content travels in its WAD directory.
 ///
 /// `info.layers` is a map, so [`ModProjectLayer::normalize_table`] orders the result rather
 /// than leaving it to however the map iterated, and adds the base layer when
@@ -216,11 +215,14 @@ fn layers_from_fantome(layers: HashMap<String, FantomeLayerInfo>) -> Vec<ModProj
     layers
 }
 
+/// The `Layers` table a project packs to: every layer other than the base, and
+/// the base layer when it carries string overrides.
+///
+/// A project with only a base layer and no overrides packs no table.
 fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLayerInfo> {
     let mut layers = HashMap::new();
     for layer in &mod_project.layers {
-        // Only include layers that have string overrides
-        if !layer.string_overrides.is_empty() {
+        if !layer.is_base() || !layer.string_overrides.is_empty() {
             layers.insert(
                 layer.name.clone(),
                 FantomeLayerInfo {

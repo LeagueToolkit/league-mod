@@ -11,7 +11,7 @@ use std::fmt;
 pub enum PackageFormat {
     /// `.modpkg`, the League Toolkit format.
     Modpkg,
-    /// `.fantome`, the legacy format. Carries only the base layer.
+    /// `.fantome`, the legacy format. Carries each layer's WAD directories.
     Fantome,
 }
 

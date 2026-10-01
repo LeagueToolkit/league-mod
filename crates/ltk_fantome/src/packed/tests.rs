@@ -51,7 +51,10 @@ fn archive(wads: CompressionMethod) -> FantomeReader<Cursor<Vec<u8>>> {
 
 /// The chunk `packed/file.bin`, read back through a mounted WAD.
 fn read_the_chunk(reader: &mut FantomeReader<Cursor<Vec<u8>>>) -> Vec<u8> {
-    let mut wad = reader.mount_packed_wad(WAD_NAME).unwrap().unwrap();
+    let mut wad = reader
+        .mount_packed_wad(crate::BASE_LAYER, WAD_NAME)
+        .unwrap()
+        .unwrap();
     let chunk = *wad.chunks().iter().next().unwrap();
     wad.load_chunk_decompressed(&chunk).unwrap().to_vec()
 }
@@ -65,7 +68,7 @@ fn a_stored_packed_wad_is_read_where_the_archive_keeps_it() {
 
     assert!(
         reader
-            .packed_wad_source(WAD_NAME)
+            .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
             .unwrap()
             .unwrap()
             .is_in_place(),
@@ -83,7 +86,7 @@ fn a_deflated_packed_wad_is_inflated_and_reads_the_same() {
 
     assert!(
         !reader
-            .packed_wad_source(WAD_NAME)
+            .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
             .unwrap()
             .unwrap()
             .is_in_place(),
@@ -108,13 +111,13 @@ fn a_wad_the_archive_holds_no_packed_copy_of_mounts_to_none() {
     let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
     assert!(
         reader
-            .mount_packed_wad("Ahri.wad.client")
+            .mount_packed_wad(crate::BASE_LAYER, "Ahri.wad.client")
             .unwrap()
             .is_none()
     );
     assert!(
         reader
-            .mount_packed_wad("Absent.wad.client")
+            .mount_packed_wad(crate::BASE_LAYER, "Absent.wad.client")
             .unwrap()
             .is_none()
     );
@@ -129,7 +132,10 @@ fn seeking_counts_from_the_wads_own_first_byte() {
     let wad_bytes = packed_wad_bytes();
     let end = wad_bytes.len() as u64;
     let mut reader = archive(CompressionMethod::Stored);
-    let mut source = reader.packed_wad_source(WAD_NAME).unwrap().unwrap();
+    let mut source = reader
+        .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
+        .unwrap()
+        .unwrap();
 
     assert_eq!(source.seek(SeekFrom::Start(0)).unwrap(), 0);
     assert_eq!(source.stream_position().unwrap(), 0);
@@ -157,7 +163,10 @@ fn both_arms_report_the_same_positions() {
 
     for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
         let mut reader = archive(method);
-        let mut source = reader.packed_wad_source(WAD_NAME).unwrap().unwrap();
+        let mut source = reader
+            .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(source.seek(SeekFrom::End(0)).unwrap(), end, "{method:?}");
         assert_eq!(
@@ -175,7 +184,10 @@ fn both_arms_report_the_same_positions() {
 fn a_seek_before_the_start_is_refused() {
     for method in [CompressionMethod::Stored, CompressionMethod::Deflated] {
         let mut reader = archive(method);
-        let mut source = reader.packed_wad_source(WAD_NAME).unwrap().unwrap();
+        let mut source = reader
+            .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
+            .unwrap()
+            .unwrap();
 
         let refused = source.seek(SeekFrom::Current(-1)).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{method:?}");

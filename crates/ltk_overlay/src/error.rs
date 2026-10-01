@@ -217,13 +217,10 @@ pub enum ModContentError {
     #[error("the fantome archive has no META/info.json")]
     FantomeInfoMissing,
 
-    /// A `.fantome` archive was asked for a layer it cannot carry.
-    #[error("fantome archives carry only a 'base' layer, not '{layer}'")]
-    FantomeLayerUnsupported { layer: String },
-
-    /// An override is in neither the archive's WAD folder nor its packed WAD.
-    #[error("override WAD/{wad_name}/{rel_path} is not in the fantome archive")]
+    /// An override is in neither the layer's WAD folder nor its packed WAD.
+    #[error("override {wad_name}/{rel_path} of layer {layer} is not in the fantome archive")]
     FantomeOverrideMissing {
+        layer: String,
         wad_name: String,
         rel_path: Utf8PathBuf,
     },

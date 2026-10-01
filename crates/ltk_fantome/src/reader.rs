@@ -1,10 +1,11 @@
 //! [`FantomeReader`]: reads the entries of a Fantome archive.
 //!
-//! The reader knows the archive's entry conventions (`WAD/`, `RAW/`,
-//! `META/`) and how to unpack a packed WAD it finds, but not what a mod
+//! The reader knows the archive's entry conventions (`WAD/`, `WAD_<layer>/`,
+//! `RAW/`, `META/`) and how to unpack a packed WAD it finds, but not what a mod
 //! project looks like on disk: turning an archive into a project directory
 //! is the caller's job (see `ltk_mod_project`'s `fantome` module).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Cursor, Read, Seek};
 
@@ -13,9 +14,9 @@ use ltk_wad::{NamingPolicy, NoResolver, PathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 use zip::read::ZipFile;
 
-use crate::FantomeInfo;
 use crate::error::FantomeExtractError;
 use crate::packed::PackedWadSource;
+use crate::{BASE_LAYER, FantomeInfo};
 
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
@@ -38,12 +39,23 @@ impl<R: Read + Seek> fmt::Debug for FantomeReader<R> {
 /// extraction has reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WadProgress<'a> {
-    /// The WAD's name, as its `WAD/` entry spells it.
+    /// The layer holding the WAD, as its WAD directory spells it.
+    pub layer: &'a str,
+    /// The WAD's name, as its entry spells it.
     pub name: &'a str,
     /// Which WAD of the archive this is, counting from 0.
     pub index: u32,
     /// How many WADs the archive holds.
     pub total: u32,
+}
+
+/// One WAD an archive holds, and the layer holding it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LayerWad {
+    /// The layer, as its WAD directory spells it: [`BASE_LAYER`] for `WAD/`.
+    pub layer: String,
+    /// The WAD's name, as its entry spells it.
+    pub name: String,
 }
 
 /// How [`FantomeReader::extract_wads`] unpacks what it finds.
@@ -273,10 +285,12 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(tables)
     }
 
-    /// Read the bytes of the packed WAD stored as the single entry
-    /// `WAD/{wad_name}`, or `None` when the archive holds no such entry.
+    /// Read the bytes of the packed WAD `wad_name` of `layer`, stored as the
+    /// single entry [`wad_entry_name`] names, or `None` when the archive holds
+    /// no such entry.
     ///
-    /// The name is matched case-insensitively, like every entry lookup here.
+    /// The layer and the name are matched case-insensitively, like every entry
+    /// lookup here.
     /// A WAD stored as a directory of files has no packed bytes and answers
     /// `None`; its files are what [`classify_entry`] calls
     /// [`WadFile`](FantomeEntry::WadFile). Like every entry read, the stored
@@ -287,16 +301,17 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// Returns an error if the entry cannot be read.
     pub fn read_packed_wad(
         &mut self,
+        layer: &str,
         wad_name: &str,
     ) -> Result<Option<Vec<u8>>, FantomeExtractError> {
-        let Some(index) = self.packed_wad_index(wad_name) else {
+        let Some(index) = self.packed_wad_index(layer, wad_name) else {
             return Ok(None);
         };
         Ok(Some(read_entry(&mut self.archive.by_index(index)?)?))
     }
 
-    /// Mount the packed WAD stored as the single entry `WAD/{wad_name}`, or
-    /// `None` when the archive holds no such entry.
+    /// Mount the packed WAD `wad_name` of `layer`, or `None` when the archive
+    /// holds no such entry.
     ///
     /// Reading a WAD costs its TOC and the chunks actually asked for, not the
     /// whole entry, whenever the archive stores that entry - which is what
@@ -317,15 +332,17 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// WAD the mount understands.
     pub fn mount_packed_wad(
         &mut self,
+        layer: &str,
         wad_name: &str,
     ) -> Result<Option<Wad<PackedWadSource<'_, R>>>, FantomeExtractError> {
-        match self.packed_wad_source(wad_name)? {
+        match self.packed_wad_source(layer, wad_name)? {
             Some(source) => Ok(Some(Wad::mount(source)?)),
             None => Ok(None),
         }
     }
 
-    /// The bytes of the packed WAD `wad_name`, without mounting them.
+    /// The bytes of the packed WAD `wad_name` of `layer`, without mounting
+    /// them.
     ///
     /// What [`mount_packed_wad`](Self::mount_packed_wad) is built on, for a
     /// caller that wants to know what the read will cost - see
@@ -338,25 +355,27 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// Returns an error if the entry cannot be read.
     pub fn packed_wad_source(
         &mut self,
+        layer: &str,
         wad_name: &str,
     ) -> Result<Option<PackedWadSource<'_, R>>, FantomeExtractError> {
-        let Some(index) = self.packed_wad_index(wad_name) else {
+        let Some(index) = self.packed_wad_index(layer, wad_name) else {
             return Ok(None);
         };
         PackedWadSource::at_index(&mut self.archive, index).map(Some)
     }
 
-    /// The index of the entry holding the packed WAD `wad_name`.
+    /// The index of the entry holding the packed WAD `wad_name` of `layer`.
     ///
     /// Only entry names are read, so a lookup that finds nothing costs no
     /// decompression. The name is resolved back to an index through the
     /// archive's own table rather than by counting the iteration, so nothing
     /// here rests on that iteration being in index order.
-    fn packed_wad_index(&self, wad_name: &str) -> Option<usize> {
+    fn packed_wad_index(&self, layer: &str, wad_name: &str) -> Option<usize> {
         let entry = self.archive.file_names().find(|name| {
             matches!(
                 classify_entry(name),
-                Some(FantomeEntry::PackedWad(packed)) if packed.eq_ignore_ascii_case(wad_name)
+                Some(FantomeEntry::PackedWad { layer: held, name })
+                    if held.eq_ignore_ascii_case(layer) && name.eq_ignore_ascii_case(wad_name)
             )
         })?;
         self.archive.index_for_name(entry)
@@ -382,7 +401,8 @@ impl<R: Read + Seek> FantomeReader<R> {
         self.archive.file_names()
     }
 
-    /// The WADs the archive's `WAD/` entries describe, in archive order.
+    /// The WADs the archive's WAD directories describe, in archive order, each
+    /// with the layer holding it.
     ///
     /// A packed WAD stored as a single entry and a WAD stored as a directory
     /// of its files both appear once, under the same name. Only entry names
@@ -393,40 +413,87 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// A WAD is listed when the archive holds a file for it. One named by a
     /// directory record alone is not listed, because there is nothing under it
     /// to unpack.
-    pub fn wad_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = Vec::new();
+    pub fn wad_names(&self) -> Vec<LayerWad> {
+        let mut wads: Vec<LayerWad> = Vec::new();
 
         for entry_name in self.archive.file_names() {
             // Through `classify_entry`, so this and `extract_wads` cannot
             // disagree about what the archive holds: a WAD present only as a
             // directory record has no files to unpack, and listing it would
             // promise a unit no extraction ever reports.
-            let relative_path = match classify_entry(entry_name) {
-                Some(FantomeEntry::PackedWad(name)) => name,
-                Some(FantomeEntry::WadFile(relative_path)) => relative_path,
-                _ => continue,
-            };
-            let Some(wad_name) = wad_name_of(relative_path) else {
+            let Some((layer, wad_name)) = wad_of_entry(entry_name) else {
                 continue;
             };
-            if !names.iter().any(|name| name == wad_name) {
-                names.push(wad_name.to_owned());
+
+            if position_of(&wads, layer, wad_name).is_none() {
+                wads.push(LayerWad {
+                    layer: layer.to_owned(),
+                    name: wad_name.to_owned(),
+                });
             }
         }
 
-        names
+        wads
     }
 
-    /// Extract every `WAD/` file into `dest`, preserving the paths beneath
-    /// the prefix.
+    /// The layers the archive's WAD directories hold content for, in archive
+    /// order: [`BASE_LAYER`] for `WAD/`, and each `WAD_<layer>/` as it spells
+    /// it.
     ///
-    /// A packed WAD directly under `WAD/` is unpacked into a directory of its
-    /// name rather than written out as a file, naming its chunks through the
-    /// resolver [`options`](WadExtractOptions) carry and then through the
-    /// WAD's own bins for whatever the resolver could not name. A caller with
-    /// no source of names leaves the resolver at its default and gets the bins
-    /// alone, which is usually most of a mod. A chunk nothing names keeps its
-    /// hash.
+    /// Only entry names are read. Two spellings that differ only in ASCII case
+    /// are one layer, listed under the first.
+    pub fn layer_names(&self) -> Vec<String> {
+        let mut layers: Vec<String> = Vec::new();
+
+        for wad in self.wad_names() {
+            if !layers
+                .iter()
+                .any(|layer| layer.eq_ignore_ascii_case(&wad.layer))
+            {
+                layers.push(wad.layer);
+            }
+        }
+
+        layers
+    }
+
+    /// The layer names `META/info.json` declares, keyed by their lower-cased
+    /// spelling.
+    ///
+    /// Empty for an archive whose metadata is missing or unreadable. A
+    /// declared name that [`is_layer_name`] refuses names no WAD directory and
+    /// is left out.
+    fn declared_layer_spellings(&mut self) -> HashMap<String, String> {
+        let Ok(info) = self.read_info() else {
+            return HashMap::new();
+        };
+
+        info.layers
+            .into_iter()
+            .map(|(key, layer)| match layer.name.is_empty() {
+                true => key,
+                false => layer.name,
+            })
+            .filter(|name| is_layer_name(name))
+            .map(|name| (name.to_ascii_lowercase(), name))
+            .collect()
+    }
+
+    /// Extract every WAD into `content_dir`, under the directory of the layer
+    /// holding it: `<content_dir>/<layer>/<wad>/...`.
+    ///
+    /// The base layer's directory is [`BASE_LAYER`]. A `WAD_<layer>/` directory
+    /// lands under the spelling `META/info.json` declares for that layer,
+    /// matched case-insensitively, and under its own spelling when the
+    /// metadata declares no such layer.
+    ///
+    /// A packed WAD directly under its layer's WAD directory is unpacked into a
+    /// directory of its name rather than written out as a file, naming its
+    /// chunks through the resolver [`options`](WadExtractOptions) carry and
+    /// then through the WAD's own bins for whatever the resolver could not
+    /// name. A caller with no source of names leaves the resolver at its
+    /// default and gets the bins alone, which is usually most of a mod. A chunk
+    /// nothing names keeps its hash.
     ///
     /// The prefix and the WAD extensions are matched case-insensitively.
     ///
@@ -440,12 +507,13 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// cancellation that answered `true`.
     pub fn extract_wads(
         &mut self,
-        dest: &Utf8Path,
+        content_dir: &Utf8Path,
         mut options: WadExtractOptions<'_>,
     ) -> Result<(), FantomeExtractError> {
-        let wad_names = self.wad_names();
-        let total = wad_names.len() as u32;
-        let mut reported = vec![false; wad_names.len()];
+        let wads = self.wad_names();
+        let total = wads.len() as u32;
+        let mut reported = vec![false; wads.len()];
+        let layer_dirs = self.declared_layer_spellings();
 
         for i in 0..self.archive.len() {
             if options.is_cancelled() {
@@ -455,24 +523,28 @@ impl<R: Read + Seek> FantomeReader<R> {
             let mut file = self.archive.by_index(i)?;
             let file_name = file.name().to_string();
 
-            let (relative_path, is_packed) = match classify_entry(&file_name) {
-                Some(FantomeEntry::PackedWad(relative_path)) => (relative_path, true),
-                Some(FantomeEntry::WadFile(relative_path)) => (relative_path, false),
+            let (layer, relative_path, is_packed) = match classify_entry(&file_name) {
+                Some(FantomeEntry::PackedWad { layer, name }) => (layer, name, true),
+                Some(FantomeEntry::WadFile { layer, path }) => (layer, path, false),
                 _ => continue,
             };
 
-            if let Some(index) = wad_name_of(relative_path)
-                .and_then(|wad_name| wad_names.iter().position(|name| name == wad_name))
+            if let Some(index) =
+                wad_name_of(relative_path).and_then(|wad_name| position_of(&wads, layer, wad_name))
                 && !std::mem::replace(&mut reported[index], true)
             {
                 options.report(WadProgress {
-                    name: &wad_names[index],
+                    layer: &wads[index].layer,
+                    name: &wads[index].name,
                     index: index as u32,
                     total,
                 });
             }
 
-            let output_path = dest.join(relative_path);
+            let layer_dir = layer_dirs
+                .get(&layer.to_ascii_lowercase())
+                .map_or(layer, String::as_str);
+            let output_path = content_dir.join(layer_dir).join(relative_path);
 
             if is_packed {
                 extract_packed_wad(&mut file, &output_path, options.resolver, options.naming)?;
@@ -669,11 +741,23 @@ fn extract_entry(
 /// compile error if a kind is ever added, not a silent skip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FantomeEntry<'a> {
-    /// A packed WAD stored as a single entry directly under `WAD/`, which is
-    /// unpacked into a directory of this name rather than written as a file.
-    PackedWad(&'a str),
-    /// A file under `WAD/`, at this path relative to the prefix.
-    WadFile(&'a str),
+    /// A packed WAD stored as a single entry directly under a layer's WAD
+    /// directory, unpacked into a directory of its name rather than written as
+    /// a file.
+    PackedWad {
+        /// The layer: [`BASE_LAYER`] for `WAD/`, the directory's own spelling
+        /// for `WAD_<layer>/`.
+        layer: &'a str,
+        /// The WAD's name.
+        name: &'a str,
+    },
+    /// A file under a layer's WAD directory.
+    WadFile {
+        /// The layer, on the terms of [`PackedWad`](Self::PackedWad).
+        layer: &'a str,
+        /// The file's path relative to the layer's WAD directory.
+        path: &'a str,
+    },
     /// A file under `RAW/`, at this path relative to the prefix.
     Raw(&'a str),
     /// The archive's readme: `META/README.md`, or a `README.md` at the root
@@ -713,15 +797,21 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
         return None;
     }
 
-    if let Some(relative_path) = strip_prefix_ci(entry_name, "WAD/") {
+    if let Some((layer, relative_path)) = layer_wad_dir_of(entry_name) {
         if relative_path.is_empty() {
             return None;
         }
         return Some(
             if !relative_path.contains('/') && is_wad_file_name(relative_path) {
-                FantomeEntry::PackedWad(relative_path)
+                FantomeEntry::PackedWad {
+                    layer,
+                    name: relative_path,
+                }
             } else {
-                FantomeEntry::WadFile(relative_path)
+                FantomeEntry::WadFile {
+                    layer,
+                    path: relative_path,
+                }
             },
         );
     }
@@ -754,6 +844,52 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
 /// The `META/` directory override files live under, with its trailing slash.
 pub(crate) const GAME_DATA_DIR: &str = "META/game_data/";
 
+/// The prefix of a non-base layer's WAD directory, `WAD_<layer>/`.
+const LAYER_WAD_DIR_PREFIX: &str = "WAD_";
+
+/// The layer whose WAD directory holds `entry_name`, and the entry's path
+/// beneath that directory.
+///
+/// `WAD/` is the base layer's directory. `WAD_<layer>/` is the directory of
+/// `<layer>` when [`is_layer_name`] accepts the name and it is not
+/// [`BASE_LAYER`] in any casing. Both prefixes match case-insensitively.
+fn layer_wad_dir_of(entry_name: &str) -> Option<(&str, &str)> {
+    if let Some(relative_path) = strip_prefix_ci(entry_name, "WAD/") {
+        return Some((BASE_LAYER, relative_path));
+    }
+
+    let (layer, relative_path) =
+        strip_prefix_ci(entry_name, LAYER_WAD_DIR_PREFIX)?.split_once('/')?;
+    (is_layer_name(layer) && !layer.eq_ignore_ascii_case(BASE_LAYER))
+        .then_some((layer, relative_path))
+}
+
+/// Whether `name` can name a layer's WAD directory: one or more ASCII letters,
+/// digits, `-` or `_`.
+///
+/// A WAD directory name is a path component on extraction. The accepted set
+/// holds no separator, no `.` and no character a file system reserves.
+/// [`BASE_LAYER`] is a layer name and is stored as `WAD/`.
+pub fn is_layer_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The archive entry name of `path` in `layer`'s WAD directory:
+/// `WAD/{path}` for [`BASE_LAYER`] in any casing, `WAD_{layer}/{path}` for any
+/// other layer.
+///
+/// `path` is a WAD's name for a packed WAD, or a WAD's name followed by a
+/// file's path inside it.
+pub fn wad_entry_name(layer: &str, path: &str) -> String {
+    match layer.eq_ignore_ascii_case(BASE_LAYER) {
+        true => format!("WAD/{path}"),
+        false => format!("{LAYER_WAD_DIR_PREFIX}{layer}/{path}"),
+    }
+}
+
 /// The archive entry name of the override file at `path` in `layer`:
 /// `META/game_data/{layer}/{path}`.
 pub fn game_data_entry_name(layer: &str, path: &str) -> String {
@@ -765,7 +901,10 @@ pub fn game_data_entry_name(layer: &str, path: &str) -> String {
 /// The one classification this crate's three archive writers order by, so they
 /// cannot disagree about which entries belong at the end of an archive.
 pub(crate) fn is_packed_wad(entry_name: &str) -> bool {
-    matches!(classify_entry(entry_name), Some(FantomeEntry::PackedWad(_)))
+    matches!(
+        classify_entry(entry_name),
+        Some(FantomeEntry::PackedWad { .. })
+    )
 }
 
 /// Match a `META/LICENSE*` archive entry case-insensitively and return the file
@@ -817,7 +956,27 @@ fn strip_prefix_ci<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &name[prefix.len()..])
 }
 
-/// The WAD an entry beneath `WAD/` belongs to, if it belongs to one.
+/// The layer and the WAD an entry belongs to, if it belongs to one.
+fn wad_of_entry(entry_name: &str) -> Option<(&str, &str)> {
+    let (layer, relative_path) = match classify_entry(entry_name)? {
+        FantomeEntry::PackedWad { layer, name } => (layer, name),
+        FantomeEntry::WadFile { layer, path } => (layer, path),
+        _ => return None,
+    };
+
+    Some((layer, wad_name_of(relative_path)?))
+}
+
+/// Where `wads` lists the WAD `wad_name` of `layer`.
+///
+/// The layer matches case-insensitively and the name exactly.
+fn position_of(wads: &[LayerWad], layer: &str, wad_name: &str) -> Option<usize> {
+    wads.iter()
+        .position(|wad| wad.layer.eq_ignore_ascii_case(layer) && wad.name == wad_name)
+}
+
+/// The WAD an entry beneath a layer's WAD directory belongs to, if it belongs
+/// to one.
 ///
 /// The first path component names it either way: it is the packed WAD itself
 /// for `Aatrox.wad.client`, and the WAD a file sits in for

@@ -6,6 +6,11 @@ use tempfile::{TempDir, tempdir};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+/// The names of `wads`, in their order.
+fn names(wads: Vec<LayerWad>) -> Vec<String> {
+    wads.into_iter().map(|wad| wad.name).collect()
+}
+
 /// The temp directory's path, which extraction takes as UTF-8.
 fn utf8_dir(dir: &TempDir) -> Utf8PathBuf {
     Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap()
@@ -118,7 +123,7 @@ fn entries_read_despite_a_bad_checksum() {
     reader.extract_raw(&dest.join("raw"), None).unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("wads/test.wad.client/assets/test.bin")).unwrap(),
+        std::fs::read(dest.join("wads/base/test.wad.client/assets/test.bin")).unwrap(),
         b"test content"
     );
     assert_eq!(
@@ -145,7 +150,8 @@ fn packed_wads_unpack_despite_a_bad_checksum() {
         .unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
+        std::fs::read(dest.join("base/test.wad.client/assets/characters/aatrox/skin0.bin"))
+            .unwrap(),
         b"packed content"
     );
 }
@@ -190,7 +196,7 @@ fn extract_wads_preserves_paths_under_dest() {
         .unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("test.wad.client/assets/test.bin")).unwrap(),
+        std::fs::read(dest.join("base/test.wad.client/assets/test.bin")).unwrap(),
         b"test content"
     );
 }
@@ -232,7 +238,7 @@ fn extract_matches_the_prefix_case_insensitively() {
     reader.extract_raw(&dest.join("raw"), None).unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("wads/test.wad.client/assets/test.bin")).unwrap(),
+        std::fs::read(dest.join("wads/base/test.wad.client/assets/test.bin")).unwrap(),
         b"test content"
     );
     assert_eq!(
@@ -333,7 +339,12 @@ fn writer_reader_round_trip() {
     let mut writer = FantomeWriter::new(Cursor::new(Vec::new()));
     writer.write_info(&info).unwrap();
     writer
-        .write_wad_entry("Test.wad.client", "data\\skin.bin", &mut &b"skin"[..])
+        .write_wad_entry(
+            crate::BASE_LAYER,
+            "Test.wad.client",
+            "data\\skin.bin",
+            &mut &b"skin"[..],
+        )
         .unwrap();
     writer
         .write_license("LICENSE.md", &mut &b"terms"[..])
@@ -360,7 +371,7 @@ fn writer_reader_round_trip() {
         .extract_wads(&dest, WadExtractOptions::new())
         .unwrap();
     assert_eq!(
-        std::fs::read(dest.join("Test.wad.client/data/skin.bin")).unwrap(),
+        std::fs::read(dest.join("base/Test.wad.client/data/skin.bin")).unwrap(),
         b"skin"
     );
 }
@@ -422,7 +433,8 @@ fn extract_wads_names_packed_chunks_through_any_resolver() {
         .unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("test.wad.client/assets/characters/aatrox/skin0.bin")).unwrap(),
+        std::fs::read(dest.join("base/test.wad.client/assets/characters/aatrox/skin0.bin"))
+            .unwrap(),
         b"packed content"
     );
 }
@@ -439,7 +451,7 @@ fn extract_wads_falls_back_to_hex_names() {
         .extract_wads(&dest, WadExtractOptions::new())
         .unwrap();
 
-    let unpacked: Vec<_> = std::fs::read_dir(dest.join("test.wad.client").as_std_path())
+    let unpacked: Vec<_> = std::fs::read_dir(dest.join("base/test.wad.client").as_std_path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
@@ -514,7 +526,7 @@ fn extract_wads_recovers_names_from_the_bins_of_a_packed_wad() {
         .unwrap();
 
     assert_eq!(
-        std::fs::read(dest.join("test.wad.client").join(skin)).unwrap(),
+        std::fs::read(dest.join("base/test.wad.client").join(skin)).unwrap(),
         b"invented bytes"
     );
 }
@@ -537,10 +549,10 @@ fn fantome_with_wads(names: &[&str]) -> Vec<u8> {
 #[test]
 fn wad_names_lists_a_directory_wad_and_a_packed_wad_alike() {
     let directory = FantomeReader::new(Cursor::new(create_test_fantome())).unwrap();
-    assert_eq!(directory.wad_names(), ["test.wad.client"]);
+    assert_eq!(names(directory.wad_names()), ["test.wad.client"]);
 
     let packed = FantomeReader::new(Cursor::new(packed_wad_fantome())).unwrap();
-    assert_eq!(packed.wad_names(), ["test.wad.client"]);
+    assert_eq!(names(packed.wad_names()), ["test.wad.client"]);
 }
 
 /// A directory WAD is many entries, and the WAD it names is one thing.
@@ -550,7 +562,7 @@ fn wad_names_lists_each_wad_once_in_archive_order() {
     let reader = FantomeReader::new(Cursor::new(archive)).unwrap();
 
     assert_eq!(
-        reader.wad_names(),
+        names(reader.wad_names()),
         ["Zed.wad.client", "Aatrox.wad.client"],
         "archive order, not sorted"
     );
@@ -568,7 +580,7 @@ fn wad_names_matches_the_prefix_and_the_extension_case_insensitively() {
     zip.write_all(b"content").unwrap();
     let reader = FantomeReader::new(Cursor::new(zip.finish().unwrap().into_inner())).unwrap();
 
-    assert_eq!(reader.wad_names(), ["Aatrox.WAD.CLIENT"]);
+    assert_eq!(names(reader.wad_names()), ["Aatrox.WAD.CLIENT"]);
 }
 
 #[test]
@@ -681,7 +693,7 @@ fn extract_wads_keeps_every_chunk_under_the_lossless_policy() {
             )
             .unwrap();
 
-        walkdir_count(dest.join("test.wad.client").as_std_path())
+        walkdir_count(dest.join("base/test.wad.client").as_std_path())
     };
 
     assert_eq!(count_chunks(NamingPolicy::Descriptive), 1);
@@ -831,11 +843,17 @@ fn a_directory_entry_classifies_as_nothing() {
 fn the_files_beneath_a_directory_entry_still_classify() {
     assert_eq!(
         classify_entry("WAD/Aatrox.wad.client/assets/x.bin"),
-        Some(FantomeEntry::WadFile("Aatrox.wad.client/assets/x.bin"))
+        Some(FantomeEntry::WadFile {
+            layer: BASE_LAYER,
+            path: "Aatrox.wad.client/assets/x.bin"
+        })
     );
     assert_eq!(
         classify_entry("WAD/Aatrox.wad.client"),
-        Some(FantomeEntry::PackedWad("Aatrox.wad.client"))
+        Some(FantomeEntry::PackedWad {
+            layer: BASE_LAYER,
+            name: "Aatrox.wad.client"
+        })
     );
 }
 
@@ -851,7 +869,7 @@ fn extraction_makes_the_directories_its_files_need() {
         .extract_wads(&dest, WadExtractOptions::new())
         .unwrap();
 
-    assert!(dest.join("test.wad.client/assets/test.bin").is_file());
+    assert!(dest.join("base/test.wad.client/assets/test.bin").is_file());
 }
 
 /// What the listing promises and what the extraction reports have to be the
@@ -884,7 +902,205 @@ fn the_wad_listing_and_the_extraction_agree() {
         .extract_wads(&dest, WadExtractOptions::new().with_progress(&mut record))
         .unwrap();
 
-    assert_eq!(listed, ["Folder.wad.client"]);
+    assert_eq!(names(listed), ["Folder.wad.client"]);
     assert_eq!(reported, [("Folder.wad.client".to_owned(), 0, 1)]);
-    assert!(dest.join("Folder.wad.client/data/x.bin").is_file());
+    assert!(dest.join("base/Folder.wad.client/data/x.bin").is_file());
+}
+
+// -- layer WAD directories ---------------------------------------------------
+
+/// An archive holding `Aatrox.wad.client` in the base layer and in a second
+/// layer, whose WAD directory spells it `Pink` and whose metadata declares it
+/// as `pink`.
+fn layered_fantome() -> Vec<u8> {
+    use crate::{FantomeLayerInfo, writer::FantomeWriter};
+
+    let mut info = FantomeInfo {
+        name: "Layered".into(),
+        ..Default::default()
+    };
+    info.layers.insert(
+        "pink".into(),
+        FantomeLayerInfo {
+            name: "pink".into(),
+            priority: 10,
+            ..Default::default()
+        },
+    );
+
+    let mut writer = FantomeWriter::new(Cursor::new(Vec::new()));
+    writer.write_info(&info).unwrap();
+    writer
+        .write_packed_wad(
+            BASE_LAYER,
+            "Aatrox.wad.client",
+            &mut packed_wad_bytes(b"base").as_slice(),
+        )
+        .unwrap();
+    writer
+        .write_packed_wad(
+            "Pink",
+            "Aatrox.wad.client",
+            &mut packed_wad_bytes(b"pink").as_slice(),
+        )
+        .unwrap();
+
+    writer.finish().unwrap().into_inner()
+}
+
+/// The content of the one file beneath `dir`.
+fn only_file(dir: &Utf8Path) -> Vec<u8> {
+    let files: Vec<_> = std::fs::read_dir(dir.as_std_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{dir} holds {files:?}");
+
+    std::fs::read(&files[0]).unwrap()
+}
+
+#[test]
+fn a_layer_wad_directory_classifies_under_its_layer() {
+    assert_eq!(
+        classify_entry("WAD_pink/Aatrox.wad.client"),
+        Some(FantomeEntry::PackedWad {
+            layer: "pink",
+            name: "Aatrox.wad.client"
+        })
+    );
+    assert_eq!(
+        classify_entry("wad_Pink/Aatrox.wad.client/data/x.bin"),
+        Some(FantomeEntry::WadFile {
+            layer: "Pink",
+            path: "Aatrox.wad.client/data/x.bin"
+        })
+    );
+}
+
+#[test]
+fn a_layer_wad_directory_with_an_unusable_name_classifies_as_nothing() {
+    for name in [
+        "WAD_base/Aatrox.wad.client",
+        "WAD_BASE/Aatrox.wad.client",
+        "WAD_/Aatrox.wad.client",
+        "WAD_pink chroma/Aatrox.wad.client",
+        "WAD_pink.old/Aatrox.wad.client",
+        "WAD_pink",
+    ] {
+        assert_eq!(classify_entry(name), None, "{name} was placed");
+    }
+}
+
+#[test]
+fn wad_entry_name_spells_the_base_layer_as_the_wad_directory() {
+    assert_eq!(
+        wad_entry_name(BASE_LAYER, "Aatrox.wad.client"),
+        "WAD/Aatrox.wad.client"
+    );
+    assert_eq!(
+        wad_entry_name("Base", "Aatrox.wad.client"),
+        "WAD/Aatrox.wad.client"
+    );
+    assert_eq!(
+        wad_entry_name("pink", "Aatrox.wad.client/data/x.bin"),
+        "WAD_pink/Aatrox.wad.client/data/x.bin"
+    );
+    assert_eq!(
+        classify_entry(&wad_entry_name("pink", "Aatrox.wad.client")),
+        Some(FantomeEntry::PackedWad {
+            layer: "pink",
+            name: "Aatrox.wad.client"
+        })
+    );
+}
+
+#[test]
+fn the_writer_refuses_a_layer_name_no_wad_directory_can_hold() {
+    use crate::{FantomeWriteError, writer::FantomeWriter};
+
+    for layer in ["..", "pink chroma", "", "pink/blue"] {
+        let mut writer = FantomeWriter::new(Cursor::new(Vec::new()));
+        let error = writer
+            .write_packed_wad(layer, "Aatrox.wad.client", &mut b"wad".as_slice())
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, FantomeWriteError::InvalidLayerName { layer: refused } if refused == layer),
+            "expected {layer:?} refused, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn each_layer_lists_and_reads_back_its_own_packed_wad() {
+    let mut reader = FantomeReader::new(Cursor::new(layered_fantome())).unwrap();
+
+    assert_eq!(
+        reader.wad_names(),
+        [
+            LayerWad {
+                layer: BASE_LAYER.into(),
+                name: "Aatrox.wad.client".into()
+            },
+            LayerWad {
+                layer: "Pink".into(),
+                name: "Aatrox.wad.client".into()
+            },
+        ]
+    );
+    assert_eq!(reader.layer_names(), [BASE_LAYER, "Pink"]);
+    assert_eq!(
+        reader.read_packed_wad("pink", "Aatrox.wad.client").unwrap(),
+        Some(packed_wad_bytes(b"pink"))
+    );
+    assert_eq!(
+        reader
+            .read_packed_wad(BASE_LAYER, "Aatrox.wad.client")
+            .unwrap(),
+        Some(packed_wad_bytes(b"base"))
+    );
+    assert_eq!(
+        reader.read_packed_wad("blue", "Aatrox.wad.client").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_layer_packed_wad_is_stored() {
+    let mut archive = ZipArchive::new(Cursor::new(layered_fantome())).unwrap();
+
+    assert_eq!(
+        archive
+            .by_name("WAD_Pink/Aatrox.wad.client")
+            .unwrap()
+            .compression(),
+        zip::CompressionMethod::Stored
+    );
+}
+
+#[test]
+fn extract_wads_unpacks_each_layer_under_its_declared_spelling() {
+    let tmp = tempdir().unwrap();
+    let dest = utf8_dir(&tmp);
+    let mut reader = FantomeReader::new(Cursor::new(layered_fantome())).unwrap();
+
+    let mut reported = Vec::new();
+    let mut record = |wad: WadProgress<'_>| reported.push((wad.layer.to_owned(), wad.index));
+    reader
+        .extract_wads(&dest, WadExtractOptions::new().with_progress(&mut record))
+        .unwrap();
+
+    let mut layer_dirs: Vec<String> = std::fs::read_dir(dest.as_std_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    layer_dirs.sort();
+
+    assert_eq!(layer_dirs, [BASE_LAYER, "pink"]);
+    assert_eq!(only_file(&dest.join("base/Aatrox.wad.client")), b"base");
+    assert_eq!(only_file(&dest.join("pink/Aatrox.wad.client")), b"pink");
+    assert_eq!(
+        reported,
+        [(BASE_LAYER.to_owned(), 0), ("Pink".to_owned(), 1)]
+    );
 }

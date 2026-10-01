@@ -77,7 +77,7 @@ pub(crate) const GENERATOR: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CA
 /// Implementations receive a resolved [`PackPlan`] and only encode: which
 /// files are packed, and how the project was filtered and validated, is the
 /// driver's job and identical across formats. A format that does not store
-/// some part of the plan (Fantome keeps only the base layer, for example)
+/// some part of the plan (Fantome drops files outside WAD directories, for example)
 /// skips it rather than failing.
 ///
 /// The value is consumed: a format is constructed around its output (usually

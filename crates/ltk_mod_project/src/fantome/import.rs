@@ -72,9 +72,11 @@ impl FantomeImportError {
 /// for [`ProjectImporter`](crate::ProjectImporter).
 ///
 /// Importing will:
-/// 1. Extract WAD contents to `content/base/`, unpacking packed WADs through
-///    the resolver [`with_path_resolver`](Self::with_path_resolver) supplied
-///    and through the WAD's own bins for whatever it could not name
+/// 1. Extract each layer's WAD contents to `content/<layer>/` (`WAD/` to
+///    `content/base/`), unpacking packed WADs through the resolver
+///    [`with_path_resolver`](Self::with_path_resolver) supplied and through
+///    the WAD's own bins for whatever it could not name. A `WAD_<layer>/`
+///    directory the metadata does not declare becomes a layer at priority 0
 /// 2. Extract `RAW/` entries to `content/base/raw/`, and `README.md`, the
 ///    license text and the thumbnail (converted to `thumbnail.webp`), if
 ///    present - and skip a thumbnail that will not convert, since the
@@ -179,7 +181,8 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         } = self;
 
         let mut reader = FantomeReader::new(reader)?;
-        let info = reader.read_info()?;
+        let mut info = reader.read_info()?;
+        info.declare_layers(reader.layer_names().iter().map(String::as_str));
         let declarations = info.layers.clone();
         // Where each declared table lands. Computed once, before anything is
         // written: what the routes declare is what the config carries and
@@ -226,7 +229,7 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
                 .with_cancellation(&is_cancelled);
 
             reader
-                .extract_wads(&target.base_layer_dir(), options)
+                .extract_wads(&target.content_dir(), options)
                 .map_err(import_error)?;
         }
 

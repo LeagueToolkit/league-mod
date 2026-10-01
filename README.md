@@ -150,7 +150,7 @@ your user `PATH`. The binaries are also on the [releases page](https://github.co
 ```bash
 league-mod init                          # scaffold a project, interactively
 league-mod pack                          # -> build/my-mod_1.0.0.modpkg
-league-mod pack --format fantome         # legacy container, base layer only
+league-mod pack --format fantome         # legacy container
 league-mod info my-mod_1.0.0.modpkg      # metadata, layers, chunk counts
 league-mod extract my-mod_1.0.0.modpkg   # back to a project directory
 league-mod config auto-detect            # find the League installation
@@ -216,8 +216,9 @@ hashtable manifest. The readme, license text, thumbnail and hashtable files are 
 own under `_meta_/`, so reading the metadata never decompresses them.
 
 **`.fantome`** is the legacy format - a renamed ZIP with `META/info.json`, `WAD/` and `RAW/`
-entries. Reading and writing it is supported for compatibility with the existing mod ecosystem. It
-carries only a project's base layer, and a pack to Fantome warns about the layers it drops.
+entries. Reading and writing it is supported for compatibility with the existing mod ecosystem. A
+layer other than the base travels as a `WAD_<layer>/` directory, which a Fantome reader that
+predates layers skips.
 
 ## Building from source
 

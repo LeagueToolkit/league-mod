@@ -51,11 +51,16 @@ pub use normalize::{
 };
 pub use packed::PackedWadSource;
 pub use reader::{
-    FantomeEntry, FantomeReader, WadExtractOptions, WadProgress, classify_entry,
-    game_data_entry_name,
+    FantomeEntry, FantomeReader, LayerWad, WadExtractOptions, WadProgress, classify_entry,
+    game_data_entry_name, is_layer_name, wad_entry_name,
 };
 pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
 pub use writer::FantomeWriter;
+
+/// The name of the base layer, whose WAD directory is `WAD/`.
+///
+/// Every other layer's WAD directory is `WAD_<layer>/`; see [`wad_entry_name`].
+pub const BASE_LAYER: &str = "base";
 
 /// Fantome metadata structure that goes into info.json
 ///
@@ -97,7 +102,10 @@ pub struct FantomeInfo {
     /// Maps this mod targets (e.g., "Summoner's Rift", "Howling Abyss").
     #[serde(rename = "Maps", default, skip_serializing_if = "Vec::is_empty")]
     pub maps: Vec<String>,
-    /// Per-layer metadata including string overrides.
+    /// Per-layer metadata including string overrides, keyed by layer name.
+    ///
+    /// A layer's WAD content lives in its WAD directory, `WAD/` for
+    /// [`BASE_LAYER`] and `WAD_<layer>/` for any other.
     #[serde(rename = "Layers", default, skip_serializing_if = "HashMap::is_empty")]
     pub layers: HashMap<String, FantomeLayerInfo>,
     /// The embedded hashtables the archive declares.
@@ -122,6 +130,41 @@ pub struct FantomeInfo {
     /// crate the older tool that silently strips a newer one's data.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl FantomeInfo {
+    /// Declare each of `layers` that the `Layers` table does not, at priority 0.
+    ///
+    /// A layer counts as declared when a `Layers` entry's `Name`, or its key
+    /// for an entry with an empty `Name`, matches it case-insensitively.
+    /// [`BASE_LAYER`] is skipped. Pass [`FantomeReader::layer_names`] to give
+    /// every `WAD_<layer>/` directory of an archive a layer to load under.
+    pub fn declare_layers<'a>(&mut self, layers: impl IntoIterator<Item = &'a str>) {
+        for layer in layers {
+            if layer.eq_ignore_ascii_case(BASE_LAYER) {
+                continue;
+            }
+
+            let declared = self.layers.iter().any(|(key, info)| {
+                let name = match info.name.is_empty() {
+                    true => key,
+                    false => &info.name,
+                };
+                name.eq_ignore_ascii_case(layer)
+            });
+            if declared {
+                continue;
+            }
+
+            self.layers.insert(
+                layer.to_owned(),
+                FantomeLayerInfo {
+                    name: layer.to_owned(),
+                    ..Default::default()
+                },
+            );
+        }
+    }
 }
 
 /// One `Hashtables` manifest entry in a Fantome info.json.
