@@ -733,10 +733,10 @@ mod fallbacks {
         assert_wad_is_well_formed(&profile.overlay_wad());
     }
 
-    /// Adding a chunk changes the WAD's entry count, which no longer fits the
-    /// TOC the file reserved - the accepted limit while TOC slack is zero.
+    /// Adding a chunk changes the WAD's entry count inside the TOC the file
+    /// reserved. The file keeps its source region.
     #[test]
-    fn adding_an_entry_forces_a_full_rebuild() {
+    fn adding_an_entry_rewrites_the_tail() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
 
@@ -749,8 +749,8 @@ mod fallbacks {
         profile.build();
 
         assert!(
-            !profile.shadow_is_stamped(SKIN),
-            "a change to the WAD's entry set must take the full rebuild path"
+            profile.shadow_is_stamped(SKIN),
+            "an entry set inside the reserved TOC must keep the source region"
         );
         assert_eq!(
             profile
@@ -758,6 +758,39 @@ mod fallbacks {
                 .as_deref(),
             Some(b"NEW ENTRY".as_slice())
         );
+        assert_wad_is_well_formed(&profile.overlay_wad());
+    }
+
+    /// Dropping a new entry lowers the WAD's entry count below the capacity the
+    /// file reserved. The file keeps its source region and the entry is gone.
+    #[test]
+    fn removing_an_entry_rewrites_the_tail() {
+        const NEW: &str = "assets/characters/aatrox/brand_new.bin";
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+
+        let profile = Profile::new(&root, &[(SKIN, EDIT_V1), (NEW, b"NEW ENTRY")]);
+        profile.build();
+        profile.stamp_shadow(SKIN);
+
+        fs::remove_file(
+            profile
+                .mod_dir
+                .join("content")
+                .join("base")
+                .join(WAD_NAME)
+                .join(NEW)
+                .as_std_path(),
+        )
+        .unwrap();
+        profile.build();
+
+        assert!(
+            profile.shadow_is_stamped(SKIN),
+            "an entry set inside the reserved TOC must keep the source region"
+        );
+        assert_eq!(profile.overlay_chunk(NEW), None);
+        assert_eq!(profile.overlay_chunk(SKIN).as_deref(), Some(EDIT_V1));
         assert_wad_is_well_formed(&profile.overlay_wad());
     }
 

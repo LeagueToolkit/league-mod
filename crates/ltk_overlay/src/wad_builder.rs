@@ -94,17 +94,14 @@ const REGION_COPY_STEP: usize = 8 << 20; // 8 MiB
 
 /// TOC entries reserved beyond a patched WAD's current entry count.
 ///
-/// Zero, deliberately. Reserving slack would let a WAD gain or lose a chunk
-/// without moving any data, but it leaves a gap between the last TOC entry and
-/// the first data byte, and the game has not been observed tolerating that gap
-/// in a real session. The capacity is still recorded and honoured throughout,
-/// and both writers zero the slots they leave unfilled, so enabling slack once
-/// that is proven is this constant alone.
+/// A WAD gains or loses entries in place while its count stays within the
+/// capacity. The client reads `chunk_count` entries and ignores the zeroed
+/// slots between the last entry and the first data byte. Both writers zero the
+/// slots they leave unfilled.
 ///
-/// While it is zero, capacity equals the entry count, so any change to a WAD's
-/// entry set fails the capacity precondition and takes the full-rebuild path -
-/// which also means nothing exercises the zero-fill until this is raised.
-const TOC_SLACK_ENTRIES: u32 = 0;
+/// 16384 slots cost 512 KiB per WAD. The largest new-entry count observed for
+/// one mod on one WAD is about 1650.
+const TOC_SLACK_ENTRIES: u32 = 16384;
 
 /// Highest byte offset the WAD v3.4 format's `u32` offset fields can address.
 const MAX_WAD_OFFSET: u64 = u32::MAX as u64;
@@ -801,11 +798,9 @@ fn write_tail_chunk<W: Write>(
 
 /// The number of TOC entries to reserve for `entry_count` chunks.
 ///
-/// [`TOC_SLACK_ENTRIES`] must match the slack `ltk_wad` allows a rebase, which
-/// it keeps privately: reserving more here than a rebase admits would build
-/// WADs that every later rebase refuses, falling back to a full rebuild
-/// forever. [`WadTailLayout::admits_entry_count`] is what enforces the
-/// agreement, and both are zero today.
+/// A rebase admits any entry count up to the capacity
+/// ([`WadTailLayout::admits_entry_count`]). [`TOC_SLACK_ENTRIES`] alone sets
+/// the slack.
 ///
 /// # Errors
 ///

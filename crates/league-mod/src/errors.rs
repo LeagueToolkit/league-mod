@@ -88,10 +88,7 @@ pub enum CliError {
 
     #[error("IO operation failed")]
     #[diagnostic(code(io::operation_failed))]
-    IoError {
-        #[from]
-        source: std::io::Error,
-    },
+    IoError(#[from] std::io::Error),
 
     #[error("Invalid base layer priority: {provided} (expected 0)")]
     #[diagnostic(
