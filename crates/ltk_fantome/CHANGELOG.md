@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.15.0...ltk_fantome-v0.15.1) - 2026-10-01
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.15.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.14.6...ltk_fantome-v0.15.0) - 2026-10-01
 
 ### Added
