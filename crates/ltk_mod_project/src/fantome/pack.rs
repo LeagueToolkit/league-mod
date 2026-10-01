@@ -1,12 +1,13 @@
 //! [`FantomeFormat`]: encodes a pack plan as a Fantome archive.
 //!
-//! Each `.wad.client` directory of the base layer is *built* into a WAD and
-//! written as one stored archive entry. That is the shape distributed mods
-//! overwhelmingly have and the one `ltk_fantome`'s reader can seek into; the
-//! alternative the format also carries - one entry per file under
-//! `WAD/<name>/` - leaves a reader a directory of loose files to rebuild a WAD
-//! out of, and costs an archive the difference between a zstd-compressed WAD
-//! and its files deflated one by one.
+//! Each `.wad.client` directory of every layer is *built* into a WAD and
+//! written as one stored archive entry in the layer's WAD directory: `WAD/`
+//! for the base layer, `WAD_<layer>/` for any other. That is the shape
+//! distributed mods overwhelmingly have and the one `ltk_fantome`'s reader can
+//! seek into; the alternative the format also carries - one entry per file
+//! under `WAD/<name>/` - leaves a reader a directory of loose files to rebuild a
+//! WAD out of, and costs an archive the difference between a zstd-compressed
+//! WAD and its files deflated one by one.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -16,7 +17,7 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_fantome::{FantomeHashtable, FantomeInfo, FantomeWriteError, FantomeWriter};
+use ltk_fantome::{is_layer_name, FantomeHashtable, FantomeInfo, FantomeWriteError, FantomeWriter};
 use ltk_file::LeagueFileKind;
 use ltk_hashtable::{Category, Hashtable, HashtableSet, Key};
 use ltk_wad::{
@@ -45,6 +46,16 @@ pub enum FantomePackError {
     /// The archive could not be written.
     #[error(transparent)]
     Write(#[from] FantomeWriteError),
+
+    /// A layer holding WAD content has a name no WAD directory can carry.
+    ///
+    /// A layer's WAD directory is `WAD_<layer>/`. The name is one or more ASCII
+    /// letters, digits, `-` or `_`; see [`is_layer_name`].
+    #[error("Layer {layer:?} cannot name a WAD directory")]
+    InvalidLayerName {
+        /// The layer name as the project spells it.
+        layer: String,
+    },
 
     /// Two different declared hashtable files land on one archive name.
     ///
@@ -123,10 +134,10 @@ impl FantomePackError {
 /// Packs a mod project into a Fantome archive; the Fantome backend for
 /// [`ProjectPacker`](crate::ProjectPacker).
 ///
-/// Fantome stores less than a plan can carry: only the base layer is packed
-/// (use [`ModProject::non_base_layers`](crate::ModProject::non_base_layers)
-/// to warn about layers a pack will drop), and within it only files inside
-/// `.wad.client` directories. See the [`pack` module docs](crate::pack) for
+/// Fantome stores less than a plan can carry: within each layer, only files
+/// inside `.wad.client` directories are packed. The base layer's WADs land
+/// under `WAD/` and every other layer's under `WAD_<layer>/`, which a Fantome
+/// reader that predates layers skips. See the [`pack` module docs](crate::pack) for
 /// how formats plug into the driver.
 ///
 /// # Example
@@ -167,12 +178,14 @@ impl<W: Write + Seek> PackFormat for FantomeFormat<W> {
         plan: &PackPlan<'_>,
         progress: &mut PackReporter<'_>,
     ) -> Result<PackFormatReport, Self::Error> {
+        validate_layer_names(plan)?;
+
         let mut writer = FantomeWriter::new(self.writer);
 
         // Metadata first and the WADs after it, so every entry whose bytes
         // never move sits ahead of the ones a later repair grows.
         pack_metadata(&mut writer, plan)?;
-        pack_base_layer(&mut writer, plan, progress)?;
+        pack_layers(&mut writer, plan, progress)?;
 
         writer.finish()?;
         // Nothing to trim: a fantome WAD stores hashes, not paths, so no
@@ -181,13 +194,51 @@ impl<W: Write + Seek> PackFormat for FantomeFormat<W> {
     }
 }
 
-/// Build one WAD per `.wad.client` directory of the base layer and write each
-/// as a single stored entry.
+/// Refuse a layer holding WAD content whose name [`is_layer_name`] refuses,
+/// before the archive is started.
+fn validate_layer_names(plan: &PackPlan<'_>) -> Result<(), FantomePackError> {
+    for planned in plan.layers() {
+        let name = &planned.layer().name;
+        let holds_wads = planned.files().iter().any(|file| file.wad().is_some());
+
+        if holds_wads && !is_layer_name(name) {
+            return Err(FantomePackError::InvalidLayerName {
+                layer: name.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Build one WAD per `.wad.client` directory of each layer and write each as a
+/// single stored entry in the layer's WAD directory.
 ///
 /// Files outside a WAD directory are neither written nor reported: Fantome has
 /// no place for them.
-fn pack_base_layer<W: Write + Seek>(
+fn pack_layers<W: Write + Seek>(
     writer: &mut FantomeWriter<W>,
+    plan: &PackPlan<'_>,
+    progress: &mut PackReporter<'_>,
+) -> Result<(), FantomePackError> {
+    for planned in plan.layers() {
+        pack_layer(
+            writer,
+            &planned.layer().name,
+            planned.files(),
+            plan,
+            progress,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Build one WAD per `.wad.client` directory among `files` of `layer`.
+fn pack_layer<W: Write + Seek>(
+    writer: &mut FantomeWriter<W>,
+    layer: &str,
+    files: &[PlannedFile],
     plan: &PackPlan<'_>,
     progress: &mut PackReporter<'_>,
 ) -> Result<(), FantomePackError> {
@@ -196,7 +247,7 @@ fn pack_base_layer<W: Write + Seek>(
     // starts. Ordered by name, so one project packs to one archive whatever
     // order the scan walked its directories in.
     let mut wads: BTreeMap<&str, Vec<&PlannedFile>> = BTreeMap::new();
-    for file in plan.base_layer().files() {
+    for file in files {
         if let Some(wad_name) = file.wad() {
             wads.entry(wad_name).or_default().push(file);
         }
@@ -210,7 +261,7 @@ fn pack_base_layer<W: Write + Seek>(
         built
             .seek(SeekFrom::Start(0))
             .map_err(|source| FantomePackError::stage(wad_name, source))?;
-        writer.write_packed_wad(wad_name, &mut built)?;
+        writer.write_packed_wad(layer, wad_name, &mut built)?;
     }
 
     Ok(())
@@ -339,7 +390,8 @@ fn harvested_routes(
     );
 
     let mut names: BTreeSet<&str> = BTreeSet::new();
-    for file in plan.base_layer().files() {
+    let files = plan.layers().iter().flat_map(|planned| planned.files());
+    for file in files {
         if file.wad().is_none() {
             continue;
         }

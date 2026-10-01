@@ -279,19 +279,114 @@ fn read_wad_overrides_lowercase_packed_wad_folder() {
     assert_eq!(overrides[0].1, b"packed");
 }
 
-#[test]
-fn strip_prefix_ci_matches_case_insensitively() {
-    assert_eq!(strip_prefix_ci("WAD/foo", "WAD/"), Some("foo"));
-    assert_eq!(strip_prefix_ci("wad/foo", "WAD/"), Some("foo"));
-    assert_eq!(strip_prefix_ci("Wad/foo", "WAD/"), Some("foo"));
-    assert_eq!(strip_prefix_ci("RAW/foo", "RAW/"), Some("foo"));
-    assert_eq!(strip_prefix_ci("raw/foo", "RAW/"), Some("foo"));
-    assert_eq!(strip_prefix_ci("META/foo", "WAD/"), None);
-    assert_eq!(strip_prefix_ci("wa", "WAD/"), None);
+/// An archive holding `Aatrox.wad.client` as loose files in the base layer and
+/// in `chroma`, and `Ahri.wad.client` packed in `chroma` alone.
+fn make_layered_fantome_zip(info: &[u8]) -> Cursor<Vec<u8>> {
+    make_fantome_zip(&[
+        ("META/info.json", info),
+        ("WAD/Aatrox.wad.client/file1.bin", b"base"),
+        ("WAD_chroma/Aatrox.wad.client/file1.bin", b"chroma"),
+        (
+            "WAD_chroma/Ahri.wad.client",
+            &make_packed_wad_bytes(b"packed"),
+        ),
+    ])
 }
 
 #[test]
-fn list_layer_wads_non_base_returns_empty() {
+fn list_layer_wads_lists_each_layers_own_wads() {
+    let mut content =
+        FantomeContent::new(make_layered_fantome_zip(&make_info_json("Test"))).unwrap();
+
+    let mut chroma = content.list_layer_wads("chroma").unwrap();
+    chroma.sort();
+
+    assert_eq!(chroma, ["aatrox.wad.client", "ahri.wad.client"]);
+    assert_eq!(
+        content.list_layer_wads("base").unwrap(),
+        ["aatrox.wad.client"]
+    );
+}
+
+#[test]
+fn each_layer_reads_its_own_overrides() {
+    let mut content =
+        FantomeContent::new(make_layered_fantome_zip(&make_info_json("Test"))).unwrap();
+
+    let chroma = content
+        .read_wad_overrides("chroma", "Aatrox.wad.client")
+        .unwrap();
+    assert_eq!(
+        chroma,
+        [(Utf8PathBuf::from("file1.bin"), b"chroma".to_vec())]
+    );
+    assert_eq!(
+        content
+            .read_wad_override_file("Chroma", "aatrox.wad.client", Utf8Path::new("file1.bin"))
+            .unwrap(),
+        b"chroma"
+    );
+    assert_eq!(
+        content
+            .read_wad_override_file("base", "Aatrox.wad.client", Utf8Path::new("file1.bin"))
+            .unwrap(),
+        b"base"
+    );
+
+    let packed = content
+        .read_wad_overrides("chroma", "Ahri.wad.client")
+        .unwrap();
+    assert_eq!(packed.len(), 1);
+    assert_eq!(packed[0].1, b"packed");
+    assert!(
+        content
+            .read_wad_overrides("base", "Ahri.wad.client")
+            .unwrap()
+            .is_empty(),
+        "the base layer holds no Ahri WAD"
+    );
+}
+
+#[test]
+fn mod_project_gives_an_undeclared_layer_directory_a_layer() {
+    let mut content =
+        FantomeContent::new(make_layered_fantome_zip(&make_info_json("Test"))).unwrap();
+
+    let layers: Vec<(String, i32)> = content
+        .mod_project()
+        .unwrap()
+        .layers
+        .into_iter()
+        .map(|layer| (layer.name, layer.priority))
+        .collect();
+
+    assert_eq!(layers, [("base".to_owned(), 0), ("chroma".to_owned(), 0)]);
+}
+
+#[test]
+fn mod_project_keeps_a_declared_layer_whatever_its_directory_casing() {
+    let info = br#"{"Name":"Test","Author":"A","Version":"1.0.0","Description":"d",
+        "Layers":{"Chroma":{"Name":"Chroma","Priority":5}}}"#;
+    let mut content = FantomeContent::new(make_layered_fantome_zip(info)).unwrap();
+
+    let layers: Vec<(String, i32)> = content
+        .mod_project()
+        .unwrap()
+        .layers
+        .into_iter()
+        .map(|layer| (layer.name, layer.priority))
+        .collect();
+
+    assert_eq!(layers, [("base".to_owned(), 0), ("Chroma".to_owned(), 5)]);
+    assert_eq!(
+        content.list_layer_wads("Chroma").unwrap().len(),
+        2,
+        "the declared spelling reaches the chroma directory's WADs"
+    );
+}
+
+#[test]
+fn list_layer_wads_of_a_layer_without_wads_is_empty() {
     let cursor = make_fantome_zip(&[
         ("META/info.json", &make_info_json("Test")),
         ("WAD/Aatrox.wad.client/file1", b"data1"),
@@ -319,7 +414,7 @@ fn read_wad_overrides_directory_style() {
 }
 
 #[test]
-fn read_wad_overrides_non_base_returns_empty() {
+fn read_wad_overrides_of_a_layer_without_wads_is_empty() {
     let cursor = make_fantome_zip(&[
         ("META/info.json", &make_info_json("Test")),
         ("WAD/Aatrox.wad.client/file1.bin", b"data1"),
@@ -576,7 +671,7 @@ fn loose_entries_have_no_stored_form_to_offer() {
             "Packed.wad.client",
             Utf8PathBuf::from("0000000000000000.bin"),
         ),
-        // Fantome WAD content is base-layer only.
+        // A layer the archive holds no WADs for.
         ("chroma", "Packed.wad.client", packed_hex),
     ];
 

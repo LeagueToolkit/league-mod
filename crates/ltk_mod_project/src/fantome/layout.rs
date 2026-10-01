@@ -56,10 +56,10 @@ impl<R: Read + Seek> ProjectPaths for FantomeReader<R> {
 /// directories come back as the parents of the files that land in them.
 pub(crate) fn project_path(entry_name: &str) -> Option<ProjectPath> {
     let path = match classify_entry(entry_name)? {
-        FantomeEntry::PackedWad(name) => {
-            return Some(ProjectPath::unpacked_wad(base_layer_dir().join(name)))
+        FantomeEntry::PackedWad { layer, name } => {
+            return Some(ProjectPath::unpacked_wad(layer_dir(layer).join(name)))
         }
-        FantomeEntry::WadFile(relative_path) => base_layer_dir().join(relative_path),
+        FantomeEntry::WadFile { layer, path } => layer_dir(layer).join(path),
         FantomeEntry::Raw(relative_path) => raw_dir().join(relative_path),
         FantomeEntry::Readme => Utf8PathBuf::from("README.md"),
         FantomeEntry::License(file_name) => Utf8PathBuf::from(file_name),
@@ -74,9 +74,13 @@ pub(crate) fn project_path(entry_name: &str) -> Option<ProjectPath> {
     Some(ProjectPath::file(path))
 }
 
-/// `content/base`, as a project-relative path.
-fn base_layer_dir() -> Utf8PathBuf {
-    ModProjectLayer::content_path(Utf8Path::new(""), ModProjectLayer::BASE_NAME)
+/// `content/<layer>`, as a project-relative path.
+///
+/// The layer is spelled as its WAD directory spells it. The import lands a
+/// layer the metadata declares under the declared spelling, which differs only
+/// in ASCII case.
+fn layer_dir(layer: &str) -> Utf8PathBuf {
+    ModProjectLayer::content_path(Utf8Path::new(""), layer)
 }
 
 /// `content/base/raw`, as a project-relative path.
@@ -106,6 +110,18 @@ mod tests {
         assert_eq!(
             file("WAD/Aatrox.wad.client/assets/x.bin"),
             "content/base/Aatrox.wad.client/assets/x.bin"
+        );
+    }
+
+    #[test]
+    fn layer_wad_files_land_in_their_layer() {
+        assert_eq!(
+            file("WAD_pink/Aatrox.wad.client/assets/x.bin"),
+            "content/pink/Aatrox.wad.client/assets/x.bin"
+        );
+        assert_eq!(
+            project_path("WAD_pink/Aatrox.wad.client"),
+            Some(ProjectPath::unpacked_wad("content/pink/Aatrox.wad.client"))
         );
     }
 

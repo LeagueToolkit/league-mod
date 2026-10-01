@@ -1,9 +1,9 @@
 //! [`FantomeWriter`]: writes the entries of a Fantome archive.
 //!
 //! The writer owns the archive flavor and the entry naming conventions
-//! (`WAD/`, `META/`). It does not know what a mod project is: deciding which
-//! files go into the archive is the caller's job (see `ltk_mod_project`'s
-//! `fantome` module).
+//! (`WAD/`, `WAD_<layer>/`, `META/`). It does not know what a mod project is:
+//! deciding which files go into the archive is the caller's job (see
+//! `ltk_mod_project`'s `fantome` module).
 //!
 //! The flavor is a Deflate-compressed zip with one exception: a **packed WAD
 //! is stored**. A reader seeks into a stored entry to reach one chunk and has
@@ -18,7 +18,9 @@ use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::{FantomeEntry, FantomeHashtable, FantomeInfo, classify_entry};
+use crate::{
+    FantomeEntry, FantomeHashtable, FantomeInfo, classify_entry, is_layer_name, wad_entry_name,
+};
 
 /// Failure to write a Fantome archive entry.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +37,14 @@ pub enum FantomeWriteError {
     /// `META/info.json` could not be serialized.
     #[error("Failed to serialize META/info.json")]
     Json(#[from] serde_json::Error),
+
+    /// A layer name that [`is_layer_name`] refuses, which names no WAD
+    /// directory.
+    #[error("{layer:?} cannot name a layer's WAD directory")]
+    InvalidLayerName {
+        /// The layer name as the caller spelled it.
+        layer: String,
+    },
 }
 
 /// Writes a Fantome archive entry by entry.
@@ -65,21 +75,31 @@ impl<W: Write + Seek> FantomeWriter<W> {
         }
     }
 
-    /// Write a file belonging to a WAD directory, as `WAD/{wad_name}/{rel_path}`.
+    /// Write a file belonging to a WAD directory of `layer`, as
+    /// `{wad_name}/{rel_path}` in the layer's WAD directory (see
+    /// [`wad_entry_name`]).
     ///
     /// `rel_path` is relative to the WAD directory; backslashes are normalized
     /// to the `/` separator archives use, whatever the host uses.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`FantomeWriteError::InvalidLayerName`] for a `layer` that
+    /// [`is_layer_name`] refuses, and otherwise when the entry cannot be
+    /// written.
     pub fn write_wad_entry(
         &mut self,
+        layer: &str,
         wad_name: &str,
         rel_path: &str,
         content: &mut impl Read,
     ) -> Result<(), FantomeWriteError> {
-        let entry_path = format!("WAD/{}/{}", wad_name, rel_path.replace('\\', "/"));
-        self.write_entry(&entry_path, content)
+        let path = format!("{}/{}", wad_name, rel_path.replace('\\', "/"));
+        self.write_entry(&layer_entry_name(layer, &path)?, content)
     }
 
-    /// Write a whole WAD as the single entry `WAD/{wad_name}`.
+    /// Write a whole WAD of `layer` as the single entry `{wad_name}` in the
+    /// layer's WAD directory (see [`wad_entry_name`]).
     ///
     /// The other shape a WAD takes in an archive, and the one distributed mods
     /// overwhelmingly have: one entry holding the built WAD rather than a
@@ -93,14 +113,21 @@ impl<W: Write + Seek> FantomeWriter<W> {
     /// behind it to move, which is what [`store_packed_wads`] and
     /// [`replace_entries`] arrange for the archives they rewrite.
     ///
+    /// # Errors
+    ///
+    /// Fails with [`FantomeWriteError::InvalidLayerName`] for a `layer` that
+    /// [`is_layer_name`] refuses, and otherwise when the entry cannot be
+    /// written.
+    ///
     /// [`store_packed_wads`]: crate::store_packed_wads
     /// [`replace_entries`]: crate::replace_entries
     pub fn write_packed_wad(
         &mut self,
+        layer: &str,
         wad_name: &str,
         content: &mut impl Read,
     ) -> Result<(), FantomeWriteError> {
-        self.write_entry(&format!("WAD/{wad_name}"), content)
+        self.write_entry(&layer_entry_name(layer, wad_name)?, content)
     }
 
     /// Write the mod metadata as `META/info.json`.
@@ -205,10 +232,21 @@ impl<W: Write + Seek> FantomeWriter<W> {
     /// [module docs](self) for what deflating a packed WAD costs.
     fn options_for(&self, entry_path: &str) -> SimpleFileOptions {
         match classify_entry(entry_path) {
-            Some(FantomeEntry::PackedWad(_)) => {
+            Some(FantomeEntry::PackedWad { .. }) => {
                 self.options.compression_method(CompressionMethod::Stored)
             }
             _ => self.options,
         }
+    }
+}
+
+/// The entry name of `path` in `layer`'s WAD directory, for a layer the reader
+/// reads back.
+fn layer_entry_name(layer: &str, path: &str) -> Result<String, FantomeWriteError> {
+    match is_layer_name(layer) {
+        true => Ok(wad_entry_name(layer, path)),
+        false => Err(FantomeWriteError::InvalidLayerName {
+            layer: layer.to_owned(),
+        }),
     }
 }

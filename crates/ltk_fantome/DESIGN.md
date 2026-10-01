@@ -1,27 +1,45 @@
 ## Fantome Format Structure
 
-The library creates ZIP files with this structure, following the [official Fantome specification](https://github.com/LeagueToolkit/Fantome/wiki/Mod-File-Format):
+The library creates ZIP files with this structure. `META/`, `WAD/` and `RAW/` follow the
+[official Fantome specification](https://github.com/LeagueToolkit/Fantome/wiki/Mod-File-Format).
+`WAD_<layer>/`, `META/hashes/` and `META/game_data/` are LeagueToolkit extensions.
 
 ```
 my_mod_1.0.0.fantome
 ├── META/
-│   ├── info.json            # Mod metadata
-│   ├── README.md            # Project documentation (optional)
-│   └── image.png            # Mod thumbnail (optional)
-│                                                                    
-├── WAD/                     # Base Layer (required)                                                            
-│    ├── Aatrox.wad.client/                                                                                     
-│    │   ├── data/                                                                                     
-│    │   └── assets/
-│ 	 └── Map11.wad.client/
-│	     ├── data/
-│	     └── assets/       
-│																									 
-└── WAD_pink/                # Pink Chroma Layer                                                                                                    
-	 └── Aatrox.wad.client/                                                                                                 
-		 ├── data/                                                                                                          
-		 └── assets/
+│   ├── info.json              # Mod metadata
+│   ├── README.md              # Project documentation (optional)
+│   ├── image.png              # Mod thumbnail (optional)
+│   ├── hashes/                # Declared hashtables (optional)
+│   └── game_data/<layer>/     # Game-data override files (optional)
+├── WAD/                       # Base layer
+│   ├── Aatrox.wad.client      # A packed WAD, stored
+│   └── Map11.wad.client/      # A WAD as a directory of its files
+│       ├── data/
+│       └── assets/
+├── WAD_pink/                  # Layer "pink"
+│   └── Aatrox.wad.client
+└── RAW/                       # Base-layer files by game asset path (optional)
 ```
+
+### Layer WAD directories
+
+- `WAD/` holds the base layer's WADs. `WAD_<layer>/` holds the WADs of the layer named
+  `<layer>`. `wad_entry_name` spells both.
+- A layer name in a WAD directory is one or more ASCII letters, digits, `-` or `_`
+  (`is_layer_name`). `WAD_base/` names no layer. An entry under a directory that breaks either
+  rule is not placed, and the writer refuses such a layer with `InvalidLayerName`.
+- The `WAD/` and `WAD_` prefixes match case-insensitively. A `WAD_<layer>/` directory belongs to
+  the `Layers` entry whose name matches `<layer>` case-insensitively. `extract_wads` writes it
+  under the declared spelling.
+- A `WAD_<layer>/` directory that `Layers` does not declare loads as a layer of that name at
+  priority 0 (`FantomeInfo::declare_layers`).
+- A packed WAD is stored, not deflated, in every layer's WAD directory.
+- `RAW/` belongs to the base layer. No other layer has raw files.
+- A reader that predates layers, cslol-manager included, reads `WAD/` and `RAW/` and skips
+  `WAD_<layer>/`. It loads the base layer alone and keeps the layer table it does not use.
+
+ADR-0036 records the choice of `WAD_<layer>/`.
 
 ### Metadata Structure
 
@@ -33,36 +51,25 @@ The `info.json` file contains metadata in the format expected by Fantome:
   "Author": "Author Name",
   "Version": "1.0.0",
   "Description": "Mod description",
-  "Generator": "ltk_mod_project 0.9.2",   # the packing tool and its version (LeagueToolkit extension, optional)
-  "Layers": {                        
-	"base": {                     # "WAD" folder (required)
-	  "Name": "base",
-	  "Priority": 0,
-      "StringOverrides": {    
- 	    "field1": "New String"
- 	    "field2": "New String"
-      } 
-	}
-	"Pink": {
-	  "Name": "Pink Chroma",
-	  "Priority": 10,
-      "StringOverrides": {    
- 	    "field3": "New String"
-      } 
-	}
-  }
-  "Groups": {                        
-	"base": {
-	  "Kind": "Inclusive",
-	  "Members": []
-	}
-	"Group": {
-	  "Kind": "Inclusive",
-	  "Members": ["Layer"]
-	}
+  "Generator": "ltk_mod_project 0.9.2",
+  "Layers": {
+    "pink": {
+      "Name": "pink",
+      "DisplayName": "Pink Chroma",
+      "Priority": 10,
+      "StringOverrides": {
+        "en_us": { "field3": "New String" }
+      }
+    }
   }
 }
 ```
+
+- `Generator` names the packing tool and its version. It is a LeagueToolkit extension and
+  optional.
+- `Layers` is keyed by layer name. `Name` is the layer name and matches the key. A pack declares
+  every layer other than base, and the base layer when it carries string overrides.
+- `StringOverrides` maps a locale (`en_us`, `ko_kr` or `default`) to field replacements.
 
 ## StringOverrides
 

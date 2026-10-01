@@ -1,10 +1,13 @@
 //! Content provider for `.fantome` ZIP archives.
 //!
-//! Fantome archives only support a single "base" layer. WAD content is stored
-//! under the `WAD/` directory, either as:
+//! Each layer's WAD content is stored under its WAD directory, `WAD/` for the
+//! base layer and `WAD_<layer>/` for any other, either as:
 //! - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
 //! - **Packed WADs**: `WAD/{name}.wad.client` - a complete WAD, read where the
 //!   archive stores it when it stores it whole, inflated into memory when not
+//!
+//! A `WAD_<layer>/` directory that `META/info.json` does not declare loads as a
+//! layer at priority 0.
 //!
 //! Raw overrides (game asset paths not pre-organized into WAD directories) are stored
 //! under the `RAW/` directory.
@@ -12,6 +15,7 @@
 use crate::content::{CompressedChunk, ModContentProvider, archive_fingerprint};
 use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use ltk_fantome::{FantomeEntry, classify_entry};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_wad::{Wad, WadChunk, WadHash, is_hex_chunk_path};
 use memmap2::Mmap;
@@ -121,13 +125,16 @@ impl Seek for PackedSource {
 struct FantomeIndex {
     /// The exact entry name for META/info.json (case-insensitive match).
     info_entry: Option<String>,
-    /// Lowercase WAD name -> [(full_zip_path, relative_path)]. Lowercase keys
-    /// make lookups case-insensitive; the stored path keeps the real casing.
+    /// [`wad_key`] -> [(full_zip_path, relative_path)]. Lowercase keys make
+    /// lookups case-insensitive. The stored path keeps the real casing.
     wad_dir_entries: HashMap<String, Vec<(String, String)>>,
-    /// Lowercase WAD name -> full_zip_path, for WADs stored as single files.
+    /// [`wad_key`] -> full_zip_path, for WADs stored as single files.
     packed_wad_paths: HashMap<String, String>,
     /// RAW entries: (full_zip_path, relative_path).
     raw_entries: Vec<(String, String)>,
+    /// The layers holding WAD content, as their WAD directories first spell
+    /// them, in archive order.
+    layers: Vec<String>,
 }
 
 impl FantomeIndex {
@@ -136,13 +143,13 @@ impl FantomeIndex {
         let mut wad_dir_entries: HashMap<String, Vec<(String, String)>> = HashMap::new();
         let mut packed_wad_paths: HashMap<String, String> = HashMap::new();
         let mut raw_entries: Vec<(String, String)> = Vec::new();
+        let mut layers: Vec<String> = Vec::new();
 
         for i in 0..archive.len() {
             let Ok(file) = archive.by_index_raw(i) else {
                 continue;
             };
             let name = file.name().to_string();
-            let is_dir = file.is_dir();
             drop(file);
 
             // META/info.json (case-insensitive)
@@ -151,40 +158,29 @@ impl FantomeIndex {
                 continue;
             }
 
-            // WAD/ entries (prefix matched case-insensitively, e.g. `wad/`)
-            if let Some(relative) = strip_prefix_ci(&name, "WAD/") {
-                if relative.is_empty() || is_dir {
-                    continue;
+            match classify_entry(&name) {
+                Some(FantomeEntry::PackedWad { layer, name: wad }) => {
+                    note_layer(&mut layers, layer);
+                    packed_wad_paths.insert(wad_key(layer, wad), name.clone());
                 }
-
-                if !relative.contains('/') && is_wad_file_name(relative) {
-                    // Packed WAD file directly under WAD/.
-                    let key = relative.to_ascii_lowercase();
-                    packed_wad_paths.insert(key, name);
-                } else if let Some(wad_name) = relative.split('/').next()
-                    && is_wad_file_name(wad_name)
-                {
-                    let rel = relative
-                        .strip_prefix(wad_name)
-                        .and_then(|s| s.strip_prefix('/'))
-                        .unwrap_or("");
-                    if !rel.is_empty() {
-                        // Own the key/rel so `name` is free to move below.
-                        let key = wad_name.to_ascii_lowercase();
-                        let rel = rel.to_string();
-                        wad_dir_entries.entry(key).or_default().push((name, rel));
+                Some(FantomeEntry::WadFile { layer, path }) => {
+                    let Some((wad, rel)) = path.split_once('/') else {
+                        continue;
+                    };
+                    if !is_wad_file_name(wad) || rel.is_empty() {
+                        continue;
                     }
-                }
-                continue;
-            }
 
-            // RAW/ entries (prefix matched case-insensitively)
-            if let Some(relative) = strip_prefix_ci(&name, "RAW/")
-                && !relative.is_empty()
-                && !is_dir
-            {
-                let relative = relative.to_string();
-                raw_entries.push((name, relative));
+                    note_layer(&mut layers, layer);
+                    wad_dir_entries
+                        .entry(wad_key(layer, wad))
+                        .or_default()
+                        .push((name.clone(), rel.to_owned()));
+                }
+                Some(FantomeEntry::Raw(relative)) => {
+                    raw_entries.push((name.clone(), relative.to_owned()));
+                }
+                _ => {}
             }
         }
 
@@ -193,25 +189,55 @@ impl FantomeIndex {
             wad_dir_entries,
             packed_wad_paths,
             raw_entries,
+            layers,
         }
     }
 
-    /// All WAD names in the archive, as lowercase keys.
-    fn wad_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.wad_dir_entries.keys().cloned().collect();
-        for wad_name in self.packed_wad_paths.keys() {
-            if !names.contains(wad_name) {
-                names.push(wad_name.clone());
+    /// The WAD names of `layer`, lowercase.
+    fn wad_names(&self, layer: &str) -> Vec<String> {
+        let prefix = wad_key(layer, "");
+        let mut names: Vec<String> = Vec::new();
+
+        for key in self
+            .wad_dir_entries
+            .keys()
+            .chain(self.packed_wad_paths.keys())
+        {
+            if let Some(wad_name) = key.strip_prefix(&prefix)
+                && !names.iter().any(|name| name == wad_name)
+            {
+                names.push(wad_name.to_owned());
             }
         }
+
         names
+    }
+}
+
+/// The index key of the WAD `wad_name` of `layer`: both lowercase, joined by
+/// `/`.
+///
+/// Neither a layer name nor a WAD name holds a `/`.
+fn wad_key(layer: &str, wad_name: &str) -> String {
+    format!(
+        "{}/{}",
+        layer.to_ascii_lowercase(),
+        wad_name.to_ascii_lowercase()
+    )
+}
+
+/// Add `layer` to `layers` unless a spelling of it differing only in ASCII
+/// case is listed.
+fn note_layer(layers: &mut Vec<String>, layer: &str) {
+    if !layers.iter().any(|held| held.eq_ignore_ascii_case(layer)) {
+        layers.push(layer.to_owned());
     }
 }
 
 /// Content provider that reads directly from a `.fantome` ZIP archive.
 ///
-/// Fantome archives only support a single "base" layer. WAD content is stored
-/// under the `WAD/` directory, either as:
+/// Each layer's WAD content is stored under its WAD directory, `WAD/` for the
+/// base layer and `WAD_<layer>/` for any other, either as:
 /// - **Directory WADs**: `WAD/{name}.wad.client/{file}` - individual override files
 /// - **Packed WADs**: `WAD/{name}.wad.client` - complete WAD files unpacked in-memory into overrides
 pub struct FantomeContent<R: Read + Seek> {
@@ -221,7 +247,7 @@ pub struct FantomeContent<R: Read + Seek> {
     /// The archive file mapped, once, for the packed WADs it stores whole.
     /// Absent until one is asked for, and for as long as none can be.
     archive_map: Option<Arc<Mmap>>,
-    /// Packed WADs mounted so far, keyed by lowercase WAD name. Filled lazily
+    /// Packed WADs mounted so far, keyed by [`wad_key`]. Filled lazily
     /// by `packed_wad`: the exact-match skip path never needs the bytes, and
     /// eagerly mounting every packed WAD would charge a full archive read to
     /// builds that end up reusing everything.
@@ -454,10 +480,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         let info_json = info_bytes
             .strip_prefix(b"\xEF\xBB\xBF")
             .unwrap_or(&info_bytes);
-        let info: ltk_fantome::FantomeInfo = serde_json::from_slice(info_json)?;
+        let mut info: ltk_fantome::FantomeInfo = serde_json::from_slice(info_json)?;
+        info.declare_layers(self.index.layers.iter().map(String::as_str));
 
-        // Map declared layers so per-layer string overrides survive; fantome WAD
-        // content itself is still base-layer only.
         let mut layers: Vec<ModProjectLayer> = info
             .layers
             .iter()
@@ -493,10 +518,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
-        if layer != "base" {
-            return Ok(Vec::new());
-        }
-        Ok(self.index.wad_names())
+        Ok(self.index.wad_names(layer))
     }
 
     fn read_wad_overrides(
@@ -504,11 +526,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         layer: &str,
         wad_name: &str,
     ) -> Result<Vec<(Utf8PathBuf, Vec<u8>)>> {
-        if layer != "base" {
-            return Ok(Vec::new());
-        }
-
-        let wad_key = wad_name.to_ascii_lowercase();
+        let wad_key = wad_key(layer, wad_name);
 
         // Try directory-style entries first
         if let Some(entries) = self.index.wad_dir_entries.get(&wad_key) {
@@ -554,11 +572,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         wad_name: &str,
         visit: &mut dyn FnMut(Utf8PathBuf, Vec<u8>) -> Result<()>,
     ) -> Result<()> {
-        if layer != "base" {
-            return Ok(());
-        }
-
-        let wad_key = wad_name.to_ascii_lowercase();
+        let wad_key = wad_key(layer, wad_name);
 
         if let Some(entries) = self.index.wad_dir_entries.get(&wad_key) {
             let entry_names: Vec<(String, String)> = entries.clone();
@@ -636,14 +650,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Vec<u8>> {
-        if layer != "base" {
-            return Err(ModContentError::FantomeLayerUnsupported {
-                layer: layer.to_string(),
-            }
-            .into());
-        }
-
-        let wad_key = wad_name.to_ascii_lowercase();
+        let wad_key = wad_key(layer, wad_name);
 
         // Look up the stored entry path rather than reconstructing it, since the
         // archive's real casing (e.g. a lowercase `wad/` folder) may differ.
@@ -683,6 +690,7 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         }
 
         Err(ModContentError::FantomeOverrideMissing {
+            layer: layer.to_string(),
             wad_name: wad_name.to_string(),
             rel_path: rel_path.to_path_buf(),
         }
@@ -695,14 +703,10 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         wad_name: &str,
         rel_path: &Utf8Path,
     ) -> Result<Option<CompressedChunk>> {
-        if layer != "base" {
-            return Ok(None);
-        }
-
         // Only a packed WAD holds chunks in a WAD's stored form; a
         // directory-style entry is a loose file the ZIP holds on its own terms,
         // so there is nothing to copy through.
-        let wad_key = wad_name.to_ascii_lowercase();
+        let wad_key = wad_key(layer, wad_name);
         let Some(chunk) = self.packed_chunk(&wad_key, rel_path)? else {
             return Ok(None);
         };
@@ -753,16 +757,6 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
 fn is_wad_file_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".wad.client") || lower.ends_with(".wad") || lower.ends_with(".wad.mobile")
-}
-
-/// Strip a leading ASCII prefix case-insensitively, returning the remainder.
-fn strip_prefix_ci<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
-    let head = name.get(..prefix.len())?;
-    if head.eq_ignore_ascii_case(prefix) {
-        Some(&name[prefix.len()..])
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

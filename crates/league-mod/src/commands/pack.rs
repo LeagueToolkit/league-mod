@@ -142,7 +142,7 @@ fn pack_to_fantome_format(
         mod_project.name.bright_cyan().bold()
     );
 
-    warn_about_unsupported_layers(&mod_project);
+    note_layer_compatibility(&mod_project);
 
     let project_root = config_path.parent().unwrap();
     let output_dir = resolve_output_dir(&args.output_dir, &config_path)?;
@@ -178,39 +178,31 @@ fn pack_to_fantome_format(
     Ok(())
 }
 
-fn warn_about_unsupported_layers(mod_project: &ModProject) {
+/// Name the layers stored as `WAD_<layer>/` directories, which Fantome tools
+/// that predate layers skip.
+fn note_layer_compatibility(mod_project: &ModProject) {
     let non_base_layers = mod_project.non_base_layers();
-
-    if !non_base_layers.is_empty() {
-        println_pad!(
-            "{}",
-            "⚠️  WARNING: Fantome format only supports the base layer!"
-                .bright_yellow()
-                .bold()
-        );
-        println_pad!(
-            "{}",
-            "   The following layers will NOT be included in the Fantome package:"
-                .bright_yellow()
-                .dimmed()
-        );
-        for layer in non_base_layers {
-            println_pad!(
-                "   {} {} {}",
-                "•".bright_red(),
-                layer.name.bright_red().bold(),
-                format!("(priority: {})", layer.priority).dimmed()
-            );
-        }
-        println_pad!(
-            "   {} {}",
-            "💡 Tip:".bright_cyan().bold(),
-            "Consider using --format modpkg to include all layers."
-                .bright_yellow()
-                .dimmed()
-        );
-        println!(); // Empty line for spacing
+    if non_base_layers.is_empty() {
+        return;
     }
+
+    println_pad!(
+        "{}",
+        "ℹ️  Layers other than base are stored as WAD_<layer>/ directories:".bright_blue()
+    );
+    for layer in non_base_layers {
+        println_pad!(
+            "   {} {} {}",
+            "•".bright_cyan(),
+            layer.name.bright_cyan().bold(),
+            format!("(priority: {})", layer.priority).dimmed()
+        );
+    }
+    println_pad!(
+        "   {}",
+        "Fantome tools that predate layers load the base layer alone.".dimmed()
+    );
+    println!();
 }
 
 // Config utils

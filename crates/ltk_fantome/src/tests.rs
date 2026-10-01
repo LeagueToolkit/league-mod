@@ -250,7 +250,12 @@ mod rewrite {
     fn archive_with_wrong_crc(info: &FantomeInfo, payload: &[u8]) -> Vec<u8> {
         let mut writer = FantomeWriter::new(Cursor::new(Vec::new()));
         writer
-            .write_wad_entry("Aatrox.wad.client", "data/x.bin", &mut &payload[..])
+            .write_wad_entry(
+                crate::BASE_LAYER,
+                "Aatrox.wad.client",
+                "data/x.bin",
+                &mut &payload[..],
+            )
             .unwrap();
         writer.write_info(info).unwrap();
         let mut bytes = writer.finish().unwrap().into_inner();
@@ -305,8 +310,12 @@ mod rewrite {
         out_reader
             .extract_wads(dir_path, WadExtractOptions::new())
             .unwrap();
-        let extracted =
-            std::fs::read(dir_path.join("Aatrox.wad.client/data/x.bin").as_std_path()).unwrap();
+        let extracted = std::fs::read(
+            dir_path
+                .join("base/Aatrox.wad.client/data/x.bin")
+                .as_std_path(),
+        )
+        .unwrap();
         assert_eq!(extracted, payload);
 
         // The manifest declares the table and the table reads back.
@@ -352,8 +361,12 @@ mod rewrite {
             .extract_wads(dir_path, WadExtractOptions::new())
             .unwrap();
 
-        let extracted =
-            std::fs::read(dir_path.join("Aatrox.wad.client/data/x.bin").as_std_path()).unwrap();
+        let extracted = std::fs::read(
+            dir_path
+                .join("base/Aatrox.wad.client/data/x.bin")
+                .as_std_path(),
+        )
+        .unwrap();
         assert_eq!(extracted, b"repaired bytes");
     }
 
@@ -424,7 +437,7 @@ mod rewrite {
         let rewritten = sink.into_inner();
         let mut out = FantomeReader::new(Cursor::new(rewritten)).unwrap();
         assert!(
-            out.packed_wad_source("Aatrox.wad.client")
+            out.packed_wad_source(crate::BASE_LAYER, "Aatrox.wad.client")
                 .unwrap()
                 .unwrap()
                 .is_in_place(),
@@ -433,7 +446,10 @@ mod rewrite {
 
         // And the bytes that come back are the replacement's, not the stale
         // ones the archive held.
-        let mut wad = out.mount_packed_wad("Aatrox.wad.client").unwrap().unwrap();
+        let mut wad = out
+            .mount_packed_wad(crate::BASE_LAYER, "Aatrox.wad.client")
+            .unwrap()
+            .unwrap();
         let chunk = *wad.chunks().iter().next().unwrap();
         assert_eq!(
             &*wad.load_chunk_decompressed(&chunk).unwrap(),
@@ -740,10 +756,17 @@ fn a_packed_wad_reads_back_whole() {
 
     let mut reader = crate::FantomeReader::new(Cursor::new(archive)).unwrap();
     assert_eq!(
-        reader.read_packed_wad("Aatrox.wad.client").unwrap(),
+        reader
+            .read_packed_wad(crate::BASE_LAYER, "Aatrox.wad.client")
+            .unwrap(),
         Some(wad_bytes)
     );
-    assert_eq!(reader.read_packed_wad("Absent.wad.client").unwrap(), None);
+    assert_eq!(
+        reader
+            .read_packed_wad(crate::BASE_LAYER, "Absent.wad.client")
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -846,7 +869,12 @@ fn a_sink_that_fails_part_way_surfaces_the_error() {
         })
         .unwrap();
     writer
-        .write_wad_entry("Aatrox.wad.client", "assets/x.tex", &mut &b"payload"[..])
+        .write_wad_entry(
+            crate::BASE_LAYER,
+            "Aatrox.wad.client",
+            "assets/x.tex",
+            &mut &b"payload"[..],
+        )
         .unwrap();
     let bytes = writer.finish().unwrap().into_inner();
 
@@ -861,4 +889,39 @@ fn a_sink_that_fails_part_way_surfaces_the_error() {
     // reported written; keeping the original safe is the temp-and-rename
     // above this call.
     add_hashtables(&mut reader, sink, &[(Category::Game, harvested)]).unwrap_err();
+}
+
+#[test]
+fn declare_layers_adds_only_the_layers_the_table_lacks() {
+    let mut info = FantomeInfo::default();
+    info.layers.insert(
+        "Pink".into(),
+        FantomeLayerInfo {
+            name: "Pink".into(),
+            priority: 5,
+            ..Default::default()
+        },
+    );
+    info.layers.insert(
+        "blue".into(),
+        FantomeLayerInfo {
+            name: String::new(),
+            priority: 3,
+            ..Default::default()
+        },
+    );
+
+    info.declare_layers([BASE_LAYER, "pink", "BLUE", "gold"]);
+
+    let mut keys: Vec<&str> = info.layers.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["Pink", "blue", "gold"]);
+    assert_eq!(info.layers["Pink"].priority, 5);
+    assert_eq!(
+        info.layers["gold"],
+        FantomeLayerInfo {
+            name: "gold".into(),
+            ..Default::default()
+        }
+    );
 }

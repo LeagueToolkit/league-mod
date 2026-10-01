@@ -57,8 +57,19 @@ fn pack(project: &ModProject, root: &Utf8Path) -> Cursor<Vec<u8>> {
 /// mounting the WAD rather than looking an entry name up: the file names the
 /// author used are not in the archive at all.
 fn holds_chunk(archive: Cursor<Vec<u8>>, wad_name: &str, rel_path: &str) -> bool {
+    holds_layer_chunk(archive, ltk_fantome::BASE_LAYER, wad_name, rel_path)
+}
+
+/// Whether the packed WAD `wad_name` of `layer` holds the chunk `rel_path`
+/// addresses.
+fn holds_layer_chunk(
+    archive: Cursor<Vec<u8>>,
+    layer: &str,
+    wad_name: &str,
+    rel_path: &str,
+) -> bool {
     let mut reader = FantomeReader::new(archive).unwrap();
-    let Some(wad) = reader.mount_packed_wad(wad_name).unwrap() else {
+    let Some(wad) = reader.mount_packed_wad(layer, wad_name).unwrap() else {
         return false;
     };
     wad.chunks()
@@ -69,7 +80,7 @@ fn holds_chunk(archive: Cursor<Vec<u8>>, wad_name: &str, rel_path: &str) -> bool
 fn read_chunk(archive: Cursor<Vec<u8>>, wad_name: &str, rel_path: &str) -> Vec<u8> {
     let mut reader = FantomeReader::new(archive).unwrap();
     let mut wad = reader
-        .mount_packed_wad(wad_name)
+        .mount_packed_wad(ltk_fantome::BASE_LAYER, wad_name)
         .unwrap()
         .expect("a packed WAD");
     let chunk = *wad
@@ -356,7 +367,10 @@ fn pack_stores_audio_uncompressed_and_compresses_the_rest() {
     let buffer = pack(&test_project(None), &root);
 
     let mut reader = FantomeReader::new(buffer).unwrap();
-    let wad = reader.mount_packed_wad("Test.wad.client").unwrap().unwrap();
+    let wad = reader
+        .mount_packed_wad(ltk_fantome::BASE_LAYER, "Test.wad.client")
+        .unwrap()
+        .unwrap();
     let codec = |rel: &str| {
         wad.chunks()
             .get(ltk_wad::chunk_hash_of(Utf8Path::new(rel)))
@@ -485,6 +499,7 @@ fn a_packed_mod_is_repaired_in_place_and_still_reads_back() {
     // was extracted under; `chunk_hash_of` turns that back into the chunk.
     let mut delta = ArchiveDelta::new();
     delta.chunk(
+        ltk_fantome::BASE_LAYER,
         "Test.wad.client",
         ltk_wad::chunk_hash_of(Utf8Path::new("data.bin")),
         REPAIRED,
@@ -498,7 +513,7 @@ fn a_packed_mod_is_repaired_in_place_and_still_reads_back() {
     let repaired = Cursor::new(std::fs::read(archive_path.as_std_path()).unwrap());
     let mut reader = FantomeReader::new(repaired.clone()).unwrap();
     assert!(reader
-        .packed_wad_source("Test.wad.client")
+        .packed_wad_source(ltk_fantome::BASE_LAYER, "Test.wad.client")
         .unwrap()
         .unwrap()
         .is_in_place());
@@ -688,30 +703,163 @@ fn pack_skips_content_outside_wad_directories() {
     );
 }
 
-#[test]
-fn pack_drops_non_base_layers() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = utf8_dir(&tmp);
-    write_project_tree(&root);
+/// A project whose `high-res` layer holds `Test.wad.client/extra.bin` beside
+/// the base layer's `Test.wad.client/data.bin`.
+fn layered_project(root: &Utf8Path, layer: &str) -> ModProject {
+    write_project_tree(root);
 
-    let hires_wad = root
-        .join("content")
-        .join("high-res")
-        .join("Test.wad.client");
-    std::fs::create_dir_all(&hires_wad).unwrap();
-    std::fs::write(hires_wad.join("extra.bin"), b"extra").unwrap();
+    let layer_wad = root.join("content").join(layer).join("Test.wad.client");
+    std::fs::create_dir_all(&layer_wad).unwrap();
+    std::fs::write(layer_wad.join("extra.bin"), b"extra").unwrap();
 
     let mut project = test_project(None);
     project.layers.push(crate::ModProjectLayer {
-        name: "high-res".to_string(),
+        name: layer.to_string(),
+        display_name: Some("High resolution".to_string()),
         priority: 1,
         ..Default::default()
     });
+    project
+}
+
+#[test]
+fn pack_writes_each_layer_into_its_own_wad_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let project = layered_project(&root, "high-res");
 
     let buffer = pack(&project, &root);
 
     assert!(holds_chunk(buffer.clone(), "Test.wad.client", "data.bin"));
-    assert!(!holds_chunk(buffer, "Test.wad.client", "extra.bin"));
+    assert!(!holds_chunk(buffer.clone(), "Test.wad.client", "extra.bin"));
+    assert!(holds_layer_chunk(
+        buffer.clone(),
+        "high-res",
+        "Test.wad.client",
+        "extra.bin"
+    ));
+    assert!(!holds_layer_chunk(
+        buffer.clone(),
+        "high-res",
+        "Test.wad.client",
+        "data.bin"
+    ));
+
+    let mut archive = zip::ZipArchive::new(buffer).unwrap();
+    assert_eq!(
+        archive
+            .by_name("WAD_high-res/Test.wad.client")
+            .unwrap()
+            .compression(),
+        zip::CompressionMethod::Stored
+    );
+}
+
+#[test]
+fn pack_declares_every_layer_other_than_the_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let project = layered_project(&root, "high-res");
+
+    let info = FantomeReader::new(pack(&project, &root))
+        .unwrap()
+        .read_info()
+        .unwrap();
+
+    let mut keys: Vec<&str> = info.layers.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["high-res"], "the base layer carries no overrides");
+    assert_eq!(info.layers["high-res"].name, "high-res");
+    assert_eq!(
+        info.layers["high-res"].display_name.as_deref(),
+        Some("High resolution")
+    );
+    assert_eq!(info.layers["high-res"].priority, 1);
+}
+
+#[test]
+fn pack_refuses_a_layer_name_no_wad_directory_can_hold() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let project = layered_project(&root, "high res");
+
+    let error = try_pack(&project, &root).unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            PackError::Format(FantomePackError::InvalidLayerName { layer }) if layer == "high res"
+        ),
+        "expected the layer name refused, got {error:?}"
+    );
+}
+
+#[test]
+fn a_layered_pack_imports_back_into_its_layers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    let project = layered_project(&root, "high-res");
+    let packed = pack(&project, &root).into_inner();
+
+    let out = utf8_dir(&tmp).join("reimported");
+    let imported = import(packed, &out).unwrap();
+
+    let content = out.join("content");
+    assert_eq!(
+        std::fs::read(content.join("base/Test.wad.client/data.bin").as_std_path()).unwrap(),
+        b"content"
+    );
+    assert_eq!(
+        std::fs::read(
+            content
+                .join("high-res/Test.wad.client/extra.bin")
+                .as_std_path()
+        )
+        .unwrap(),
+        b"extra"
+    );
+
+    let layer = imported
+        .layers
+        .iter()
+        .find(|layer| layer.name == "high-res")
+        .expect("the layer travels");
+    assert_eq!(layer.priority, 1);
+    assert_eq!(layer.display_name.as_deref(), Some("High resolution"));
+}
+
+#[test]
+fn import_gives_an_undeclared_layer_wad_directory_a_layer() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("META/info.json", options).unwrap();
+    zip.write_all(br#"{"Name":"Mod","Author":"A","Version":"1.0.0","Description":"d"}"#)
+        .unwrap();
+    zip.start_file("WAD_extra/Test.wad.client/data.bin", options)
+        .unwrap();
+    zip.write_all(b"extra").unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let out = utf8_dir(&tmp);
+    let imported = import(archive, &out).unwrap();
+
+    assert_eq!(
+        std::fs::read(
+            out.join("content/extra/Test.wad.client/data.bin")
+                .as_std_path()
+        )
+        .unwrap(),
+        b"extra"
+    );
+    let names: Vec<(&str, i32)> = imported
+        .layers
+        .iter()
+        .map(|layer| (layer.name.as_str(), layer.priority))
+        .collect();
+    assert_eq!(names, [("base", 0), ("extra", 0)]);
 }
 
 #[test]

@@ -15,9 +15,8 @@
 //! [`ProjectPaths`](crate::ProjectPaths), so a caller that has to size the
 //! result first can see where every entry lands without unpacking one.
 //!
-//! Fantome stores only the base layer; use
-//! [`ModProject::non_base_layers`](crate::ModProject::non_base_layers) to
-//! warn about layers a pack will drop.
+//! Every layer travels: the base layer's WADs under `WAD/`, every other
+//! layer's under `WAD_<layer>/`, and the layer table in `META/info.json`.
 
 mod convert;
 mod import;

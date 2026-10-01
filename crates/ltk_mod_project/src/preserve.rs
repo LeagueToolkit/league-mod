@@ -182,7 +182,10 @@ fn harvest<R: std::io::Read + std::io::Seek>(
     let mut packed_wads = Vec::new();
     for entry_name in reader.entry_names() {
         match classify_entry(entry_name) {
-            Some(FantomeEntry::WadFile(relative_path)) => {
+            Some(FantomeEntry::WadFile {
+                path: relative_path,
+                ..
+            }) => {
                 let Some((_wad_dir, chunk_path)) = relative_path.split_once('/') else {
                     continue;
                 };
@@ -199,13 +202,15 @@ fn harvest<R: std::io::Read + std::io::Seek>(
                     unharvestable += 1;
                 }
             }
-            Some(FantomeEntry::PackedWad(name)) => packed_wads.push(name.to_owned()),
+            Some(FantomeEntry::PackedWad { layer, name }) => {
+                packed_wads.push((layer.to_owned(), name.to_owned()));
+            }
             _ => {}
         }
     }
 
-    for wad_name in packed_wads {
-        let Some(bytes) = reader.read_packed_wad(&wad_name)? else {
+    for (layer, wad_name) in packed_wads {
+        let Some(bytes) = reader.read_packed_wad(&layer, &wad_name)? else {
             continue;
         };
         let mut wad = Wad::mount(Cursor::new(bytes)).map_err(|source| PreserveError::Wad {

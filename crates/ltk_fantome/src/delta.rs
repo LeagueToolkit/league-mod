@@ -87,10 +87,10 @@ const ZSTD_LEVEL: i32 = 3;
 /// [`ltk_wad::chunk_hash_of`], which reads all three back.
 #[derive(Default, Clone)]
 pub struct ArchiveDelta<'a> {
-    /// Keyed by the WAD's lower-cased name, since the archive matches its
-    /// `WAD/` entries case-insensitively and two spellings must not become two
-    /// rebases of one WAD.
-    chunks: BTreeMap<String, WadDelta<'a>>,
+    /// Keyed by the WAD's lower-cased layer and name. The archive matches its
+    /// WAD entries case-insensitively, and two spellings of one WAD are one
+    /// rebase.
+    chunks: BTreeMap<(String, String), WadDelta<'a>>,
     /// Keyed by the entry path lower-cased, on the same terms.
     entries: BTreeMap<String, (String, Cow<'a, [u8]>)>,
     /// The entries to drop, in `entries`' key space and disjoint from it.
@@ -100,6 +100,8 @@ pub struct ArchiveDelta<'a> {
 /// The part of a delta that lands inside one packed WAD.
 #[derive(Default, Clone)]
 struct WadDelta<'a> {
+    /// The layer holding the WAD, as the caller first spelled it.
+    layer: String,
     /// The WAD's name as the caller first spelled it, for error messages.
     name: String,
     chunks: BTreeMap<WadHash, Cow<'a, [u8]>>,
@@ -114,33 +116,36 @@ impl<'a> ArchiveDelta<'a> {
         Self::default()
     }
 
-    /// Replace the chunk `path_hash` of the packed WAD `wad_name`.
+    /// Replace the chunk `path_hash` of the packed WAD `wad_name` of `layer`.
     ///
-    /// `wad_name` is the WAD's `.wad.client` name as the archive's `WAD/` entry
-    /// spells it, matched case-insensitively. `bytes` are the chunk's content
+    /// `layer` is the layer holding the WAD, [`BASE_LAYER`](crate::BASE_LAYER)
+    /// for `WAD/`. `wad_name` is the WAD's `.wad.client` name as its entry
+    /// spells it. Both are matched case-insensitively. `bytes` are the chunk's content
     /// uncompressed; what it is stored under is read off those bytes, so naming
     /// one hash in two WADs lands one encoding in both. Naming one hash twice
     /// keeps the last bytes given, and naming one already given to
     /// [`remove_chunk`](Self::remove_chunk) takes it back.
     pub fn chunk(
         &mut self,
+        layer: &str,
         wad_name: &str,
         path_hash: WadHash,
         bytes: impl Into<Cow<'a, [u8]>>,
     ) -> &mut Self {
-        let wad = self.wad_mut(wad_name);
+        let wad = self.wad_mut(layer, wad_name);
         wad.removed.remove(&path_hash);
         wad.chunks.insert(path_hash, bytes.into());
         self
     }
 
-    /// Drop the chunk `path_hash` from the packed WAD `wad_name`.
+    /// Drop the chunk `path_hash` from the packed WAD `wad_name` of `layer`.
     ///
-    /// `wad_name` is matched as [`chunk`](Self::chunk) matches it. Naming a
+    /// `layer` and `wad_name` are matched as [`chunk`](Self::chunk) matches
+    /// them. Naming a
     /// chunk the WAD does not hold does nothing, and naming one already given
     /// to [`chunk`](Self::chunk) takes it back.
-    pub fn remove_chunk(&mut self, wad_name: &str, path_hash: WadHash) -> &mut Self {
-        let wad = self.wad_mut(wad_name);
+    pub fn remove_chunk(&mut self, layer: &str, wad_name: &str, path_hash: WadHash) -> &mut Self {
+        let wad = self.wad_mut(layer, wad_name);
         wad.chunks.remove(&path_hash);
         wad.removed.insert(path_hash);
         self
@@ -179,11 +184,13 @@ impl<'a> ArchiveDelta<'a> {
         self.chunks.is_empty() && self.entries.is_empty() && self.removed_entries.is_empty()
     }
 
-    /// The delta's record for `wad_name`, added empty where there is none.
-    fn wad_mut(&mut self, wad_name: &str) -> &mut WadDelta<'a> {
+    /// The delta's record for `wad_name` of `layer`, added empty where there is
+    /// none.
+    fn wad_mut(&mut self, layer: &str, wad_name: &str) -> &mut WadDelta<'a> {
         self.chunks
-            .entry(wad_name.to_ascii_lowercase())
+            .entry((layer.to_ascii_lowercase(), wad_name.to_ascii_lowercase()))
             .or_insert_with(|| WadDelta {
+                layer: layer.to_owned(),
                 name: wad_name.to_owned(),
                 chunks: BTreeMap::new(),
                 removed: BTreeSet::new(),
@@ -288,8 +295,10 @@ pub enum FantomeDeltaError {
     ///
     /// A WAD the archive ships as a directory of loose files has no packed
     /// bytes to rebase; replace its files as entries instead.
-    #[error("The archive holds no packed WAD named {wad}")]
+    #[error("The archive holds no packed WAD named {wad} in layer {layer}")]
     WadNotPacked {
+        /// The layer named, as the caller spelled it.
+        layer: String,
         /// The WAD named, as the caller spelled it.
         wad: String,
     },
@@ -496,6 +505,8 @@ fn report(progress: &mut Option<&mut dyn FnMut(DeltaProgress<'_>)>, step: DeltaP
 
 /// One packed WAD a replace will rebase.
 struct PlannedWad<'a> {
+    /// The layer holding the WAD, as the caller spelled it.
+    layer: String,
     /// The WAD's name as the caller spelled it, for error messages.
     name: String,
     /// The archive entry holding it, as the archive spells it.
@@ -556,15 +567,18 @@ impl<'a> ArchivePlan<'a> {
         }
 
         let mut wads = Vec::with_capacity(delta.chunks.len());
-        for (key, wad) in &delta.chunks {
+        for ((layer_key, wad_key), wad) in &delta.chunks {
             let entry_name = source_entries
                 .iter()
                 .find(|entry| match classify_entry(&entry.name) {
-                    Some(FantomeEntry::PackedWad(packed)) => packed.eq_ignore_ascii_case(key),
+                    Some(FantomeEntry::PackedWad { layer, name }) => {
+                        layer.eq_ignore_ascii_case(layer_key) && name.eq_ignore_ascii_case(wad_key)
+                    }
                     _ => false,
                 })
                 .map(|entry| entry.name.clone())
                 .ok_or_else(|| FantomeDeltaError::WadNotPacked {
+                    layer: wad.layer.clone(),
                     wad: wad.name.clone(),
                 })?;
 
@@ -579,6 +593,7 @@ impl<'a> ArchivePlan<'a> {
             }
 
             wads.push(PlannedWad {
+                layer: wad.layer.clone(),
                 name: wad.name.clone(),
                 entry_name,
                 chunks: &wad.chunks,
@@ -635,12 +650,12 @@ fn rebase_wad<R: Read + Seek>(
     wad: &PlannedWad<'_>,
     scratch_dir: &Utf8Path,
 ) -> Result<(File, usize), FantomeDeltaError> {
-    let mut source =
-        reader
-            .packed_wad_source(&wad.name)?
-            .ok_or_else(|| FantomeDeltaError::WadNotPacked {
-                wad: wad.name.clone(),
-            })?;
+    let mut source = reader
+        .packed_wad_source(&wad.layer, &wad.name)?
+        .ok_or_else(|| FantomeDeltaError::WadNotPacked {
+            layer: wad.layer.clone(),
+            wad: wad.name.clone(),
+        })?;
 
     // Read off the bytes rather than off the mount: `Wad` mounts a v3.1 TOC as
     // readily as a v3.4 one and reports neither, and only v3.4 entries are the

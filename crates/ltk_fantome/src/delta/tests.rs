@@ -128,7 +128,7 @@ fn staged(bytes: &[u8]) -> (TempDir, Utf8PathBuf) {
 fn replace_one(archive_bytes: &[u8], path: &str, bytes: &[u8]) -> (TempDir, Utf8PathBuf) {
     let (dir, source) = staged(archive_bytes);
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(path), bytes);
+    delta.chunk(crate::BASE_LAYER, WAD_NAME, hash_of(path), bytes);
     apply_delta(&source, &source, &delta, None).unwrap();
     (dir, source)
 }
@@ -138,7 +138,7 @@ fn mount(path: &Utf8PathBuf) -> Wad<Cursor<Vec<u8>>> {
     let mut reader = FantomeReader::new(Cursor::new(std::fs::read(path.as_std_path()).unwrap()))
         .expect("the rewritten archive must read back");
     let bytes = reader
-        .read_packed_wad(WAD_NAME)
+        .read_packed_wad(crate::BASE_LAYER, WAD_NAME)
         .unwrap()
         .expect("a packed WAD");
     Wad::mount(Cursor::new(bytes)).expect("the rebased WAD must mount")
@@ -206,7 +206,10 @@ fn the_toc_ascends_counts_honestly_and_stays_inside_the_wad() {
 
     let mut reader =
         FantomeReader::new(Cursor::new(std::fs::read(path.as_std_path()).unwrap())).unwrap();
-    let bytes = reader.read_packed_wad(WAD_NAME).unwrap().unwrap();
+    let bytes = reader
+        .read_packed_wad(crate::BASE_LAYER, WAD_NAME)
+        .unwrap()
+        .unwrap();
     let wad = Wad::mount(Cursor::new(bytes.clone())).unwrap();
     let chunks = wad.chunks().as_slice();
 
@@ -239,6 +242,7 @@ fn replacing_a_subchunked_body_is_refused_and_writes_nothing() {
 
     let mut delta = ArchiveDelta::new();
     delta.chunk(
+        crate::BASE_LAYER,
         WAD_NAME,
         hash_of(CHUNK_PATHS[0]),
         b"a repaired body".as_slice(),
@@ -299,15 +303,28 @@ fn one_repair_lands_byte_identical_in_every_wad_that_shares_the_chunk() {
     let (_dir, source) = staged(&zip.finish().unwrap().into_inner());
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk("Aatrox.wad.client", hash_of(SHARED), REPAIRED);
-    delta.chunk("Ahri.wad.client", hash_of(SHARED), REPAIRED);
+    delta.chunk(
+        crate::BASE_LAYER,
+        "Aatrox.wad.client",
+        hash_of(SHARED),
+        REPAIRED,
+    );
+    delta.chunk(
+        crate::BASE_LAYER,
+        "Ahri.wad.client",
+        hash_of(SHARED),
+        REPAIRED,
+    );
     apply_delta(&source, &source, &delta, None).unwrap();
 
     let mut reader =
         FantomeReader::new(Cursor::new(std::fs::read(source.as_std_path()).unwrap())).unwrap();
     let mut bodies = Vec::new();
     for name in ["Aatrox.wad.client", "Ahri.wad.client"] {
-        let bytes = reader.read_packed_wad(name).unwrap().unwrap();
+        let bytes = reader
+            .read_packed_wad(crate::BASE_LAYER, name)
+            .unwrap()
+            .unwrap();
         let mut wad = Wad::mount(Cursor::new(bytes)).unwrap();
         let chunk = *wad.chunks().get(hash_of(SHARED)).unwrap();
         bodies.push((chunk.checksum, wad.load_chunk_raw(&chunk).unwrap()));
@@ -352,15 +369,28 @@ fn a_shared_chunk_is_encoded_alike_even_where_the_wads_disagree() {
     let (_dir, source) = staged(&zip.finish().unwrap().into_inner());
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk("Aatrox.wad.client", hash_of(SHARED), REPAIRED);
-    delta.chunk("Ahri.wad.client", hash_of(SHARED), REPAIRED);
+    delta.chunk(
+        crate::BASE_LAYER,
+        "Aatrox.wad.client",
+        hash_of(SHARED),
+        REPAIRED,
+    );
+    delta.chunk(
+        crate::BASE_LAYER,
+        "Ahri.wad.client",
+        hash_of(SHARED),
+        REPAIRED,
+    );
     apply_delta(&source, &source, &delta, None).unwrap();
 
     let mut reader =
         FantomeReader::new(Cursor::new(std::fs::read(source.as_std_path()).unwrap())).unwrap();
     let mut written = Vec::new();
     for name in ["Aatrox.wad.client", "Ahri.wad.client"] {
-        let bytes = reader.read_packed_wad(name).unwrap().unwrap();
+        let bytes = reader
+            .read_packed_wad(crate::BASE_LAYER, name)
+            .unwrap()
+            .unwrap();
         let mut wad = Wad::mount(Cursor::new(bytes)).unwrap();
         let chunk = *wad.chunks().get(hash_of(SHARED)).unwrap();
         written.push((
@@ -402,7 +432,12 @@ fn a_wad_reaching_past_the_formats_offsets_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[1]), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[1]),
+        b"repaired".as_slice(),
+    );
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
     assert!(
@@ -476,7 +511,7 @@ fn the_repaired_wad_goes_back_in_seekable() {
         FantomeReader::new(Cursor::new(std::fs::read(path.as_std_path()).unwrap())).unwrap();
     assert!(
         reader
-            .packed_wad_source(WAD_NAME)
+            .packed_wad_source(crate::BASE_LAYER, WAD_NAME)
             .unwrap()
             .unwrap()
             .is_in_place(),
@@ -517,6 +552,7 @@ fn loose_entries_are_replaced_alongside_chunks() {
 
     let mut delta = ArchiveDelta::new();
     delta.chunk(
+        crate::BASE_LAYER,
         WAD_NAME,
         hash_of("data/one.bin"),
         b"a repaired body".as_slice(),
@@ -562,10 +598,19 @@ fn a_repaired_archive_still_mounts_extracts_and_reads_back() {
     let mut reader =
         FantomeReader::new(Cursor::new(std::fs::read(path.as_std_path()).unwrap())).unwrap();
     assert_eq!(reader.read_info().unwrap().name, "Mod");
-    assert_eq!(reader.wad_names(), vec![WAD_NAME.to_owned()]);
+    assert_eq!(
+        reader.wad_names(),
+        vec![crate::LayerWad {
+            layer: crate::BASE_LAYER.to_owned(),
+            name: WAD_NAME.to_owned(),
+        }]
+    );
 
     // The health check's own path: mount in place, read every chunk back.
-    let mut wad = reader.mount_packed_wad(WAD_NAME).unwrap().unwrap();
+    let mut wad = reader
+        .mount_packed_wad(crate::BASE_LAYER, WAD_NAME)
+        .unwrap()
+        .unwrap();
     for chunk in wad.chunks().as_slice().to_vec() {
         let decoded = wad.load_chunk_decompressed(&chunk).unwrap();
         assert_eq!(
@@ -583,7 +628,7 @@ fn a_repaired_archive_still_mounts_extracts_and_reads_back() {
     reader
         .extract_wads(&out, crate::WadExtractOptions::new())
         .unwrap();
-    let names: Vec<_> = std::fs::read_dir(out.join(WAD_NAME).as_std_path())
+    let names: Vec<_> = std::fs::read_dir(out.join(crate::BASE_LAYER).join(WAD_NAME).as_std_path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
@@ -603,7 +648,12 @@ fn a_chunk_the_wad_does_not_hold_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of("data/absent.bin"), b"new".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("data/absent.bin"),
+        b"new".as_slice(),
+    );
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
     assert!(
@@ -627,11 +677,16 @@ fn a_wad_the_archive_holds_as_loose_files_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of("data/one.bin"), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("data/one.bin"),
+        b"repaired".as_slice(),
+    );
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
     assert!(
-        matches!(&error, FantomeDeltaError::WadNotPacked { wad } if wad == WAD_NAME),
+        matches!(&error, FantomeDeltaError::WadNotPacked { layer, wad } if layer == crate::BASE_LAYER && wad == WAD_NAME),
         "expected a not-packed refusal, got {error:?}"
     );
     assert!(!dest.exists());
@@ -648,7 +703,12 @@ fn a_wad_older_than_v3_4_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[0]),
+        b"repaired".as_slice(),
+    );
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
     assert!(
@@ -676,7 +736,12 @@ fn a_wad_named_both_whole_and_by_chunk_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[0]),
+        b"repaired".as_slice(),
+    );
     delta.entry(WAD_ENTRY, b"a whole new WAD".as_slice());
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
@@ -701,7 +766,7 @@ fn a_removed_chunk_is_gone_and_its_neighbours_still_read() {
     )));
 
     let mut delta = ArchiveDelta::new();
-    delta.remove_chunk(WAD_NAME, hash_of(REMOVED));
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of(REMOVED));
     let report = apply_delta(&source, &source, &delta, None).unwrap();
 
     assert_eq!(report.chunks_removed, 1);
@@ -733,7 +798,7 @@ fn a_removal_leaves_no_gap_between_the_toc_and_the_first_chunk() {
     let (_dir, source) = staged(&archive(&wad_bytes));
 
     let mut delta = ArchiveDelta::new();
-    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of("data/two.bin"));
     apply_delta(&source, &source, &delta, None).unwrap();
 
     let wad = mount(&source);
@@ -777,8 +842,13 @@ fn a_removal_and_a_replacement_land_in_one_rebase() {
     )));
 
     let mut delta = ArchiveDelta::new();
-    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
-    delta.chunk(WAD_NAME, hash_of("assets/three.bin"), REPAIRED);
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of("data/two.bin"));
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("assets/three.bin"),
+        REPAIRED,
+    );
     let report = apply_delta(&source, &source, &delta, None).unwrap();
 
     assert_eq!(report.wads_rebased, 1);
@@ -805,7 +875,11 @@ fn removing_a_chunk_the_wad_does_not_hold_changes_nothing() {
     )));
 
     let mut delta = ArchiveDelta::new();
-    delta.remove_chunk(WAD_NAME, hash_of("data/never_shipped.bin"));
+    delta.remove_chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("data/never_shipped.bin"),
+    );
     let report = apply_delta(&source, &source, &delta, None).unwrap();
 
     assert_eq!(report.chunks_removed, 0);
@@ -822,8 +896,13 @@ fn naming_a_chunk_for_both_a_write_and_a_removal_keeps_the_last_call() {
 
     let (_dir, source) = staged(&source_bytes);
     let mut delta = ArchiveDelta::new();
-    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
-    delta.chunk(WAD_NAME, hash_of("data/two.bin"), REPAIRED);
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of("data/two.bin"));
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("data/two.bin"),
+        REPAIRED,
+    );
     let report = apply_delta(&source, &source, &delta, None).unwrap();
     assert_eq!((report.chunks_replaced, report.chunks_removed), (1, 0));
     let mut wad = mount(&source);
@@ -832,8 +911,13 @@ fn naming_a_chunk_for_both_a_write_and_a_removal_keeps_the_last_call() {
 
     let (_dir, source) = staged(&source_bytes);
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of("data/two.bin"), REPAIRED);
-    delta.remove_chunk(WAD_NAME, hash_of("data/two.bin"));
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of("data/two.bin"),
+        REPAIRED,
+    );
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of("data/two.bin"));
     let report = apply_delta(&source, &source, &delta, None).unwrap();
     assert_eq!((report.chunks_replaced, report.chunks_removed), (0, 1));
     let wad = mount(&source);
@@ -850,7 +934,7 @@ fn removing_every_chunk_leaves_a_wad_that_still_mounts() {
 
     let mut delta = ArchiveDelta::new();
     for path in CHUNK_PATHS {
-        delta.remove_chunk(WAD_NAME, hash_of(path));
+        delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of(path));
     }
     let report = apply_delta(&source, &source, &delta, None).unwrap();
 
@@ -951,7 +1035,12 @@ fn a_wad_removed_whole_and_named_by_chunk_is_refused() {
     let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
 
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[0]),
+        b"repaired".as_slice(),
+    );
     delta.remove_entry(WAD_ENTRY);
     let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
 
@@ -977,7 +1066,11 @@ fn naming_nothing_still_puts_the_archive_at_the_destination() {
     assert_eq!(report, DeltaReport::default());
     let mut out = FantomeReader::new(std::fs::File::open(dest.as_std_path()).unwrap()).unwrap();
     assert_eq!(out.read_info().unwrap().name, "Mod");
-    assert!(out.read_packed_wad(WAD_NAME).unwrap().is_some());
+    assert!(
+        out.read_packed_wad(crate::BASE_LAYER, WAD_NAME)
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// The replacement's own content picks its codec: audio stored, because its
@@ -1036,7 +1129,12 @@ fn progress_counts_every_rebase_and_every_entry_once() {
 
     let mut steps: Vec<(String, DeltaStep, u32, u32)> = Vec::new();
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"repaired".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[0]),
+        b"repaired".as_slice(),
+    );
     apply_delta(
         &source,
         &source,
@@ -1082,11 +1180,13 @@ fn a_wad_named_in_two_casings_is_rebased_once() {
 
     let mut delta = ArchiveDelta::new();
     delta.chunk(
+        crate::BASE_LAYER,
         "Aatrox.wad.client",
         hash_of(CHUNK_PATHS[0]),
         b"one".as_slice(),
     );
     delta.chunk(
+        crate::BASE_LAYER,
         "aatrox.WAD.CLIENT",
         hash_of(CHUNK_PATHS[1]),
         b"two".as_slice(),
@@ -1113,6 +1213,7 @@ fn a_chunk_is_addressed_by_the_hash_its_extracted_path_reads_back_as() {
     // all; `chunk_hash_of` is what turns it back into the chunk's key.
     let mut delta = ArchiveDelta::new();
     delta.chunk(
+        crate::BASE_LAYER,
         WAD_NAME,
         chunk_hash_of(camino::Utf8Path::new("data/two.bin.ltk")),
         REPAIRED,
@@ -1129,10 +1230,20 @@ fn a_chunk_is_addressed_by_the_hash_its_extracted_path_reads_back_as() {
 #[test]
 fn the_debug_shape_counts_rather_than_dumps() {
     let mut delta = ArchiveDelta::new();
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[0]), b"one".as_slice());
-    delta.chunk(WAD_NAME, hash_of(CHUNK_PATHS[1]), b"two".as_slice());
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[0]),
+        b"one".as_slice(),
+    );
+    delta.chunk(
+        crate::BASE_LAYER,
+        WAD_NAME,
+        hash_of(CHUNK_PATHS[1]),
+        b"two".as_slice(),
+    );
     delta.entry("RAW/x.bin", b"three".as_slice());
-    delta.remove_chunk(WAD_NAME, hash_of(CHUNK_PATHS[2]));
+    delta.remove_chunk(crate::BASE_LAYER, WAD_NAME, hash_of(CHUNK_PATHS[2]));
     delta.remove_entry("RAW/y.bin");
 
     assert_eq!(
@@ -1141,4 +1252,67 @@ fn the_debug_shape_counts_rather_than_dumps() {
     );
     assert!(!delta.is_empty());
     assert!(ArchiveDelta::new().is_empty());
+}
+
+// -- layer WAD directories ---------------------------------------------------
+
+/// The body a layer test repairs a chunk to.
+const LAYER_REPAIRED: &[u8] = b"a repaired body in one layer";
+
+/// An archive holding `WAD_NAME` twice: once in the base layer, once in `pink`.
+fn layered_archive() -> Vec<u8> {
+    let wad = packed_wad(&original_bodies(), WadChunkCompression::Zstd);
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+    for entry in [WAD_ENTRY, "WAD_pink/Aatrox.wad.client"] {
+        zip.start_file(entry, stored).unwrap();
+        zip.write_all(&wad).unwrap();
+    }
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// The body of `path` in the packed WAD `WAD_NAME` of `layer`.
+fn body_in(archive: &Utf8PathBuf, layer: &str, path: &str) -> Vec<u8> {
+    let mut reader =
+        FantomeReader::new(Cursor::new(std::fs::read(archive.as_std_path()).unwrap())).unwrap();
+    let bytes = reader.read_packed_wad(layer, WAD_NAME).unwrap().unwrap();
+    let mut wad = Wad::mount(Cursor::new(bytes)).unwrap();
+    let chunk = *wad.chunks().get(hash_of(path)).unwrap();
+
+    wad.load_chunk_decompressed(&chunk).unwrap().to_vec()
+}
+
+#[test]
+fn a_chunk_named_in_a_layer_replaces_only_that_layers_wad() {
+    let (_dir, source) = staged(&layered_archive());
+
+    let mut delta = ArchiveDelta::new();
+    delta.chunk("Pink", WAD_NAME, hash_of(CHUNK_PATHS[0]), LAYER_REPAIRED);
+    apply_delta(&source, &source, &delta, None).unwrap();
+
+    assert_eq!(body_in(&source, "pink", CHUNK_PATHS[0]), LAYER_REPAIRED);
+    assert_eq!(
+        body_in(&source, crate::BASE_LAYER, CHUNK_PATHS[0]),
+        original_bodies()[0].1,
+        "the base layer's WAD of the same name changed"
+    );
+}
+
+#[test]
+fn a_chunk_named_in_a_layer_the_archive_lacks_is_refused() {
+    let (dir, source) = staged(&layered_archive());
+    let dest = Utf8PathBuf::from_path_buf(dir.path().join("out.fantome")).unwrap();
+
+    let mut delta = ArchiveDelta::new();
+    delta.chunk("blue", WAD_NAME, hash_of(CHUNK_PATHS[0]), LAYER_REPAIRED);
+    let error = apply_delta(&source, &dest, &delta, None).unwrap_err();
+
+    assert!(
+        matches!(&error, FantomeDeltaError::WadNotPacked { layer, wad }
+            if layer == "blue" && wad == WAD_NAME),
+        "expected a not-packed refusal, got {error:?}"
+    );
+    assert!(!dest.exists(), "a refusal wrote a destination archive");
 }

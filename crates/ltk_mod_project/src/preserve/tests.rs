@@ -17,7 +17,9 @@ fn write_source(dir: &Utf8Path, entries: &[(&str, &str, &[u8])]) -> Utf8PathBuf 
         })
         .unwrap();
     for (wad, rel, content) in entries {
-        writer.write_wad_entry(wad, rel, &mut &content[..]).unwrap();
+        writer
+            .write_wad_entry(ltk_fantome::BASE_LAYER, wad, rel, &mut &content[..])
+            .unwrap();
     }
     writer.finish().unwrap();
     path
