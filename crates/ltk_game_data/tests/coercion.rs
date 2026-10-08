@@ -613,6 +613,11 @@ fn every_coercion_row_passes_and_every_reason_fails() {
         ),
         ("id: Foo", "id", values::Hash::new(h("Foo")).into()),
         (
+            "id: '0x0123456789abcdef'",
+            "id",
+            values::Hash::new(ltk_hash::HashValue::wide(0x0123_4567_89ab_cdef)).into(),
+        ),
+        (
             "tags2: [b]",
             "tags2",
             UnorderedContainer(

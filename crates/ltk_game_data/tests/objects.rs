@@ -46,7 +46,8 @@ impl Schema for TestSchema {
 }
 
 /// A PROP v3 with `Characters/A` of class `C`, whose `objectPath` and `particlePath` name the
-/// object itself and whose `label` names another object.
+/// object itself and whose `label` names another object. The low 4 bytes of the 8-byte hash
+/// `wideId` are the object hash.
 fn base_bin() -> Vec<u8> {
     let object = BinObject::builder(h("Characters/A"), h("C"))
         .property(h("speed"), values::F32::new(1.0))
@@ -56,6 +57,7 @@ fn base_bin() -> Vec<u8> {
             values::String::new("characters/a".into()),
         )
         .property(h("label"), values::String::new("Characters/B".into()))
+        .property(h("wideId"), values::Hash::new(wide_id()))
         .build();
     let mut cursor = Cursor::new(Vec::new());
     Bin::builder()
@@ -64,6 +66,11 @@ fn base_bin() -> Vec<u8> {
         .to_writer(&mut cursor)
         .unwrap();
     cursor.into_inner()
+}
+
+/// An 8-byte hash whose low 4 bytes are the object hash of `Characters/A`.
+fn wide_id() -> ltk_hash::HashValue {
+    ltk_hash::HashValue::wide((1 << 32) | u64::from(h("Characters/A").0))
 }
 
 fn load(name: &str, text: &str) -> Declarations {
@@ -272,6 +279,7 @@ fn a_clone_copies_its_source_applies_set_and_names_itself() {
         at(copy, "label"),
         values::String::new("Characters/B".into()).into()
     );
+    assert_eq!(at(copy, "wideId"), values::Hash::new(wide_id()).into());
     // The source is untouched.
     let source = object(&bin, "Characters/A");
     assert_eq!(at(source, "speed"), values::F32::new(1.0).into());

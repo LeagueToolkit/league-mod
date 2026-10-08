@@ -6,7 +6,7 @@
 use std::cell::Cell;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use ltk_hash::{BinHash, WadHash};
+use ltk_hash::{BinHash, HashValue, WadHash};
 use ltk_meta::{PropertyKind as K, PropertyValueEnum as V, path::PropertyPath, property::values};
 
 use crate::{Schema, Shape, Value, kind_named, path_hash};
@@ -170,7 +170,7 @@ impl Coercer<'_> {
                 Value::String(text) => values::String::new(text.clone()).into(),
                 _ => return Err(Reason::KindMismatch),
             },
-            K::Hash => values::Hash::new(hash32(value)?).into(),
+            K::Hash => values::Hash::new(hash_value(value)?).into(),
             K::ObjectLink => values::ObjectLink::new(hash32(value)?).into(),
             K::WadChunkLink => values::WadChunkLink::new(hash64(value)?).into(),
             K::Container | K::UnorderedContainer => self.list(value, shape)?,
@@ -406,6 +406,17 @@ fn hash32(value: &Value) -> Result<BinHash, Reason> {
         Value::String(text) => Ok(hash32_of(text)),
         _ => Err(Reason::KindMismatch),
     }
+}
+
+/// Reads `value` as a `hash` value. Returns an 8-byte hash for a string of `0x` and 16
+/// hexadecimal digits. Returns the 4-byte hash that [`hash32`] reads for any other value.
+fn hash_value(value: &Value) -> Result<HashValue, Reason> {
+    if let Value::String(text) = value
+        && let Some(wide) = hex(text, 16)
+    {
+        return Ok(HashValue::wide(wide));
+    }
+    hash32(value).map(HashValue::from)
 }
 
 /// A 64-bit hash: XXH64 of a lowercased path, a spelled hash, or zero for null and `""`.

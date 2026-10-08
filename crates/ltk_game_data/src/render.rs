@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 
 use indexmap::IndexMap;
-use ltk_hash::BinHash;
+use ltk_hash::{BinHash, HashValue};
 use ltk_meta::{
     PropertyValueEnum as V,
     path::{FieldNames, PropertyPath},
@@ -25,7 +25,7 @@ use crate::{
 /// Plaintext for the hashes a rendered value carries ([ADR-0020]).
 ///
 /// A name that does not hash back to the value it names is ignored, and the value renders
-/// as its `0x` spelling.
+/// as its `0x` spelling. The empty name is ignored. Coercion reads `""` as the hash `0`.
 ///
 /// [ADR-0020]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0020-value-rendering.md
 pub trait Names: FieldNames {
@@ -230,13 +230,18 @@ impl Renderer<'_> {
         )])))
     }
 
-    fn hash(&self, hash: BinHash) -> String {
-        spelled32(hash, self.names.hash(hash))
+    /// Returns the spelling of a `hash` value. A 4-byte hash is its name, else `0x` and 8
+    /// hexadecimal digits. An 8-byte hash is `0x` and 16 hexadecimal digits.
+    fn hash(&self, hash: HashValue) -> String {
+        match hash.try_as_bin_hash() {
+            Some(hash) => spelled32(hash, self.names.hash(hash)),
+            None => format!("0x{:016x}", hash.as_u64()),
+        }
     }
 
     fn file(&self, chunk: u64) -> String {
         match self.names.file(chunk) {
-            Some(name) if hash64_of(&name) == chunk => name.into_owned(),
+            Some(name) if !name.is_empty() && hash64_of(&name) == chunk => name.into_owned(),
             _ => format!("0x{chunk:016x}"),
         }
     }
@@ -273,10 +278,11 @@ fn push_step(path: &mut String, step: &str) {
     path.push_str(step);
 }
 
-/// `name` where it reads back as `hash`, else `0x` and 8 hexadecimal digits.
+/// Returns `name` if it is nonempty and reads back as `hash`. Returns `0x` and 8 hexadecimal
+/// digits for any other name.
 fn spelled32(hash: BinHash, name: Option<Cow<'_, str>>) -> String {
     match name {
-        Some(name) if hash32_of(&name) == hash => name.into_owned(),
+        Some(name) if !name.is_empty() && hash32_of(&name) == hash => name.into_owned(),
         _ => format!("0x{:08x}", *hash),
     }
 }
