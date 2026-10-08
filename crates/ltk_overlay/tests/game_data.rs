@@ -541,6 +541,64 @@ fn a_build_without_entries_never_opens_the_object_index() {
 }
 
 #[test]
+fn a_build_with_only_empty_entries_modules_applies_nothing_and_never_opens_the_object_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    common::write_game_wad(&game.join(WAD), &[("shared", &bin(&["Game"]))]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"name":"Particles","entries":{}},{"entries":{}}]}"#),
+    );
+    let (mut builder, stages) =
+        recording_stages(OverlayBuilder::new(game, overlay.clone(), state.clone()));
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+    assert!(
+        result.game_data_diagnostics.is_empty(),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    assert!(!state.join("object_index.bin").exists());
+    assert!(
+        !stages
+            .lock()
+            .unwrap()
+            .contains(&"indexingObjects".to_owned())
+    );
+}
+
+#[test]
+fn an_empty_entries_module_beside_a_target_module_applies_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    let overlay = root.join("overlay");
+    let state = root.join("state");
+    common::write_game_wad(&game.join(WAD), &[("shared", &bin(&["Game"]))]);
+    let top = project(
+        &root,
+        "top",
+        None,
+        Some(r#"{"version":1,"modules":[{"entries":{}},{"target":"shared","links":["Added"]}]}"#),
+    );
+    let mut builder = OverlayBuilder::new(game, overlay.clone(), state.clone());
+    builder.set_enabled_mods(vec![top]);
+    let result = builder.build().unwrap();
+    assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["Game", "Added"]));
+    assert!(
+        result.game_data_diagnostics.is_empty(),
+        "{:?}",
+        result.game_data_diagnostics
+    );
+    assert!(!state.join("object_index.bin").exists());
+}
+
+#[test]
 fn a_called_off_build_ends_without_writing_state() {
     use std::sync::{Arc, Mutex};
     let tmp = tempfile::tempdir().unwrap();

@@ -301,6 +301,33 @@ impl Fanout {
     }
 }
 
+/// Lowers the `entries` module of `pending` against the object index of the build.
+///
+/// Pushes one `IndexUnavailable` diagnostic and lowers nothing if the index failed to load.
+/// Lowers nothing and reports nothing for a module with no entry, whatever the state of the
+/// index: a build does not load the index for such a module ([ADR-0034]).
+///
+/// [ADR-0034]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0034-an-empty-entries-module-loads.md
+fn lower_entries_module(
+    pending: &Pending,
+    entries: &IndexMap<EntryName, EntryEdit>,
+    index: Option<&std::result::Result<ObjectIndex, ObjectBuildError>>,
+    game: &GameIndex,
+    targets: &mut BTreeMap<WadHash, Vec<Application>>,
+    diagnostics: &mut Vec<GameDataDiagnostic>,
+) {
+    if entries.is_empty() {
+        return;
+    }
+    match index {
+        Some(Ok(index)) => lower_entries(pending, entries, index, game, targets, diagnostics),
+        Some(Err(error)) => {
+            diagnostics.push(index_unavailable(pending, error, "entries are skipped"));
+        }
+        None => unreachable!("an entries module with an entry loads the object index"),
+    }
+}
+
 /// Lowers the entries of `pending` to one application per declaring chunk, in mapping order.
 fn lower_entries(
     pending: &Pending,
@@ -519,22 +546,14 @@ impl OverlayBuilder {
                         origin: pending.module.origin,
                     });
                 }
-                Selector::Entries(entries) => {
-                    match &object_index {
-                        Some(Ok(index)) => lower_entries(
-                            &pending,
-                            entries,
-                            index,
-                            game,
-                            &mut targets,
-                            &mut self.last_game_data_diagnostics,
-                        ),
-                        Some(Err(error)) => self
-                            .last_game_data_diagnostics
-                            .push(index_unavailable(&pending, error, "entries are skipped")),
-                        None => unreachable!("an entries module loads the object index"),
-                    }
-                }
+                Selector::Entries(entries) => lower_entries_module(
+                    &pending,
+                    entries,
+                    object_index.as_ref(),
+                    game,
+                    &mut targets,
+                    &mut self.last_game_data_diagnostics,
+                ),
                 _ => unreachable!("the overlay lowers every selector of its `ltk_game_data`"),
             }
         }
@@ -829,6 +848,48 @@ mod tests {
         assert_eq!(diagnostic.origin.as_ref().unwrap().module_index, 3);
         assert_eq!(diagnostic.chunk, None);
         assert!(diagnostic.message.contains("called off"));
+    }
+
+    #[test]
+    fn an_entries_module_with_no_entry_lowers_nothing_whatever_the_index_state() {
+        let (_fixture, game) =
+            game_index_with_hashes(&[("DATA/FINAL/Champions/Aatrox.wad.client", &[WadHash(1)])]);
+        let built = Ok(ObjectIndex::build(&game).unwrap());
+        let failed = Err(ObjectBuildError::CalledOff);
+        let (empty, no_entries) = pending(&[]);
+        let (filled, entries) = pending(&["Characters/Zed"]);
+
+        for index in [None, Some(&built), Some(&failed)] {
+            let mut targets = BTreeMap::new();
+            let mut diagnostics = Vec::new();
+            lower_entries_module(
+                &empty,
+                &no_entries,
+                index,
+                &game,
+                &mut targets,
+                &mut diagnostics,
+            );
+            assert!(targets.is_empty());
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+
+        let mut targets = BTreeMap::new();
+        let mut diagnostics = Vec::new();
+        lower_entries_module(
+            &filled,
+            &entries,
+            Some(&failed),
+            &game,
+            &mut targets,
+            &mut diagnostics,
+        );
+        assert!(targets.is_empty());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].kind,
+            GameDataDiagnosticKind::IndexUnavailable
+        );
     }
 
     #[test]
