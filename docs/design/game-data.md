@@ -181,7 +181,7 @@ field with no name renders under its hash-form name, a map key with no spelling 
 `UnrenderableKey`, and a value of kind `none` is `UnrenderableValue`, each with the rendered path
 as its key
 ([ADR-0020](../adr/0020-value-rendering.md)). A name that does not hash back to the value it
-names is ignored. `Value::to_yaml` writes one node starting at column 0 with no trailing
+names is ignored. The empty name is ignored. `Value::to_yaml` writes one node starting at column 0 with no trailing
 newline: block style, a list whose items are scalars in flow style, a string YAML reads
 as another type quoted, and a struct pin as its struct tag over its `set`. A struct pin with a
 class and no fields is written `!pointer(C) {}`, the null pointer `!pointer null`, and a class

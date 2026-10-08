@@ -25,7 +25,7 @@ use crate::{
 /// Plaintext for the hashes a rendered value carries ([ADR-0020]).
 ///
 /// A name that does not hash back to the value it names is ignored, and the value renders
-/// as its `0x` spelling.
+/// as its `0x` spelling. The empty name is ignored. Coercion reads `""` as the hash `0`.
 ///
 /// [ADR-0020]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0020-value-rendering.md
 pub trait Names: FieldNames {
@@ -241,7 +241,7 @@ impl Renderer<'_> {
 
     fn file(&self, chunk: u64) -> String {
         match self.names.file(chunk) {
-            Some(name) if hash64_of(&name) == chunk => name.into_owned(),
+            Some(name) if !name.is_empty() && hash64_of(&name) == chunk => name.into_owned(),
             _ => format!("0x{chunk:016x}"),
         }
     }
@@ -278,10 +278,11 @@ fn push_step(path: &mut String, step: &str) {
     path.push_str(step);
 }
 
-/// `name` where it reads back as `hash`, else `0x` and 8 hexadecimal digits.
+/// Returns `name` if it is nonempty and reads back as `hash`. Returns `0x` and 8 hexadecimal
+/// digits for any other name.
 fn spelled32(hash: BinHash, name: Option<Cow<'_, str>>) -> String {
     match name {
-        Some(name) if hash32_of(&name) == hash => name.into_owned(),
+        Some(name) if !name.is_empty() && hash32_of(&name) == hash => name.into_owned(),
         _ => format!("0x{:08x}", *hash),
     }
 }

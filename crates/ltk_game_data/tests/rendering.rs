@@ -548,6 +548,29 @@ fn a_hash_renders_as_its_name_or_its_spelling() {
 }
 
 #[test]
+fn the_empty_name_is_ignored() {
+    let mut table = Table::new();
+    table.hashes.insert(h(""), "");
+    table.files.insert(path_hash(""), "");
+
+    // Coercion reads `""` as the hash `0`, and the hash of the empty name is not `0`.
+    let empty = h("");
+    let render = |value: V| Value::render(&value, &table).unwrap();
+    assert_eq!(
+        render(values::Hash::new(empty).into()),
+        Value::String(format!("0x{:08x}", empty.0))
+    );
+    assert_eq!(
+        render(values::ObjectLink::new(empty).into()),
+        Value::String(format!("0x{:08x}", empty.0))
+    );
+    assert_eq!(
+        render(values::WadChunkLink::new(WadHash(path_hash(""))).into()),
+        Value::String(format!("0x{:016x}", path_hash("")))
+    );
+}
+
+#[test]
 fn an_eight_byte_hash_renders_as_sixteen_digits_and_round_trips() {
     let seed: V = values::Hash::new(h("tag")).into();
     for (hash, spelling) in [
