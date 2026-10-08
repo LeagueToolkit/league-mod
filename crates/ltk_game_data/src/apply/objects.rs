@@ -81,15 +81,16 @@ pub(super) fn create(
 /// A top-level `hash` property holding the hash of `source`, and a top-level `string`
 /// property spelling the path of `source`, compared ASCII case-insensitively, name the object
 /// itself. The copy holds the hash of `name` and the path of `name` there. A hash-form name
-/// has no path, and a string property is left as it is where either name is hash-form.
+/// has no path, and a string property is left as it is where either name is hash-form. An
+/// object hash occupies 4 bytes, and an 8-byte `hash` property is left as it is.
 fn clone_as(object: &BinObject, source: &EntryName, name: &EntryName) -> BinObject {
     let mut copy = object.clone();
     copy.path_hash = name.object_hash();
     let spelled = !source.is_hash() && !name.is_hash();
     for value in copy.properties.values_mut() {
         match value {
-            V::Hash(hash) if hash.value == source.object_hash() => {
-                hash.value = name.object_hash();
+            V::Hash(hash) if hash.value.try_as_bin_hash() == Some(source.object_hash()) => {
+                hash.value = name.object_hash().into();
             }
             V::String(text) if spelled && text.value.eq_ignore_ascii_case(source.as_str()) => {
                 name.as_str().clone_into(&mut text.value);

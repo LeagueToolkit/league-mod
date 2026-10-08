@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 
 use indexmap::IndexMap;
-use ltk_hash::BinHash;
+use ltk_hash::{BinHash, HashValue};
 use ltk_meta::{
     PropertyValueEnum as V,
     path::{FieldNames, PropertyPath},
@@ -230,8 +230,13 @@ impl Renderer<'_> {
         )])))
     }
 
-    fn hash(&self, hash: BinHash) -> String {
-        spelled32(hash, self.names.hash(hash))
+    /// Returns the spelling of a `hash` value. A 4-byte hash is its name, else `0x` and 8
+    /// hexadecimal digits. An 8-byte hash is `0x` and 16 hexadecimal digits.
+    fn hash(&self, hash: HashValue) -> String {
+        match hash.try_as_bin_hash() {
+            Some(hash) => spelled32(hash, self.names.hash(hash)),
+            None => format!("0x{:016x}", hash.as_u64()),
+        }
     }
 
     fn file(&self, chunk: u64) -> String {
