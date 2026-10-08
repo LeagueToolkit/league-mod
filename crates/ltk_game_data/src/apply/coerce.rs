@@ -91,6 +91,12 @@ impl Coercer<'_> {
                 if Some(pin) != shape.item {
                     return Err(Reason::PinMismatch);
                 }
+                // A struct pin spells one struct. On a list of structs it is the one
+                // element, as it is on an option of structs.
+                if matches!(pin, K::Struct | K::Embedded) && shape.kind != K::Map {
+                    let element = Value::Mapping([(name.to_owned(), inner.clone())].into());
+                    return self.list(&Value::List(vec![element]), shape);
+                }
                 self.bare(inner, shape)
             }
             K::Optional if name == "option" => match inner {

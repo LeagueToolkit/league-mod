@@ -646,7 +646,10 @@ a map, signed or not, a pin names the item kind. A pin on a map value pins its v
 including a field inside a struct pin's `set`
 ([ADR-0019](../adr/0019-uniform-type-pins.md)). An `option` pin wraps one bare or pinned
 value, or null. On an option of `pointer` or `embed`, a pin of that name is the element's
-struct pin.
+struct pin. On a list or list2 of `pointer` or `embed`, a pin of that name is the struct pin of
+one element, and the value reads as the list of that element: `+units: !embed(C) {f: 1}` reads
+as `+units: [!embed(C) {f: 1}]`. A removal from such a list names indices, and a struct pin
+there is `KindMismatch`.
 
 **Rendering.** A property value renders to a `Value` by these rules
 ([ADR-0020](../adr/0020-value-rendering.md)). A rendered value coerces back to the same value
@@ -776,6 +779,7 @@ block descent, a struct pin's `set` field, and an object construction's `set`, `
 outranking `fallback`, a property the base holds typed from the base whatever `fallback`
 answers, a `fallback` answering `None` leaving the property `Untypable`,
 additions and removals on lists and maps,
+a struct pin on a list of structs read as the list of that element as an addition and as a set,
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, module names in every format, through the document, the manifest,
 both archives, and extraction, an empty module name, a `name` in a source file and in an
@@ -837,3 +841,4 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D40 | A property the base omits takes `Schema::fallback` where `expected` is `None`; `expected` and a held base value outrank it | `Untypable` until the schema describes the build; the newest described build answered inside `expected` | A game build newer than the schema keeps its added fields typable; the guess is an answer of its own, reported as `SchemaFallback` | [section 6](#s6), [ADR-0033](../adr/0033-schema-fallback-shape.md) |
 | D41 | An `entries` module may hold no entry, and applies nothing | `EntriesEmpty` at loading | An author names a module before filling it, and a tool writes it as it is named | [section 4](#s4), [ADR-0034](../adr/0034-an-empty-entries-module-loads.md) |
 | D42 | A YAML tag on an object body names the class and tags the body's `set` | A keyword tag with the class in parentheses; a struct tag; `class` and `set` only | An object body has one kind and takes no type pin; the document form keeps one shape | [section 4](#s4), [ADR-0037](../adr/0037-object-class-tags.md) |
+| D43 | A struct pin on a list of structs is the list of that one element | A list of one pin only; `KindMismatch` | A struct pin spells one struct, and a pin on a list names the item kind; the option of structs reads the same pin the same way | [section 6](#s6) |
