@@ -5,6 +5,12 @@
 # because main's versions already match. release-plz has no retry, so
 # `true` is the retry - each push republishes only what crates.io lacks.
 release_always = true
+# cargo-semver-checks builds the published version of each crate as its
+# baseline and resolves the dependencies of that version anew. The published
+# `ltk_game_index` 0.1.4 does not compile against `ltk_wad` 0.5.9, and each
+# published crate that depends on it fails to build as a baseline. The
+# conventional commits set the version bumps.
+semver_check = false
 changelog_update = true
 git_tag_enable = true
 git_release_enable = true
