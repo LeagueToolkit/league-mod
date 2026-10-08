@@ -563,7 +563,7 @@ under the new object hash, and rewrites its own path
 ([ADR-0030](../adr/0030-own-path-rewrite.md)): a top-level `hash` property holding the source's
 object hash holds the new object hash, and a top-level `string` property equal to the source's
 path, ASCII case-insensitively, holds the new name. A string is left as it is where either
-name is hash-form. A construction holds its class and no property. The phase inserts every
+name is hash-form. An 8-byte `hash` property is left as it is. A construction holds its class and no property. The phase inserts every
 created object in mapping order, then runs each object's `set` as the entry edits of its name;
 a `set` edit that does not apply is `PropertyEditSkipped` under the object's name, and the
 object stays created. The entry edits phase edits a created object as any other entry. The
@@ -616,7 +616,8 @@ key is one field name of the pinned class typed by `expected`, or by `fallback` 
 | float | `f32` | Rounded to single precision |
 | boolean | `bool`, `flag` | As is |
 | string | `string` | As is |
-| string | `hash`, `link` | FNV-1a 32 of the ASCII-lowercased string; `0x` and 8 hexadecimal digits pass through; `""` is `0` |
+| string | `hash` | FNV-1a 32 of the ASCII-lowercased string; `0x` and 8 hexadecimal digits pass through; `0x` and 16 hexadecimal digits are an 8-byte hash; `""` is `0` |
+| string | `link` | FNV-1a 32 of the ASCII-lowercased string; `0x` and 8 hexadecimal digits pass through; `""` is `0` |
 | string | `file` | XXH64 of the ASCII-lowercased string; `0x` and 16 hexadecimal digits pass through; `""` is `0` |
 | null | `hash`, `link`, `file` | `0` |
 | null | `pointer` | The null pointer |
@@ -652,7 +653,7 @@ under the value's own shape, and carries no type pin.
 | `vec2`, `vec3`, `vec4`, `mtx44` | A list of 2, 3, 4, or 16 floats, in the order coercion reads them |
 | `rgba` | A list of 4 integers |
 | `string` | The string |
-| `hash` | `FieldNames::hash` of the value, else `0x` and 8 hexadecimal digits |
+| `hash` | A 4-byte hash is `FieldNames::hash` of the value, else `0x` and 8 hexadecimal digits. An 8-byte hash is `0x` and 16 hexadecimal digits |
 | `link` | `Names::entry` of the value, else `0x` and 8 hexadecimal digits |
 | `file` | `Names::file` of the value, else `0x` and 16 hexadecimal digits |
 | `list`, `list2` | A list of the rendered items |

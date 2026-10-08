@@ -12,7 +12,7 @@ use ltk_game_data::{
     ApplyDiagnosticKind, BinHash, ErrorKind, FieldNames, IndexMap, Names, NoSchema, OverridePath,
     PropertyKind as K, Schema, Selector, Shape, Value, apply, load_declarations, path_hash,
 };
-use ltk_hash::WadHash;
+use ltk_hash::{HashValue, WadHash};
 use ltk_meta::{Bin, BinObject, PropertyValueEnum as V, property::values};
 
 const ENTRY: &str = "Characters/A";
@@ -544,6 +544,31 @@ fn a_hash_renders_as_its_name_or_its_spelling() {
     assert_eq!(
         render(values::WadChunkLink::new(WadHash(7)).into()),
         text("0x0000000000000007")
+    );
+}
+
+#[test]
+fn an_eight_byte_hash_renders_as_sixteen_digits_and_round_trips() {
+    let seed: V = values::Hash::new(h("tag")).into();
+    for (hash, spelling) in [
+        (0x5d07_ca0d_22ff_9588, "0x5d07ca0d22ff9588"),
+        // The value fits 4 bytes and the hash occupies 8.
+        (7, "0x0000000000000007"),
+    ] {
+        let wide: V = values::Hash::new(HashValue::wide(hash)).into();
+        assert_eq!(
+            Value::render(&wide, &Table::new()).unwrap(),
+            Value::String(spelling.into())
+        );
+        assert_eq!(round_trip(&wide, &seed, &NoSchema), wide);
+    }
+
+    // A name of the low 4 bytes does not name an 8-byte hash.
+    let low = u64::from(h("tag").0);
+    let wide: V = values::Hash::new(HashValue::wide(low)).into();
+    assert_eq!(
+        Value::render(&wide, &Table::new()).unwrap(),
+        Value::String(format!("0x{low:016x}"))
     );
 }
 
