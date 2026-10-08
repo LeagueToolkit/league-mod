@@ -783,7 +783,8 @@ a struct pin on a list of structs read as the list of that element as an additio
 per-key order, every `PropertySkipReason`, `SchemaFallback`, entry bodies packed and extracted
 through both archives, module names in every format, through the document, the manifest,
 both archives, and extraction, an empty module name, a `name` in a source file and in an
-`edits` item, an empty `entries` module loaded, written and read back, an empty `edits`
+`edits` item, an empty `entries` module loaded, written and read back,
+an overlay build with only empty `entries` modules that leaves the object index unopened, an empty `edits`
 refused, and an overlay build with a schema and a cached replay of the two kinds.
 Rendering cases cover every row of the rendering table coerced back to the same value, `f32`
 spellings, an `option` of a vector, a nameless field rendered under its hash-form name and
