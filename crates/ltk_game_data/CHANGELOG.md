@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.9.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.8.0...ltk_game_data-v0.9.0) - 2026-10-08
+
+### Added
+
+- *(game_data)* read 8-byte hash literals
+
+### Fixed
+
+- *(game_data)* ignore the empty name on render
+
+### Other
+
+- *(workspace)* [**breaking**] bump ltk_meta to 0.9
+
 ## [0.8.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.7.2...ltk_game_data-v0.8.0) - 2026-09-29
 
 ### Added
