@@ -4,8 +4,8 @@ use std::{collections::HashSet, io::Cursor};
 
 use ltk_game_data::{
     ApplyDiagnosticKind, ApplyResult, BinHash, DeclarationDocument, Declarations, Edit, EntryName,
-    ErrorKind, NoSchema, ObjectEdit, ObjectSkipReason, OverridePath, PropertyKind as K,
-    PropertySkipReason, Schema, Selector, Shape, apply, load_declarations,
+    ErrorKind, NoSchema, ObjectEdit, ObjectSkipReason, OverridePath, PropertyEdit,
+    PropertyKind as K, PropertySkipReason, Schema, Selector, Shape, apply, load_declarations,
 };
 use ltk_meta::{Bin, BinObject, PropertyValueEnum as V, path::PropertyPath, property::values};
 
@@ -251,6 +251,114 @@ fn objects_inside_an_entries_module_are_errors() {
         "game_data.yaml",
         "version: 1\nmodules:\n  - entries:\n      Characters/A:\n        Objects: null\n",
     );
+}
+
+const TAGGED_YAML: &str = "version: 1
+modules:
+  - target: a.bin
+    objects:
+      Characters/Copy:
+        clone: Characters/A
+        set:
+          speed: !f32 2.5
+      Characters/New: !C
+        label: fresh
+      Characters/Old:
+        remove: true
+";
+
+/// The first object edit of a target manifest whose `objects` mapping holds `body`.
+fn object_edit(body: &str) -> ObjectEdit {
+    let declarations = load("game_data.yaml", &manifest(&format!("objects:\n  {body}")));
+    edits(&declarations)[0].objects[0].clone()
+}
+
+#[test]
+fn a_class_tag_loads_as_the_object_body_it_spells() {
+    let tagged = load("game_data.yaml", TAGGED_YAML);
+    assert_eq!(edits(&tagged), edits(&load("game_data.yaml", YAML)));
+    let document = DeclarationDocument::try_from(tagged.clone()).unwrap();
+    assert_eq!(document.parse().unwrap(), tagged);
+
+    // A null value and an empty mapping are a construction with no property.
+    for body in [
+        "Characters/X: !C",
+        "Characters/X: !C null",
+        "Characters/X: !C {}",
+    ] {
+        assert!(
+            matches!(
+                object_edit(body),
+                ObjectEdit::Construct { class, properties }
+                    if class.as_str() == "C" && properties.is_empty()
+            ),
+            "{body}"
+        );
+    }
+    assert!(matches!(
+        object_edit("Characters/X: !0x50db156b {speed: 1}"),
+        ObjectEdit::Construct { class, properties }
+            if class.class_hash() == BinHash(0x50db_156b) && properties.len() == 1
+    ));
+
+    // A key under a class tag is a property path, a binding keyword of an object body included.
+    let ObjectEdit::Construct { properties, .. } =
+        object_edit("Characters/X: !C {class: D, set: {speed: 1}, clone: Characters/A}")
+    else {
+        panic!("expected a construction");
+    };
+    let keys: Vec<String> = properties.iter().map(PropertyEdit::key).collect();
+    assert_eq!(keys, ["class", "set", "clone"]);
+}
+
+#[test]
+fn a_tagged_construction_builds_the_object_of_class_and_set() {
+    let plain = run(
+        &manifest("objects:\n  Characters/New:\n    class: C\n    set: {label: fresh}"),
+        &TestSchema,
+    );
+    let tagged = run(
+        &manifest("objects:\n  Characters/New: !C\n    label: fresh"),
+        &TestSchema,
+    );
+    assert!(tagged.diagnostics.is_empty(), "{:?}", tagged.diagnostics);
+    assert_eq!(tagged.applied.objects, 1);
+    assert_eq!(tagged.bytes, plain.bytes);
+}
+
+#[test]
+fn a_tag_on_an_object_body_that_is_not_a_class_tag_is_an_error() {
+    for body in [
+        "Characters/X: !embed(C) {speed: 1}",
+        "Characters/X: !pointer {speed: 1}",
+        "Characters/X: !f32 1",
+        "Characters/X: !ref a:b",
+    ] {
+        let text = manifest(&format!("objects:\n  {body}"));
+        let error = load_declarations("game_data.yaml", &text, |_| unreachable!()).unwrap_err();
+        assert!(
+            matches!(&error.kind, ErrorKind::Syntax { detail } if detail.contains("class tag")),
+            "{body}: {error}"
+        );
+    }
+    let text = manifest("objects: !C {Characters/X: {class: C}}");
+    let error = load_declarations("game_data.yaml", &text, |_| unreachable!()).unwrap_err();
+    assert!(
+        matches!(&error.kind, ErrorKind::Syntax { detail } if detail.contains("takes no tag")),
+        "{error}"
+    );
+
+    // The value under a class tag is the `set`, a mapping.
+    for body in ["Characters/X: !C 5", "Characters/X: !C [1]"] {
+        let text = manifest(&format!("objects:\n  {body}"));
+        let error = load_declarations("game_data.yaml", &text, |_| unreachable!()).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::ObjectBodyShape, "{body}: {error}");
+        assert_eq!(
+            error.location.entry.as_deref(),
+            Some("Characters/X"),
+            "{body}"
+        );
+    }
 }
 
 #[test]

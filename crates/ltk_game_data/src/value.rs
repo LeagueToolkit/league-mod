@@ -4,12 +4,13 @@
 //! mapping, in spelled order. The build reads it by the property's type. A YAML local tag on a
 //! value loads as the one-key mapping of its name, the type pin's document form. A struct tag,
 //! `!pointer`, `!embed`, or either with a class, `!pointer(C)`, loads as the struct pin with
-//! the value as its `set`.
+//! the value as its `set`. A tag on an object body is a class tag, `!C`, and loads as the
+//! body of `class` and the value as its `set`.
 //!
 //! Two one-key mappings mean more than a mapping. A type name pins the type the value reads
 //! as, and `ref` names a value of the installed game to read instead of a literal.
 
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 use indexmap::IndexMap;
 use ltk_meta::PropertyKind;
@@ -343,13 +344,80 @@ struct Untagged(Value);
 
 impl<'de> Deserialize<'de> for Untagged {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(ValueVisitor).map(Untagged)
+        deserializer
+            .deserialize_any(ValueVisitor::<Value>(PhantomData))
+            .map(Untagged)
     }
 }
 
-struct ValueVisitor;
+/// The `objects` mapping of a body as read: a [`Value`] in which each class tag is the object
+/// body it spells ([ADR-0037]).
+///
+/// [ADR-0037]: https://github.com/LeagueToolkit/league-mod/blob/main/docs/adr/0037-object-class-tags.md
+pub(crate) struct Objects(pub(crate) Value);
 
-impl<'de> Visitor<'de> for ValueVisitor {
+impl<'de> Deserialize<'de> for Objects {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let serde_saphyr::Tagged(objects, tag) =
+            serde_saphyr::Tagged::<UntaggedObjects>::deserialize(deserializer)?;
+        match tag {
+            Some(tag) if !tag.starts_with(YAML_CORE) => Err(de::Error::custom(format!(
+                "the `objects` mapping takes no tag, found `{tag}`"
+            ))),
+            _ => Ok(Self(objects.0)),
+        }
+    }
+}
+
+/// An `objects` mapping read without its tag.
+struct UntaggedObjects(Value);
+
+impl<'de> Deserialize<'de> for UntaggedObjects {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(ValueVisitor::<ObjectBody>(PhantomData))
+            .map(Self)
+    }
+}
+
+/// One object body as read.
+struct ObjectBody(Value);
+
+impl From<ObjectBody> for Value {
+    fn from(body: ObjectBody) -> Self {
+        body.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectBody {
+    /// Reads an object body. A class tag, `!C`, loads as `class: C` with the tagged value as
+    /// the `set`, and a null value is the `set` left out. Fails for a tag that is a type name,
+    /// `ref`, or a struct tag.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let serde_saphyr::Tagged(set, tag) =
+            serde_saphyr::Tagged::<Untagged>::deserialize(deserializer)?;
+        let set = set.0;
+        let Some(tag) = tag.filter(|tag| !tag.starts_with(YAML_CORE)) else {
+            return Ok(Self(set));
+        };
+        let class = tag.trim_start_matches('!');
+        if kind_named(class).is_some() || class == REFERENCE_KEY || struct_tag(class).is_some() {
+            return Err(de::Error::custom(format!(
+                "`{tag}` on an object body is not a class tag"
+            )));
+        }
+        let mut body = IndexMap::from([("class".to_owned(), Value::String(class.to_owned()))]);
+        if set != Value::Null {
+            body.insert("set".to_owned(), set);
+        }
+        Ok(Self(Value::Mapping(body)))
+    }
+}
+
+/// The visitor of a [`Value`]. `M` is the type a value of a mapping is read as.
+struct ValueVisitor<M>(PhantomData<M>);
+
+impl<'de, M: Deserialize<'de> + Into<Value>> Visitor<'de> for ValueVisitor<M> {
     type Value = Value;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -417,8 +485,8 @@ impl<'de> Visitor<'de> for ValueVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
         let mut mapping = IndexMap::with_capacity(map.size_hint().unwrap_or(0));
-        while let Some((key, value)) = map.next_entry::<String, Value>()? {
-            if mapping.insert(key.clone(), value).is_some() {
+        while let Some((key, value)) = map.next_entry::<String, M>()? {
+            if mapping.insert(key.clone(), value.into()).is_some() {
                 return Err(de::Error::custom(format!("duplicate key `{key}`")));
             }
         }

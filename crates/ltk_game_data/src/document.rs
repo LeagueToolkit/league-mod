@@ -14,6 +14,7 @@ use serde::{
 use crate::{
     ClassName, Declarations, Edit, EntryEdit, EntryName, Error, ErrorKind, LinkEdit, LinkPath,
     ModuleName, ObjectEdit, Origin, OverridePath, PropertyEdit, Selector, Target, Value,
+    value::Objects,
 };
 
 /// An archive's versioned declarations, including fields an older consumer cannot execute.
@@ -281,7 +282,9 @@ impl<'de, E: Deserialize<'de>> Fields<E> {
                         fill(&mut fields.bindings.overrides, &mut map, &key)?;
                     }
                     Some(BindingKeyword::Objects) => {
-                        fill(&mut fields.bindings.objects, &mut map, &key)?;
+                        let mut objects = fields.bindings.objects.take().map(Objects);
+                        fill(&mut objects, &mut map, &key)?;
+                        fields.bindings.objects = objects.map(|objects| objects.0);
                     }
                     // `fill` would name whichever spelling came second. The two spellings
                     // are one binding, so the message names the pair instead.
@@ -359,7 +362,8 @@ pub(crate) struct Bindings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) overrides: Option<Vec<String>>,
     /// The `objects` mapping as read. A [`Value`] refuses a duplicate object name, and keeps
-    /// a YAML tag inside a `set`.
+    /// a YAML tag inside a `set`. A class tag on an object body is read as `class` and
+    /// `set`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) objects: Option<Value>,
     #[serde(rename = "links", skip_serializing_if = "Option::is_none")]
