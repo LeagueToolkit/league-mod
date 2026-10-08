@@ -557,10 +557,8 @@ mod tests {
                 "[!bool true, !flag false]",
                 r#"[{"bool": true}, {"flag": false}]"#,
             ),
-            (
-                "{bool: {ref: 'Characters/B:visible'}}",
-                r#"{"bool": {"ref": "Characters/B:visible"}}"#,
-            ),
+            ("{bool: [true, false]}", r#"{"bool": [true, false]}"#),
+            ("{bool: {a: true}}", r#"{"bool": {"a": true}}"#),
         ];
         for (yaml, json) in cases {
             let loaded: Value = serde_saphyr::from_str(yaml).unwrap();
@@ -574,7 +572,7 @@ mod tests {
             "!bool x",
             "!bool 1",
             "!bool null",
-            "!bool {ref: 'Characters/B:visible'}",
+            "!bool {a: true}",
             "!bool [true]",
         ] {
             assert!(serde_saphyr::from_str::<Value>(yaml).is_err(), "{yaml}");

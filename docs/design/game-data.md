@@ -391,7 +391,7 @@ A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
 loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`. The YAML parser reads `!bool`
 as the YAML boolean tag: `!bool true` and `!bool false` load as `{bool: true}` and
 `{bool: false}`, and `!bool` on any other scalar, on a mapping, or on a list is a syntax
-error. A `bool` pin on a reference is the one-key mapping, `{bool: {ref: "a:b"}}`. A struct tag's value is the
+error. A `bool` pin on a list or on a map is the one-key mapping, `{bool: [true, false]}`. A struct tag's value is the
 pin's `set` ([ADR-0027](../adr/0027-struct-tags.md)): `!pointer(C) {f: 1}` loads as
 `{pointer: {class: C, set: {f: 1}}}`, and `!embed {f: 1}` as `{embed: {set: {f: 1}}}`. A null
 value loads with no `set`: `!pointer(C)` alone is `{pointer: {class: C}}`, and `!pointer null`
