@@ -31,6 +31,7 @@ to a value of the installed game.
 - **Type pin:** A one-key mapping whose key is a type name. In YAML a local tag `!name` on a value is the same pin. A pin fixes the type a value must have.
 - **Struct pin:** A `pointer` or `embed` pin. Its value is null, or a mapping of `class` and `set`.
 - **Struct tag:** The YAML spelling of a struct pin: `!pointer` or `!embed`, with an optional class in parentheses, `!embed(C)`, on the mapping of the pin's `set`.
+- **Class tag:** The YAML spelling of a constructed object: the class as a local tag, `!C`, on the mapping of the object body's `set`.
 - **Schema:** The class schema of the installed patch: the shape of each field of each class, reached through the `Schema` trait.
 - **Shape:** A property type: a kind, and for a container or an option its item kind, for a map its key kind and item kind.
 - **Coercion:** The reading of a value as the shape of its property.
@@ -334,7 +335,13 @@ property paths.
 `target` body. An object body is `clone`, an entry name, or `class`, a class name, beside an
 optional `set` mapping; or `remove: true` alone. Any other shape is `ObjectBodyShape`, naming
 the object as its entry. `set` is an entry body: the same signed keys, blocks, pins, and
-references. `ObjectEdit` is non-exhaustive:
+references. A YAML local tag on an object body is a class tag
+([ADR-0037](../adr/0037-object-class-tags.md)), and its value is the body's `set`:
+`!C {f: 1}` loads as `{class: C, set: {f: 1}}`. A null value loads with no `set`: `!C` alone
+is `{class: C}`. The class is the tag without its `!`. A mapping under a class tag is an
+entry body; a `clone`, `class`, `set`, or `remove` key in it is a property path. A tag that
+is a type name, `ref`, or a struct tag is an error on an object body, and so is a tag on the
+`objects` mapping. `ObjectEdit` is non-exhaustive:
 `ObjectEdit::Clone { source: EntryName, properties: Vec<PropertyEdit> }`,
 `ObjectEdit::Construct { class: ClassName, properties: Vec<PropertyEdit> }`, and
 `ObjectEdit::Remove`; `ObjectEdit::properties()` is the `set`, empty for a removal. A
@@ -456,7 +463,7 @@ Rust names and serialized names have the following mapping:
 | `Edit::overrides` | `overrides` |
 | `Edit::objects` | `objects`, a mapping of entry name to object body |
 | `ObjectEdit::Clone` | `clone` and `set` |
-| `ObjectEdit::Construct` | `class` and `set` |
+| `ObjectEdit::Construct` | `class` and `set`; a YAML class tag `!C value` is written `{class: C, set: value}` |
 | `ObjectEdit::Remove` | `remove: true` |
 | `Edit::entries` | one key per entry name at the body root, its value the entry body |
 | `EntryEdit::properties` | the signed property keys of an entry body |
@@ -756,7 +763,7 @@ diagnostics, cached builds with missing or unknown diagnostic kinds, a called-of
 override path resolution, override application with skipped records and unreadable files,
 override files round-tripping through both archives, entry bodies in every format with tags
 and one-key pins loading to one model, object bodies in every format loading to one model and
-refusing every other shape, `objects` refused in an `entries` module, clones, constructions,
+refusing every other shape, class tags loading as the object body they spell, `objects` refused in an `entries` module, clones, constructions,
 removals, own-path rewrites, every `ObjectSkipReason`, a clone of an object created by an
 earlier edit, entry edits between creation and removal, an overlay build reporting a created
 object the game declares in another chunk, hash-form names in a dotted path, a block, a
@@ -829,3 +836,4 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D39 | A manifest module takes an optional `name`, carried by every serialized form, uniqueness unchecked | A unique key; names in a separate table; a `name` in a source file | A name labels a module for its author; modules execute by position | [section 4](#s4), [ADR-0032](../adr/0032-module-names.md) |
 | D40 | A property the base omits takes `Schema::fallback` where `expected` is `None`; `expected` and a held base value outrank it | `Untypable` until the schema describes the build; the newest described build answered inside `expected` | A game build newer than the schema keeps its added fields typable; the guess is an answer of its own, reported as `SchemaFallback` | [section 6](#s6), [ADR-0033](../adr/0033-schema-fallback-shape.md) |
 | D41 | An `entries` module may hold no entry, and applies nothing | `EntriesEmpty` at loading | An author names a module before filling it, and a tool writes it as it is named | [section 4](#s4), [ADR-0034](../adr/0034-an-empty-entries-module-loads.md) |
+| D42 | A YAML tag on an object body names the class and tags the body's `set` | A keyword tag with the class in parentheses; a struct tag; `class` and `set` only | An object body has one kind and takes no type pin; the document form keeps one shape | [section 4](#s4), [ADR-0037](../adr/0037-object-class-tags.md) |
