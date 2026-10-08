@@ -388,7 +388,10 @@ refuses a duplicate key in every format; an integer past the ranges named is wha
 parser makes of it, a float. `Value::Integer` holds an `i128`; serializing one outside the
 union of the `i64` and `u64` ranges is an error.
 A YAML local tag on a value loads as the one-key mapping of its name: `!f32 1.0`
-loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`. A struct tag's value is the
+loads as `{f32: 1.0}`, and `!ref a:b` loads as `{ref: "a:b"}`. The YAML parser reads `!bool`
+as the YAML boolean tag: `!bool true` and `!bool false` load as `{bool: true}` and
+`{bool: false}`, and `!bool` on any other scalar, on a mapping, or on a list is a syntax
+error. A `bool` pin on a reference is the one-key mapping, `{bool: {ref: "a:b"}}`. A struct tag's value is the
 pin's `set` ([ADR-0027](../adr/0027-struct-tags.md)): `!pointer(C) {f: 1}` loads as
 `{pointer: {class: C, set: {f: 1}}}`, and `!embed {f: 1}` as `{embed: {set: {f: 1}}}`. A null
 value loads with no `set`: `!pointer(C)` alone is `{pointer: {class: C}}`, and `!pointer null`
@@ -765,7 +768,8 @@ construction, serialized field compatibility, target selection, enabled layers, 
 diagnostics, cached builds with missing or unknown diagnostic kinds, a called-off build,
 override path resolution, override application with skipped records and unreadable files,
 override files round-tripping through both archives, entry bodies in every format with tags
-and one-key pins loading to one model, object bodies in every format loading to one model and
+and one-key pins loading to one model,
+a `!bool` tag on a scalar loading as the `bool` pin and refused on a mapping and a list, object bodies in every format loading to one model and
 refusing every other shape, class tags loading as the object body they spell, `objects` refused in an `entries` module, clones, constructions,
 removals, own-path rewrites, every `ObjectSkipReason`, a clone of an object created by an
 earlier edit, entry edits between creation and removal, an overlay build reporting a created

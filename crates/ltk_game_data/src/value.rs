@@ -548,6 +548,40 @@ mod tests {
     }
 
     #[test]
+    fn a_bool_tag_on_a_scalar_loads_as_the_bool_pin() {
+        let cases = [
+            ("!bool false", r#"{"bool": false}"#),
+            ("!bool true", r#"{"bool": true}"#),
+            ("a: !bool false", r#"{"a": {"bool": false}}"#),
+            (
+                "[!bool true, !flag false]",
+                r#"[{"bool": true}, {"flag": false}]"#,
+            ),
+            (
+                "{bool: {ref: 'Characters/B:visible'}}",
+                r#"{"bool": {"ref": "Characters/B:visible"}}"#,
+            ),
+        ];
+        for (yaml, json) in cases {
+            let loaded: Value = serde_saphyr::from_str(yaml).unwrap();
+            let expected: Value = serde_json::from_str(json).unwrap();
+            assert_eq!(loaded, expected, "{yaml}");
+        }
+
+        // The parser reads `!bool` as the YAML boolean tag. The tag takes a boolean
+        // scalar and no mapping or list.
+        for yaml in [
+            "!bool x",
+            "!bool 1",
+            "!bool null",
+            "!bool {ref: 'Characters/B:visible'}",
+            "!bool [true]",
+        ] {
+            assert!(serde_saphyr::from_str::<Value>(yaml).is_err(), "{yaml}");
+        }
+    }
+
+    #[test]
     fn a_class_tag_needs_a_struct_pin_and_a_class() {
         for yaml in [
             "!f32(X) 1",
