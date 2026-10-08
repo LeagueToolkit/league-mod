@@ -816,6 +816,53 @@ fn signed_edits_replace_the_whole_container_from_the_base() {
 }
 
 #[test]
+fn a_struct_pin_on_a_list_of_structs_is_the_list_of_that_element() {
+    let schema = TestSchema::new();
+    let units = |textures: &[&str]| -> V {
+        values::Container::new(
+            K::Embedded,
+            textures
+                .iter()
+                .map(|texture| embed(texture).into())
+                .collect(),
+        )
+        .unwrap()
+        .into()
+    };
+
+    // An addition appends the one struct.
+    let tagged = run(&manifest("+units: !embed(E)\n  texture: u3\n"), &schema);
+    assert!(tagged.diagnostics.is_empty(), "{:?}", tagged.diagnostics);
+    assert_eq!(value_at(&tagged, "units"), units(&["u0", "u1", "u2", "u3"]));
+
+    // The pin over the fields builds what the one-item list builds, in both spellings.
+    let listed = run(
+        &manifest("+units:\n  - !embed(E)\n    texture: u3\n"),
+        &schema,
+    );
+    assert_eq!(tagged.bytes, listed.bytes);
+    let mapped = run(
+        &manifest("+units: {embed: {class: E, set: {texture: u3}}}\n"),
+        &schema,
+    );
+    assert_eq!(tagged.bytes, mapped.bytes);
+
+    // A set replaces the list with the one struct.
+    let output = run(&manifest("units: !embed(E)\n  texture: only\n"), &schema);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(value_at(&output, "units"), units(&["only"]));
+
+    // A removal names indices, and a struct pin there is refused.
+    let output = run(&manifest("-units: !embed(E)\n  texture: u0\n"), &schema);
+    assert_eq!(skips(&output), [("-units", Reason::KindMismatch)]);
+
+    // A pin of the other struct kind is not the item kind.
+    let output = run(&manifest("+units: !pointer(E)\n  texture: u3\n"), &schema);
+    assert_eq!(skips(&output), [("+units", Reason::PinMismatch)]);
+    assert_eq!(value_at(&output, "units"), units(&["u0", "u1", "u2"]));
+}
+
+#[test]
 fn blocks_merge_field_by_field_and_report_joined_paths() {
     let schema = TestSchema::new();
     let output = run(
