@@ -392,10 +392,12 @@ impl ModpkgBuilder {
         Ok(all_chunks)
     }
 
-    /// Collect all non-meta chunks, sorted by WAD name then layer.
+    /// Collect all non-meta chunks, sorted by WAD name, then layer, then path hash.
     ///
     /// This groups related chunks physically in the file,
     /// enabling more sequential I/O when reading all overrides for a WAD.
+    /// No two chunks share all three keys. The order is total: two builds of
+    /// one input write identical bytes.
     fn collect_regular_chunks(
         &self,
         meta_path_hashes: &HashSet<PathHash>,
@@ -405,7 +407,12 @@ impl ModpkgBuilder {
             .values()
             .filter(|chunk| !meta_path_hashes.contains(&chunk.path_hash))
             .collect();
-        regular_chunks.sort_by(|a, b| a.wad.cmp(&b.wad).then(a.layer.cmp(&b.layer)));
+        regular_chunks.sort_by(|a, b| {
+            a.wad
+                .cmp(&b.wad)
+                .then_with(|| a.layer.cmp(&b.layer))
+                .then_with(|| a.path_hash.cmp(&b.path_hash))
+        });
 
         regular_chunks
     }
@@ -1277,6 +1284,35 @@ mod tests {
             .load_chunk_decompressed_by_path("data/shared.bin", Some("base"))
             .unwrap();
         assert_eq!(&loaded[..], &[0xCC; 64]);
+    }
+
+    /// Builds a package of many chunks that share one WAD and one layer.
+    fn build_one_wad_one_layer() -> Vec<u8> {
+        let builder = (0..64).fold(
+            ModpkgBuilder::default().with_layer(ModpkgLayerBuilder::base()),
+            |builder, i| {
+                builder.with_chunk(
+                    ModpkgChunkBuilder::new()
+                        .with_path(&format!("data/chunk_{i}.bin"))
+                        .with_layer("base")
+                        .with_wad("aatrox.wad.client"),
+                )
+            },
+        );
+
+        let mut cursor = Cursor::new(Vec::new());
+        builder
+            .build_to_writer(&mut cursor, |chunk| Ok(chunk.path().as_bytes().to_vec()))
+            .expect("Failed to build Modpkg");
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn identical_input_builds_identical_bytes() {
+        assert!(
+            build_one_wad_one_layer() == build_one_wad_one_layer(),
+            "two builds of one input differ"
+        );
     }
 
     #[test]

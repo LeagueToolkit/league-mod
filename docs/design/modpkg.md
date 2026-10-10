@@ -717,6 +717,9 @@ A writer produces a package a reader accepts under [section 12](#s12), and more:
 - Zero padding to a multiple of 8 before the TOC.
 - `chunk_count` equals the number of records; every record's `data_offset` and
   `compressed_size` lie inside the file.
+- A writer SHOULD write identical bytes for identical input. The reference writer orders content
+  records by WAD name, then layer name, then `path_hash`. The data runs and the content
+  entries of the path and WAD tables follow the record order.
 
 ### <a id="s13.2"></a>13.2 Chunks
 
