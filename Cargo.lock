@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_mod_project"
-version = "0.16.5"
+version = "0.16.6"
 dependencies = [
  "camino",
  "ignore",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_modpkg"
-version = "0.12.12"
+version = "0.12.13"
 dependencies = [
  "binrw",
  "byteorder",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_overlay"
-version = "0.16.5"
+version = "0.16.6"
 dependencies = [
  "byteorder",
  "camino",
