@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.13](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.12.12...ltk_modpkg-v0.12.13) - 2026-10-11
+
+### Fixed
+
+- *(modpkg)* make chunk order deterministic
+
+### Other
+
+- Merge pull request #302 from LeagueToolkit/fix/modpkg-deterministic-chunk-order
+
 ## [0.12.12](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.12.11...ltk_modpkg-v0.12.12) - 2026-10-08
 
 ### Other
