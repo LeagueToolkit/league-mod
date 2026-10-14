@@ -282,8 +282,7 @@ mod tests {
                 wad_name: "Test.wad.client".to_string(),
                 rel_path: Utf8PathBuf::from("data/test.bin"),
             },
-            fallback_wad: None,
-            unlocalized_wad: None,
+            fallback_wads: Vec::new(),
             linked_bins: linked.iter().map(|s| s.to_string()).collect(),
         }
     }

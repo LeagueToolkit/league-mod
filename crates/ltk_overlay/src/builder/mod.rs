@@ -50,6 +50,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_index::GameIndex;
 use ltk_wad::{EncodedChunk, WadHash};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,40 +122,69 @@ pub struct OverrideMeta {
     pub content_hash: ContentHash,
     pub uncompressed_size: usize,
     pub(crate) source: OverrideSource,
-    /// WAD path to route this override to when the game index has no match
-    pub(crate) fallback_wad: Option<Utf8PathBuf>,
-    /// The unlocalized sibling of [`Self::fallback_wad`]
-    pub(crate) unlocalized_wad: Option<Utf8PathBuf>,
+    /// WADs to route this override to when the game index has no match, one for
+    /// each WAD directory of the mod that ships the chunk
+    pub(crate) fallback_wads: Vec<FallbackWad>,
     /// Linked-file dependency paths declared by this override when it is a League
     /// property-bin (`PROP`/`PTCH`); empty otherwise. Parsed once in pass 1 and
     /// cached so the linked-bin pre-flight needs no re-decompression.
     pub(crate) linked_bins: Vec<String>,
 }
 
-impl OverrideMeta {
-    /// Whether this override is a cross-WAD import
-    pub(crate) fn is_cross_wad_import(&self, path_hash: WadHash, game_index: &GameIndex) -> bool {
-        if !matches!(self.source, OverrideSource::LayerWad { .. }) {
-            return false;
+/// A game WAD that an override falls back to, with its unlocalized sibling.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FallbackWad {
+    pub(crate) wad: Utf8PathBuf,
+    /// The unlocalized sibling of [`Self::wad`] when the mod declared a
+    /// localized WAD directory
+    pub(crate) unlocalized: Option<Utf8PathBuf>,
+}
+
+impl FallbackWad {
+    /// Returns a fallback to `wad` without an unlocalized sibling.
+    pub(crate) fn new(wad: Utf8PathBuf) -> Self {
+        Self {
+            wad,
+            unlocalized: None,
         }
-        let Some(fallback) = self.fallback_wad.as_deref() else {
-            return false;
-        };
-        !game_index
-            .holders(path_hash)
-            .any(|holder| game_index.is_wad_rel_path(holder, fallback))
+    }
+}
+
+impl OverrideMeta {
+    /// Returns the first of [`fallback_wads`](Self::fallback_wads), or `None` if it is empty.
+    #[cfg(test)]
+    pub(crate) fn first_fallback_wad(&self) -> Option<&Utf8Path> {
+        self.fallback_wads
+            .first()
+            .map(|fallback| fallback.wad.as_path())
+    }
+
+    /// Whether this override is a cross-WAD import into any of its fallback WADs
+    pub(crate) fn is_cross_wad_import(&self, path_hash: WadHash, game_index: &GameIndex) -> bool {
+        self.fallback_wads
+            .iter()
+            .any(|fallback| self.imports_into(&fallback.wad, path_hash, game_index))
+    }
+
+    /// Whether this is a WAD-layer override declared into `wad` that the game's
+    /// copy of `wad` does not hold.
+    fn imports_into(&self, wad: &Utf8Path, path_hash: WadHash, game_index: &GameIndex) -> bool {
+        matches!(self.source, OverrideSource::LayerWad { .. })
+            && !game_index
+                .holders(path_hash)
+                .any(|holder| game_index.is_wad_rel_path(holder, wad))
     }
 
     /// The game-relative WAD paths this override routes to.
     ///
     /// - Every game WAD containing `path_hash` - a shared chunk is fanned out
     ///   to all of its holders so every loaded copy stays checksum-consistent.
-    /// - Additionally `fallback_wad` when no WAD hash-matched, or when the
-    ///   override is a [cross-WAD import](Self::is_cross_wad_import) whose
-    ///   declared WAD is missing from the matches.
-    /// - Additionally [`unlocalized_wad`](Self::unlocalized_wad) whenever
-    ///   `fallback_wad` is taken, so a chunk declared into a localized WAD also
-    ///   reaches players on other locales and the integrity scan can resolve it.
+    /// - Additionally each of [`fallback_wads`](Self::fallback_wads) when no WAD
+    ///   hash-matched, or when the override is a
+    ///   [cross-WAD import](Self::is_cross_wad_import) into that WAD.
+    /// - Additionally the unlocalized sibling of each fallback WAD that is
+    ///   taken, so a chunk declared into a localized WAD also reaches players
+    ///   on other locales and the integrity scan can resolve it.
     ///
     /// An empty result means the override cannot be routed anywhere and is
     /// dropped. This is the single source of truth shared by
@@ -166,15 +196,17 @@ impl OverrideMeta {
         game_index: &GameIndex,
     ) -> Vec<Utf8PathBuf> {
         let mut targets: Vec<Utf8PathBuf> = game_index.holder_paths(path_hash).collect();
+        let unmatched = targets.is_empty();
 
-        if let Some(fallback) = self.fallback_wad.as_deref()
-            && (targets.is_empty() || self.is_cross_wad_import(path_hash, game_index))
-        {
-            targets.push(fallback.to_path_buf());
-            if let Some(unlocalized) = self.unlocalized_wad.as_deref()
-                && !targets.iter().any(|target| target == unlocalized)
-            {
-                targets.push(unlocalized.to_path_buf());
+        for fallback in &self.fallback_wads {
+            if !unmatched && !self.imports_into(&fallback.wad, path_hash, game_index) {
+                continue;
+            }
+
+            for wad in std::iter::once(&fallback.wad).chain(&fallback.unlocalized) {
+                if !targets.contains(wad) {
+                    targets.push(wad.clone());
+                }
             }
         }
 
@@ -1490,8 +1522,7 @@ mod tests {
                 wad_name: "Test.wad.client".to_string(),
                 rel_path: Utf8PathBuf::from("data/file.bin"),
             },
-            fallback_wad: None,
-            unlocalized_wad: None,
+            fallback_wads: Vec::new(),
             linked_bins: Vec::new(),
         };
         assert_eq!(meta.content_hash, ContentHash(0x1234));
@@ -1508,8 +1539,7 @@ mod tests {
                 wad_name: "Aatrox.wad.client".to_string(),
                 rel_path: Utf8PathBuf::from("data/x.bin"),
             },
-            fallback_wad: None,
-            unlocalized_wad: None,
+            fallback_wads: Vec::new(),
             linked_bins: Vec::new(),
         }
     }
@@ -1590,7 +1620,7 @@ mod tests {
         // import into Aatrox (declared WAD). Both WADs receive the same bytes
         // so their compressed checksums stay consistent in-game.
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(aatrox.clone());
+        meta.fallback_wads = vec![FallbackWad::new(aatrox.clone())];
         assert_eq!(
             meta.route_targets(WadHash(0xA881), &game_index),
             vec![ahri.clone(), aatrox.clone()]
@@ -1598,7 +1628,7 @@ mod tests {
 
         // Declared WAD already among the hash matches: no extra target.
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(ahri.clone());
+        meta.fallback_wads = vec![FallbackWad::new(ahri.clone())];
         assert_eq!(
             meta.route_targets(WadHash(0xA881), &game_index),
             vec![ahri.clone()]
@@ -1615,8 +1645,10 @@ mod tests {
         // hold it, which no other locale installs and the integrity scan never
         // reads, so the sibling carries it too.
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(graves_en.clone());
-        meta.unlocalized_wad = Some(graves.clone());
+        meta.fallback_wads = vec![FallbackWad {
+            wad: graves_en.clone(),
+            unlocalized: Some(graves.clone()),
+        }];
         assert_eq!(
             meta.route_targets(WadHash(0xF00D), &game_index),
             vec![graves_en.clone(), graves.clone()]
@@ -1632,8 +1664,10 @@ mod tests {
         // Genuinely localized content hash-matches the localized WAD, so it never
         // reaches the fallback and the sibling stays out of it.
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(graves_en.clone());
-        meta.unlocalized_wad = Some(graves.clone());
+        meta.fallback_wads = vec![FallbackWad {
+            wad: graves_en.clone(),
+            unlocalized: Some(graves.clone()),
+        }];
         assert_eq!(
             meta.route_targets(WadHash(0x1_0CA1), &game_index),
             vec![graves_en.clone()]
@@ -1649,8 +1683,10 @@ mod tests {
         // An existing asset misplaced into the localized WAD: the hash match
         // already names the sibling, so only the declared WAD is added.
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(graves_en.clone());
-        meta.unlocalized_wad = Some(graves.clone());
+        meta.fallback_wads = vec![FallbackWad {
+            wad: graves_en.clone(),
+            unlocalized: Some(graves.clone()),
+        }];
         assert_eq!(
             meta.route_targets(WadHash(0xBA5E), &game_index),
             vec![graves.clone(), graves_en.clone()]
@@ -1663,7 +1699,7 @@ mod tests {
         let aatrox = Utf8PathBuf::from("DATA/FINAL/Champions/Aatrox.wad.client");
         let (_fixture, game_index) = game_index_with_hashes(&[(&ahri, &[WadHash(0xA881)])]);
 
-        // A RAW override's fallback_wad is the dominant-WAD heuristic, not a
+        // A RAW override's fallback WAD is the dominant-WAD heuristic, not a
         // declared placement - hash matches must not be widened by it.
         let meta = OverrideMeta {
             content_hash: ContentHash(1),
@@ -1672,8 +1708,7 @@ mod tests {
                 mod_id: "m".to_string(),
                 rel_path: Utf8PathBuf::from("assets/x.bin"),
             },
-            fallback_wad: Some(aatrox.clone()),
-            unlocalized_wad: None,
+            fallback_wads: vec![FallbackWad::new(aatrox.clone())],
             linked_bins: Vec::new(),
         };
         assert_eq!(
@@ -1694,7 +1729,7 @@ mod tests {
         let (_fixture, game_index) = game_index_with_hashes(&[(&ahri, &[WadHash(0xA881)])]);
 
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(aatrox.clone());
+        meta.fallback_wads = vec![FallbackWad::new(aatrox.clone())];
         let mut mod_meta = HashMap::new();
         mod_meta.insert(WadHash(0xA881), meta);
 
@@ -1721,7 +1756,7 @@ mod tests {
         let (_fixture, game_index) = game_index_with_hashes(&[]);
 
         let mut meta = dummy_meta();
-        meta.fallback_wad = Some(custom.clone());
+        meta.fallback_wads = vec![FallbackWad::new(custom.clone())];
         let mut mod_meta = HashMap::new();
         mod_meta.insert(WadHash(0xABCD), meta);
 

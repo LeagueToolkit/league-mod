@@ -58,7 +58,7 @@ pub(super) fn collect_unfiltered_mod_metadata(
 
 /// Hash one override file into its chunk path hash and [`OverrideMeta`].
 ///
-/// `fallback_wad` starts out `None`; callers backfill it once the WAD-level
+/// `fallback_wads` starts out empty, and callers fill it once the WAD-level
 /// routing target is known (the same post-hoc pattern as
 /// [`route_unroutable_to_dominant_wad`]).
 fn build_override_meta(source: OverrideSource, bytes: &[u8]) -> Result<(WadHash, OverrideMeta)> {
@@ -69,8 +69,7 @@ fn build_override_meta(source: OverrideSource, bytes: &[u8]) -> Result<(WadHash,
             content_hash: ContentHash::of(bytes),
             uncompressed_size: bytes.len(),
             source,
-            fallback_wad: None,
-            unlocalized_wad: None,
+            fallback_wads: Vec::new(),
             linked_bins: crate::linked_bins::parse_linked_bins(bytes).unwrap_or_default(),
         },
     ))
@@ -146,8 +145,17 @@ fn collect_wad_dir_metadata(
     let fallback = resolve_fallback_wad(&enabled_mod.id, wad_name, &path_hashes, game_index)?;
 
     for (path_hash, mut meta) in entries {
-        meta.fallback_wad = fallback.wad.clone();
-        meta.unlocalized_wad = fallback.unlocalized.clone();
+        // A chunk that the mod ships under several WAD directories keeps the
+        // fallback of each, so a new file reaches every WAD that declares it.
+        if let Some(previous) = mod_meta.remove(&path_hash) {
+            meta.fallback_wads = previous.fallback_wads;
+        }
+        if let Some(fallback) = &fallback
+            && !meta.fallback_wads.contains(fallback)
+        {
+            meta.fallback_wads.push(fallback.clone());
+        }
+
         mod_meta.insert(path_hash, meta);
     }
 
@@ -159,18 +167,6 @@ fn collect_wad_dir_metadata(
     );
 
     Ok(())
-}
-
-/// Where one mod WAD directory's overrides go when a chunk hash matches no
-/// game WAD. Both fields land on every [`OverrideMeta`] collected from that
-/// directory.
-#[derive(Debug, Clone, Default)]
-struct FallbackTargets {
-    /// The game WAD the mod's declared WAD directory resolves to.
-    wad: Option<Utf8PathBuf>,
-    /// [`Self::wad`]'s unlocalized sibling, when the mod declared a localized
-    /// WAD. See [`OverrideMeta::unlocalized_wad`].
-    unlocalized: Option<Utf8PathBuf>,
 }
 
 /// Resolve the game WAD that a mod WAD target's overrides fall back to when
@@ -188,7 +184,7 @@ fn resolve_fallback_wad(
     wad_name: &str,
     path_hashes: &[WadHash],
     game_index: &GameIndex,
-) -> Result<FallbackTargets> {
+) -> Result<Option<FallbackWad>> {
     match game_index.archive_by_file_name(wad_name) {
         Ok(id) => {
             let relative_game_path = game_index.wad_rel_path(id);
@@ -200,10 +196,10 @@ fn resolve_fallback_wad(
                 relative_game_path
             );
 
-            Ok(FallbackTargets {
-                wad: Some(relative_game_path),
+            Ok(Some(FallbackWad {
+                wad: relative_game_path,
                 unlocalized: resolve_unlocalized_wad(mod_id, wad_name, game_index),
-            })
+            }))
         }
         Err(ArchiveLookupError::Absent { .. }) => match game_index
             .dominant_holder(path_hashes)
@@ -218,10 +214,7 @@ fn resolve_fallback_wad(
                     best_wad
                 );
 
-                Ok(FallbackTargets {
-                    wad: Some(best_wad),
-                    unlocalized: None,
-                })
+                Ok(Some(FallbackWad::new(best_wad)))
             }
             None => {
                 tracing::warn!(
@@ -231,7 +224,7 @@ fn resolve_fallback_wad(
                     wad_name
                 );
 
-                Ok(FallbackTargets::default())
+                Ok(None)
             }
         },
         Err(ambiguous) => Err(ambiguous.into()),
@@ -336,7 +329,7 @@ fn route_unroutable_to_dominant_wad(
 ) {
     let unroutable = mod_meta
         .values()
-        .filter(|meta| meta.fallback_wad.is_none())
+        .filter(|meta| meta.fallback_wads.is_empty())
         .count();
     if unroutable == 0 {
         return;
@@ -358,8 +351,8 @@ fn route_unroutable_to_dominant_wad(
     );
 
     for meta in mod_meta.values_mut() {
-        if meta.fallback_wad.is_none() {
-            meta.fallback_wad = Some(dominant_wad.clone());
+        if meta.fallback_wads.is_empty() {
+            meta.fallback_wads = vec![FallbackWad::new(dominant_wad.clone())];
         }
     }
 }
@@ -440,9 +433,12 @@ pub(crate) fn filter_override_metadata(
 
         if meta.is_cross_wad_import(path_hash, game_index) {
             tracing::debug!(
-                "Keeping byte-identical override {:016x} as cross-WAD import into '{}'",
+                "Keeping byte-identical override {:016x} as cross-WAD import into {:?}",
                 path_hash,
-                meta.fallback_wad.as_deref().unwrap_or(Utf8Path::new("?")),
+                meta.fallback_wads
+                    .iter()
+                    .map(|fallback| &fallback.wad)
+                    .collect::<Vec<_>>(),
             );
 
             import_count += 1;
@@ -796,14 +792,14 @@ mod tests {
 
         let entry = &meta[&WadHash(0xAAAA)];
         assert_eq!(
-            entry.fallback_wad.as_deref(),
+            entry.first_fallback_wad(),
             Some(Utf8Path::new("DATA/FINAL/Maps/MapA.wad.client")),
             "Overlap detection should select the WAD with the most matching hashes"
         );
 
         let entry_b = &meta[&WadHash(0xBBBB)];
         assert_eq!(
-            entry_b.fallback_wad.as_deref(),
+            entry_b.first_fallback_wad(),
             Some(Utf8Path::new("DATA/FINAL/Maps/MapA.wad.client")),
         );
     }
@@ -831,8 +827,8 @@ mod tests {
 
         assert_eq!(meta.len(), 1);
         assert!(
-            meta[&WadHash(0xCCCC)].fallback_wad.is_none(),
-            "When no overlapping WAD is found, fallback_wad should be None"
+            meta[&WadHash(0xCCCC)].fallback_wads.is_empty(),
+            "When no overlapping WAD is found, fallback_wads should be empty"
         );
     }
 
@@ -866,12 +862,42 @@ mod tests {
         let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
 
         let ahri = Utf8Path::new("DATA/FINAL/Champions/Ahri.wad.client");
-        assert_eq!(meta[&WadHash(0xAAAA)].fallback_wad.as_deref(), Some(ahri));
+        assert_eq!(meta[&WadHash(0xAAAA)].first_fallback_wad(), Some(ahri));
         assert_eq!(
-            meta[&WadHash(0xCCCC)].fallback_wad.as_deref(),
+            meta[&WadHash(0xCCCC)].first_fallback_wad(),
             Some(ahri),
             "Override with no WAD match should be routed to the mod's dominant WAD"
         );
+    }
+
+    #[test]
+    fn collect_single_mod_metadata_routes_new_chunk_to_every_wad_that_ships_it() {
+        let map11 = Utf8PathBuf::from("DATA/FINAL/Maps/Shipping/Map11.wad.client");
+        let map12 = Utf8PathBuf::from("DATA/FINAL/Maps/Shipping/Map12.wad.client");
+        let (_fixture, game_index) = game_index_with_hashes(&[
+            (map11.as_str(), &[WadHash(0x1111)]),
+            (map12.as_str(), &[WadHash(0x1212)]),
+        ]);
+
+        let new_chunk = (Utf8PathBuf::from("000000000000f00d.bin"), b"new".to_vec());
+        let mut wad_overrides = HashMap::new();
+        wad_overrides.insert("Map11.wad.client".to_string(), vec![new_chunk.clone()]);
+        wad_overrides.insert("Map12.wad.client".to_string(), vec![new_chunk]);
+
+        let mut enabled_mod = EnabledMod {
+            id: "two-wad-mod".to_string(),
+            content: Box::new(OverrideMockContent {
+                layers: make_layers(&["base"]),
+                wad_overrides,
+            }),
+            enabled_layers: None,
+        };
+
+        let meta = collect_single_mod_metadata(&mut enabled_mod, &game_index).unwrap();
+
+        let mut targets = meta[&WadHash(0xF00D)].route_targets(WadHash(0xF00D), &game_index);
+        targets.sort();
+        assert_eq!(targets, vec![map11, map12]);
     }
 
     #[test]
@@ -888,8 +914,7 @@ mod tests {
                 mod_id: "strings-shipper".to_string(),
                 rel_path: Utf8PathBuf::from(rel_path),
             },
-            fallback_wad: None,
-            unlocalized_wad: None,
+            fallback_wads: Vec::new(),
             linked_bins: Vec::new(),
         };
 
@@ -1007,7 +1032,7 @@ mod tests {
         let import = meta.get(&import_hash).expect(
             "byte-identical override under another WAD dir is a cross-WAD import and must be kept",
         );
-        assert_eq!(import.fallback_wad.as_deref(), Some(aatrox_rel.as_path()));
+        assert_eq!(import.first_fallback_wad(), Some(aatrox_rel.as_path()));
         assert_eq!(
             import.route_targets(import_hash, &game_index),
             vec![ahri_rel.clone(), aatrox_rel.clone()],
@@ -1025,8 +1050,7 @@ mod tests {
                     path_hash: WadHash(0x1234),
                     content_hash: ContentHash(0x5678),
                     uncompressed_size: 100,
-                    target_wad: Some("DATA/FINAL/test.wad.client".to_string()),
-                    unlocalized_wad: None,
+                    target_wads: vec![FallbackWad::new("DATA/FINAL/test.wad.client".into())],
                     source_layer: Some("base".to_string()),
                     source_wad_name: Some("Test.wad.client".to_string()),
                     source_rel_path: "data/file.bin".to_string(),
@@ -1036,8 +1060,7 @@ mod tests {
                     path_hash: WadHash(0xABCD),
                     content_hash: ContentHash(0xEF01),
                     uncompressed_size: 200,
-                    target_wad: None,
-                    unlocalized_wad: None,
+                    target_wads: Vec::new(),
                     source_layer: None,
                     source_wad_name: None,
                     source_rel_path: "assets/raw/file.bin".to_string(),
@@ -1051,10 +1074,10 @@ mod tests {
         assert_eq!(meta[&WadHash(0x1234)].content_hash, ContentHash(0x5678));
         assert_eq!(meta[&WadHash(0xABCD)].content_hash, ContentHash(0xEF01));
         assert_eq!(
-            meta[&WadHash(0x1234)].fallback_wad.as_deref(),
+            meta[&WadHash(0x1234)].first_fallback_wad(),
             Some(Utf8Path::new("DATA/FINAL/test.wad.client"))
         );
-        assert!(meta[&WadHash(0xABCD)].fallback_wad.is_none());
+        assert!(meta[&WadHash(0xABCD)].fallback_wads.is_empty());
         assert_eq!(
             meta[&WadHash(0x1234)].linked_bins,
             vec!["data/characters/test/test.bin".to_string()]
@@ -1110,13 +1133,12 @@ mod tests {
         let (_fixture, game_index) =
             champion_archives(&["Graves.wad.client", "Graves.en_US.wad.client"]);
 
-        let localized =
-            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index).unwrap();
+        let localized = resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index)
+            .unwrap()
+            .expect("the game ships the WAD");
         assert_eq!(
-            localized.wad.as_deref(),
-            Some(Utf8Path::new(
-                "DATA/FINAL/Champions/Graves.en_US.wad.client"
-            ))
+            localized.wad,
+            Utf8Path::new("DATA/FINAL/Champions/Graves.en_US.wad.client")
         );
         assert_eq!(
             localized.unlocalized.as_deref(),
@@ -1124,10 +1146,12 @@ mod tests {
         );
 
         // A mod that placed its content correctly gets no second target.
-        let plain = resolve_fallback_wad("m", "Graves.wad.client", &[], &game_index).unwrap();
+        let plain = resolve_fallback_wad("m", "Graves.wad.client", &[], &game_index)
+            .unwrap()
+            .expect("the game ships the WAD");
         assert_eq!(
-            plain.wad.as_deref(),
-            Some(Utf8Path::new("DATA/FINAL/Champions/Graves.wad.client"))
+            plain.wad,
+            Utf8Path::new("DATA/FINAL/Champions/Graves.wad.client")
         );
         assert_eq!(plain.unlocalized, None);
     }
@@ -1136,8 +1160,9 @@ mod tests {
     fn a_sibling_the_game_does_not_ship_is_not_invented() {
         let (_fixture, game_index) = champion_archives(&["Graves.en_US.wad.client"]);
 
-        let resolved =
-            resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index).unwrap();
+        let resolved = resolve_fallback_wad("m", "Graves.en_US.wad.client", &[], &game_index)
+            .unwrap()
+            .expect("the game ships the WAD");
         assert_eq!(resolved.unlocalized, None);
     }
 }
