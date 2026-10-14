@@ -430,11 +430,14 @@ fn scan_layer<E>(
 
     let entries = fs::read_dir(layer_dir.as_std_path())
         .map_err(|source| PackError::scan(&layer_dir, source))?;
+    let mut entry_paths = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|source| PackError::scan(&layer_dir, source))?;
-        let entry_path =
-            Utf8PathBuf::from_path_buf(entry.path()).map_err(PackError::NonUtf8Path)?;
+        entry_paths.push(Utf8PathBuf::from_path_buf(entry.path()).map_err(PackError::NonUtf8Path)?);
+    }
+    entry_paths.sort();
 
+    for entry_path in entry_paths {
         // Ignore files are filter metadata, never content.
         if entry_path
             .file_name()

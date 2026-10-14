@@ -209,6 +209,16 @@ fn a_removal_deletes_a_base_object_and_drops_one_the_variant_holds() {
 }
 
 #[test]
+fn a_removal_of_several_base_objects_deletes_them_in_declared_order() {
+    let body = "objects:\n  UI/Other:\n    remove: true\n  UI/Icon:\n    remove: true";
+
+    for _ in 0..16 {
+        let patch = patch_of(&run(body));
+        assert_eq!(patch.deleted, [h("UI/Other"), h("UI/Icon")]);
+    }
+}
+
+#[test]
 fn a_created_object_is_one_the_variant_holds() {
     let output = run("objects:\n  UI/Copy:\n    clone: UI/Icon\n  UI/Other:\n    clone: UI/Icon");
 

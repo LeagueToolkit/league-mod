@@ -31,7 +31,7 @@ pub(crate) type ResolvedChunk = SharedBytes;
 struct ChunkSources<'a> {
     /// Overrides read from mod content providers, grouped by mod id. Their bytes
     /// are compressed by the writer.
-    by_mod: HashMap<&'a str, Vec<WadHash>>,
+    by_mod: BTreeMap<&'a str, Vec<WadHash>>,
 
     /// Synthetic stringtable patches, rebuilt from the game chunk + merged plan.
     string_patches: Vec<WadHash>,
@@ -43,11 +43,14 @@ impl<'a> ChunkSources<'a> {
         all_meta: &'a HashMap<WadHash, OverrideMeta>,
     ) -> Self {
         let mut sources = ChunkSources {
-            by_mod: HashMap::new(),
+            by_mod: BTreeMap::new(),
             string_patches: Vec::new(),
         };
 
-        for &path_hash in needed_hashes {
+        let mut needed_hashes: Vec<WadHash> = needed_hashes.iter().copied().collect();
+        needed_hashes.sort_unstable();
+
+        for path_hash in needed_hashes {
             let Some(meta) = all_meta.get(&path_hash) else {
                 continue;
             };
@@ -90,6 +93,20 @@ pub(crate) fn distribute_prepared_to_wads(
         wad_overrides.insert(wad_path.clone(), per_wad);
     }
     wad_overrides
+}
+
+/// Returns the entries of `chunks` in path hash order.
+///
+/// When two path hashes carry one content in different encodings, the first in this order
+/// wins, so every build picks the same encoding.
+fn sorted_by_path_hash(chunks: &HashMap<WadHash, EncodedChunk>) -> Vec<(WadHash, &EncodedChunk)> {
+    let mut sorted: Vec<(WadHash, &EncodedChunk)> = chunks
+        .iter()
+        .map(|(&path_hash, chunk)| (path_hash, chunk))
+        .collect();
+    sorted.sort_unstable_by_key(|&(path_hash, _)| path_hash);
+
+    sorted
 }
 
 /// How many uncompressed bytes accumulate before a batch is compressed.
@@ -151,10 +168,11 @@ impl<'a> OverrideCompressor<'a> {
                 .get(&path_hash)
                 .map_or(ContentHash(path_hash.0), |meta| meta.content_hash)
         };
-        let memo = reused
-            .iter()
-            .map(|(&path_hash, prepared)| (content_hash_of(path_hash), prepared.clone()))
-            .collect();
+        let mut memo = HashMap::new();
+        for (path_hash, prepared) in sorted_by_path_hash(&reused) {
+            memo.entry(content_hash_of(path_hash))
+                .or_insert_with(|| prepared.clone());
+        }
 
         Self {
             all_meta,
@@ -224,10 +242,10 @@ impl<'a> OverrideCompressor<'a> {
     ///
     /// One content can reach a build both ways - passed through from one mod's
     /// packed WAD and read loose from another's - and whichever arrives first
-    /// wins. The two encodings are equally valid and every WAD in the build
-    /// still gets the one buffer, which is all the game's shared-chunk rule
-    /// asks for; a later build settling on the other encoding only matters to a
-    /// WAD being rewritten, and those seed the memo from the tail they keep.
+    /// wins. Sources arrive in mod id and path hash order (see
+    /// [`ChunkSources::classify`]), so every build of the same input makes the
+    /// same choice. Every WAD in the build gets the one buffer, which is all the
+    /// game's shared-chunk rule asks for.
     fn supply_prepared(&mut self, path_hash: WadHash, prepared: EncodedChunk) {
         let content_hash = self.record(path_hash);
         self.memo.insert(content_hash, prepared);
@@ -241,7 +259,7 @@ impl<'a> OverrideCompressor<'a> {
     /// one build therefore write one encoding of a shared chunk, which is what the client's
     /// compressed-checksum check on a shared chunk requires.
     fn seed(&mut self, prepared: &HashMap<WadHash, EncodedChunk>) {
-        for (&path_hash, chunk) in prepared {
+        for (path_hash, chunk) in sorted_by_path_hash(prepared) {
             let content_hash = self.record(path_hash);
             self.memo
                 .entry(content_hash)
@@ -495,7 +513,7 @@ impl OverlayBuilder {
     /// have, which the caller reports and does not fail on.
     fn resolve_provider_overrides(
         &mut self,
-        by_mod: &HashMap<&str, Vec<WadHash>>,
+        by_mod: &BTreeMap<&str, Vec<WadHash>>,
         all_meta: &HashMap<WadHash, OverrideMeta>,
         preparer: &mut OverrideCompressor<'_>,
     ) -> Result<Vec<ChecksumMismatch>> {

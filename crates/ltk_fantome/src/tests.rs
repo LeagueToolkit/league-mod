@@ -10,7 +10,7 @@ fn info_json(license: Option<FantomeLicense>) -> serde_json::Value {
         tags: vec![],
         champions: vec![],
         maps: vec![],
-        layers: HashMap::new(),
+        layers: IndexMap::new(),
         hashtables: vec![],
         generator: None,
         extra: Default::default(),
@@ -924,4 +924,30 @@ fn declare_layers_adds_only_the_layers_the_table_lacks() {
             ..Default::default()
         }
     );
+}
+
+#[test]
+fn fantome_info_layers_serialize_in_read_order() {
+    let names = ["zeta", "alpha", "mid"];
+    let layers: Vec<String> = names
+        .iter()
+        .map(|name| format!(r#""{name}":{{"Name":"{name}","Priority":1}}"#))
+        .collect();
+    let base = serde_json::to_string(&info_json(None)).unwrap();
+    let text = format!(
+        r#"{},"Layers":{{{}}}}}"#,
+        base.trim_end_matches('}'),
+        layers.join(",")
+    );
+
+    for _ in 0..16 {
+        let info: FantomeInfo = serde_json::from_str(&text).unwrap();
+        let written = serde_json::to_string(&info).unwrap();
+
+        let positions: Vec<usize> = names
+            .iter()
+            .map(|name| written.find(&format!(r#""{name}":"#)).unwrap())
+            .collect();
+        assert!(positions.is_sorted(), "{written}");
+    }
 }

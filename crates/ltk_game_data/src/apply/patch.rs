@@ -7,6 +7,7 @@
 
 use std::{cell::Cell, collections::HashSet, io::Cursor};
 
+use indexmap::IndexSet;
 use ltk_meta::{Bin, BinObject, BinOverride, PropertyPatch};
 
 use crate::{BinHash, Edit, EntryName, Error, ObjectEdit, OverridePath, Schema};
@@ -127,7 +128,7 @@ impl View {
         }
     }
 
-    fn keys(&self) -> HashSet<BinHash> {
+    fn keys(&self) -> IndexSet<BinHash> {
         self.bin.objects.keys().copied().collect()
     }
 
@@ -191,12 +192,12 @@ impl View {
 
     /// Takes every object the view gained since `before` as the patch's own. A created object
     /// the patch deletes is no longer deleted.
-    fn own_new(&mut self, before: &HashSet<BinHash>) {
+    fn own_new(&mut self, before: &IndexSet<BinHash>) {
         let created: Vec<BinHash> = self
             .bin
             .objects
             .keys()
-            .filter(|hash| !before.contains(hash))
+            .filter(|&hash| !before.contains(hash))
             .copied()
             .collect();
         for hash in created {
@@ -207,7 +208,7 @@ impl View {
 
     /// Drops every object the view lost since `before`: from the patch's objects where the
     /// patch holds it, into its deletions where the game does. Its records go with it.
-    fn drop_missing(&mut self, before: &HashSet<BinHash>) {
+    fn drop_missing(&mut self, before: &IndexSet<BinHash>) {
         for &hash in before {
             if self.bin.objects.contains_key(&hash) {
                 continue;

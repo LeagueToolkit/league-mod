@@ -114,7 +114,7 @@ fn make_info_json_with_license(
         tags: Vec::new(),
         champions: Vec::new(),
         maps: Vec::new(),
-        layers: std::collections::HashMap::new(),
+        layers: indexmap::IndexMap::new(),
         hashtables: Vec::new(),
         generator: None,
         extra: Default::default(),
@@ -180,7 +180,7 @@ fn mod_project_handles_bom() {
             tags: Vec::new(),
             champions: Vec::new(),
             maps: Vec::new(),
-            layers: std::collections::HashMap::new(),
+            layers: indexmap::IndexMap::new(),
             hashtables: Vec::new(),
             generator: None,
             extra: Default::default(),
@@ -839,4 +839,28 @@ fn a_window_is_exactly_its_entry() {
 #[test]
 fn a_window_past_the_end_of_the_archive_is_refused() {
     assert!(EntryWindow::new(Arc::new(b"short".to_vec()), 2, 10).is_none());
+}
+
+#[test]
+fn list_layer_wads_follows_archive_order() {
+    for _ in 0..16 {
+        let cursor = make_fantome_zip(&[
+            ("META/info.json", &make_info_json("Order")),
+            ("WAD/Zed.wad.client/a.bin", b"z"),
+            ("WAD/Aatrox.wad.client/a.bin", b"a"),
+            ("WAD/Map11.wad.client/a.bin", b"m"),
+            ("WAD/Ahri.wad.client/a.bin", b"h"),
+        ]);
+        let mut content = FantomeContent::new(cursor).unwrap();
+
+        assert_eq!(
+            content.list_layer_wads("base").unwrap(),
+            [
+                "zed.wad.client",
+                "aatrox.wad.client",
+                "map11.wad.client",
+                "ahri.wad.client"
+            ]
+        );
+    }
 }

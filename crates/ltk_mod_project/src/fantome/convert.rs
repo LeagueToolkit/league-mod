@@ -1,8 +1,7 @@
 //! Conversions between mod project types and the Fantome metadata shapes.
 
-use std::collections::HashMap;
-
 use camino::Utf8Path;
+use indexmap::IndexMap;
 
 use crate::hashtable_routes::{
     file_name_of, is_plain_tail, HashtableRoute, NameClaims, PlannedRoute,
@@ -195,10 +194,9 @@ fn meta_hashes_tail(archive_path: &str) -> Option<&str> {
 /// Each layer's names, priority and string overrides travel in the table. Its
 /// WAD content travels in its WAD directory.
 ///
-/// `info.layers` is a map, so [`ModProjectLayer::normalize_table`] orders the result rather
-/// than leaving it to however the map iterated, and adds the base layer when
-/// the archive names none.
-fn layers_from_fantome(layers: HashMap<String, FantomeLayerInfo>) -> Vec<ModProjectLayer> {
+/// [`ModProjectLayer::normalize_table`] orders the result and adds the base layer when the
+/// archive names none.
+fn layers_from_fantome(layers: IndexMap<String, FantomeLayerInfo>) -> Vec<ModProjectLayer> {
     let mut layers: Vec<ModProjectLayer> = layers
         .into_values()
         .map(|layer| ModProjectLayer {
@@ -219,8 +217,8 @@ fn layers_from_fantome(layers: HashMap<String, FantomeLayerInfo>) -> Vec<ModProj
 /// the base layer when it carries string overrides.
 ///
 /// A project with only a base layer and no overrides packs no table.
-fn build_fantome_layers(mod_project: &ModProject) -> HashMap<String, FantomeLayerInfo> {
-    let mut layers = HashMap::new();
+fn build_fantome_layers(mod_project: &ModProject) -> IndexMap<String, FantomeLayerInfo> {
+    let mut layers = IndexMap::new();
     for layer in &mod_project.layers {
         if !layer.is_base() || !layer.string_overrides.is_empty() {
             layers.insert(

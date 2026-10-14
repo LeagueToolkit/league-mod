@@ -99,7 +99,7 @@ fn fantome_with_packed_wad(packed_wad: Vec<u8>) -> Cursor<Vec<u8>> {
         tags: Vec::new(),
         champions: Vec::new(),
         maps: Vec::new(),
-        layers: std::collections::HashMap::new(),
+        layers: indexmap::IndexMap::new(),
         hashtables: Vec::new(),
         generator: None,
         extra: Default::default(),
