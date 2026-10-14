@@ -277,8 +277,7 @@ mod tests {
                         mod_id: "test-mod".to_string(),
                         rel_path: Utf8PathBuf::from("dummy"),
                     },
-                    fallback_wad: None,
-                    unlocalized_wad: None,
+                    fallback_wads: Vec::new(),
                     linked_bins: Vec::new(),
                 },
             );

@@ -11,8 +11,7 @@ fn meta_with_content_hash(content_hash: ContentHash) -> OverrideMeta {
             mod_id: "m".to_string(),
             rel_path: Utf8PathBuf::from("assets/x.bin"),
         },
-        fallback_wad: None,
-        unlocalized_wad: None,
+        fallback_wads: Vec::new(),
         linked_bins: Vec::new(),
     }
 }

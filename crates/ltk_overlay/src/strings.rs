@@ -35,7 +35,7 @@
 //! hash, e.g. `f772a83b33773223`) is treated as a pre-computed hash instead,
 //! for entries whose plaintext name is unknown.
 
-use crate::builder::{EnabledMod, OverrideMeta, OverrideSource};
+use crate::builder::{EnabledMod, FallbackWad, OverrideMeta, OverrideSource};
 use crate::error::{CorruptionError, ModContentError, Result};
 use crate::game::GameIndexExt;
 use crate::utils::ContentHash;
@@ -206,10 +206,9 @@ impl StringPatchPlan {
             source: OverrideSource::StringPatch {
                 chunk_path: Utf8PathBuf::from(stringtable_chunk_path(&self.locale)),
             },
-            fallback_wad: Some(self.wad_rel_path.clone()),
             // A stringtable patch is per-locale by construction, so it belongs
             // in the localized WAD alone.
-            unlocalized_wad: None,
+            fallback_wads: vec![FallbackWad::new(self.wad_rel_path.clone())],
             linked_bins: Vec::new(),
         }
     }

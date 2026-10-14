@@ -18,7 +18,9 @@ use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
 use serde::{Deserialize, Serialize};
 
-use super::{OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource};
+use super::{
+    FallbackWad, OverlayBuilder, OverlayProgress, OverlayStage, OverrideMeta, OverrideSource,
+};
 use crate::{error::Result, game::GameDir, game::GameIndexExt, utils::ContentHash};
 
 /// The category of a declaration diagnostic.
@@ -675,11 +677,10 @@ impl OverlayBuilder {
                         chunk_path: Utf8PathBuf::from(owner.chunk_path.as_str()),
                         bytes: Arc::from(bytes),
                     },
-                    fallback_wad: original
-                        .as_ref()
-                        .and_then(|value| value.fallback_wad.clone())
-                        .or(game_wad),
-                    unlocalized_wad: original.and_then(|value| value.unlocalized_wad),
+                    fallback_wads: original
+                        .map(|value| value.fallback_wads)
+                        .filter(|fallback_wads| !fallback_wads.is_empty())
+                        .unwrap_or_else(|| game_wad.map(FallbackWad::new).into_iter().collect()),
                     linked_bins: dependencies,
                 },
             );
