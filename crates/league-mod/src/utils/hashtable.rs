@@ -59,6 +59,7 @@ impl WadHashtable {
         }
 
         for entry in WalkDir::new(dir.as_std_path())
+            .sort_by_file_name()
             .into_iter()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.file_type().is_file())

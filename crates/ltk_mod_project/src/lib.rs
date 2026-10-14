@@ -2,7 +2,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 mod cancellation;
@@ -570,7 +570,7 @@ pub struct FileTransformer {
     pub options: Option<FileTransformerOptions>,
 }
 
-pub type FileTransformerOptions = HashMap<String, serde_json::Value>;
+pub type FileTransformerOptions = IndexMap<String, serde_json::Value>;
 
 impl ModProjectLayer {
     /// The name every project's lowest-priority layer carries.

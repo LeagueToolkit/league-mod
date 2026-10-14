@@ -15,6 +15,7 @@
 use crate::content::{CompressedChunk, ModContentProvider, archive_fingerprint};
 use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use indexmap::IndexMap;
 use ltk_fantome::{FantomeEntry, classify_entry};
 use ltk_mod_project::{ModProject, ModProjectAuthor, ModProjectLayer, ModProjectLicense};
 use ltk_wad::{Wad, WadChunk, WadHash, is_hex_chunk_path};
@@ -127,9 +128,9 @@ struct FantomeIndex {
     info_entry: Option<String>,
     /// [`wad_key`] -> [(full_zip_path, relative_path)]. Lowercase keys make
     /// lookups case-insensitive. The stored path keeps the real casing.
-    wad_dir_entries: HashMap<String, Vec<(String, String)>>,
+    wad_dir_entries: IndexMap<String, Vec<(String, String)>>,
     /// [`wad_key`] -> full_zip_path, for WADs stored as single files.
-    packed_wad_paths: HashMap<String, String>,
+    packed_wad_paths: IndexMap<String, String>,
     /// RAW entries: (full_zip_path, relative_path).
     raw_entries: Vec<(String, String)>,
     /// The layers holding WAD content, as their WAD directories first spell
@@ -140,8 +141,8 @@ struct FantomeIndex {
 impl FantomeIndex {
     fn build<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Self {
         let mut info_entry = None;
-        let mut wad_dir_entries: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        let mut packed_wad_paths: HashMap<String, String> = HashMap::new();
+        let mut wad_dir_entries: IndexMap<String, Vec<(String, String)>> = IndexMap::new();
+        let mut packed_wad_paths: IndexMap<String, String> = IndexMap::new();
         let mut raw_entries: Vec<(String, String)> = Vec::new();
         let mut layers: Vec<String> = Vec::new();
 

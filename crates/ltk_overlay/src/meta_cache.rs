@@ -116,7 +116,7 @@ impl CachedModMeta {
     /// This is the inverse of [`reconstruct`](Self::reconstruct): it converts
     /// the builder's in-memory representation into the serializable cache format.
     pub fn from_override_meta(fingerprint: u64, mod_meta: &HashMap<WadHash, OverrideMeta>) -> Self {
-        let overrides = mod_meta
+        let mut overrides: Vec<CachedOverride> = mod_meta
             .iter()
             .map(|(&path_hash, meta)| {
                 let (source_layer, source_wad_name, source_rel_path) = match &meta.source {
@@ -152,6 +152,7 @@ impl CachedModMeta {
                 }
             })
             .collect();
+        overrides.sort_unstable_by_key(|entry| entry.path_hash);
 
         Self {
             content_fingerprint: fingerprint,

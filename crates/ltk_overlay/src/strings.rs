@@ -44,7 +44,7 @@ use indexmap::IndexMap;
 use ltk_game_index::GameIndex;
 use ltk_mod_project::ModProjectLayer;
 use ltk_wad::WadHash;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::io::Cursor;
 
 /// Locale bucket name whose overrides apply to every target locale.
@@ -240,8 +240,8 @@ fn buckets<'a>(
 pub(crate) fn collect_effective_overrides(
     enabled_mods: &mut [EnabledMod],
     target_locales: &[String],
-) -> Result<HashMap<String, BTreeMap<String, String>>> {
-    let mut per_locale: HashMap<String, BTreeMap<String, String>> = HashMap::new();
+) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+    let mut per_locale: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     if target_locales.is_empty() {
         return Ok(per_locale);
     }

@@ -23,7 +23,6 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 mod delta;
 pub mod error;
@@ -106,8 +105,8 @@ pub struct FantomeInfo {
     ///
     /// A layer's WAD content lives in its WAD directory, `WAD/` for
     /// [`BASE_LAYER`] and `WAD_<layer>/` for any other.
-    #[serde(rename = "Layers", default, skip_serializing_if = "HashMap::is_empty")]
-    pub layers: HashMap<String, FantomeLayerInfo>,
+    #[serde(rename = "Layers", default, skip_serializing_if = "IndexMap::is_empty")]
+    pub layers: IndexMap<String, FantomeLayerInfo>,
     /// The embedded hashtables the archive declares.
     ///
     /// The manifest is authoritative: a `META/hashes/` entry no manifest

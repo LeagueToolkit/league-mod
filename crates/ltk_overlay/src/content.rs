@@ -450,6 +450,8 @@ impl ModContentProvider for FsModContent {
             }
             wads.push(name.to_string());
         }
+        wads.sort();
+
         Ok(wads)
     }
 
