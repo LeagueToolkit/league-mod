@@ -1,6 +1,6 @@
 # ADR-0009: Game index crate
 
-- **Status:** Accepted
+- **Status:** Accepted; the application-side search boundary is superseded by [ADR-0038](0038-search-in-the-index-crate.md)
 - **Date:** 2026-09-16
 - **Crates:** `ltk_game_index`, `ltk_overlay`, `ltk_game_data`
 - **Related:** `docs/design/game-index.md` [section 3](../design/game-index.md#s3),

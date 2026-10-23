@@ -10,8 +10,8 @@ use std::num::NonZeroUsize;
 
 use common::Installation;
 use ltk_game_index::{
-    BinHash, BuildOptions, CacheError, Declaration, GameIndex, ObjectBuildError, ObjectIndex,
-    ResolveWadPath, WadHash, chunk_hash, for_each_declaration,
+    BinHash, BuildOptions, CacheError, ChunkKind, Declaration, DeclarationId, GameIndex,
+    ObjectBuildError, ObjectIndex, ResolveWadPath, WadHash, chunk_hash, for_each_declaration,
 };
 use ltk_meta::{Bin, BinObject, BinOverride};
 
@@ -87,11 +87,16 @@ fn options<'a>(
     options
 }
 
-fn pairs(declarations: &[Declaration]) -> Vec<(u32, u32)> {
+fn pairs(declarations: Vec<Declaration>) -> Vec<(u32, u32)> {
     declarations
         .iter()
         .map(|d| (d.object.0, d.class.0))
         .collect()
+}
+
+/// Every declaration of `object`, copied out of the index.
+fn decls(index: &ObjectIndex, object: BinHash) -> Vec<Declaration> {
+    index.declarations(object).map(|(_, d)| *d).collect()
 }
 
 #[test]
@@ -184,7 +189,7 @@ fn declarations_store_in_archive_order_then_named_bare_unnamed() {
     let b = game.archive_by_file_name("B.wad.client").unwrap();
     let all: Vec<&Declaration> = index
         .objects()
-        .flat_map(|object| index.declarations(object))
+        .flat_map(|object| index.declarations(object).map(|(_, d)| d))
         .collect();
     assert_eq!(all.len(), 5);
 
@@ -192,7 +197,7 @@ fn declarations_store_in_archive_order_then_named_bare_unnamed() {
     let by_chunk = |chunk: &str| {
         index
             .chunk_declarations(chunk_hash(chunk))
-            .map(|d| (d.object.0, d.archive))
+            .map(|(_, d)| (d.object.0, d.archive))
             .collect::<Vec<_>>()
     };
     assert_eq!(by_chunk("a/named.bin"), [(3, a)]);
@@ -205,7 +210,7 @@ fn declarations_store_in_archive_order_then_named_bare_unnamed() {
     b_named.sort();
     let b_order: Vec<WadHash> = [1u32, 2]
         .iter()
-        .map(|&o| index.declarations(BinHash(o))[0].chunk)
+        .map(|&o| decls(&index, BinHash(o))[0].chunk)
         .collect();
     let mut expected: Vec<(WadHash, u32)> =
         vec![(chunk_hash("b/one.bin"), 1), (chunk_hash("b/two.bin"), 2)];
@@ -236,7 +241,7 @@ fn an_object_in_two_chunks_lists_both_in_archive_id_order_and_chunk_lookup_inver
 
     let index = ObjectIndex::build(&game).unwrap();
 
-    let seven = index.declarations(BinHash(7));
+    let seven = decls(&index, BinHash(7));
     assert_eq!(seven.len(), 2);
     assert_eq!(seven[0].archive, a);
     assert_eq!(seven[0].chunk, chunk_hash("a.bin"));
@@ -244,11 +249,11 @@ fn an_object_in_two_chunks_lists_both_in_archive_id_order_and_chunk_lookup_inver
     assert_eq!(seven[1].archive, b);
     assert_eq!(seven[1].chunk, chunk_hash("b.bin"));
     assert_eq!(seven[1].class, BinHash(70));
-    assert!(index.declarations(BinHash(9)).is_empty());
+    assert_eq!(index.declarations(BinHash(9)).len(), 0);
 
     let in_b: Vec<u32> = index
         .chunk_declarations(chunk_hash("b.bin"))
-        .map(|d| d.object.0)
+        .map(|(_, d)| d.object.0)
         .collect();
     assert_eq!(in_b, [7, 8]);
     assert_eq!(index.len(), 2);
@@ -273,7 +278,7 @@ fn an_object_declared_twice_in_one_chunk_contributes_two_declarations() {
     install.write_archive("A.wad.client", &[("x.bin", &prop_with_duplicate())]);
     let game = GameIndex::build(install.game_dir()).unwrap();
     let index = ObjectIndex::build(&game).unwrap();
-    assert_eq!(pairs(index.declarations(BinHash(1))), [(1, 10), (1, 11)]);
+    assert_eq!(pairs(decls(&index, BinHash(1))), [(1, 10), (1, 11)]);
     assert_eq!(index.chunk_declarations(chunk_hash("x.bin")).count(), 2);
     assert_eq!(index.len(), 1);
 }
@@ -335,7 +340,7 @@ fn without_a_resolver_every_chunk_is_sniffed_and_declarations_match_the_named_bu
     assert_eq!(sniffed.stats().sniffed_bins, 4);
     assert_eq!(named.stats().sniffed, 1);
     for object in named.objects() {
-        assert_eq!(named.declarations(object), sniffed.declarations(object));
+        assert_eq!(decls(&named, object), decls(&sniffed, object));
     }
     assert_eq!(named.len(), sniffed.len());
 }
@@ -399,12 +404,12 @@ fn one_worker_and_many_workers_produce_equal_declarations() {
     let a = game.archive_by_file_name("A.wad.client").unwrap();
     let first: Vec<(u32, u32)> = many
         .chunk_declarations(chunk_hash("A/one.bin"))
-        .map(|d| (d.object.0, d.class.0))
+        .map(|(_, d)| (d.object.0, d.class.0))
         .collect();
     assert_eq!(first, [(6501, 1), (6502, 2)]);
     assert!(
         many.chunk_declarations(chunk_hash("A/one.bin"))
-            .all(|d| d.archive == a)
+            .all(|(_, d)| d.archive == a)
     );
 }
 
@@ -442,7 +447,7 @@ fn the_cache_round_trips_and_follows_the_chunk_index_fingerprint() {
     assert_eq!(loaded.stats(), built.stats());
     assert_eq!(loaded.len(), built.len());
     for object in built.objects() {
-        assert_eq!(loaded.declarations(object), built.declarations(object));
+        assert_eq!(decls(&loaded, object), decls(&built, object));
     }
     assert_eq!(loaded.chunk_declarations(chunk_hash("a.bin")).count(), 2);
 
@@ -468,4 +473,68 @@ fn the_cache_round_trips_and_follows_the_chunk_index_fingerprint() {
         ObjectIndex::load_or_build_with(&changed, &path, &BuildOptions::default()).unwrap();
     assert_eq!(rebuilt.len(), 1);
     assert_eq!(ObjectIndex::load_for(&path, &changed).unwrap().len(), 1);
+}
+
+#[test]
+fn a_declaration_carries_the_kind_of_its_chunk() {
+    let install = Installation::new();
+    install.write_archive(
+        "A.wad.client",
+        &[("a.bin", &prop(&[(1, 10)])), ("p.bin", &ptch(&[(2, 20)]))],
+    );
+    let game = GameIndex::build(install.game_dir()).unwrap();
+
+    let index = ObjectIndex::build(&game).unwrap();
+
+    assert_eq!(decls(&index, BinHash(1))[0].kind, ChunkKind::Prop);
+    assert_eq!(decls(&index, BinHash(2))[0].kind, ChunkKind::Patch);
+}
+
+#[test]
+fn an_id_names_its_row_in_every_lookup() {
+    let install = Installation::new();
+    install.write_archive("B.wad.client", &[("b.bin", &prop(&[(7, 70), (8, 80)]))]);
+    install.write_archive("A.wad.client", &[("a.bin", &prop(&[(7, 71)]))]);
+    let game = GameIndex::build(install.game_dir()).unwrap();
+
+    let index = ObjectIndex::build(&game).unwrap();
+
+    assert_eq!(index.rows().len(), 3);
+    for (index_at, row) in index.rows().iter().enumerate() {
+        let id = DeclarationId::new(index_at as u32);
+        assert_eq!(id.index(), index_at);
+        assert_eq!(index.row(id), Some(row));
+        assert!(index.declarations(row.object).any(|(found, _)| found == id));
+        assert!(
+            index
+                .chunk_declarations(row.chunk)
+                .any(|(found, _)| found == id)
+        );
+    }
+    for (id, declaration) in index.declarations(BinHash(7)) {
+        assert_eq!(index.row(id), Some(declaration));
+    }
+    assert_eq!(index.row(DeclarationId::new(3)), None);
+}
+
+#[test]
+fn on_archive_reports_every_job_done_against_the_job_count() {
+    let install = Installation::new();
+    for archive in ["A", "B", "C"] {
+        install.write_archive(
+            &format!("{archive}.wad.client"),
+            &[(&format!("{archive}.bin"), &prop(&[(1, 1)]))],
+        );
+    }
+    let game = GameIndex::build(install.game_dir()).unwrap();
+    let reports = std::sync::Mutex::new(Vec::new());
+    let on_archive = |done: u32, total: u32| reports.lock().unwrap().push((done, total));
+    let mut options = options(None, Some(2), None);
+    options.on_archive = Some(&on_archive);
+
+    ObjectIndex::build_with(&game, &options).unwrap();
+
+    let mut reports = reports.into_inner().unwrap();
+    reports.sort_unstable();
+    assert_eq!(reports, [(1, 3), (2, 3), (3, 3)]);
 }

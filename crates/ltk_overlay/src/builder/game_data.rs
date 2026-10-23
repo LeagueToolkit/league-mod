@@ -225,9 +225,8 @@ fn shadowed(
 ) -> Option<GameDataDiagnostic> {
     let others: IndexMap<WadHash, ArchiveId> = index
         .declarations(name.object_hash())
-        .iter()
-        .filter(|declaration| declaration.chunk != chunk)
-        .map(|declaration| (declaration.chunk, declaration.archive))
+        .filter(|(_, declaration)| declaration.chunk != chunk)
+        .map(|(_, declaration)| (declaration.chunk, declaration.archive))
         .collect();
     if others.is_empty() {
         return None;
@@ -269,8 +268,7 @@ impl Fanout {
         Self {
             chunks: index
                 .declarations(name.object_hash())
-                .iter()
-                .map(|declaration| (declaration.chunk, declaration.archive))
+                .map(|(_, declaration)| (declaration.chunk, declaration.archive))
                 .collect(),
         }
     }
@@ -716,7 +714,8 @@ impl OverlayBuilder {
         if let Some(cached) = cache.get(&object) {
             return Ok(cached.clone());
         }
-        let Some(declaration) = index.and_then(|index| index.declarations(object).first()) else {
+        let Some((_, declaration)) = index.and_then(|index| index.declarations(object).next())
+        else {
             cache.insert(object, None);
             return Ok(None);
         };

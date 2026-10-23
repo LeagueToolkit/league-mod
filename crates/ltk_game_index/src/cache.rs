@@ -62,6 +62,12 @@ pub enum CacheError {
         /// The version the crate reads.
         expected: u32,
     },
+    /// The file decodes and its parts disagree with one another.
+    #[error("cache {path} holds parts that disagree")]
+    Inconsistent {
+        /// The cache file.
+        path: Utf8PathBuf,
+    },
     /// The file was built for another installation state.
     #[error("cache {path} was built for fingerprint {cached}, installation is {current}")]
     Stale {

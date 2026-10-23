@@ -19,6 +19,17 @@
 //!
 //! - `rayon` (default): archives mount in parallel. The index is identical either way.
 //! - `objects`: the bin object index, which adds `ltk_meta` and `ltk_file`.
+//! - `search`: the term index, the name sheets, query resolution and the object tree over
+//!   the object index, which adds `memchr`. Implies `objects`.
+//!
+//! # Search
+//!
+//! A `TermIndex`, behind `search`, is an object index built with every bin chunk decoded in
+//! full, holding every term each declaration mentions: its path, class, embedded classes,
+//! field names, hash values, links and strings. Terms are hashes and lowercased strings.
+//! `NameSheets` hold a consumer's hash tables, read through `NameSource`, as lowercased
+//! substring-searchable sheets. `GameSearch` resolves a query text to declarations through
+//! both, and lists the named objects as one tree of paths.
 
 mod archive;
 mod build;
@@ -30,6 +41,8 @@ mod index;
 #[cfg(feature = "objects")]
 mod objects;
 mod resolver;
+#[cfg(feature = "search")]
+mod search;
 
 pub use archive::{Archive, ArchiveId, ArchiveLookupError, ArchiveReadError, SkippedArchive};
 pub use cache::CacheError;
@@ -42,7 +55,15 @@ pub use ltk_hash::BinHash;
 pub use ltk_hash::WadHash;
 #[cfg(feature = "objects")]
 pub use objects::{
-    BuildOptions, Declaration, OBJECT_CACHE_FORMAT_VERSION, ObjectBuildError, ObjectIndex,
-    ObjectStats, for_each_declaration,
+    BuildOptions, ChunkKind, Declaration, DeclarationId, OBJECT_CACHE_FORMAT_VERSION,
+    ObjectBuildError, ObjectIndex, ObjectStats, for_each_declaration,
 };
 pub use resolver::ResolveWadPath;
+#[cfg(feature = "search")]
+pub use search::{
+    DEFAULT_LIMIT, DEFAULT_LISTING_LIMIT, DeclarationMatches, Dir, GameSearch, Hit, KindCount,
+    ListOptions, Listing, Match, MatchedTerm, Matches, NAME_CACHE_FORMAT_VERSION, NameSheets,
+    NameSource, NameTable, ObjectNode, Occurrence, Query, SearchResult, Sheet,
+    TERM_CACHE_FORMAT_VERSION, TermIndex, TermKind, TermKinds, TermStats, TreeEntry, natural_cmp,
+    path_cmp,
+};

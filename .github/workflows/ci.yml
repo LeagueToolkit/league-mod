@@ -58,6 +58,28 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --locked --release --bin league-mod
 
+  # The other jobs pass `--all-features`, which hides a feature set that no longer
+  # builds on its own. Each `ltk_game_index` feature set builds, lints and tests here.
+  game-index-features:
+    name: Game index (${{ matrix.features }})
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "objects", "search", "rayon,objects", "rayon,search"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: >-
+          cargo clippy --locked -p ltk_game_index --all-targets --no-default-features
+          --features "${{ matrix.features }}" -- -D warnings
+      - run: >-
+          cargo test --locked -p ltk_game_index --no-default-features
+          --features "${{ matrix.features }}"
+
   publish-check:
     name: Publish check
     runs-on: ubuntu-latest

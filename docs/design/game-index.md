@@ -6,9 +6,12 @@
 `Game/DATA/FINAL`, and, behind the `objects` feature, every bin object those chunks declare. The
 chunk index answers which archives hold a chunk. The object index answers which chunks declare an
 object. Both are hash-keyed, cached to disk under one game fingerprint, and free of display names.
-`ltk_overlay` consumes both for WAD distribution and declaration selectors. LTK Manager consumes
-both and keeps its own browsing, searching, and lifecycle code on top
-([ADR-0009](../adr/0009-game-index-crate.md)).
+`ltk_overlay` consumes both for WAD distribution and declaration selectors
+([ADR-0009](../adr/0009-game-index-crate.md)). The `search` feature answers a substring query
+over every object and lists the objects as one tree, with names through a consumer's tables
+(`game-search.md` [section 1](game-search.md#s1)). `ritobin-lsp` and LTK Manager consume it
+and keep their own lifecycle, chunk rendering and wire types on top
+([ADR-0038](../adr/0038-search-in-the-index-crate.md)).
 
 ## <a id="s2"></a>2. Vocabulary
 
@@ -45,16 +48,20 @@ The crate does not use **file** for a chunk, **WAD** for an archive, **entry** f
 ## <a id="s3"></a>3. Crate boundary
 
 `ltk_game_index` owns archive enumeration, the chunk table, the fingerprint, the cache format, the
-object rows, and the resolver trait. It depends on `ltk_wad`, `ltk_hash`, `camino`, `serde`,
+object rows, the resolver trait, and, behind `search`, the term index, the name sheets, query
+resolution and the object tree. It depends on `ltk_wad`, `ltk_hash`, `camino`, `serde`,
 `rmp-serde`, `thiserror`, `tracing`, `walkdir`, and `xxhash-rust`. The `objects` feature adds
-`ltk_meta` and `ltk_file`. The `rayon` feature, on by default, adds `rayon`.
+`ltk_meta` and `ltk_file`. The `search` feature implies `objects` and adds `memchr`. The `rayon`
+feature, on by default, adds `rayon`.
 
 Outside the crate:
 
-- Directory trees, folded listings, ranked or exhaustive search, cancellation generations, and
-  IPC wire types. These belong to the application.
-- Display names for chunks, objects, and classes. A consumer resolves them through its own tables.
-- Reading chunk bytes. A consumer mounts the archive at `Archive::path` with `ltk_wad`.
+- Lifecycle: which build runs, cancellation generations, the slot an index is swapped into, and
+  the application's wire types for a result. These belong to the application.
+- Display names. The crate holds no table. The `search` feature reads a consumer's tables
+  through `NameSource` and returns hashes.
+- Reading chunk bytes for anything but a build. A consumer mounts the archive at
+  `Archive::path` with `ltk_wad`. Rendering a chunk as text is the consumer's.
 - Game-layout policy over archive names: locale archives, SubChunkTOC block lists, and content
   hashing of chunk bytes. `ltk_overlay` owns these as functions over the index.
 - Where a cache file lives. The consumer passes the path.
@@ -64,9 +71,15 @@ ltk_game_index
 |-- GameIndex            chunk table, archives, fingerprint, cache
 |-- ObjectIndex          [objects] declarations, cache
 |-- ResolveWadPath       resolver trait, implemented by every ltk_wad::PathResolver
+|-- TermIndex            [search] postings and strings sheet over an object index, cache
+|-- NameSource           [search] a consumer's five tables
+|-- NameSheets           [search] one sheet per table, cache
+|-- GameSearch           [search] query and listing
 |-- errors               BuildError, CacheError, ArchiveLookupError, ArchiveReadError,
                          ObjectBuildError
 ```
+
+The `search` surface is specified in `game-search.md`.
 
 ## <a id="s4"></a>4. Archives and identity
 
@@ -302,6 +315,8 @@ pub enum CacheError {
     Encode { path: Utf8PathBuf, #[source] source: rmp_serde::encode::Error },
     #[error("cache {path} has format version {found}, expected {expected}")]
     Version { path: Utf8PathBuf, found: u32, expected: u32 },
+    #[error("cache {path} holds parts that disagree")]
+    Inconsistent { path: Utf8PathBuf },
     #[error("cache {path} was built for fingerprint {cached}, installation is {current}")]
     Stale { path: Utf8PathBuf, cached: Fingerprint, current: Fingerprint },
     #[error(transparent)]
@@ -347,12 +362,35 @@ pub struct Declaration {
     pub chunk: WadHash,
     /// The copy of `chunk` the build read.
     pub archive: ArchiveId,
+    /// Whether `chunk` is a `PROP` bin or a `PTCH` override.
+    pub kind: ChunkKind,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ChunkKind {
+    Prop,
+    Patch,
+}
+
+/// The ordinal of a declaration in `ObjectIndex::rows()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeclarationId(u32);
+
+impl DeclarationId {
+    pub const fn new(index: u32) -> Self;
+    pub const fn index(self) -> usize;
+}
+impl From<DeclarationId> for u32 {}
 ```
 
 Declarations are stored in archive id order, and within one archive in the order the build read
 its bin chunks: named `.bin` chunks in ascending chunk hash order, then bare-named chunks, then
-unnamed chunks. One object declared twice in one chunk contributes two declarations.
+unnamed chunks. One object declared twice in one chunk contributes two declarations. The
+position of a declaration in storage order is its id. Ids are dense from zero, stable for one
+index and its cache, and not stable across builds.
 
 ### <a id="s9.2"></a>9.2 Surface
 
@@ -371,6 +409,8 @@ pub struct BuildOptions<'a> {
     pub workers: Option<NonZeroUsize>,
     /// Polled before each archive. `true` stops the build.
     pub called_off: Option<&'a (dyn Fn() -> bool + Sync)>,
+    /// Called with `(done, total)` after each archive's job, from the job's thread.
+    pub on_archive: Option<&'a (dyn Fn(u32, u32) + Sync)>,
 }
 
 impl ObjectIndex {
@@ -386,10 +426,20 @@ impl ObjectIndex {
     ) -> Result<Self, ObjectBuildError>;
 
     pub fn declares(&self, object: BinHash) -> bool;
-    /// Every declaration of `object`, in storage order.
-    pub fn declarations(&self, object: BinHash) -> &[Declaration];
-    /// Every declaration in `chunk`, in storage order.
-    pub fn chunk_declarations(&self, chunk: WadHash) -> impl Iterator<Item = &Declaration>;
+    /// Every declaration of `object` with its id, in storage order.
+    pub fn declarations(
+        &self,
+        object: BinHash,
+    ) -> impl ExactSizeIterator<Item = (DeclarationId, &Declaration)>;
+    /// Every declaration in `chunk` with its id, in storage order.
+    pub fn chunk_declarations(
+        &self,
+        chunk: WadHash,
+    ) -> impl ExactSizeIterator<Item = (DeclarationId, &Declaration)>;
+    /// Every declaration, in storage order.
+    pub fn rows(&self) -> &[Declaration];
+    /// The declaration at `id`. `None` for an id from another index.
+    pub fn row(&self, id: DeclarationId) -> Option<&Declaration>;
     pub fn objects(&self) -> impl ExactSizeIterator<Item = BinHash> + '_;
     pub fn len(&self) -> usize;
     pub fn is_empty(&self) -> bool;
@@ -448,8 +498,14 @@ without decoding values. A `PTCH` is read through `ltk_meta::BinOverride::from_r
 that fails to decompress or parse counts in `skipped_chunks` and produces no declarations.
 
 Jobs run on `workers` threads with the `rayon` feature and serially without it. `called_off` is
-polled before each job. A build that observes `true` returns `ObjectBuildError::CalledOff`. An
-archive that cannot be opened or mounted is a skipped archive, as in the chunk build.
+polled before each job. A build that observes `true` returns `ObjectBuildError::CalledOff`.
+`on_archive` runs after each job with the number of jobs done and the number of jobs, on the
+job's thread, in any order. An archive that cannot be opened or mounted is a skipped archive,
+as in the chunk build.
+
+The term build of the `search` feature (`game-search.md` [section 6.3](game-search.md#s6.3))
+is this build with every bin chunk decoded in full. It produces an object index and a term
+index from one read.
 
 The object index's fingerprint is its chunk index's. `load_for(path, game)` returns
 `CacheError::Stale` when the cached fingerprint differs from `game.fingerprint()`. The object
@@ -468,9 +524,13 @@ SubChunkTOC block list, and base selection are functions over `GameIndex`. The o
 files are `game_index.bin` and `object_index.bin` in its state directory.
 
 LTK Manager builds its folded directory tree from `chunks()` and `archives()`, with each row's
-first holder as the archive a file reads from, and builds its object rows and browsing on
-`ObjectIndex`. Its display names come from its own tables. Its lifecycle slots wrap the two
-indexes without the crate's knowledge.
+first holder as the archive a file reads from, and its object search and object tree on the
+`search` feature with its own tables as the `NameSource`. Its lifecycle slots wrap the indexes
+without the crate's knowledge.
+
+`ritobin-lsp` builds the chunk index, the name sheets over its Mimir tables and the term index,
+and serves its search panel, `workspace/symbol` and object tree from `GameSearch`
+(`game-search.md` [section 10](game-search.md#s10)).
 
 ## <a id="s11"></a>11. Validation
 
@@ -499,6 +559,9 @@ and cache staleness following the chunk index.
 | G9 | Names enter through a batch resolver trait | A hashtable dependency | Each consumer keeps its own tables | [section 8](#s8) |
 | G10 | Rows carry no display names | Resolved paths in rows | A hashtable update never invalidates a cache | [section 5.1](#s5.1), [section 9.1](#s9.1) |
 | G11 | The resolver is optional | A required resolver | A build without tables is correct, only slower | [section 9.3](#s9.3) |
-| G12 | Trees, search, and lifecycle stay in the application | An index with a browser | Two applications want two browsers | [section 3](#s3) |
+| G12 | Lifecycle, chunk rendering and wire types stay in the application | An index with a service | Two applications have two lifecycles and two wire formats | [section 3](#s3), [ADR-0038](../adr/0038-search-in-the-index-crate.md) |
+| G15 | Search and the object tree are the `search` feature | A copy per application | Two applications want one index | [ADR-0038](../adr/0038-search-in-the-index-crate.md), `game-search.md` |
+| G16 | A declaration carries its chunk kind | Reading the chunk to tell | A `PTCH` declaration is shown as an override without a read | [section 9.1](#s9.1) |
+| G17 | A declaration has an id, its storage ordinal | Positions in a by-object slice | Postings and tree entries name a declaration in one `u32` | [section 9.1](#s9.1) |
 | G13 | Game-layout name policy stays in the overlay | Locale and SubChunkTOC rules in the index | The rules belong to WAD distribution | [section 3](#s3) |
 | G14 | The object fingerprint is the chunk index's | A second fingerprint | One staleness rule for both caches | [section 9.3](#s9.3) |
