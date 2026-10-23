@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "ltk_game_index"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "camino",
  "ltk_file",
