@@ -22,10 +22,16 @@ name = "ltk_hashtable"
 publish = true
 changelog_update = true
 
+# The published ltk_fantome 0.15.5 does not compile against zip 2.6, the
+# version its `zip = "2.4"` requirement resolves to in a fresh project.
+# cargo-semver-checks builds the published version as its baseline; for
+# ltk_fantome and the two crates whose published versions depend on it, that
+# baseline does not build.
 [[package]]
 name = "ltk_fantome"
 publish = true
 changelog_update = true
+semver_check = false
 
 [[package]]
 name = "ltk_modpkg"
@@ -36,6 +42,7 @@ changelog_update = true
 name = "ltk_mod_project"
 publish = true
 changelog_update = true
+semver_check = false
 
 [[package]]
 name = "ltk_mod_core"
@@ -46,6 +53,7 @@ changelog_update = true
 name = "ltk_overlay"
 publish = true
 changelog_update = true
+semver_check = false
 
 [[package]]
 name = "ltk_game_index"
