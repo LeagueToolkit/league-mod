@@ -595,7 +595,7 @@ mod rewrite {
         zip::ZipArchive::new(Cursor::new(archive.to_vec()))
             .unwrap()
             .file_names()
-            .map(str::to_owned)
+            .map(|name| name.unwrap().into_owned())
             .collect()
     }
 

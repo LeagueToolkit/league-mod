@@ -52,5 +52,5 @@ toml = "1.1"
 tracing = "0.1"
 walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
-zip = "2.4"
+zip = "9"
 zstd = "0.13"

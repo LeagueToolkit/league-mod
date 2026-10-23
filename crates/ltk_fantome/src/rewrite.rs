@@ -245,15 +245,14 @@ pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
         }
 
         for index in 0..reader.entry_count() {
+            let name = reader.entry_name(index);
+            if replaced.contains(&name.to_ascii_lowercase()) || is_packed_wad(name) != packed_wads {
+                continue;
+            }
             let file = reader
                 .zip_archive_mut()
                 .by_index_raw(index)
                 .map_err(FantomeExtractError::from)?;
-            if replaced.contains(&file.name().to_ascii_lowercase())
-                || is_packed_wad(file.name()) != packed_wads
-            {
-                continue;
-            }
             writer
                 .zip_mut()
                 .raw_copy_file(file)

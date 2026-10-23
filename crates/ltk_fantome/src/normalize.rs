@@ -161,11 +161,11 @@ pub fn store_packed_wads<R: Read + Seek, W: Write + Seek>(
     let others = (0..reader.entry_count()).filter(|index| !packed.all.contains(index));
     for index in others.chain(packed.all.iter().copied()) {
         if packed.deflated.contains(&index) {
+            let name = reader.entry_name(index).to_owned();
             let mut entry = reader
                 .zip_archive_mut()
                 .by_index(index)
                 .map_err(FantomeExtractError::from)?;
-            let name = entry.name().to_owned();
             writer
                 .start_file(name, stored)
                 .map_err(FantomeWriteError::from)?;
@@ -207,10 +207,10 @@ fn packed_wads<R: Read + Seek>(
     let mut all = Vec::new();
     let mut deflated = HashSet::new();
     for index in 0..reader.entry_count() {
-        let entry = reader.zip_archive_mut().by_index_raw(index)?;
-        if !is_packed_wad(entry.name()) {
+        if !is_packed_wad(reader.entry_name(index)) {
             continue;
         }
+        let entry = reader.zip_archive_mut().by_index_raw(index)?;
         all.push(index);
         if entry.compression() != CompressionMethod::Stored {
             deflated.insert(index);

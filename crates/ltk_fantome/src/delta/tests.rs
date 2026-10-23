@@ -489,9 +489,12 @@ fn the_packed_wad_is_written_last() {
     );
 
     let archive = zip::ZipArchive::new(std::fs::File::open(path.as_std_path()).unwrap()).unwrap();
-    let names: Vec<&str> = archive.file_names().collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.unwrap().into_owned())
+        .collect();
     assert_eq!(
-        names.last().copied(),
+        names.last().map(String::as_str),
         Some(WAD_ENTRY),
         "the packed WAD is not the last entry: {names:?}"
     );
@@ -985,7 +988,13 @@ fn entry_names(path: &Utf8PathBuf) -> Vec<String> {
     let file = std::fs::File::open(path.as_std_path()).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     (0..zip.len())
-        .map(|index| zip.by_index_raw(index).unwrap().name().to_owned())
+        .map(|index| {
+            zip.by_index_raw(index)
+                .unwrap()
+                .name()
+                .unwrap()
+                .into_owned()
+        })
         .collect()
 }
 
