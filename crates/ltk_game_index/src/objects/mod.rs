@@ -1,10 +1,11 @@
 //! The object index: every bin object of an installation with every declaring chunk.
 
-mod build;
+pub(crate) mod build;
 mod read;
 
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::time::Duration;
 
 use camino::Utf8Path;
@@ -20,7 +21,7 @@ pub use read::for_each_declaration;
 ///
 /// Bumped on any change to [`Declaration`], [`ObjectStats`], [`SkippedArchive`], or the
 /// container layout.
-pub const OBJECT_CACHE_FORMAT_VERSION: u32 = 1;
+pub const OBJECT_CACHE_FORMAT_VERSION: u32 = 2;
 
 /// One object in one declaring chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -34,6 +35,47 @@ pub struct Declaration {
     pub chunk: WadHash,
     /// The copy of `chunk` the build read.
     pub archive: ArchiveId,
+    /// Whether `chunk` is a `PROP` bin or a `PTCH` override.
+    pub kind: ChunkKind,
+}
+
+/// The kind of bin a declaring chunk is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ChunkKind {
+    /// A property bin, magic `PROP`.
+    Prop,
+    /// A property override, magic `PTCH`.
+    Patch,
+}
+
+/// The ordinal of a declaration in [`ObjectIndex::rows`].
+///
+/// Ids are dense from zero and stable for one index and its cache. They are not stable across
+/// builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeclarationId(u32);
+
+impl DeclarationId {
+    /// The id at storage ordinal `index`.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// The storage ordinal, as an index into [`ObjectIndex::rows`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl From<DeclarationId> for u32 {
+    fn from(id: DeclarationId) -> Self {
+        id.0
+    }
 }
 
 /// Counts of one object index build.
@@ -79,6 +121,8 @@ pub struct BuildOptions<'a> {
     pub workers: Option<NonZeroUsize>,
     /// Polled before each archive. `true` stops the build.
     pub called_off: Option<&'a (dyn Fn() -> bool + Sync)>,
+    /// Called with `(done, total)` after each archive's job, from the job's thread.
+    pub on_archive: Option<&'a (dyn Fn(u32, u32) + Sync)>,
 }
 
 impl fmt::Debug for BuildOptions<'_> {
@@ -87,16 +131,25 @@ impl fmt::Debug for BuildOptions<'_> {
             .field("resolver", &self.resolver.is_some())
             .field("workers", &self.workers)
             .field("called_off", &self.called_off.is_some())
+            .field("on_archive", &self.on_archive.is_some())
             .finish()
     }
 }
 
 /// The cached body of an object index. The lookups are rebuilt on load.
-#[derive(Serialize, Deserialize)]
-struct Body {
+#[derive(Deserialize)]
+pub(crate) struct Body {
     declarations: Vec<Declaration>,
     stats: ObjectStats,
     skipped: Vec<SkippedArchive>,
+}
+
+/// [`Body`] borrowed from an index, for writing.
+#[derive(Serialize)]
+pub(crate) struct BodyRef<'a> {
+    declarations: &'a [Declaration],
+    stats: &'a ObjectStats,
+    skipped: &'a [SkippedArchive],
 }
 
 /// Every bin object of an installation, keyed by object hash, with every declaring chunk.
@@ -108,8 +161,8 @@ struct Body {
 pub struct ObjectIndex {
     /// Storage order.
     declarations: Vec<Declaration>,
-    /// Storage order, stably sorted by object.
-    by_object: Vec<Declaration>,
+    /// Ids in storage order, stably sorted by object.
+    by_object: Vec<u32>,
     /// Every object, ascending.
     objects: Vec<BinHash>,
     /// `(chunk, start, len)` into `declarations`, sorted by chunk.
@@ -120,15 +173,18 @@ pub struct ObjectIndex {
 }
 
 impl ObjectIndex {
-    fn from_parts(
+    pub(crate) fn from_parts(
         declarations: Vec<Declaration>,
         stats: ObjectStats,
         skipped: Vec<SkippedArchive>,
         fingerprint: Fingerprint,
     ) -> Self {
-        let mut by_object = declarations.clone();
-        by_object.sort_by_key(|declaration| declaration.object);
-        let mut objects: Vec<BinHash> = by_object.iter().map(|d| d.object).collect();
+        let mut by_object: Vec<u32> = (0..declarations.len() as u32).collect();
+        by_object.sort_by_key(|&id| declarations[id as usize].object);
+        let mut objects: Vec<BinHash> = by_object
+            .iter()
+            .map(|&id| declarations[id as usize].object)
+            .collect();
         objects.dedup();
 
         let mut by_chunk: Vec<(WadHash, u32, u32)> = Vec::new();
@@ -171,7 +227,7 @@ impl ObjectIndex {
         game: &GameIndex,
         options: &BuildOptions<'_>,
     ) -> Result<Self, ObjectBuildError> {
-        let built = build::build(game, options)?;
+        let built = build::build(game, options, &build::Declarations)?;
         Ok(Self::from_parts(
             built.declarations,
             built.stats,
@@ -197,12 +253,21 @@ impl ObjectIndex {
                 current: game.fingerprint(),
             });
         }
-        Ok(Self::from_parts(
-            body.declarations,
-            body.stats,
-            body.skipped,
-            fingerprint,
-        ))
+        Ok(Self::from_body(body, fingerprint))
+    }
+
+    /// The index a cached body holds, for the installation `fingerprint` names.
+    pub(crate) fn from_body(body: Body, fingerprint: Fingerprint) -> Self {
+        Self::from_parts(body.declarations, body.stats, body.skipped, fingerprint)
+    }
+
+    /// The cached body of the index.
+    pub(crate) fn body(&self) -> BodyRef<'_> {
+        BodyRef {
+            declarations: &self.declarations,
+            stats: &self.stats,
+            skipped: &self.skipped,
+        }
     }
 
     /// Writes the index to `cache_path` atomically.
@@ -211,16 +276,11 @@ impl ObjectIndex {
     ///
     /// [`CacheError::Write`] and [`CacheError::Encode`].
     pub fn save(&self, cache_path: &Utf8Path) -> Result<(), CacheError> {
-        let body = Body {
-            declarations: self.declarations.clone(),
-            stats: self.stats,
-            skipped: self.skipped.clone(),
-        };
         cache::write(
             cache_path,
             OBJECT_CACHE_FORMAT_VERSION,
             self.fingerprint,
-            &body,
+            &self.body(),
         )?;
         tracing::debug!("Object index cache saved to {cache_path}");
         Ok(())
@@ -254,26 +314,49 @@ impl ObjectIndex {
         self.objects.binary_search(&object).is_ok()
     }
 
-    /// Every declaration of `object`, in storage order.
-    #[must_use]
-    pub fn declarations(&self, object: BinHash) -> &[Declaration] {
-        let start = self.by_object.partition_point(|d| d.object < object);
-        let end = start + self.by_object[start..].partition_point(|d| d.object == object);
-        &self.by_object[start..end]
+    /// Every declaration of `object` with its id, in storage order.
+    pub fn declarations(
+        &self,
+        object: BinHash,
+    ) -> impl ExactSizeIterator<Item = (DeclarationId, &Declaration)> + '_ {
+        let object_of = |id: &u32| self.declarations[*id as usize].object;
+        let start = self.by_object.partition_point(|id| object_of(id) < object);
+        let end = start + self.by_object[start..].partition_point(|id| object_of(id) == object);
+        self.by_object[start..end]
+            .iter()
+            .map(|&id| (DeclarationId(id), &self.declarations[id as usize]))
     }
 
-    /// Every declaration in `chunk`, in storage order.
-    pub fn chunk_declarations(&self, chunk: WadHash) -> impl Iterator<Item = &Declaration> {
-        let range = self
-            .by_chunk
+    /// Every declaration in `chunk` with its id, in storage order.
+    pub fn chunk_declarations(
+        &self,
+        chunk: WadHash,
+    ) -> impl ExactSizeIterator<Item = (DeclarationId, &Declaration)> + '_ {
+        self.chunk_range(chunk)
+            .map(|index| (DeclarationId(index as u32), &self.declarations[index]))
+    }
+
+    /// The storage range of the declarations in `chunk`. Empty for a chunk declaring nothing.
+    fn chunk_range(&self, chunk: WadHash) -> Range<usize> {
+        self.by_chunk
             .binary_search_by_key(&chunk, |&(chunk, _, _)| chunk)
             .ok()
-            .map(|at| {
+            .map_or(0..0, |at| {
                 let (_, start, len) = self.by_chunk[at];
                 start as usize..(start + len) as usize
             })
-            .unwrap_or(0..0);
-        self.declarations[range].iter()
+    }
+
+    /// Every declaration, in storage order. The position of a declaration is its id.
+    #[must_use]
+    pub fn rows(&self) -> &[Declaration] {
+        &self.declarations
+    }
+
+    /// The declaration at `id`. `None` for an id past the end, from another index.
+    #[must_use]
+    pub fn row(&self, id: DeclarationId) -> Option<&Declaration> {
+        self.declarations.get(id.index())
     }
 
     /// Every object, ascending.

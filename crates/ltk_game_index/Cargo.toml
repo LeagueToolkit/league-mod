@@ -20,6 +20,9 @@ rayon = ["dep:rayon"]
 # The bin object index.
 objects = ["dep:ltk_meta", "dep:ltk_file"]
 
+# The term index, name sheets, query and object tree over the object index.
+search = ["objects", "dep:memchr"]
+
 [dependencies]
 camino = { workspace = true, features = ["serde1"] }
 ltk_hash = { workspace = true, features = ["serde"] }
@@ -33,6 +36,7 @@ xxhash-rust = { workspace = true }
 rayon = { workspace = true, optional = true }
 ltk_meta = { workspace = true, optional = true }
 ltk_file = { workspace = true, optional = true }
+memchr = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -39,6 +39,7 @@ byteorder = "1.5"
 camino = "1.1"
 image = { version = "0.25", default-features = false }
 indexmap = { version = "2", features = ["serde"] }
+memchr = "2.7"
 rayon = "1.10"
 rmp-serde = "1.3"
 semver = "1.0"

@@ -17,6 +17,10 @@ use crate::{Archive, BuildError};
 pub struct Fingerprint(u64);
 
 impl Fingerprint {
+    /// The fingerprint of a cache that belongs to no installation.
+    #[cfg(feature = "search")]
+    pub(crate) const ZERO: Fingerprint = Fingerprint(0);
+
     /// The fingerprint as a plain integer, for wire formats that carry a `u64`.
     #[must_use]
     pub fn as_u64(self) -> u64 {

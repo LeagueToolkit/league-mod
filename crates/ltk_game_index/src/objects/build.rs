@@ -1,14 +1,83 @@
 //! The object index build: one job per archive over the chunk index's rows.
+//!
+//! The build is generic over what it reads from a bin chunk. The object index reads
+//! declarations. The term index of the `search` feature reads declarations and terms.
 
 use std::fs::File;
 use std::io::{BufReader, Cursor};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use ltk_wad::{ChunkDecoder, Wad, WadHash};
 
 use super::read::{MountedArchive, for_each_declaration, sniffs_as_bin};
-use super::{BuildOptions, Declaration, ObjectBuildError, ObjectStats};
+use super::{BuildOptions, ChunkKind, Declaration, ObjectBuildError, ObjectStats};
 use crate::{Archive, ArchiveId, ArchiveReadError, GameIndex, SkippedArchive};
+
+/// The magic a `PTCH` opens with.
+const PATCH_MAGIC: &[u8; 4] = b"PTCH";
+
+/// What a build reads from one bin chunk.
+pub(crate) trait ChunkRead: Sync {
+    /// One job's output beyond its declarations.
+    type Out: Default + Send;
+
+    /// Reads the decompressed `bytes` of one bin chunk into `read`.
+    ///
+    /// A chunk that does not read leaves `read.declarations` and `read.out` as they were and
+    /// counts in `read.skipped_chunks`.
+    fn read(&self, bytes: &[u8], chunk: ChunkAt<'_>, read: &mut JobRead<Self::Out>);
+}
+
+/// Where one bin chunk is, and what kind of bin it is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ChunkAt<'a> {
+    pub chunk: WadHash,
+    pub archive: ArchiveId,
+    /// The name of `archive`, for logs.
+    pub archive_name: &'a str,
+    pub kind: ChunkKind,
+}
+
+impl ChunkAt<'_> {
+    /// The declaration of `object` as `class` in this chunk.
+    pub fn declaration(self, object: ltk_hash::BinHash, class: ltk_hash::BinHash) -> Declaration {
+        Declaration {
+            object,
+            class,
+            chunk: self.chunk,
+            archive: self.archive,
+            kind: self.kind,
+        }
+    }
+}
+
+/// The declarations-only read: a `PROP` streamed through its object table.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Declarations;
+
+impl ChunkRead for Declarations {
+    type Out = ();
+
+    fn read(&self, bytes: &[u8], at: ChunkAt<'_>, read: &mut JobRead<()>) {
+        read_declarations(bytes, at, read);
+    }
+}
+
+/// Pushes a declaration for every object `bytes` declares.
+///
+/// A chunk that does not read pushes nothing and counts in `skipped_chunks`.
+pub(crate) fn read_declarations<O>(bytes: &[u8], at: ChunkAt<'_>, read: &mut JobRead<O>) {
+    let before = read.declarations.len();
+    let outcome = for_each_declaration(Cursor::new(bytes), |object, class| {
+        read.declarations.push(at.declaration(object, class));
+    });
+    if let Err(e) = outcome {
+        read.declarations.truncate(before);
+        read.skipped_chunks += 1;
+        tracing::debug!("Skipping {}/{:016x}: {e}", at.archive_name, at.chunk.0);
+    }
+}
 
 /// One archive's share of the build.
 #[derive(Debug)]
@@ -25,21 +94,24 @@ struct Job<'a> {
 
 /// What one job read.
 #[derive(Debug, Default)]
-struct JobRead {
-    declarations: Vec<Declaration>,
-    bins: u32,
-    sniffed: u32,
-    sniffed_bins: u32,
-    skipped_chunks: u32,
-    bytes: u64,
+pub(crate) struct JobRead<O> {
+    pub declarations: Vec<Declaration>,
+    pub out: O,
+    pub bins: u32,
+    pub sniffed: u32,
+    pub sniffed_bins: u32,
+    pub skipped_chunks: u32,
+    pub bytes: u64,
 }
 
 /// What the build produced before indexing.
 #[derive(Debug)]
-pub(super) struct Built {
+pub(crate) struct Built<O> {
     pub declarations: Vec<Declaration>,
     pub stats: ObjectStats,
     pub skipped: Vec<SkippedArchive>,
+    /// Each read job's output in archive id order, with the id of its first declaration.
+    pub outs: Vec<(u32, O)>,
 }
 
 impl Job<'_> {
@@ -50,7 +122,7 @@ impl Job<'_> {
     /// Mounts the archive and reads every chunk of the job for its declarations.
     ///
     /// Named chunks first, then bare and unnamed chunks that sniff as a bin.
-    fn read(&self) -> Result<JobRead, ArchiveReadError> {
+    fn read<R: ChunkRead>(&self, reader: &R) -> Result<JobRead<R::Out>, ArchiveReadError> {
         let file =
             File::open(self.archive.path.as_std_path()).map_err(|e| ArchiveReadError::open(&e))?;
         let mut wad = Wad::mount(BufReader::new(file)).map_err(|e| ArchiveReadError::mount(&e))?;
@@ -58,7 +130,7 @@ impl Job<'_> {
 
         for &hash in &self.named {
             read.bins += 1;
-            self.read_chunk(&mut wad, hash, &mut read);
+            self.read_chunk(reader, &mut wad, hash, &mut read);
         }
 
         let mut decoder = ChunkDecoder::new();
@@ -69,7 +141,7 @@ impl Job<'_> {
             }
             read.sniffed_bins += 1;
             read.bins += 1;
-            self.read_chunk(&mut wad, hash, &mut read);
+            self.read_chunk(reader, &mut wad, hash, &mut read);
         }
         Ok(read)
     }
@@ -88,10 +160,16 @@ impl Job<'_> {
         }
     }
 
-    /// Reads `hash` whole and pushes a declaration for every object it declares.
+    /// Reads `hash` whole and hands its bytes to `reader`.
     ///
-    /// A chunk that is missing or does not read is counted in `skipped_chunks`.
-    fn read_chunk(&self, wad: &mut MountedArchive, hash: WadHash, read: &mut JobRead) {
+    /// A chunk that is missing or does not decompress is counted in `skipped_chunks`.
+    fn read_chunk<R: ChunkRead>(
+        &self,
+        reader: &R,
+        wad: &mut MountedArchive,
+        hash: WadHash,
+        read: &mut JobRead<R::Out>,
+    ) {
         let bytes = match wad.chunks().get(hash).copied() {
             Some(chunk) => wad.load_chunk_decompressed(&chunk),
             None => {
@@ -112,21 +190,17 @@ impl Job<'_> {
             }
         };
         read.bytes += bytes.len() as u64;
-
-        let before = read.declarations.len();
-        let outcome = for_each_declaration(Cursor::new(&bytes[..]), |object, class| {
-            read.declarations.push(Declaration {
-                object,
-                class,
-                chunk: hash,
-                archive: self.id,
-            });
-        });
-        if let Err(e) = outcome {
-            read.declarations.truncate(before);
-            read.skipped_chunks += 1;
-            tracing::debug!("Skipping {}/{hash:016x}: {e}", self.archive.name);
-        }
+        let kind = match bytes.starts_with(PATCH_MAGIC) {
+            true => ChunkKind::Patch,
+            false => ChunkKind::Prop,
+        };
+        let at = ChunkAt {
+            chunk: hash,
+            archive: self.id,
+            archive_name: &self.archive.name,
+            kind,
+        };
+        reader.read(&bytes, at, read);
     }
 }
 
@@ -193,23 +267,36 @@ fn jobs<'a>(game: &'a GameIndex, options: &BuildOptions<'_>) -> Vec<Job<'a>> {
         .collect()
 }
 
-/// Runs `jobs` on `workers` threads, polling `called_off` before each.
+/// Runs `jobs` on `workers` threads, polling `called_off` before each and reporting each.
 ///
 /// Outcomes come back in job order. An outcome is `None` where the build was called off
 /// before reaching the job.
-fn run_jobs(
+fn run_jobs<R: ChunkRead>(
     jobs: &[Job<'_>],
+    reader: &R,
     workers: usize,
-    called_off: &(dyn Fn() -> bool + Sync),
-) -> Vec<Option<Result<JobRead, ArchiveReadError>>> {
+    options: &BuildOptions<'_>,
+) -> Vec<Option<Result<JobRead<R::Out>, ArchiveReadError>>> {
+    let never = || false;
+    let called_off: &(dyn Fn() -> bool + Sync) = options.called_off.unwrap_or(&never);
+    let on_archive = options.on_archive;
+    let total = jobs.len() as u32;
+    let done = AtomicU32::new(0);
+    let run_one = |job: &Job<'_>| {
+        if called_off() {
+            return None;
+        }
+        let outcome = job.read(reader);
+        let done = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(on_archive) = on_archive {
+            on_archive(done, total);
+        }
+        Some(outcome)
+    };
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
-        let run = || {
-            jobs.par_iter()
-                .map(|job| (!called_off()).then(|| job.read()))
-                .collect()
-        };
+        let run = || jobs.par_iter().map(run_one).collect();
         match rayon::ThreadPoolBuilder::new().num_threads(workers).build() {
             Ok(pool) => pool.install(run),
             Err(e) => {
@@ -221,16 +308,16 @@ fn run_jobs(
     #[cfg(not(feature = "rayon"))]
     {
         let _ = workers;
-        jobs.iter()
-            .map(|job| (!called_off()).then(|| job.read()))
-            .collect()
+        jobs.iter().map(run_one).collect()
     }
 }
 
-pub(super) fn build(
+/// Runs the build over every bin chunk of `game` with `reader`.
+pub(crate) fn build<R: ChunkRead>(
     game: &GameIndex,
     options: &BuildOptions<'_>,
-) -> Result<Built, ObjectBuildError> {
+    reader: &R,
+) -> Result<Built<R::Out>, ObjectBuildError> {
     let started = Instant::now();
     let jobs = jobs(game, options);
     let workers = options
@@ -239,10 +326,8 @@ pub(super) fn build(
         .or_else(|| std::thread::available_parallelism().ok().map(Into::into))
         .unwrap_or(1)
         .clamp(1, jobs.len().max(1));
-    let never = || false;
-    let called_off: &(dyn Fn() -> bool + Sync) = options.called_off.unwrap_or(&never);
 
-    let outcomes = run_jobs(&jobs, workers, called_off);
+    let outcomes = run_jobs(&jobs, reader, workers, options);
 
     let mut built = Built {
         declarations: Vec::new(),
@@ -251,6 +336,7 @@ pub(super) fn build(
             ..ObjectStats::default()
         },
         skipped: Vec::new(),
+        outs: Vec::new(),
     };
     for (job, outcome) in jobs.iter().zip(outcomes) {
         let Some(outcome) = outcome else {
@@ -265,6 +351,7 @@ pub(super) fn build(
                 built.stats.declarations += read.declarations.len() as u32;
                 built.stats.skipped_chunks += read.skipped_chunks;
                 built.stats.bytes += read.bytes;
+                built.outs.push((built.declarations.len() as u32, read.out));
                 built.declarations.extend(read.declarations);
             }
             Err(error) => {

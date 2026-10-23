@@ -1469,6 +1469,7 @@ dependencies = [
  "ltk_hash",
  "ltk_meta",
  "ltk_wad",
+ "memchr",
  "rayon",
  "rmp-serde",
  "serde",
