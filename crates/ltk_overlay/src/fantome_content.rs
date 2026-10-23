@@ -41,7 +41,7 @@ use zip::{CompressionMethod, ZipArchive};
 /// some packers over-declare it, and rejecting those would discard data that is
 /// fully present and usable. Genuine corruption of the compressed stream still
 /// surfaces as a decompression error from `read_to_end`.
-fn read_zip_entry_bytes(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
+fn read_zip_entry_bytes(entry: &mut ZipFile<'_, impl Read>) -> io::Result<Vec<u8>> {
     let size = entry.size();
     let mut data = Vec::new();
 
@@ -150,7 +150,9 @@ impl FantomeIndex {
             let Ok(file) = archive.by_index_raw(i) else {
                 continue;
             };
-            let name = file.name().to_string();
+            let Ok(name) = file.name().map(std::borrow::Cow::into_owned) else {
+                continue;
+            };
             drop(file);
 
             // META/info.json (case-insensitive)
@@ -344,6 +346,9 @@ impl<R: Read + Seek> FantomeContent<R> {
         }
         let (start, len) = (entry.data_start(), entry.size());
         drop(entry);
+        let Some(start) = start else {
+            return Ok(None);
+        };
 
         let Some(archive) = self.archive_map()? else {
             return Ok(None);
@@ -449,8 +454,9 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         let zip_path = self
             .archive
             .file_names()
+            .filter_map(|name| name.ok())
             .find(|name| name.eq_ignore_ascii_case(&want))
-            .map(str::to_owned);
+            .map(std::borrow::Cow::into_owned);
         let Some(zip_path) = zip_path else {
             return Err(ModContentError::game_data_resource_missing(layer, path));
         };

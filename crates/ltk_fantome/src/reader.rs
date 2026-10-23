@@ -5,6 +5,7 @@
 //! project looks like on disk: turning an archive into a project directory
 //! is the caller's job (see `ltk_mod_project`'s `fantome` module).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Cursor, Read, Seek};
@@ -21,6 +22,8 @@ use crate::{BASE_LAYER, FantomeInfo};
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
     archive: ZipArchive<R>,
+    /// Every entry's name, by entry index, decoded once when the archive opens.
+    names: Vec<String>,
 }
 
 impl<R: Read + Seek> fmt::Debug for FantomeReader<R> {
@@ -160,7 +163,10 @@ impl fmt::Debug for WadExtractOptions<'_> {
 /// Every read of an entry goes through here or [`read_entry`]: an archive that
 /// only some of the reads accept is worse than one none of them do - the
 /// normalize included, which is why this is reachable from the crate at large.
-pub(crate) fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> io::Result<()> {
+pub(crate) fn copy_entry(
+    entry: &mut ZipFile<'_, impl Read>,
+    sink: &mut impl io::Write,
+) -> io::Result<()> {
     let size = entry.size();
     let copied = io::copy(&mut entry.take(size), sink)?;
     if copied != size {
@@ -177,7 +183,7 @@ pub(crate) fn copy_entry(entry: &mut ZipFile<'_>, sink: &mut impl io::Write) -> 
 ///
 /// The buffer grows as the copy runs rather than being sized from the entry's
 /// header, so a declared length nothing backs cannot ask for the allocation.
-pub(crate) fn read_entry(entry: &mut ZipFile<'_>) -> io::Result<Vec<u8>> {
+pub(crate) fn read_entry(entry: &mut ZipFile<'_, impl Read>) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     copy_entry(entry, &mut bytes)?;
     Ok(bytes)
@@ -194,28 +200,30 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// # Errors
     ///
     /// Fails with [`FantomeExtractError::EscapingEntry`] for such an archive,
-    /// and with [`FantomeExtractError::Zip`] for one that is not a zip at all.
+    /// and with [`FantomeExtractError::Zip`] for one that is not a zip at all or
+    /// holds an entry name that does not decode.
     pub fn new(reader: R) -> Result<Self, FantomeExtractError> {
         let archive = ZipArchive::new(reader)?;
+        let names = archive
+            .file_names()
+            .map(|name| name.map(Cow::into_owned))
+            .collect::<Result<Vec<String>, _>>()?;
 
-        if let Some(name) = archive.file_names().find(|name| !is_contained(name)) {
-            return Err(FantomeExtractError::EscapingEntry {
-                name: name.to_owned(),
-            });
+        if let Some(name) = names.iter().find(|name| !is_contained(name)) {
+            return Err(FantomeExtractError::EscapingEntry { name: name.clone() });
         }
 
-        Ok(Self { archive })
+        Ok(Self { archive, names })
     }
 
     /// Read the mod metadata from `META/info.json`.
     pub fn read_info(&mut self) -> Result<FantomeInfo, FantomeExtractError> {
         // Entry names are matched case-insensitively: archives in the wild
         // spell the directory `META`, `meta` and `Meta`.
-        let index = (0..self.archive.len()).find(|i| {
-            self.archive
-                .by_index(*i)
-                .is_ok_and(|file| file.name().eq_ignore_ascii_case("META/info.json"))
-        });
+        let index = self
+            .names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case("META/info.json"));
 
         let Some(index) = index else {
             return Err(FantomeExtractError::MissingMetadata);
@@ -262,11 +270,10 @@ impl<R: Read + Seek> FantomeReader<R> {
             };
             // Case-insensitive like every other entry lookup here: archives
             // in the wild spell `META/` in any casing.
-            let index = (0..self.archive.len()).find(|i| {
-                self.archive
-                    .by_index(*i)
-                    .is_ok_and(|file| file.name().eq_ignore_ascii_case(&manifest.path))
-            });
+            let index = self
+                .names
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(&manifest.path));
             let Some(index) = index else {
                 return Err(FantomeExtractError::MissingHashtable {
                     path: manifest.path.clone(),
@@ -371,7 +378,7 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// archive's own table rather than by counting the iteration, so nothing
     /// here rests on that iteration being in index order.
     fn packed_wad_index(&self, layer: &str, wad_name: &str) -> Option<usize> {
-        let entry = self.archive.file_names().find(|name| {
+        let entry = self.entry_names().find(|name| {
             matches!(
                 classify_entry(name),
                 Some(FantomeEntry::PackedWad { layer: held, name })
@@ -386,6 +393,11 @@ impl<R: Read + Seek> FantomeReader<R> {
         self.archive.len()
     }
 
+    /// The name of entry `index`. Empty for an index past the end.
+    pub(crate) fn entry_name(&self, index: usize) -> &str {
+        self.names.get(index).map_or("", String::as_str)
+    }
+
     /// The inner zip archive, for the rewrite's raw entry copies.
     pub(crate) fn zip_archive_mut(&mut self) -> &mut ZipArchive<R> {
         &mut self.archive
@@ -398,7 +410,7 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// extracting them; the directory entries among them classify as `None`,
     /// so the pairing yields the files alone.
     pub fn entry_names(&self) -> impl Iterator<Item = &str> {
-        self.archive.file_names()
+        self.names.iter().map(String::as_str)
     }
 
     /// The WADs the archive's WAD directories describe, in archive order, each
@@ -416,7 +428,7 @@ impl<R: Read + Seek> FantomeReader<R> {
     pub fn wad_names(&self) -> Vec<LayerWad> {
         let mut wads: Vec<LayerWad> = Vec::new();
 
-        for entry_name in self.archive.file_names() {
+        for entry_name in self.entry_names() {
             // Through `classify_entry`, so this and `extract_wads` cannot
             // disagree about what the archive holds: a WAD present only as a
             // directory record has no files to unpack, and listing it would
@@ -521,7 +533,7 @@ impl<R: Read + Seek> FantomeReader<R> {
             }
 
             let mut file = self.archive.by_index(i)?;
-            let file_name = file.name().to_string();
+            let file_name = self.names[i].clone();
 
             let (layer, relative_path, is_packed) = match classify_entry(&file_name) {
                 Some(FantomeEntry::PackedWad { layer, name }) => (layer, name, true),
@@ -584,7 +596,7 @@ impl<R: Read + Seek> FantomeReader<R> {
             }
 
             let mut file = self.archive.by_index(i)?;
-            let file_name = file.name().to_string();
+            let file_name = self.names[i].clone();
 
             let Some(FantomeEntry::Raw(relative_path)) = classify_entry(&file_name) else {
                 continue;
@@ -627,7 +639,7 @@ impl<R: Read + Seek> FantomeReader<R> {
     pub fn extract_game_data(&mut self, content_dir: &Utf8Path) -> Result<(), FantomeExtractError> {
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
-            let file_name = file.name().to_string();
+            let file_name = self.names[i].clone();
 
             let Some(FantomeEntry::GameData(relative_path)) = classify_entry(&file_name) else {
                 continue;
@@ -694,7 +706,7 @@ impl<R: Read + Seek> FantomeReader<R> {
     ) -> Result<Option<(T, Vec<u8>)>, FantomeExtractError> {
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
-            let Some(matched) = matcher(file.name()) else {
+            let Some(matched) = matcher(&self.names[i]) else {
                 continue;
             };
 
@@ -707,7 +719,7 @@ impl<R: Read + Seek> FantomeReader<R> {
 
 /// Write one archive entry to `output_path`, creating its parent directories.
 fn extract_entry(
-    entry: &mut ZipFile<'_>,
+    entry: &mut ZipFile<'_, impl Read>,
     output_path: &Utf8Path,
 ) -> Result<(), FantomeExtractError> {
     let write_error = |source| FantomeExtractError::write(output_path, source);
@@ -1017,7 +1029,7 @@ fn ends_with_ci(name: &str, suffix: &str) -> bool {
 /// hashes and the project directory is unreadable. The scan is over one small
 /// archive, once, at import.
 fn extract_packed_wad(
-    entry: &mut ZipFile<'_>,
+    entry: &mut ZipFile<'_, impl Read>,
     output_dir: &Utf8Path,
     resolver: &dyn PathResolver,
     naming: NamingPolicy,

@@ -290,7 +290,7 @@ fn pack_writes_each_wad_directory_as_one_stored_entry() {
     assert!(
         archive
             .file_names()
-            .all(|name| !name.starts_with("WAD/Test.wad.client/")),
+            .all(|name| !name.unwrap().starts_with("WAD/Test.wad.client/")),
         "the WAD's files leaked in as loose entries as well"
     );
 
@@ -325,10 +325,13 @@ fn pack_writes_the_wads_last_in_name_order() {
     let buffer = pack(&test_project(None), &root);
 
     let archive = zip::ZipArchive::new(buffer).unwrap();
-    let names: Vec<&str> = archive.file_names().collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.unwrap().into_owned())
+        .collect();
     let wads: Vec<&str> = names
         .iter()
-        .copied()
+        .map(String::as_str)
         .filter(|name| name.starts_with("WAD/"))
         .collect();
     assert_eq!(
@@ -694,7 +697,10 @@ fn pack_skips_content_outside_wad_directories() {
     let buffer = pack(&test_project(None), &root);
 
     let archive = zip::ZipArchive::new(buffer).unwrap();
-    let names: Vec<&str> = archive.file_names().collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.unwrap().into_owned())
+        .collect();
     assert!(
         names
             .iter()
@@ -1940,7 +1946,7 @@ mod hashtables {
 
         assert!(archive.by_name("META/hashes/game.hashes.txt").is_ok());
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_owned())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert!(
             !names.iter().any(|name| name.starts_with("WAD/")),

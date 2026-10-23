@@ -551,12 +551,7 @@ impl<'a> ArchivePlan<'a> {
         // iteration is in that order.
         let mut source_entries: Vec<SourceEntry> = Vec::with_capacity(reader.entry_count());
         for index in 0..reader.entry_count() {
-            let name = reader
-                .zip_archive_mut()
-                .by_index_raw(index)
-                .map_err(FantomeExtractError::from)?
-                .name()
-                .to_owned();
+            let name = reader.entry_name(index).to_owned();
             let packed = is_packed_wad(&name);
             let removed = delta.removed_entries.contains(&name.to_ascii_lowercase());
             source_entries.push(SourceEntry {
