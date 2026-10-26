@@ -54,4 +54,4 @@ tracing = "0.1"
 walkdir = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 zip = "9"
-zstd = "0.13"
+zstd = "0.14"
