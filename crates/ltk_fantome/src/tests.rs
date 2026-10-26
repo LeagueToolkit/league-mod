@@ -13,6 +13,7 @@ fn info_json(license: Option<FantomeLicense>) -> serde_json::Value {
         layers: IndexMap::new(),
         hashtables: vec![],
         generator: None,
+        distributor: None,
         extra: Default::default(),
     };
     serde_json::to_value(&info).unwrap()
@@ -137,6 +138,48 @@ fn info_json_without_hashtables_serializes_without_the_field() {
         .unwrap();
     assert!(!entry_text.contains("Hashtables"));
     assert!(!entry_text.contains("extra"));
+}
+
+#[test]
+fn info_json_round_trips_the_distributor() {
+    let json = serde_json::json!({
+        "Name": "Old Summoners Rift",
+        "Author": "TheKillerey, Crauzer",
+        "Version": "1.0.0",
+        "Description": "Brings back the classic Summoners Rift map",
+        "Distributor": {
+            "SiteId": "runeforge",
+            "SiteName": "RuneForge",
+            "SiteUrl": "https://runeforge.dev",
+            "ModId": "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10"
+        }
+    });
+
+    let info: FantomeInfo = serde_json::from_value(json.clone()).unwrap();
+
+    assert_eq!(
+        info.distributor,
+        Some(FantomeDistributor::new(
+            "runeforge".to_owned(),
+            "RuneForge".to_owned(),
+            "https://runeforge.dev".to_owned(),
+            "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+        ))
+    );
+    assert!(info.extra.is_empty(), "Distributor is not an unknown field");
+    assert_eq!(serde_json::to_value(&info).unwrap(), json);
+}
+
+#[test]
+fn info_json_without_a_distributor_serializes_without_the_field() {
+    let info = FantomeInfo {
+        name: "A mod".to_owned(),
+        ..Default::default()
+    };
+
+    let value = serde_json::to_value(&info).unwrap();
+
+    assert!(value.get("Distributor").is_none());
 }
 
 #[test]

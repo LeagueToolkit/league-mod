@@ -122,6 +122,15 @@ pub struct FantomeInfo {
     /// on it. Omitted when unset.
     #[serde(rename = "Generator", default, skip_serializing_if = "Option::is_none")]
     pub generator: Option<String>,
+    /// The distributor site that hosts the mod, and the mod's ID on it.
+    ///
+    /// A LeagueToolkit extension. Omitted when unset.
+    #[serde(
+        rename = "Distributor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub distributor: Option<FantomeDistributor>,
     /// Fields this crate does not know, carried verbatim.
     ///
     /// `info.json` is shared ground: other tools extend it, and the archive
@@ -209,6 +218,38 @@ impl FantomeHashtable {
             category: entry.category().clone(),
             algorithm: entry.algorithm().clone(),
             bits: entry.width().bits(),
+        }
+    }
+}
+
+/// The `Distributor` declaration in a Fantome info.json.
+///
+/// The fantome spelling of `ltk_modpkg`'s `DistributorInfo`, with
+/// PascalCase keys.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FantomeDistributor {
+    /// The identifier of the distributor site, for example `runeforge`.
+    #[serde(rename = "SiteId")]
+    pub site_id: String,
+    /// The display name of the distributor site, for example `RuneForge`.
+    #[serde(rename = "SiteName")]
+    pub site_name: String,
+    /// The base URL of the distributor site, for example `https://runeforge.dev`.
+    #[serde(rename = "SiteUrl")]
+    pub site_url: String,
+    /// The ID of the mod on the distributor site.
+    #[serde(rename = "ModId")]
+    pub mod_id: String,
+}
+
+impl FantomeDistributor {
+    /// Creates a distributor stamp.
+    pub fn new(site_id: String, site_name: String, site_url: String, mod_id: String) -> Self {
+        Self {
+            site_id,
+            site_name,
+            site_url,
+            mod_id,
         }
     }
 }

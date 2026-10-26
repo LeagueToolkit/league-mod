@@ -6,11 +6,13 @@ use indexmap::IndexMap;
 use crate::hashtable_routes::{
     file_name_of, is_plain_tail, HashtableRoute, NameClaims, PlannedRoute,
 };
-use ltk_fantome::{FantomeHashtable, FantomeInfo, FantomeLayerInfo, FantomeLicense};
+use ltk_fantome::{
+    FantomeDistributor, FantomeHashtable, FantomeInfo, FantomeLayerInfo, FantomeLicense,
+};
 
 use crate::{
-    ModMap, ModProject, ModProjectAuthor, ModProjectHashtable, ModProjectLayer, ModProjectLicense,
-    ModTag, HASHES_DIR_NAME,
+    ModMap, ModProject, ModProjectAuthor, ModProjectDistributor, ModProjectHashtable,
+    ModProjectLayer, ModProjectLicense, ModTag, HASHES_DIR_NAME,
 };
 
 impl From<&ModProjectLicense> for FantomeLicense {
@@ -53,6 +55,10 @@ impl From<&ModProject> for FantomeInfo {
             // disagree.
             hashtables: vec![],
             generator: Some(crate::pack::GENERATOR.to_owned()),
+            distributor: mod_project
+                .distributor
+                .as_ref()
+                .map(FantomeDistributor::from),
             extra: Default::default(),
         }
     }
@@ -82,7 +88,30 @@ impl From<FantomeInfo> for ModProject {
             // the files where they declare, so the files and the manifest
             // cannot disagree.
             hashtables: vec![],
+            distributor: info.distributor.map(ModProjectDistributor::from),
         }
+    }
+}
+
+impl From<&ModProjectDistributor> for FantomeDistributor {
+    fn from(distributor: &ModProjectDistributor) -> Self {
+        Self::new(
+            distributor.site_id.clone(),
+            distributor.site_name.clone(),
+            distributor.site_url.clone(),
+            distributor.mod_id.clone(),
+        )
+    }
+}
+
+impl From<FantomeDistributor> for ModProjectDistributor {
+    fn from(distributor: FantomeDistributor) -> Self {
+        Self::new(
+            distributor.site_id,
+            distributor.site_name,
+            distributor.site_url,
+            distributor.mod_id,
+        )
     }
 }
 

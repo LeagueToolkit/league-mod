@@ -22,13 +22,11 @@ fn bin(links: &[&str]) -> Vec<u8> {
 fn project(root: &Utf8Path, name: &str, base: Option<&[u8]>, manifest: Option<&str>) -> EnabledMod {
     let path = root.join(name);
     fs::create_dir_all(path.join("content/base/Test.wad.client")).unwrap();
-    let config = ModProject {
-        name: name.into(),
-        display_name: name.into(),
-        version: "1.0.0".into(),
-        layers: vec![ModProjectLayer::base()],
-        ..Default::default()
-    };
+    let mut config = ModProject::default();
+    config.name = name.into();
+    config.display_name = name.into();
+    config.version = "1.0.0".into();
+    config.layers = vec![ModProjectLayer::base()];
     fs::write(
         path.join("mod.config.json"),
         serde_json::to_vec(&config).unwrap(),

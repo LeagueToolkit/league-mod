@@ -344,21 +344,12 @@ mod tests {
 
     impl ModContentProvider for StringsOnlyContent {
         fn mod_project(&mut self) -> crate::error::Result<ModProject> {
-            Ok(ModProject {
-                name: "strings-mod".to_string(),
-                display_name: "Strings Mod".to_string(),
-                version: "1.0.0".to_string(),
-                description: String::new(),
-                authors: vec![],
-                license: None,
-                tags: vec![],
-                champions: vec![],
-                maps: vec![],
-                transformers: vec![],
-                layers: self.layers.clone(),
-                thumbnail: None,
-                hashtables: vec![],
-            })
+            let mut project = ModProject::default();
+            project.name = "strings-mod".to_string();
+            project.display_name = "Strings Mod".to_string();
+            project.version = "1.0.0".to_string();
+            project.layers = self.layers.clone();
+            Ok(project)
         }
 
         fn list_layer_wads(&mut self, _layer: &str) -> crate::error::Result<Vec<String>> {

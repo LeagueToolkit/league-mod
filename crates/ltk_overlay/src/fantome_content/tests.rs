@@ -117,6 +117,7 @@ fn make_info_json_with_license(
         layers: indexmap::IndexMap::new(),
         hashtables: Vec::new(),
         generator: None,
+        distributor: None,
         extra: Default::default(),
     })
     .unwrap()
@@ -183,6 +184,7 @@ fn mod_project_handles_bom() {
             layers: indexmap::IndexMap::new(),
             hashtables: Vec::new(),
             generator: None,
+            distributor: None,
             extra: Default::default(),
         })
         .unwrap()

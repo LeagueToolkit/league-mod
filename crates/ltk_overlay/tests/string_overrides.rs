@@ -101,21 +101,11 @@ fn string_layer(buckets: &[(&str, &[(&str, &str)])]) -> ModProjectLayer {
 fn write_mod_dir(root: &Utf8Path, name: &str, layers: Vec<ModProjectLayer>) -> Utf8PathBuf {
     let mod_dir = root.join(name);
     fs::create_dir_all(mod_dir.join("content").join("base").as_std_path()).unwrap();
-    let project = ModProject {
-        name: name.to_string(),
-        display_name: name.to_string(),
-        version: "1.0.0".to_string(),
-        description: String::new(),
-        authors: vec![],
-        license: None,
-        tags: vec![],
-        champions: vec![],
-        maps: vec![],
-        transformers: vec![],
-        layers,
-        thumbnail: None,
-        hashtables: vec![],
-    };
+    let mut project = ModProject::default();
+    project.name = name.to_string();
+    project.display_name = name.to_string();
+    project.version = "1.0.0".to_string();
+    project.layers = layers;
     fs::write(
         mod_dir.join("mod.config.json").as_std_path(),
         serde_json::to_string_pretty(&project).unwrap(),

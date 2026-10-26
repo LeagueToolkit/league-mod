@@ -29,13 +29,12 @@ fn fixture(root: &Utf8Path) -> ModProject {
         "game content",
     )
     .unwrap();
-    ModProject {
-        name: "declarations".into(),
-        display_name: "Declarations".into(),
-        version: "1.0.0".into(),
-        layers: vec![ModProjectLayer::base()],
-        ..Default::default()
-    }
+    let mut project = ModProject::default();
+    project.name = "declarations".into();
+    project.display_name = "Declarations".into();
+    project.version = "1.0.0".into();
+    project.layers = vec![ModProjectLayer::base()];
+    project
 }
 
 #[test]
@@ -279,13 +278,12 @@ fn override_fixture(root: &Utf8Path) -> ModProject {
         "game content",
     )
     .unwrap();
-    ModProject {
-        name: "overrides".into(),
-        display_name: "Overrides".into(),
-        version: "1.0.0".into(),
-        layers: vec![ModProjectLayer::base()],
-        ..Default::default()
-    }
+    let mut project = ModProject::default();
+    project.name = "overrides".into();
+    project.display_name = "Overrides".into();
+    project.version = "1.0.0".into();
+    project.layers = vec![ModProjectLayer::base()];
+    project
 }
 
 fn override_paths(declarations: &ltk_game_data::Declarations) -> Vec<&str> {
@@ -490,13 +488,12 @@ fn property_fixture(root: &Utf8Path) -> ModProject {
         "version: 1\nmodules:\n  - target: data/characters/teemo/skins/skin0.bin\n    Characters/Teemo/Skins/Skin0:\n      skinMeshProperties:\n        selfIllumination: !f32 1.0\n        +tagEventList: [Jade_Teemo]\n      healthBarData.unitHealthBarStyle: 12\n      ptr: !pointer(X) {a: 1}\n  - entries:\n      Characters/Teemo/Skins/Skin0/Resources:\n        links: [x.bin]\n        +resourceMap:\n          Teemo_R_Mis: !link Characters/Jade_Teemo/Particles/R_Mis\n          Teemo_R_Debuff: null\n",
     )
     .unwrap();
-    ModProject {
-        name: "properties".into(),
-        display_name: "Properties".into(),
-        version: "1.0.0".into(),
-        layers: vec![ModProjectLayer::base()],
-        ..Default::default()
-    }
+    let mut project = ModProject::default();
+    project.name = "properties".into();
+    project.display_name = "Properties".into();
+    project.version = "1.0.0".into();
+    project.layers = vec![ModProjectLayer::base()];
+    project
 }
 
 #[test]
@@ -609,13 +606,12 @@ fn module_names_round_trip_through_both_archives_and_extraction() {
             "version: 1\nmodules:\n  - name: Teemo recolor\n    entries:\n      Characters/Teemo:\n        speed: 2\n  - target: shared\n    links: [x]\n",
         )
         .unwrap();
-        let project = ModProject {
-            name: "names".into(),
-            display_name: "Names".into(),
-            version: "1.0.0".into(),
-            layers: vec![ModProjectLayer::base()],
-            ..Default::default()
-        };
+        let mut project = ModProject::default();
+        project.name = "names".into();
+        project.display_name = "Names".into();
+        project.version = "1.0.0".into();
+        project.layers = vec![ModProjectLayer::base()];
+
         let mut archive = Cursor::new(Vec::new());
         let packer = ProjectPacker::new(project, source);
         if format == "modpkg" {

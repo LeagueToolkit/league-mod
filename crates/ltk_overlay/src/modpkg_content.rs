@@ -92,25 +92,19 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for ModpkgContent<R> {
             .collect();
         ModProjectLayer::normalize_table(&mut layers);
 
-        Ok(ModProject {
-            name: metadata.name,
-            display_name: metadata.display_name,
-            version: metadata.version.to_string(),
-            description: metadata.description.unwrap_or_default(),
-            authors: metadata
-                .authors
-                .into_iter()
-                .map(|a| ModProjectAuthor::Name(a.name))
-                .collect(),
-            license: convert_license(metadata.license),
-            tags: Vec::new(),
-            champions: Vec::new(),
-            maps: Vec::new(),
-            transformers: Vec::new(),
-            layers,
-            thumbnail: None,
-            hashtables: vec![],
-        })
+        let mut project = ModProject::default();
+        project.name = metadata.name;
+        project.display_name = metadata.display_name;
+        project.version = metadata.version.to_string();
+        project.description = metadata.description.unwrap_or_default();
+        project.authors = metadata
+            .authors
+            .into_iter()
+            .map(|a| ModProjectAuthor::Name(a.name))
+            .collect();
+        project.license = convert_license(metadata.license);
+        project.layers = layers;
+        Ok(project)
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {

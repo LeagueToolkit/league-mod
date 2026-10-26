@@ -607,8 +607,10 @@ Where the package was published, for a tool that checks for updates or links bac
 | `site_url`  | str  | The site's base URL (`https://runeforge.dev`)          |
 | `mod_id`    | str  | The mod's identifier on that site                      |
 
-A package packed from a mod project has no distributor. A distribution site stamps one when it
-accepts an upload.
+A mod project carries the same four keys as its `distributor` in `mod.config.json`. A package
+packed from a project carries the project's distributor, and `nil` for a project without one. A
+package extracted to a project writes its distributor back into `mod.config.json`
+(ADR-0039).
 
 ### <a id="s11.7"></a>11.7 Author
 
@@ -821,7 +823,7 @@ Both formats pack from one mod project. What crosses between them:
 | Readme                             | `_meta_/readme.md`         | `META/README.md`                                     |
 | Embedded hashtables                | `_meta_/hashes/`           | `META/hashes/` (extension)                           |
 | Chunk paths                        | path table, authored casing | none inside a packed WAD; recovered through a harvested `game` table |
-| Distributor                        | `distributor`              | not carried                                          |
+| Distributor                        | `distributor`              | `Distributor` (extension)                            |
 | Packing tool                       | `generator`                | `Generator` (extension)                              |
 
 A modpkg holds everything a project declares. A fantome holds the base layer and whatever the

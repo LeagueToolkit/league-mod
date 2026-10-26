@@ -62,27 +62,17 @@ fn write_mod_dir(
         fs::write(file.as_std_path(), bytes).unwrap();
     }
 
-    let project = ModProject {
-        name: name.to_string(),
-        display_name: name.to_string(),
-        version: "1.0.0".to_string(),
-        description: String::new(),
-        authors: vec![],
-        license: None,
-        tags: vec![],
-        champions: vec![],
-        maps: vec![],
-        transformers: vec![],
-        layers: vec![ModProjectLayer {
-            name: "base".to_string(),
-            display_name: None,
-            priority: 0,
-            description: None,
-            string_overrides: Default::default(),
-        }],
-        thumbnail: None,
-        hashtables: vec![],
-    };
+    let mut project = ModProject::default();
+    project.name = name.to_string();
+    project.display_name = name.to_string();
+    project.version = "1.0.0".to_string();
+    project.layers = vec![ModProjectLayer {
+        name: "base".to_string(),
+        display_name: None,
+        priority: 0,
+        description: None,
+        string_overrides: Default::default(),
+    }];
     fs::write(
         mod_dir.join("mod.config.json").as_std_path(),
         serde_json::to_string_pretty(&project).unwrap(),

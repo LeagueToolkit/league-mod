@@ -333,6 +333,7 @@ fn writer_reader_round_trip() {
         layers: Default::default(),
         hashtables: vec![],
         generator: None,
+        distributor: None,
         extra: Default::default(),
     };
 

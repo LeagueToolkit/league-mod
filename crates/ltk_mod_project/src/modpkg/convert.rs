@@ -11,16 +11,16 @@
 use std::io::{Read, Seek};
 
 use ltk_modpkg::{
-    Modpkg, ModpkgAuthor, ModpkgError, ModpkgLayer, ModpkgLayerMetadata, ModpkgLicense,
-    ModpkgMetadata,
+    DistributorInfo, Modpkg, ModpkgAuthor, ModpkgError, ModpkgLayer, ModpkgLayerMetadata,
+    ModpkgLicense, ModpkgMetadata,
 };
 
 use camino::Utf8Path;
 
 use crate::hashtable_routes::{file_name_of, is_plain_tail, NameClaims, PlannedRoute};
 use crate::{
-    ModMap, ModProject, ModProjectAuthor, ModProjectHashtable, ModProjectLayer, ModProjectLicense,
-    ModTag, HASHES_DIR_NAME,
+    ModMap, ModProject, ModProjectAuthor, ModProjectDistributor, ModProjectHashtable,
+    ModProjectLayer, ModProjectLicense, ModTag, HASHES_DIR_NAME,
 };
 
 /// Read the project a mounted `.modpkg` describes.
@@ -80,6 +80,7 @@ impl From<&ModpkgMetadata> for ModProject {
             layers,
             thumbnail: None,
             hashtables: project_hashtables(metadata.hashtables()),
+            distributor: metadata.distributor().map(ModProjectDistributor::from),
         }
     }
 }
@@ -198,6 +199,17 @@ impl From<&ModpkgLayerMetadata> for ModProjectLayer {
             description: layer.description.clone(),
             string_overrides: layer.string_overrides.clone(),
         }
+    }
+}
+
+impl From<&DistributorInfo> for ModProjectDistributor {
+    fn from(distributor: &DistributorInfo) -> Self {
+        Self::new(
+            distributor.site_id().to_owned(),
+            distributor.site_name().to_owned(),
+            distributor.site_url().to_owned(),
+            distributor.mod_id().to_owned(),
+        )
     }
 }
 

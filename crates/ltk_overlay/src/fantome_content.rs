@@ -507,21 +507,15 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
             .collect();
         ModProjectLayer::normalize_table(&mut layers);
 
-        Ok(ModProject {
-            name: slug::slugify(&info.name),
-            display_name: info.name,
-            version: info.version,
-            description: info.description,
-            authors: vec![ModProjectAuthor::Name(info.author)],
-            license: info.license.map(ModProjectLicense::from),
-            tags: Vec::new(),
-            champions: Vec::new(),
-            maps: Vec::new(),
-            transformers: Vec::new(),
-            layers,
-            thumbnail: None,
-            hashtables: vec![],
-        })
+        let mut project = ModProject::default();
+        project.name = slug::slugify(&info.name);
+        project.display_name = info.name;
+        project.version = info.version;
+        project.description = info.description;
+        project.authors = vec![ModProjectAuthor::Name(info.author)];
+        project.license = info.license.map(ModProjectLicense::from);
+        project.layers = layers;
+        Ok(project)
     }
 
     fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
