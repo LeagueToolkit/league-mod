@@ -63,10 +63,10 @@ pub const BASE_LAYER: &str = "base";
 
 /// Fantome metadata structure that goes into info.json
 ///
-/// `Default` is for struct update syntax and for tests building one field at a
-/// time (`FantomeInfo { name, ..Default::default() }`); a default archive's
-/// metadata is empty, not valid.
+/// Outside this crate, an info is built from [`FantomeInfo::default`] and
+/// field assignment. A default archive's metadata is empty, not valid.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct FantomeInfo {
     #[serde(rename = "Name")]
     pub name: String,
@@ -278,8 +278,7 @@ pub enum FantomeLicense {
 
 /// Per-layer metadata in a Fantome info.json.
 ///
-/// As with [`FantomeInfo`], `Default` is for struct update syntax; it names no
-/// layer.
+/// `Default` is for struct update syntax. A default layer info names no layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct FantomeLayerInfo {
     /// The layer's versioned executable game-data program.

@@ -179,21 +179,18 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
                 .unwrap();
         } else {
             let mut writer = FantomeWriter::new(&mut archive);
-            writer
-                .write_info(&FantomeInfo {
-                    name: "declarations".into(),
-                    layers: [(
-                        "base".into(),
-                        FantomeLayerInfo {
-                            name: "base".into(),
-                            game_data: Some(declarations.try_into().unwrap()),
-                            ..Default::default()
-                        },
-                    )]
-                    .into(),
+            let mut info = FantomeInfo::default();
+            info.name = "declarations".into();
+            info.layers = [(
+                "base".into(),
+                FantomeLayerInfo {
+                    name: "base".into(),
+                    game_data: Some(declarations.try_into().unwrap()),
                     ..Default::default()
-                })
-                .unwrap();
+                },
+            )]
+            .into();
+            writer.write_info(&info).unwrap();
             writer.finish().unwrap();
         }
         let archive_path = root.join(format!("mod.{format}"));
@@ -904,21 +901,18 @@ fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
                 .unwrap();
         } else {
             let mut writer = FantomeWriter::new(&mut archive);
-            writer
-                .write_info(&FantomeInfo {
-                    name: "overrides".into(),
-                    layers: [(
-                        "base".into(),
-                        FantomeLayerInfo {
-                            name: "base".into(),
-                            game_data: Some(declarations.try_into().unwrap()),
-                            ..Default::default()
-                        },
-                    )]
-                    .into(),
+            let mut info = FantomeInfo::default();
+            info.name = "overrides".into();
+            info.layers = [(
+                "base".into(),
+                FantomeLayerInfo {
+                    name: "base".into(),
+                    game_data: Some(declarations.try_into().unwrap()),
                     ..Default::default()
-                })
-                .unwrap();
+                },
+            )]
+            .into();
+            writer.write_info(&info).unwrap();
             writer
                 .write_game_data_resource(
                     "base",

@@ -39,28 +39,26 @@ impl From<FantomeLicense> for ModProjectLicense {
 /// The `META/info.json` metadata a project packs to.
 impl From<&ModProject> for FantomeInfo {
     fn from(mod_project: &ModProject) -> Self {
-        Self {
-            name: mod_project.display_name.clone(),
-            author: format_authors(&mod_project.authors),
-            version: mod_project.version.clone(),
-            description: mod_project.description.clone(),
-            license: mod_project.license.as_ref().map(FantomeLicense::from),
-            tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
-            champions: mod_project.champions.clone(),
-            maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
-            layers: build_fantome_layers(mod_project),
-            // The pack owns the hashtable manifest: it computes the routes
-            // once (fallibly - colliding file names are refused) and writes
-            // what they declare, so the entries and the manifest cannot
-            // disagree.
-            hashtables: vec![],
-            generator: Some(crate::pack::GENERATOR.to_owned()),
-            distributor: mod_project
-                .distributor
-                .as_ref()
-                .map(FantomeDistributor::from),
-            extra: Default::default(),
-        }
+        let mut info = Self::default();
+        info.name = mod_project.display_name.clone();
+        info.author = format_authors(&mod_project.authors);
+        info.version = mod_project.version.clone();
+        info.description = mod_project.description.clone();
+        info.license = mod_project.license.as_ref().map(FantomeLicense::from);
+        info.tags = mod_project.tags.iter().map(|t| t.to_string()).collect();
+        info.champions = mod_project.champions.clone();
+        info.maps = mod_project.maps.iter().map(|m| m.to_string()).collect();
+        info.layers = build_fantome_layers(mod_project);
+        // `hashtables` stays empty. The pack owns the hashtable manifest: it
+        // computes the routes once (fallibly - colliding file names are
+        // refused) and writes what they declare, so the entries and the
+        // manifest cannot disagree.
+        info.generator = Some(crate::pack::GENERATOR.to_owned());
+        info.distributor = mod_project
+            .distributor
+            .as_ref()
+            .map(FantomeDistributor::from);
+        info
     }
 }
 

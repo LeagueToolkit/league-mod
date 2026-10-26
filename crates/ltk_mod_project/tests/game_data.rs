@@ -96,19 +96,17 @@ fn fantome_import_uses_the_declared_layer_name() {
         |_| unreachable!(),
     )
     .unwrap();
-    let info = FantomeInfo {
-        name: "Declarations".into(),
-        layers: [(
-            "alias".into(),
-            FantomeLayerInfo {
-                name: "base".into(),
-                game_data: Some(declarations.try_into().unwrap()),
-                ..Default::default()
-            },
-        )]
-        .into(),
-        ..Default::default()
-    };
+    let mut info = FantomeInfo::default();
+    info.name = "Declarations".into();
+    info.layers = [(
+        "alias".into(),
+        FantomeLayerInfo {
+            name: "base".into(),
+            game_data: Some(declarations.try_into().unwrap()),
+            ..Default::default()
+        },
+    )]
+    .into();
     let mut archive = Cursor::new(Vec::new());
     let mut writer = FantomeWriter::new(&mut archive);
     writer.write_info(&info).unwrap();

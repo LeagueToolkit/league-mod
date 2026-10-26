@@ -90,22 +90,11 @@ fn claim_checksum(wad: &mut [u8], checksum: u64) {
 /// A `.fantome` archive whose base layer ships `packed_wad` as a packed
 /// `Aatrox.wad.client`.
 fn fantome_with_packed_wad(packed_wad: Vec<u8>) -> Cursor<Vec<u8>> {
-    let info = serde_json::to_vec(&ltk_fantome::FantomeInfo {
-        name: "Passthrough Mod".to_string(),
-        author: "Author".to_string(),
-        version: "1.0.0".to_string(),
-        description: String::new(),
-        license: None,
-        tags: Vec::new(),
-        champions: Vec::new(),
-        maps: Vec::new(),
-        layers: indexmap::IndexMap::new(),
-        hashtables: Vec::new(),
-        generator: None,
-        distributor: None,
-        extra: Default::default(),
-    })
-    .expect("fantome info serializes");
+    let mut info = ltk_fantome::FantomeInfo::default();
+    info.name = "Passthrough Mod".to_string();
+    info.author = "Author".to_string();
+    info.version = "1.0.0".to_string();
+    let info = serde_json::to_vec(&info).expect("fantome info serializes");
 
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default();
