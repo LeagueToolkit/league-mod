@@ -259,10 +259,10 @@ impl From<String> for ModMap {
 
 /// Describes a mod project configuration file
 ///
-/// `Default` is for struct update syntax
-/// (`ModProject { name, ..Default::default() }`). A default project is empty,
-/// not valid.
+/// Outside this crate, a project is built from [`ModProject::default`] and
+/// field assignment. A default project is empty, not valid.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
+#[non_exhaustive]
 pub struct ModProject {
     /// The name of the mod
     /// Must not contain spaces or special characters except for underscores and hyphens
@@ -331,6 +331,12 @@ pub struct ModProject {
     /// a project without tables serializes as before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hashtables: Vec<ModProjectHashtable>,
+
+    /// The distributor site that hosts the mod, and the mod's ID on it.
+    ///
+    /// A packed archive carries the value. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distributor: Option<ModProjectDistributor>,
 }
 
 impl ModProject {
@@ -484,10 +490,43 @@ impl ModProjectHashtable {
     }
 }
 
+/// The distributor site that hosts a mod, and the mod's ID on that site.
+///
+/// The project spelling of `ltk_modpkg`'s `DistributorInfo`, with the same
+/// snake case keys.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModProjectDistributor {
+    /// The identifier of the distributor site.
+    ///
+    /// Example: `runeforge`
+    pub site_id: String,
+    /// The display name of the distributor site.
+    ///
+    /// Example: `RuneForge`
+    pub site_name: String,
+    /// The base URL of the distributor site.
+    ///
+    /// Example: `https://runeforge.dev`
+    pub site_url: String,
+    /// The ID of the mod on the distributor site.
+    pub mod_id: String,
+}
+
+impl ModProjectDistributor {
+    /// Creates a distributor stamp.
+    pub fn new(site_id: String, site_name: String, site_url: String, mod_id: String) -> Self {
+        Self {
+            site_id,
+            site_name,
+            site_url,
+            mod_id,
+        }
+    }
+}
+
 /// Represents a layer in a mod project
 ///
-/// As with [`ModProject`], `Default` is for struct update syntax; it has no
-/// name. Use [`base`](ModProjectLayer::base) for the layer every project has.
+/// `Default` is for struct update syntax. A default layer has no name. Use [`base`](ModProjectLayer::base) for the layer every project has.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ModProjectLayer {
     /// The name of the layer

@@ -63,10 +63,10 @@ pub const BASE_LAYER: &str = "base";
 
 /// Fantome metadata structure that goes into info.json
 ///
-/// `Default` is for struct update syntax and for tests building one field at a
-/// time (`FantomeInfo { name, ..Default::default() }`); a default archive's
-/// metadata is empty, not valid.
+/// Outside this crate, an info is built from [`FantomeInfo::default`] and
+/// field assignment. A default archive's metadata is empty, not valid.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct FantomeInfo {
     #[serde(rename = "Name")]
     pub name: String,
@@ -122,6 +122,15 @@ pub struct FantomeInfo {
     /// on it. Omitted when unset.
     #[serde(rename = "Generator", default, skip_serializing_if = "Option::is_none")]
     pub generator: Option<String>,
+    /// The distributor site that hosts the mod, and the mod's ID on it.
+    ///
+    /// A LeagueToolkit extension. Omitted when unset.
+    #[serde(
+        rename = "Distributor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub distributor: Option<FantomeDistributor>,
     /// Fields this crate does not know, carried verbatim.
     ///
     /// `info.json` is shared ground: other tools extend it, and the archive
@@ -213,6 +222,38 @@ impl FantomeHashtable {
     }
 }
 
+/// The `Distributor` declaration in a Fantome info.json.
+///
+/// The fantome spelling of `ltk_modpkg`'s `DistributorInfo`, with
+/// PascalCase keys.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FantomeDistributor {
+    /// The identifier of the distributor site, for example `runeforge`.
+    #[serde(rename = "SiteId")]
+    pub site_id: String,
+    /// The display name of the distributor site, for example `RuneForge`.
+    #[serde(rename = "SiteName")]
+    pub site_name: String,
+    /// The base URL of the distributor site, for example `https://runeforge.dev`.
+    #[serde(rename = "SiteUrl")]
+    pub site_url: String,
+    /// The ID of the mod on the distributor site.
+    #[serde(rename = "ModId")]
+    pub mod_id: String,
+}
+
+impl FantomeDistributor {
+    /// Creates a distributor stamp.
+    pub fn new(site_id: String, site_name: String, site_url: String, mod_id: String) -> Self {
+        Self {
+            site_id,
+            site_name,
+            site_url,
+            mod_id,
+        }
+    }
+}
+
 /// The license declaration in a Fantome info.json.
 ///
 /// Either a bare SPDX identifier (`"License": "MIT"`) or an object naming the
@@ -237,8 +278,7 @@ pub enum FantomeLicense {
 
 /// Per-layer metadata in a Fantome info.json.
 ///
-/// As with [`FantomeInfo`], `Default` is for struct update syntax; it names no
-/// layer.
+/// `Default` is for struct update syntax. A default layer info names no layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct FantomeLayerInfo {
     /// The layer's versioned executable game-data program.

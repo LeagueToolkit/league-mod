@@ -97,6 +97,15 @@ fn make_packed_wad_bytes_with(payload: &[u8], compression: WadChunkCompression) 
     cursor.into_inner()
 }
 
+fn info_named(name: &str) -> ltk_fantome::FantomeInfo {
+    let mut info = ltk_fantome::FantomeInfo::default();
+    info.name = name.to_string();
+    info.author = "Author".to_string();
+    info.version = "1.0.0".to_string();
+    info.description = "Desc".to_string();
+    info
+}
+
 fn make_info_json(name: &str) -> Vec<u8> {
     make_info_json_with_license(name, None)
 }
@@ -105,21 +114,9 @@ fn make_info_json_with_license(
     name: &str,
     license: Option<ltk_fantome::FantomeLicense>,
 ) -> Vec<u8> {
-    serde_json::to_vec(&ltk_fantome::FantomeInfo {
-        name: name.to_string(),
-        author: "Author".to_string(),
-        version: "1.0.0".to_string(),
-        description: "Desc".to_string(),
-        license,
-        tags: Vec::new(),
-        champions: Vec::new(),
-        maps: Vec::new(),
-        layers: indexmap::IndexMap::new(),
-        hashtables: Vec::new(),
-        generator: None,
-        extra: Default::default(),
-    })
-    .unwrap()
+    let mut info = info_named(name);
+    info.license = license;
+    serde_json::to_vec(&info).unwrap()
 }
 
 #[test]
@@ -171,21 +168,7 @@ fn mod_project_missing_info_json() {
 fn mod_project_handles_bom() {
     let info_str = format!(
         "\u{feff}{}",
-        serde_json::to_string(&ltk_fantome::FantomeInfo {
-            name: "BOM Mod".to_string(),
-            author: "Author".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Desc".to_string(),
-            license: None,
-            tags: Vec::new(),
-            champions: Vec::new(),
-            maps: Vec::new(),
-            layers: indexmap::IndexMap::new(),
-            hashtables: Vec::new(),
-            generator: None,
-            extra: Default::default(),
-        })
-        .unwrap()
+        serde_json::to_string(&info_named("BOM Mod")).unwrap()
     );
     let cursor = make_fantome_zip(&[("META/info.json", info_str.as_bytes())]);
     let mut content = FantomeContent::new(cursor).unwrap();

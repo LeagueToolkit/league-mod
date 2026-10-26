@@ -7,15 +7,16 @@ use ltk_hashtable::Category;
 
 use super::{preserve_archive_names, PreserveOutcome};
 
+fn info_named(name: &str) -> FantomeInfo {
+    let mut info = FantomeInfo::default();
+    info.name = name.to_owned();
+    info
+}
+
 fn write_source(dir: &Utf8Path, entries: &[(&str, &str, &[u8])]) -> Utf8PathBuf {
     let path = dir.join("mod.fantome");
     let mut writer = FantomeWriter::new(File::create(path.as_std_path()).unwrap());
-    writer
-        .write_info(&FantomeInfo {
-            name: "Mod".to_owned(),
-            ..Default::default()
-        })
-        .unwrap();
+    writer.write_info(&info_named("Mod")).unwrap();
     for (wad, rel, content) in entries {
         writer
             .write_wad_entry(ltk_fantome::BASE_LAYER, wad, rel, &mut &content[..])
@@ -110,14 +111,7 @@ fn names_in_a_packed_wads_bins_are_harvested() {
     let mut zip = zip::ZipWriter::new(File::create(source.as_std_path()).unwrap());
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file("META/info.json", options).unwrap();
-    serde_json::to_writer(
-        &mut zip,
-        &FantomeInfo {
-            name: "Packed".to_owned(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    serde_json::to_writer(&mut zip, &info_named("Packed")).unwrap();
     zip.start_file("WAD/Aatrox.wad.client", options).unwrap();
     zip.write_all(&wad_bytes.into_inner()).unwrap();
     zip.finish().unwrap();

@@ -1,15 +1,15 @@
 use super::*;
 use crate::{
-    ImportError, ImportProgress, ImportStage, ModProject, ModProjectAuthor, ModProjectLayer,
-    ModProjectLicense, PackError, PackReport, ProjectImporter, ProjectPacker, ProjectPath,
-    ProjectPaths,
+    ImportError, ImportProgress, ImportStage, ModProject, ModProjectAuthor, ModProjectDistributor,
+    ModProjectLayer, ModProjectLicense, PackError, PackReport, ProjectImporter, ProjectPacker,
+    ProjectPath, ProjectPaths,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use indexmap::IndexMap;
 use ltk_modpkg::builder::{ModpkgBuilder, ModpkgBuilderError, ModpkgLayerBuilder};
 use ltk_modpkg::{
-    ChunkKey, ChunkPath, LayerHash, Modpkg, ModpkgCompression, ModpkgLayerMetadata, ModpkgMetadata,
-    LICENSE_CHUNK_PATH,
+    ChunkKey, ChunkPath, DistributorInfo, LayerHash, Modpkg, ModpkgCompression,
+    ModpkgLayerMetadata, ModpkgMetadata, LICENSE_CHUNK_PATH,
 };
 use std::fs;
 use std::io::Cursor;
@@ -333,6 +333,52 @@ fn pack_names_this_crate_as_the_generator() {
     );
 }
 
+fn runeforge_distributor() -> ModProjectDistributor {
+    ModProjectDistributor::new(
+        "runeforge".to_owned(),
+        "RuneForge".to_owned(),
+        "https://runeforge.dev".to_owned(),
+        "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+    )
+}
+
+#[test]
+fn pack_stores_the_distributor_stamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let (mut modpkg, _) = pack(project, &root);
+    let meta = modpkg.load_metadata().unwrap();
+
+    assert_eq!(
+        meta.distributor(),
+        Some(&DistributorInfo::new(
+            "runeforge".to_owned(),
+            "RuneForge".to_owned(),
+            "https://runeforge.dev".to_owned(),
+            "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn pack_without_a_distributor_stores_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "X.wad.client/f.bin", b"x");
+
+    let (mut modpkg, _) = pack(test_mod_project(vec![ModProjectLayer::base()]), &root);
+    let meta = modpkg.load_metadata().unwrap();
+
+    assert_eq!(meta.distributor(), None);
+}
+
 #[test]
 fn pack_rejects_a_non_semver_version() {
     let tmp = tempfile::tempdir().unwrap();
@@ -631,6 +677,23 @@ fn read_project_recovers_what_the_pack_stored() {
     assert_eq!(read.tags, project.tags);
     assert_eq!(read.champions, project.champions);
     assert_eq!(read.maps, project.maps);
+}
+
+#[test]
+fn read_project_keeps_the_distributor_stamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_tempdir(&tmp);
+    create_content_file(&root, "base", "Test.wad.client/data.bin", b"content");
+
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..test_mod_project(vec![ModProjectLayer::base()])
+    };
+
+    let (mut packed, _) = pack(project, &root);
+    let read = read_project(&mut packed).unwrap();
+
+    assert_eq!(read.distributor, Some(runeforge_distributor()));
 }
 
 /// The header is the source of truth for a layer's priority; the metadata copy

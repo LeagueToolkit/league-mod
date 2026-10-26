@@ -17,6 +17,13 @@ yanked = "warn"
 ignore = [
     # Add any specific advisories you want to ignore here
     "RUSTSEC-2023-0071", # Marvin Attack: timing sidechannel (rsa crate)
+    # zstd 0.13 and zstd-safe 7.x reach the tree only through ltk_wad 0.5, which builds zstd 0.13
+    # with `default-features = false` and calls no `with_context` constructor. The workspace's own
+    # zstd is the patched 0.14.3 on zstd-safe 8.2. Remove these entries when ltk_wad moves to
+    # zstd 0.14.
+    { id = "RUSTSEC-2026-0391", reason = "ltk_wad calls no zstd with_context constructor" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe 7.x only through ltk_wad, seekable feature off" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 7.x only through ltk_wad, legacy feature off" },
 ]
 
 [licenses]

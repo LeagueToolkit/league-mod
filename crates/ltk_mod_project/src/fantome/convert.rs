@@ -6,11 +6,13 @@ use indexmap::IndexMap;
 use crate::hashtable_routes::{
     file_name_of, is_plain_tail, HashtableRoute, NameClaims, PlannedRoute,
 };
-use ltk_fantome::{FantomeHashtable, FantomeInfo, FantomeLayerInfo, FantomeLicense};
+use ltk_fantome::{
+    FantomeDistributor, FantomeHashtable, FantomeInfo, FantomeLayerInfo, FantomeLicense,
+};
 
 use crate::{
-    ModMap, ModProject, ModProjectAuthor, ModProjectHashtable, ModProjectLayer, ModProjectLicense,
-    ModTag, HASHES_DIR_NAME,
+    ModMap, ModProject, ModProjectAuthor, ModProjectDistributor, ModProjectHashtable,
+    ModProjectLayer, ModProjectLicense, ModTag, HASHES_DIR_NAME,
 };
 
 impl From<&ModProjectLicense> for FantomeLicense {
@@ -37,24 +39,26 @@ impl From<FantomeLicense> for ModProjectLicense {
 /// The `META/info.json` metadata a project packs to.
 impl From<&ModProject> for FantomeInfo {
     fn from(mod_project: &ModProject) -> Self {
-        Self {
-            name: mod_project.display_name.clone(),
-            author: format_authors(&mod_project.authors),
-            version: mod_project.version.clone(),
-            description: mod_project.description.clone(),
-            license: mod_project.license.as_ref().map(FantomeLicense::from),
-            tags: mod_project.tags.iter().map(|t| t.to_string()).collect(),
-            champions: mod_project.champions.clone(),
-            maps: mod_project.maps.iter().map(|m| m.to_string()).collect(),
-            layers: build_fantome_layers(mod_project),
-            // The pack owns the hashtable manifest: it computes the routes
-            // once (fallibly - colliding file names are refused) and writes
-            // what they declare, so the entries and the manifest cannot
-            // disagree.
-            hashtables: vec![],
-            generator: Some(crate::pack::GENERATOR.to_owned()),
-            extra: Default::default(),
-        }
+        let mut info = Self::default();
+        info.name = mod_project.display_name.clone();
+        info.author = format_authors(&mod_project.authors);
+        info.version = mod_project.version.clone();
+        info.description = mod_project.description.clone();
+        info.license = mod_project.license.as_ref().map(FantomeLicense::from);
+        info.tags = mod_project.tags.iter().map(|t| t.to_string()).collect();
+        info.champions = mod_project.champions.clone();
+        info.maps = mod_project.maps.iter().map(|m| m.to_string()).collect();
+        info.layers = build_fantome_layers(mod_project);
+        // `hashtables` stays empty. The pack owns the hashtable manifest: it
+        // computes the routes once (fallibly - colliding file names are
+        // refused) and writes what they declare, so the entries and the
+        // manifest cannot disagree.
+        info.generator = Some(crate::pack::GENERATOR.to_owned());
+        info.distributor = mod_project
+            .distributor
+            .as_ref()
+            .map(FantomeDistributor::from);
+        info
     }
 }
 
@@ -82,7 +86,30 @@ impl From<FantomeInfo> for ModProject {
             // the files where they declare, so the files and the manifest
             // cannot disagree.
             hashtables: vec![],
+            distributor: info.distributor.map(ModProjectDistributor::from),
         }
+    }
+}
+
+impl From<&ModProjectDistributor> for FantomeDistributor {
+    fn from(distributor: &ModProjectDistributor) -> Self {
+        Self::new(
+            distributor.site_id.clone(),
+            distributor.site_name.clone(),
+            distributor.site_url.clone(),
+            distributor.mod_id.clone(),
+        )
+    }
+}
+
+impl From<FantomeDistributor> for ModProjectDistributor {
+    fn from(distributor: FantomeDistributor) -> Self {
+        Self::new(
+            distributor.site_id,
+            distributor.site_name,
+            distributor.site_url,
+            distributor.mod_id,
+        )
     }
 }
 

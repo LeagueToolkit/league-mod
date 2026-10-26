@@ -603,21 +603,13 @@ mod tests {
 
     impl ModContentProvider for MockModContent {
         fn mod_project(&mut self) -> Result<ModProject> {
-            Ok(ModProject {
-                name: "test-mod".to_string(),
-                display_name: "Test Mod".to_string(),
-                version: "1.0.0".to_string(),
-                description: "test".to_string(),
-                authors: vec![],
-                license: None,
-                tags: vec![],
-                champions: vec![],
-                maps: vec![],
-                transformers: vec![],
-                layers: self.layers.clone(),
-                thumbnail: None,
-                hashtables: vec![],
-            })
+            let mut project = ModProject::default();
+            project.name = "test-mod".to_string();
+            project.display_name = "Test Mod".to_string();
+            project.version = "1.0.0".to_string();
+            project.description = "test".to_string();
+            project.layers = self.layers.clone();
+            Ok(project)
         }
 
         fn list_layer_wads(&mut self, layer: &str) -> Result<Vec<String>> {
@@ -706,21 +698,13 @@ mod tests {
 
     impl ModContentProvider for OverrideMockContent {
         fn mod_project(&mut self) -> Result<ModProject> {
-            Ok(ModProject {
-                name: "test-mod".to_string(),
-                display_name: "Test Mod".to_string(),
-                version: "1.0.0".to_string(),
-                description: "test".to_string(),
-                authors: vec![],
-                license: None,
-                tags: vec![],
-                champions: vec![],
-                maps: vec![],
-                transformers: vec![],
-                layers: self.layers.clone(),
-                thumbnail: None,
-                hashtables: vec![],
-            })
+            let mut project = ModProject::default();
+            project.name = "test-mod".to_string();
+            project.display_name = "Test Mod".to_string();
+            project.version = "1.0.0".to_string();
+            project.description = "test".to_string();
+            project.layers = self.layers.clone();
+            Ok(project)
         }
 
         fn list_layer_wads(&mut self, _layer: &str) -> Result<Vec<String>> {

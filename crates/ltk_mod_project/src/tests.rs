@@ -42,6 +42,7 @@ fn create_example_project() -> ModProject {
         ],
         thumbnail: None,
         hashtables: vec![],
+        distributor: None,
     }
 }
 
@@ -450,6 +451,89 @@ fn hashtable_wire_form_is_lowercase() {
             "category": "game",
             "algorithm": "xxh64",
             "bits": 64,
+        })
+    );
+}
+
+// -- distributor -------------------------------------------------------------
+
+fn runeforge_distributor() -> ModProjectDistributor {
+    ModProjectDistributor::new(
+        "runeforge".to_owned(),
+        "RuneForge".to_owned(),
+        "https://runeforge.dev".to_owned(),
+        "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+    )
+}
+
+#[test]
+fn distributor_round_trips_through_both_config_formats() {
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..create_example_project()
+    };
+
+    for format in ConfigFormat::ALL {
+        let text = project.to_config_string(format).unwrap();
+        let parsed = match format {
+            ConfigFormat::Json => serde_json::from_str::<ModProject>(&text).unwrap(),
+            ConfigFormat::Toml => toml::from_str::<ModProject>(&text).unwrap(),
+        };
+        assert_eq!(parsed, project, "{format}");
+    }
+}
+
+#[test]
+fn a_project_without_a_distributor_serializes_without_the_field() {
+    for format in ConfigFormat::ALL {
+        let text = create_example_project().to_config_string(format).unwrap();
+        assert!(!text.contains("distributor"), "{format}: {text}");
+    }
+}
+
+#[test]
+fn a_config_without_a_distributor_loads_with_none() {
+    let from_json: ModProject = serde_json::from_str(
+        r#"{
+            "name": "old-mod",
+            "display_name": "Old Mod",
+            "version": "1.0.0",
+            "description": "",
+            "authors": []
+        }"#,
+    )
+    .unwrap();
+    let from_toml: ModProject = toml::from_str(
+        r#"
+            name = "old-mod"
+            display_name = "Old Mod"
+            version = "1.0.0"
+            description = ""
+            authors = []
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(from_json.distributor, None);
+    assert_eq!(from_toml.distributor, None);
+}
+
+/// RuneForge reads `distributor.site_id` and `distributor.mod_id` in snake case.
+#[test]
+fn distributor_wire_form_is_snake_case() {
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..create_example_project()
+    };
+
+    let value = serde_json::to_value(&project).unwrap();
+    assert_eq!(
+        value["distributor"],
+        serde_json::json!({
+            "site_id": "runeforge",
+            "site_name": "RuneForge",
+            "site_url": "https://runeforge.dev",
+            "mod_id": "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10",
         })
     );
 }

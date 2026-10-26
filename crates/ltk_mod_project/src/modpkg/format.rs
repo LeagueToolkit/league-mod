@@ -10,14 +10,14 @@ use ltk_modpkg::builder::{
     ModpkgBuilder, ModpkgBuilderError, ModpkgChunkBuilder, ModpkgLayerBuilder,
 };
 use ltk_modpkg::{
-    ChunkKey, InvalidSlugError, ModpkgAuthor, ModpkgCompression, ModpkgLayerMetadata,
-    ModpkgLicense, ModpkgMetadata, Slug, WadNameHash, CURRENT_SCHEMA_VERSION,
+    ChunkKey, DistributorInfo, InvalidSlugError, ModpkgAuthor, ModpkgCompression,
+    ModpkgLayerMetadata, ModpkgLicense, ModpkgMetadata, Slug, WadNameHash, CURRENT_SCHEMA_VERSION,
 };
 
 use super::thumbnail::{load_thumbnail, ThumbnailError};
 use crate::{
-    ModProjectAuthor, ModProjectLicense, PackFormat, PackFormatReport, PackPlan, PackReporter,
-    PlannedLayer,
+    ModProjectAuthor, ModProjectDistributor, ModProjectLicense, PackFormat, PackFormatReport,
+    PackPlan, PackReporter, PlannedLayer,
 };
 
 /// Failure to encode a pack plan as a `.modpkg` archive.
@@ -368,7 +368,7 @@ impl TryFrom<&PackPlan<'_>> for ModpkgMetadata {
             display_name: project.display_name.clone(),
             description: Some(project.description.clone()),
             version,
-            distributor: None,
+            distributor: project.distributor.as_ref().map(DistributorInfo::from),
             authors: project.authors.iter().map(ModpkgAuthor::from).collect(),
             license: project
                 .license
@@ -404,6 +404,17 @@ impl From<&ModProjectAuthor> for ModpkgAuthor {
                 role: Some(role.clone()),
             },
         }
+    }
+}
+
+impl From<&ModProjectDistributor> for DistributorInfo {
+    fn from(distributor: &ModProjectDistributor) -> Self {
+        Self::new(
+            distributor.site_id.clone(),
+            distributor.site_name.clone(),
+            distributor.site_url.clone(),
+            distributor.mod_id.clone(),
+        )
     }
 }
 

@@ -8,21 +8,12 @@ fn create_test_mod_dir() -> tempfile::TempDir {
     let mod_dir = dir.path();
 
     // Create mod.config.json
-    let project = ltk_mod_project::ModProject {
-        name: "test-mod".to_string(),
-        display_name: "Test Mod".to_string(),
-        version: "1.0.0".to_string(),
-        description: "A test mod".to_string(),
-        authors: vec![],
-        license: None,
-        tags: vec![],
-        champions: vec![],
-        maps: vec![],
-        transformers: vec![],
-        layers: ltk_mod_project::ModProjectLayer::default_table(),
-        thumbnail: None,
-        hashtables: vec![],
-    };
+    let mut project = ltk_mod_project::ModProject::default();
+    project.name = "test-mod".to_string();
+    project.display_name = "Test Mod".to_string();
+    project.version = "1.0.0".to_string();
+    project.description = "A test mod".to_string();
+    project.layers = ltk_mod_project::ModProjectLayer::default_table();
     fs::write(
         mod_dir.join("mod.config.json"),
         serde_json::to_string_pretty(&project).unwrap(),

@@ -92,21 +92,14 @@ fn create_mod_project_file(
 }
 
 fn create_default_mod_project(name: Option<String>, display_name: Option<String>) -> ModProject {
-    ModProject {
-        name: name.unwrap_or("mod-name".to_string()),
-        display_name: display_name.unwrap_or("Mod Name".to_string()),
-        version: "0.1.0".to_string(),
-        description: "Short description of the mod".to_string(),
-        authors: vec![ModProjectAuthor::Name("<Your Name>".to_string())],
-        license: None,
-        tags: vec![],
-        champions: vec![],
-        maps: vec![],
-        transformers: vec![],
-        layers: ltk_mod_project::ModProjectLayer::default_table(),
-        thumbnail: None,
-        hashtables: vec![],
-    }
+    let mut project = ModProject::default();
+    project.name = name.unwrap_or("mod-name".to_string());
+    project.display_name = display_name.unwrap_or("Mod Name".to_string());
+    project.version = "0.1.0".to_string();
+    project.description = "Short description of the mod".to_string();
+    project.authors = vec![ModProjectAuthor::Name("<Your Name>".to_string())];
+    project.layers = ltk_mod_project::ModProjectLayer::default_table();
+    project
 }
 
 fn create_mod_project_dir_path(name: impl AsRef<Path>) -> io::Result<PathBuf> {

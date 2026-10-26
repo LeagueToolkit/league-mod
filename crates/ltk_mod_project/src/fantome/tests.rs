@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
     Cancellation, ImportError, ImportProgress, ImportStage, ModProject, ModProjectAuthor,
-    ModProjectHashtable, ModProjectLayer, ModProjectLicense, PackError, ProjectImporter,
-    ProjectPacker, ProjectPath, ProjectPaths,
+    ModProjectDistributor, ModProjectHashtable, ModProjectLayer, ModProjectLicense, PackError,
+    ProjectImporter, ProjectPacker, ProjectPath, ProjectPaths,
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_fantome::{FantomeInfo, FantomeLicense, FantomeReader};
+use ltk_fantome::{FantomeDistributor, FantomeInfo, FantomeLicense, FantomeReader};
 use ltk_hashtable::Category;
 use std::io::Cursor;
 use std::sync::atomic::AtomicBool;
@@ -138,6 +138,62 @@ fn pack_names_this_crate_as_the_generator() {
         Some(concat!("ltk_mod_project ", env!("CARGO_PKG_VERSION")))
     );
     assert!(!info.extra.contains_key("Generator"));
+}
+
+fn runeforge_distributor() -> ModProjectDistributor {
+    ModProjectDistributor::new(
+        "runeforge".to_owned(),
+        "RuneForge".to_owned(),
+        "https://runeforge.dev".to_owned(),
+        "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+    )
+}
+
+#[test]
+fn pack_writes_the_distributor_stamp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp);
+    write_project_tree(&root);
+
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..test_project(None)
+    };
+
+    let buffer = pack(&project, &root);
+
+    let mut reader = FantomeReader::new(buffer).unwrap();
+    let info = reader.read_info().unwrap();
+    assert_eq!(
+        info.distributor,
+        Some(FantomeDistributor::new(
+            "runeforge".to_owned(),
+            "RuneForge".to_owned(),
+            "https://runeforge.dev".to_owned(),
+            "0b8a3a52-5f4e-4d6e-9a43-2f1c3f7d9e10".to_owned(),
+        ))
+    );
+}
+
+#[test]
+fn distributor_survives_project_fantome_project_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = utf8_dir(&tmp).join("project");
+    write_project_tree(&root);
+
+    let project = ModProject {
+        distributor: Some(runeforge_distributor()),
+        ..test_project(None)
+    };
+
+    let buffer = pack(&project, &root);
+
+    let extracted = utf8_dir(&tmp).join("extracted");
+    let imported = ProjectImporter::new(&extracted)
+        .import(FantomeImporter::new(buffer))
+        .unwrap();
+
+    assert_eq!(imported.distributor, Some(runeforge_distributor()));
 }
 
 #[test]

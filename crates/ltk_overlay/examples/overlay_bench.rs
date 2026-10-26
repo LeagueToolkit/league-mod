@@ -476,27 +476,18 @@ fn synthesize_mod(
         std::fs::write(wad_dir.join(name).as_std_path(), &bytes)?;
     }
 
-    let project = ModProject {
-        name: "ltk-overlay-bench".to_string(),
-        display_name: "ltk-overlay-bench".to_string(),
-        version: "1.0.0".to_string(),
-        description: "Synthetic fixture for overlay_bench".to_string(),
-        authors: vec![],
-        license: None,
-        tags: vec![],
-        champions: vec![],
-        maps: vec![],
-        transformers: vec![],
-        layers: vec![ModProjectLayer {
-            name: "base".to_string(),
-            display_name: None,
-            priority: 0,
-            description: None,
-            string_overrides: Default::default(),
-        }],
-        thumbnail: None,
-        hashtables: vec![],
-    };
+    let mut project = ModProject::default();
+    project.name = "ltk-overlay-bench".to_string();
+    project.display_name = "ltk-overlay-bench".to_string();
+    project.version = "1.0.0".to_string();
+    project.description = "Synthetic fixture for overlay_bench".to_string();
+    project.layers = vec![ModProjectLayer {
+        name: "base".to_string(),
+        display_name: None,
+        priority: 0,
+        description: None,
+        string_overrides: Default::default(),
+    }];
     std::fs::write(
         mod_dir.join("mod.config.json").as_std_path(),
         serde_json::to_string_pretty(&project)?,
