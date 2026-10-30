@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.18.0...ltk_mod_project-v0.19.0) - 2026-10-30
+
+### Added
+
+- *(overlay)* [**breaking**] warn on JSON and TOML manifests
+- *(fantome)* [**breaking**] store declarations outside info.json
+
+### Fixed
+
+- *(fantome)* extract manifest entry at declared layer
+- *(game_data)* [**breaking**] write YAML manifest on import
+
 ## [0.18.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.17.1...ltk_mod_project-v0.18.0) - 2026-10-26
 
 ### Added

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.17.0...ltk_fantome-v0.18.0) - 2026-10-30
+
+### Added
+
+- *(fantome)* [**breaking**] store declarations outside info.json
+
+### Fixed
+
+- *(fantome)* extract manifest entry at declared layer
+
 ## [0.17.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_fantome-v0.16.1...ltk_fantome-v0.17.0) - 2026-10-26
 
 ### Added
