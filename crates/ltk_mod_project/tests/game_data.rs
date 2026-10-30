@@ -958,3 +958,46 @@ fn packing_an_imported_archive_reports_no_deprecated_file() {
 
     assert!(report.deprecated_files().is_empty());
 }
+
+#[test]
+fn a_fantome_import_places_a_differently_spelled_entry_at_the_declared_layer() {
+    use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
+    use ltk_mod_project::fantome::FantomeImporter;
+    let tmp = tempfile::tempdir().unwrap();
+    let output = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let mut info = FantomeInfo::default();
+    info.name = "Declarations".into();
+    info.layers = [(
+        "real".into(),
+        FantomeLayerInfo {
+            name: "real".into(),
+            ..Default::default()
+        },
+    )]
+    .into();
+    let mut archive = Cursor::new(Vec::new());
+    let mut writer = FantomeWriter::new(&mut archive);
+    writer.write_info(&info).unwrap();
+    writer
+        .write_game_data_resource(
+            "REAL",
+            "GAME_DATA.YAML",
+            &mut "version: 1\nmodules:\n  - target: shared\n    links: [Entry]\n".as_bytes(),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    archive.set_position(0);
+
+    ProjectImporter::new(output.clone())
+        .import(FantomeImporter::new(archive))
+        .unwrap();
+
+    let declarations = load_layer(&output, "real", &ModIgnore::empty(&output))
+        .declarations
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
+        "Entry"
+    );
+}

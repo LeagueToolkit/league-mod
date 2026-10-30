@@ -629,6 +629,11 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// Write every `META/game_data/` entry under `content_dir`, at
     /// `<layer>/<path>`.
     ///
+    /// The layer directory is the spelling `META/info.json` declares for that
+    /// layer, matched case-insensitively, and the entry's own spelling when the
+    /// metadata declares no such layer. A layer's manifest lands under
+    /// [`GAME_DATA_MANIFEST`], whatever case its entry spells.
+    ///
     /// An entry whose relative path is absolute or climbs with `..` is
     /// skipped: the archive names where a file lands, and a name that leaves
     /// the content directory names nowhere.
@@ -637,6 +642,8 @@ impl<R: Read + Seek> FantomeReader<R> {
     ///
     /// Returns an error if the archive is malformed or a file cannot be written.
     pub fn extract_game_data(&mut self, content_dir: &Utf8Path) -> Result<(), FantomeExtractError> {
+        let layer_dirs = self.declared_layer_spellings();
+
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
             let file_name = self.names[i].clone();
@@ -653,7 +660,23 @@ impl<R: Read + Seek> FantomeReader<R> {
                 continue;
             }
 
-            extract_entry(&mut file, &content_dir.join(relative))?;
+            let target = match relative_path.split_once('/') {
+                Some((layer, path)) => {
+                    let layer = match layer.eq_ignore_ascii_case(BASE_LAYER) {
+                        true => BASE_LAYER,
+                        false => layer_dirs
+                            .get(&layer.to_ascii_lowercase())
+                            .map_or(layer, String::as_str),
+                    };
+                    let path = match path.eq_ignore_ascii_case(GAME_DATA_MANIFEST) {
+                        true => GAME_DATA_MANIFEST,
+                        false => path,
+                    };
+                    content_dir.join(layer).join(path)
+                }
+                None => content_dir.join(relative),
+            };
+            extract_entry(&mut file, &target)?;
         }
 
         Ok(())
