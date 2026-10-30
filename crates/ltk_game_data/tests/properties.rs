@@ -323,17 +323,17 @@ fn entry_bodies_round_trip_through_documents_and_manifests() {
         "{json}"
     );
     assert!(json.contains(r#""+tagEventList":["Jade_Teemo"]"#), "{json}");
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
-        selectors(&load("game_data.json", &manifest)),
+        selectors(&load("game_data.yaml", &manifest)),
         selectors(&declarations)
     );
 
     let text = "version: 1\nmodules:\n  - entries:\n      Characters/A:\n        speed: 2.5\n        +tags: [a]\n";
     let declarations = load("game_data.yaml", text);
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
-        selectors(&load("game_data.json", &manifest)),
+        selectors(&load("game_data.yaml", &manifest)),
         selectors(&declarations)
     );
     let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
@@ -365,7 +365,7 @@ fn a_property_path_spelling_a_binding_keyword_refuses_to_serialize() {
     for key in ["overrides", "links", "+links", "-links"] {
         let declarations =
             entries_module(vec![PropertyEdit::parse(key, Value::Integer(1)).unwrap()]);
-        let error = declarations.manifest_json().unwrap_err();
+        let error = declarations.manifest_yaml().unwrap_err();
         assert!(
             matches!(&error.kind, ErrorKind::ReservedBindingKey { key: named } if named == key),
             "{key}: {error:?}"
@@ -380,9 +380,9 @@ fn a_property_path_spelling_a_binding_keyword_refuses_to_serialize() {
     let declarations = entries_module(vec![
         PropertyEdit::parse("linksPerSecond", Value::Integer(1)).unwrap(),
     ]);
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
-        selectors(&load("game_data.json", &manifest)),
+        selectors(&load("game_data.yaml", &manifest)),
         selectors(&declarations)
     );
 }
@@ -417,7 +417,7 @@ fn two_edits_under_one_signed_key_refuse_to_serialize() {
         PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(1)])).unwrap(),
         PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(2)])).unwrap(),
     ]);
-    let error = declarations.manifest_json().unwrap_err();
+    let error = declarations.manifest_yaml().unwrap_err();
     assert!(
         matches!(&error.kind, ErrorKind::DuplicatePropertyKey { key } if key == "+mFoo"),
         "{error:?}"
@@ -429,9 +429,9 @@ fn two_edits_under_one_signed_key_refuse_to_serialize() {
         PropertyEdit::parse("+mFoo", Value::List(vec![Value::Integer(1)])).unwrap(),
         PropertyEdit::parse("-mFoo", Value::List(vec![Value::Integer(2)])).unwrap(),
     ]);
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
-        selectors(&load("game_data.json", &manifest)),
+        selectors(&load("game_data.yaml", &manifest)),
         selectors(&declarations)
     );
 }
@@ -466,9 +466,9 @@ fn an_empty_entries_module_loads_writes_and_reads_back() {
     let yaml = "version: 1\nmodules:\n  - name: Particles\n    entries: {}\n";
     let loaded =
         ltk_game_data::load_declarations("game_data.yaml", yaml, |_| unreachable!()).unwrap();
-    let written = loaded.manifest_json().unwrap();
+    let written = loaded.manifest_yaml().unwrap();
     let reloaded =
-        ltk_game_data::load_declarations("game_data.json", &written, |_| unreachable!()).unwrap();
+        ltk_game_data::load_declarations("game_data.yaml", &written, |_| unreachable!()).unwrap();
     assert_eq!(
         reloaded.modules[0].name.as_ref().map(|name| name.as_str()),
         Some("Particles")
@@ -500,7 +500,7 @@ fn an_empty_target_refuses_to_load_and_to_write() {
             },
         }],
     };
-    let error = declarations.manifest_json().unwrap_err();
+    let error = declarations.manifest_yaml().unwrap_err();
     assert!(matches!(error.kind, ErrorKind::EditsEmpty), "{error:?}");
     assert_eq!(error.location.module, Some(0));
 }
@@ -510,7 +510,7 @@ fn an_out_of_range_integer_refuses_to_serialize() {
     let declarations = entries_module(vec![
         PropertyEdit::parse("a", Value::Integer(i128::MAX)).unwrap(),
     ]);
-    let error = declarations.manifest_json().unwrap_err();
+    let error = declarations.manifest_yaml().unwrap_err();
     assert!(
         matches!(error.kind, ErrorKind::Serialize { .. }),
         "{error:?}"

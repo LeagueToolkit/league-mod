@@ -196,9 +196,9 @@ fn objects_round_trip_through_documents_and_manifests() {
     let declarations = load("game_data.yaml", YAML);
     let document = DeclarationDocument::try_from(declarations.clone()).unwrap();
     assert_eq!(document.parse().unwrap(), declarations);
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
-        edits(&load("game_data.json", &manifest)),
+        edits(&load("game_data.yaml", &manifest)),
         edits(&declarations)
     );
 }

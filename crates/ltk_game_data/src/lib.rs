@@ -82,7 +82,7 @@ impl Declarations {
         Ok(())
     }
 
-    /// Writes the declarations as a direct JSON manifest.
+    /// Writes the declarations as a direct YAML manifest.
     ///
     /// The manifest names no source. Every target module carries an `edits` list; every edit
     /// carries `links`, empty or not.
@@ -91,10 +91,10 @@ impl Declarations {
     ///
     /// Whatever [`validate`](Self::validate) refuses, and [`ErrorKind::Serialize`] for
     /// declarations the manifest form cannot hold ([`DeclarationDocument::try_from`]).
-    pub fn manifest_json(&self) -> Result<String, Error> {
+    pub fn manifest_yaml(&self) -> Result<String, Error> {
         self.validate()?;
         let manifest = manifest::Manifest::try_from(self)?;
-        serde_json::to_string_pretty(&manifest).map_err(|error| {
+        serde_saphyr::to_string(&manifest).map_err(|error| {
             Error::new(ErrorKind::Serialize {
                 detail: error.to_string(),
             })

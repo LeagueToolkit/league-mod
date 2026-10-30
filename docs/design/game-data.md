@@ -234,14 +234,16 @@ unset displays as the code's statement alone. `Display` is a log rendering; a co
 a contained document and validates the result; reading a document refuses a duplicate mapping
 key anywhere in it. `Declarations` exposes mutable `version` and `modules` fields; `validate()`
 checks supported declaration versions, and refuses a target module with no edit and an entries
-module with no entry. `manifest_json()` validates and writes a direct JSON manifest.
+module with no entry. `manifest_yaml()` validates and writes a direct YAML manifest
+([ADR-0041](../adr/0041-yaml-manifests.md)). A string the YAML core schema reads as another type
+is quoted.
 A conversion to a serialized form refuses what that form cannot carry, and the manifest and
 the document refuse the same things ([ADR-0023](../adr/0023-refusing-serialization.md)): a
 property path spelling a binding keyword, one signed key held twice by an entry, and an
 integer outside the union of the `i64` and `u64` ranges. An entry name spelling a binding
 keyword is refused earlier, at construction
 ([ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md)).
-`manifest_json()` output loads
+`manifest_yaml()` output loads
 to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in phase order, each edit over the
 result of the preceding one, returns bytes, and leaves its input unchanged. `applied` counts
@@ -446,14 +448,14 @@ retain their origins. Archive declarations use the target strings specified in
 [section 4](#s4). An override file travels under its layer-relative path
 ([ADR-0013](../adr/0013-override-file-placement.md)): modpkg stores it as a chunk of its layer
 with no WAD; Fantome stores it as `META/game_data/<layer>/<path>`, classified as
-`FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.json` manifest per
+`FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.yaml` manifest per
 layer and places every override file at its path under the layer's content directory.
 The modpkg layer metadata field is `game_data`; the Fantome layer field is `GameData`.
 Modpkg metadata uses schema version 4. Absent fields represent no declarations.
 `DeclarationDocument` retains unsupported fields; its `parse()` method validates the complete
 layer before execution. A document and a manifest carry an `entries` mapping in authored
 order ([ADR-0011](../adr/0011-insertion-ordered-declaration-documents.md)). An edit with no
-binding is a legal document value; `manifest_json()` writes `name` for a named module,
+binding is a legal document value; `manifest_yaml()` writes `name` for a named module,
 `links` for every edit,
 `overrides` for an edit with override paths, and one key per entry name for an edit with
 entry edits, each value the entry body with every `Value` as its literal.

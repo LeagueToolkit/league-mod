@@ -265,10 +265,10 @@ pub fn write_manifest(
     if layer.is_empty() || layer.contains(['/', '\\']) || matches!(layer, "." | "..") {
         return Err(Error::in_document(ErrorKind::InvalidLayerName, layer));
     }
-    let text = document.parse()?.manifest_json()?;
+    let text = document.parse()?.manifest_yaml()?;
     let dir = ModProjectLayer::content_path(project_root, layer);
     std::fs::create_dir_all(&dir).map_err(|e| Error::io(dir.as_str(), &e))?;
-    let path = dir.join("game_data.json");
+    let path = dir.join("game_data.yaml");
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)

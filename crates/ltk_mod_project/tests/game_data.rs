@@ -75,8 +75,8 @@ fn modpkg_round_trip_preserves_edits_and_excludes_sources_from_chunks() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        extracted.manifest_json().unwrap(),
-        declarations.manifest_json().unwrap()
+        extracted.manifest_yaml().unwrap(),
+        declarations.manifest_yaml().unwrap()
     );
     assert_eq!(
         fs::read_to_string(output.join("content/base/test.wad.client/content.txt")).unwrap(),
@@ -124,7 +124,7 @@ fn fantome_import_uses_the_declared_layer_name() {
         edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
         "Added"
     );
-    assert!(!output.join("content/alias/game_data.json").exists());
+    assert!(!output.join("content/alias/game_data.yaml").exists());
 }
 
 #[test]
@@ -160,8 +160,8 @@ fn fantome_round_trip_preserves_compiled_sources() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        extracted.manifest_json().unwrap(),
-        declarations.manifest_json().unwrap()
+        extracted.manifest_yaml().unwrap(),
+        declarations.manifest_yaml().unwrap()
     );
     assert!(!output
         .join("content/base/Test.wad.client/links.json")
@@ -409,8 +409,8 @@ fn override_files_round_trip_through_modpkg() {
     let extracted = load_layer(&output, "base", &ModIgnore::empty(&output));
     let extracted_declarations = extracted.declarations.as_ref().unwrap().as_ref().unwrap();
     assert_eq!(
-        extracted_declarations.manifest_json().unwrap(),
-        declarations.manifest_json().unwrap()
+        extracted_declarations.manifest_yaml().unwrap(),
+        declarations.manifest_yaml().unwrap()
     );
     assert_eq!(extracted.override_files().len(), 2);
     assert_eq!(
@@ -538,8 +538,8 @@ fn entry_bodies_round_trip_through_both_archives() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            extracted.manifest_json().unwrap(),
-            declarations.manifest_json().unwrap(),
+            extracted.manifest_yaml().unwrap(),
+            declarations.manifest_yaml().unwrap(),
             "{format}"
         );
         let modules: Vec<_> = extracted.modules.iter().map(|m| &m.selector).collect();
@@ -640,5 +640,55 @@ fn module_names_round_trip_through_both_archives_and_extraction() {
             .unwrap()
             .unwrap();
         assert_eq!(names(&extracted), expected, "{format}");
+    }
+}
+
+#[test]
+fn an_imported_archive_holds_a_yaml_manifest_and_no_json_manifest() {
+    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
+    for format in ["modpkg", "fantome"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let source = root.join("source");
+        let project = property_fixture(&source);
+        let authored = load_layer(&source, "base", &ModIgnore::empty(&source))
+            .declarations
+            .unwrap()
+            .unwrap();
+        let mut archive = Cursor::new(Vec::new());
+        let packer = ProjectPacker::new(project, source);
+        if format == "modpkg" {
+            packer.pack(ModpkgFormat::new(&mut archive)).unwrap();
+        } else {
+            packer.pack(FantomeFormat::new(&mut archive)).unwrap();
+        }
+        archive.set_position(0);
+
+        let output = root.join("output");
+        let importer = ProjectImporter::new(output.clone());
+        if format == "modpkg" {
+            importer.import(ModpkgImporter::new(archive)).unwrap();
+        } else {
+            importer.import(FantomeImporter::new(archive)).unwrap();
+        }
+
+        let manifest = fs::read_to_string(output.join("content/base/game_data.yaml")).unwrap();
+        assert!(manifest.starts_with("version: 1\n"), "{format}: {manifest}");
+        assert!(
+            !output.join("content/base/game_data.json").exists(),
+            "{format}"
+        );
+        let extracted = load_layer(&output, "base", &ModIgnore::empty(&output))
+            .declarations
+            .unwrap()
+            .unwrap();
+        let selectors = |declarations: &ltk_game_data::Declarations| {
+            declarations
+                .modules
+                .iter()
+                .map(|module| module.selector.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(selectors(&extracted), selectors(&authored), "{format}");
     }
 }
