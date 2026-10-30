@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.10.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.9.3...ltk_game_data-v0.10.0) - 2026-10-30
+
+### Added
+
+- *(overlay)* [**breaking**] warn on JSON and TOML manifests
+
+### Fixed
+
+- *(game_data)* [**breaking**] write YAML manifest on import
+
 ## [0.9.3](https://github.com/LeagueToolkit/league-mod/compare/ltk_game_data-v0.9.2...ltk_game_data-v0.9.3) - 2026-10-14
 
 ### Fixed
