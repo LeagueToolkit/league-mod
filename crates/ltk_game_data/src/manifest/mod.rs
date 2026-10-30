@@ -26,27 +26,16 @@ use crate::{
 use body::Body;
 use source::Source;
 
-pub const MANIFEST_NAMES: [&str; 4] = [
-    "game_data.yaml",
-    "game_data.yml",
-    "game_data.toml",
-    "game_data.json",
-];
+pub const MANIFEST_NAMES: [&str; 2] = ["game_data.yaml", "game_data.yml"];
+
+/// The manifest names of the formats this crate refuses. A layer holding one is refused with
+/// [`ErrorKind::UnknownFormat`], and the file never packs as content.
+pub const REFUSED_MANIFEST_NAMES: [&str; 2] = ["game_data.toml", "game_data.json"];
 
 /// The serialization format of a manifest or source file, from its file extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
     Yaml,
-    Json,
-    Toml,
-}
-
-/// Whether the manifest or source file `name` is in a deprecated format: JSON or TOML.
-///
-/// The extension is compared ASCII case-insensitively. A name in no format is not deprecated.
-#[must_use]
-pub fn is_deprecated_format(name: &str) -> bool {
-    Format::of(name).is_ok_and(Format::is_deprecated)
 }
 
 /// How a file is read. `Execution` refuses duplicate keys; `Discovery` keeps the last of
@@ -66,15 +55,8 @@ impl Format {
             .to_ascii_lowercase();
         match extension.as_str() {
             "yaml" | "yml" => Ok(Self::Yaml),
-            "json" => Ok(Self::Json),
-            "toml" => Ok(Self::Toml),
             _ => Err(Error::in_document(ErrorKind::UnknownFormat, name)),
         }
-    }
-
-    /// Whether the format is deprecated. A deprecated format loads and reports a warning.
-    fn is_deprecated(self) -> bool {
-        matches!(self, Self::Json | Self::Toml)
     }
 
     fn parse<T: DeserializeOwned>(
@@ -115,17 +97,6 @@ impl Format {
                     syntax(&e, span)
                 })
             }
-            Self::Json => serde_json::from_str(text).map_err(|e| {
-                let span = Span::at_line_byte_column(text, e.line(), e.column());
-                syntax(&e, Some(span))
-            }),
-            Self::Toml => toml::from_str(text).map_err(|e| {
-                let span = e.span().map(|range| Span {
-                    start: range.start,
-                    end: range.end,
-                });
-                syntax(&e, span)
-            }),
         }
     }
 }

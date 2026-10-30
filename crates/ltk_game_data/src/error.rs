@@ -152,25 +152,6 @@ impl Span {
         Self::at(text, start)
     }
 
-    /// The span of the character at a 1-based `line` and 1-based byte `column` of `text`.
-    ///
-    /// A position past the end of `text` is the empty span at its end; one inside a character
-    /// is the span of that character. `serde_json` counts a column in bytes.
-    #[must_use]
-    pub fn at_line_byte_column(text: &str, line: usize, column: usize) -> Self {
-        let mut start = line_start(text, line).saturating_add(column.saturating_sub(1));
-        if start >= text.len() {
-            return Self {
-                start: text.len(),
-                end: text.len(),
-            };
-        }
-        while !text.is_char_boundary(start) {
-            start -= 1;
-        }
-        Self::at(text, start)
-    }
-
     /// The span of the character `text` holds at the byte offset `start`.
     fn at(text: &str, start: usize) -> Self {
         let end = text[start..]
@@ -225,8 +206,8 @@ pub enum ErrorKind {
     /// The declaration version is not one this crate executes.
     #[error("unsupported declaration version")]
     UnsupportedVersion,
-    /// A document extension that is not YAML, TOML, or JSON.
-    #[error("expected YAML, TOML, or JSON")]
+    /// A document extension that is not YAML.
+    #[error("not a YAML file, convert the file to YAML")]
     UnknownFormat,
     /// A document the parser refuses. `detail` is the parser's statement.
     #[error("{detail}")]
@@ -433,24 +414,5 @@ mod tests {
         assert_eq!(Span::at_line_column(text, 1, 1), Span { start: 0, end: 1 });
         assert_eq!(Span::at_line_column(text, 2, 3), Span { start: 5, end: 7 });
         assert_eq!(Span::at_line_column(text, 9, 9), Span { start: 9, end: 9 });
-    }
-
-    #[test]
-    fn a_byte_column_locates_the_same_character_a_multibyte_line_holds() {
-        let text = "ab\ncd\u{e9}f\n";
-        // Character column 4 is `f`; byte column 4 is the second byte of `\u{e9}`.
-        assert_eq!(Span::at_line_column(text, 2, 4), Span { start: 7, end: 8 });
-        assert_eq!(
-            Span::at_line_byte_column(text, 2, 4),
-            Span { start: 5, end: 7 }
-        );
-        assert_eq!(
-            Span::at_line_byte_column(text, 2, 5),
-            Span { start: 7, end: 8 }
-        );
-        assert_eq!(
-            Span::at_line_byte_column(text, 9, 9),
-            Span { start: 9, end: 9 }
-        );
     }
 }

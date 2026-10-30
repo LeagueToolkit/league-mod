@@ -31,9 +31,9 @@ fn fantome_declarations<R: std::io::Read + std::io::Seek>(
 
 fn fixture(root: &Utf8Path) -> ModProject {
     fs::create_dir_all(root.join("content/base/Test.wad.client")).unwrap();
-    fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.json\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
+    fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.yaml\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
     fs::write(
-        root.join("content/base/Test.wad.client/links.json"),
+        root.join("content/base/Test.wad.client/links.yaml"),
         r#"{"version":1,"edits":[{"links":["Added"]},{"-links":["Removed"]}]}"#,
     )
     .unwrap();
@@ -62,7 +62,7 @@ fn modpkg_round_trip_preserves_edits_and_excludes_sources_from_chunks() {
         .unwrap();
     archive.set_position(0);
     let mut package = Modpkg::mount_from_reader(archive.clone()).unwrap();
-    assert!(package.chunk("links.json", Some("base")).is_err());
+    assert!(package.chunk("links.yaml", Some("base")).is_err());
     assert!(package.chunk("game_data.yaml", Some("base")).is_err());
     let metadata = package.load_metadata().unwrap();
     let declarations = metadata.layers[0]
@@ -104,7 +104,7 @@ fn fantome_import_uses_the_declared_layer_name() {
     let tmp = tempfile::tempdir().unwrap();
     let output = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     let declarations = ltk_game_data::load_declarations(
-        "game_data.json",
+        "game_data.yaml",
         r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
         |_| unreachable!(),
     )
@@ -171,7 +171,7 @@ fn fantome_round_trip_preserves_compiled_sources() {
         declarations.manifest_yaml().unwrap()
     );
     assert!(!output
-        .join("content/base/Test.wad.client/links.json")
+        .join("content/base/Test.wad.client/links.yaml")
         .exists());
 }
 
@@ -183,8 +183,8 @@ fn packing_rejects_ignored_inputs_and_multiple_manifests_before_writing() {
         let project = fixture(&root);
         if multiple {
             fs::write(
-                root.join("content/base/game_data.toml"),
-                "version = 1\nmodules = []",
+                root.join("content/base/game_data.yml"),
+                "version: 1\nmodules: []\n",
             )
             .unwrap();
         } else {
@@ -209,18 +209,18 @@ fn source_symlinks_cannot_escape_the_layer() {
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     fs::create_dir_all(root.join("content/base")).unwrap();
     fs::write(
-        root.join("outside.json"),
+        root.join("outside.yaml"),
         r#"{"version":1,"links":["outside"]}"#,
     )
     .unwrap();
     fs::write(
-        root.join("content/base/game_data.json"),
-        r#"{"version":1,"modules":[{"target":"shared","source":"linked.json"}]}"#,
+        root.join("content/base/game_data.yaml"),
+        r#"{"version":1,"modules":[{"target":"shared","source":"linked.yaml"}]}"#,
     )
     .unwrap();
     std::os::unix::fs::symlink(
-        root.join("outside.json"),
-        root.join("content/base/linked.json"),
+        root.join("outside.yaml"),
+        root.join("content/base/linked.yaml"),
     )
     .unwrap();
     let error = load_layer(&root, "base", &ModIgnore::empty(&root))
@@ -235,13 +235,13 @@ fn source_paths_resolve_within_the_layer_and_reject_duplicate_assignments() {
     let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
     fixture(&root);
     let manifest = root.join("content/base/game_data.yaml");
-    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
+    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/../Test.wad.client/links.yaml\n").unwrap();
     let ignore = ModIgnore::empty(&root);
     assert!(load_layer(&root, "base", &ignore)
         .declarations
         .unwrap()
         .is_some());
-    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/links.json\n- target: SHARED\n  source: Test.wad.client/../Test.wad.client/links.json\n").unwrap();
+    fs::write(&manifest, "version: 1\nmodules:\n- target: shared\n  source: Test.wad.client/links.yaml\n- target: SHARED\n  source: Test.wad.client/../Test.wad.client/links.yaml\n").unwrap();
     assert_eq!(
         load_layer(&root, "base", &ignore)
             .declarations
@@ -848,115 +848,55 @@ fn project_with_files(root: &Utf8Path, files: &[(&str, &str)]) -> ModProject {
 }
 
 #[test]
-fn packing_a_project_reports_every_json_and_toml_file_and_still_loads_it() {
-    type Files = &'static [(&'static str, &'static str)];
-    let cases: [(Files, &[&str]); 5] = [
-        (
-            &[(
-                "game_data.json",
-                r#"{"version":1,"modules":[{"target":"shared","links":["a"]}]}"#,
-            )],
-            &["game_data.json"],
-        ),
-        (
-            &[(
-                "game_data.toml",
-                "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['a']\n",
-            )],
-            &["game_data.toml"],
-        ),
-        (
-            &[
-                (
-                    "game_data.yaml",
-                    "version: 1\nmodules:\n  - target: shared\n    source: links.json\n  - target: other\n    source: links.json\n",
-                ),
-                ("links.json", r#"{"version":1,"links":["a"]}"#),
-            ],
-            &["links.json"],
-        ),
-        (
-            &[
-                (
-                    "game_data.yaml",
-                    "version: 1\nmodules:\n  - target: shared\n    source: LINKS.TOML\n",
-                ),
-                ("LINKS.TOML", "version = 1\nlinks = ['a']\n"),
-            ],
-            &["LINKS.TOML"],
-        ),
-        (
-            &[
-                (
-                    "game_data.yml",
-                    "version: 1\nmodules:\n  - target: shared\n    source: links.yaml\n",
-                ),
-                ("links.yaml", "version: 1\nlinks: [a]\n"),
-            ],
-            &[],
-        ),
-    ];
-    for (files, expected) in cases {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
-        let project = project_with_files(&root, files);
-        let mut archive = Cursor::new(Vec::new());
+fn a_json_or_toml_manifest_is_refused_and_says_to_convert_it() {
+    for name in ["game_data.json", "game_data.toml"] {
+        for beside in [None, Some("game_data.yaml")] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+            let mut files = vec![(name, r#"{"version":1,"modules":[]}"#)];
+            if let Some(beside) = beside {
+                files.push((beside, "version: 1\nmodules: []\n"));
+            }
+            let project = project_with_files(&root, &files);
+            let mut archive = Cursor::new(Vec::new());
 
-        let report = ProjectPacker::new(project, root.clone())
-            .pack(ModpkgFormat::new(&mut archive))
-            .unwrap();
+            let error = ProjectPacker::new(project, root.clone())
+                .pack(ModpkgFormat::new(&mut archive))
+                .unwrap_err();
 
-        let reported: Vec<&str> = report
-            .deprecated_files()
-            .iter()
-            .map(|file| file.path.as_str())
-            .collect();
-        assert_eq!(reported, expected);
-        assert!(load_layer(&root, "base", &ModIgnore::empty(&root))
-            .declarations
-            .unwrap()
-            .is_some());
+            let ltk_mod_project::PackError::GameData(error) = error else {
+                panic!("{name}: {error}");
+            };
+            assert_eq!(error.kind, ltk_game_data::ErrorKind::UnknownFormat);
+            let text = error.to_string();
+            assert!(text.contains(name), "{text}");
+            assert!(text.contains("convert the file to YAML"), "{text}");
+            assert!(archive.get_ref().is_empty());
+        }
     }
 }
 
 #[test]
-fn a_deprecated_file_names_the_file_and_says_to_convert_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
-    project_with_files(
-        &root,
-        &[("game_data.json", r#"{"version":1,"modules":[]}"#)],
-    );
+fn a_manifest_naming_a_json_or_toml_source_is_refused_by_the_source_name() {
+    for source in ["links.json", "LINKS.TOML"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let manifest = format!("version: 1\nmodules:\n  - target: shared\n    source: {source}\n");
+        project_with_files(
+            &root,
+            &[
+                ("game_data.yaml", manifest.as_str()),
+                (source, r#"{"version":1,"links":["a"]}"#),
+            ],
+        );
 
-    let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+        let error = load_layer(&root, "base", &ModIgnore::empty(&root))
+            .declarations
+            .unwrap_err();
 
-    let text = layer.deprecated_files()[0].to_string();
-    assert!(text.contains("content/base/game_data.json"), "{text}");
-    assert!(text.contains("YAML"), "{text}");
-}
-
-#[test]
-fn packing_an_imported_archive_reports_no_deprecated_file() {
-    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
-    let tmp = tempfile::tempdir().unwrap();
-    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
-    let source = root.join("source");
-    let project = fixture(&source);
-    let mut archive = Cursor::new(Vec::new());
-    ProjectPacker::new(project, source)
-        .pack(FantomeFormat::new(&mut archive))
-        .unwrap();
-    archive.set_position(0);
-    let output = root.join("output");
-    let imported = ProjectImporter::new(output.clone())
-        .import(FantomeImporter::new(archive))
-        .unwrap();
-
-    let report = ProjectPacker::new(imported, output)
-        .pack(ModpkgFormat::new(&mut Cursor::new(Vec::new())))
-        .unwrap();
-
-    assert!(report.deprecated_files().is_empty());
+        assert_eq!(error.kind, ltk_game_data::ErrorKind::UnknownFormat);
+        assert!(error.to_string().contains(source), "{error}");
+    }
 }
 
 #[test]
