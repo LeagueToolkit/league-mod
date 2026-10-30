@@ -21,12 +21,12 @@ and each format has its own parser, its own duplicate-key behaviour and its own 
 
 - A project imported from an archive is a project the manager edits.
 - One format for the author, the manager and the writer.
-- Existing projects load until the manager has converted them.
+- A project on disk loads through the deprecation, and the manager converts it ahead of the removal.
 
 ## Considered options
 
-1. **YAML only, reached in steps.** The writer switches to YAML, JSON and TOML files warn, and a
-   later breaking release removes both.
+1. **YAML only, reached in steps.** The writer is YAML, JSON and TOML files warn, and a separate
+   breaking release removes both.
 2. **Writer switches, formats stay.** `manifest_yaml` replaces `manifest_json`; JSON and TOML
    manifests load indefinitely.
 3. **Two writers.** `manifest_yaml` beside `manifest_json`, the caller picks.
@@ -37,9 +37,8 @@ and each format has its own parser, its own duplicate-key behaviour and its own 
 **YAML is the manifest format, in three steps: the writer is YAML, JSON and TOML files report a
 warning on load, and a breaking release of `ltk_game_data` removes both.**
 
-`Declarations::manifest_yaml` replaces `manifest_json`, with the same validation and refusals, and
-an import writes `game_data.yaml`. A project-directory pack and overlay build report every JSON or
-TOML manifest and source file. The removal follows LTK Manager's conversion of projects on disk.
+`Declarations::manifest_yaml` is the one manifest writer, and an import writes `game_data.yaml`. A project-directory pack and overlay build report every JSON or
+TOML manifest and source file. The manager's conversion of projects on disk ships ahead of the removal.
 `docs/design/game-data.md` [section 4](../design/game-data.md#s4) states the accepted formats and
 [section 5](../design/game-data.md#s5) the extraction rule. `DeclarationDocument` stays a JSON
 value in memory: it is what archive metadata deserializes into, and no author reads it.
@@ -48,7 +47,7 @@ value in memory: it is what archive metadata deserializes into, and no author re
 
 - **Positive:** an imported project opens in the manager as an editable project.
 - **Positive:** the removal drops `toml` from `ltk_game_data` and one parser path per format.
-- **Negative:** removing `manifest_json` is a breaking change to `ltk_game_data`.
+- **Negative:** the writer change is a breaking change to `ltk_game_data`.
 - **Negative:** a reader of a written manifest sees a scalar pin as a `{f32: 1.0}` mapping, not as
   a `!f32 1.0` tag. Both spellings load to the same `Value`.
 - **Negative:** TOML comments do not survive the manager's conversion.
@@ -58,7 +57,7 @@ value in memory: it is what archive metadata deserializes into, and no author re
 
 ### YAML only, reached in steps
 
-- Good: projects keep loading through the whole migration, and an author hears about it first.
+- Good: a project loads through every step, and a warning reaches its author ahead of the removal.
 - Good: the end state has one format.
 - Bad: three releases carry the deprecation, and the manager has to ship before the last.
 
@@ -75,5 +74,5 @@ value in memory: it is what archive metadata deserializes into, and no author re
 ### Removal in one release
 
 - Good: the shortest path to one format.
-- Bad: every project imported before the writer change stops loading on upgrade, with no warning
-  and no conversion.
+- Bad: a project holding a `game_data.json` from an earlier import fails to load on upgrade, with
+  no warning and no conversion.

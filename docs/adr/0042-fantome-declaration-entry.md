@@ -20,8 +20,8 @@ of this repository classifies that directory as build resources. A `.modpkg` sto
 
 - `info.json` stays metadata.
 - An author reads an archive's declarations as the format they write.
-- Every existing archive keeps loading and importing.
-- An import of a new archive places the manifest where a project holds it.
+- An archive holding only `GameData` loads and imports.
+- An import places the manifest where a project holds it.
 
 ## Considered options
 
@@ -45,7 +45,7 @@ manifest only for a layer whose declarations are in `GameData` alone.
 - **Positive:** an import is placement: the entry lands as the project's manifest, with the
   override files it names beside it.
 - **Positive:** `unzip` shows an author the declarations of any archive.
-- **Negative:** a reader without this change finds no `GameData` in a new archive and applies no
+- **Negative:** a reader that knows only `GameData` finds none in a packed archive and applies no
   declarations, with no error. The release notes state this.
 - **Negative:** a module read from the entry reports no origin source. A diagnostic on such a
   module names the manifest and the module index, not the authored source file.
@@ -59,14 +59,14 @@ manifest only for a layer whose declarations are in `GameData` alone.
 - Good: the entry is the file an author writes, under the directory that holds the layer's other
   build resources.
 - Good: no new classification and no new extraction path.
-- Bad: origin sources do not survive, the direct manifest having no place for them.
+- Bad: a direct manifest has no place for an origin source. The source does not survive.
 
 ### A sibling metadata file
 
-- Good: origins survive, the document form carrying them.
-- Bad: an author still reads nested JSON, and an import still has to write a manifest.
+- Good: the document form carries origins.
+- Bad: an author reads nested JSON, and an import writes a manifest.
 
 ### Keep the field
 
 - Good: no compatibility break for an older reader.
-- Bad: `info.json` still holds declarations, and YAML inside a JSON string reads worse than either.
+- Bad: `info.json` holds declarations, and YAML inside a JSON string reads worse than either.
