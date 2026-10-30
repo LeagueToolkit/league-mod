@@ -92,6 +92,10 @@ fn pack_to_modpkg(
         );
     }
 
+    for file in report.deprecated_files() {
+        println_pad!("{} {file}", "⚠️  Deprecated:".bright_yellow());
+    }
+
     println_pad!(
         "{}\n{} {}",
         "Mod package created successfully!".bright_green().bold(),

@@ -265,7 +265,10 @@ spellings, including retained base entries.
 
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 `game_data.json`. A manifest or source file's extension names its format, compared ASCII
-case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
+case-insensitively. YAML is the manifest format. JSON and TOML are deprecated
+([ADR-0041](../adr/0041-yaml-manifests.md)): a file in either format loads, and a pack
+([section 5](#s5)) or an overlay build ([section 6](#s6)) of a project directory reports it.
+`is_deprecated_format(name)` answers for a file name. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one selector and an optional `name`. A `target` selector takes a compact
 binding body, `edits`, or `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. The mapping may be empty, and such a module
@@ -450,6 +453,10 @@ retain their origins. Archive declarations use the target strings specified in
 with no WAD; Fantome stores it as `META/game_data/<layer>/<path>`, classified as
 `FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.yaml` manifest per
 layer and places every override file at its path under the layer's content directory.
+`LayerDeclarations::deprecated_files()` and `PackReport::deprecated_files()` list the JSON and
+TOML manifest and source files of a project as `DeprecatedFile`, the layer and the layer-relative
+path. Its `Display` names the file and says to convert it to YAML. An archive's declarations are
+not manifest files and report none.
 The modpkg layer metadata field is `game_data`. A Fantome layer stores its declarations as the
 direct manifest `META/game_data/<layer>/game_data.yaml`, classified as `FantomeEntry::GameData`
 and named by `GAME_DATA_MANIFEST` ([ADR-0042](../adr/0042-fantome-declaration-entry.md)). The
@@ -717,8 +724,11 @@ absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
 `DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
 `PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, `ObjectSkipped`,
-`ObjectShadowsGame`, `LinkUnsupported`, `EntryUnreadable`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
-are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
+`ObjectShadowsGame`, `LinkUnsupported`, `EntryUnreadable`, `DeprecatedFormat`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
+are informational. `DeprecatedFormat` is one warning per JSON or TOML manifest or source file a
+project directory's `ModContentProvider::deprecated_game_data_files` lists, with the
+layer-relative path in its optional `file` field. The file loads. An archive provider lists none.
+A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field, and one of kind `ObjectSkipped`
 carries the `SkippedObject` in its optional `object` field; each is absent otherwise and

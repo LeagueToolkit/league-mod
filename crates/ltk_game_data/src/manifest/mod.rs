@@ -41,6 +41,14 @@ enum Format {
     Toml,
 }
 
+/// Whether the manifest or source file `name` is in a deprecated format: JSON or TOML.
+///
+/// The extension is compared ASCII case-insensitively. A name in no format is not deprecated.
+#[must_use]
+pub fn is_deprecated_format(name: &str) -> bool {
+    Format::of(name).is_ok_and(Format::is_deprecated)
+}
+
 /// How a file is read. `Execution` refuses duplicate keys; `Discovery` keeps the last of
 /// duplicate keys. A local YAML tag is a type pin and is read in both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +70,11 @@ impl Format {
             "toml" => Ok(Self::Toml),
             _ => Err(Error::in_document(ErrorKind::UnknownFormat, name)),
         }
+    }
+
+    /// Whether the format is deprecated. A deprecated format loads and reports a warning.
+    fn is_deprecated(self) -> bool {
+        matches!(self, Self::Json | Self::Toml)
     }
 
     fn parse<T: DeserializeOwned>(

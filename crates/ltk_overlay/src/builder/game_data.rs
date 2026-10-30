@@ -62,6 +62,8 @@ pub enum GameDataDiagnosticKind {
     LinkUnsupported,
     /// An entry of a `PTCH` target's base the build could not read. Its edits are skipped.
     EntryUnreadable,
+    /// A manifest or source file of a project directory in JSON or TOML. The file loads.
+    DeprecatedFormat,
     /// A missing or unrecognized serialized category.
     #[default]
     #[serde(other)]
@@ -93,6 +95,9 @@ pub struct GameDataDiagnostic {
     /// The object of an `ObjectSkipped` diagnostic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object: Option<SkippedObject>,
+    /// The layer-relative path of a `DeprecatedFormat` file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     pub message: String,
 }
 
@@ -153,6 +158,7 @@ impl Pending {
             record: None,
             property: None,
             object: None,
+            file: None,
             message: message.to_string(),
         }
     }
@@ -369,6 +375,7 @@ impl Application {
             record: None,
             property: None,
             object: None,
+            file: None,
             message: message.to_string(),
         }
     }
@@ -450,6 +457,22 @@ impl OverlayBuilder {
                 if !enabled.is_layer_active(&layer.name) {
                     continue;
                 }
+                for file in enabled.content.deprecated_game_data_files(&layer.name) {
+                    self.last_game_data_diagnostics.push(GameDataDiagnostic {
+                        kind: GameDataDiagnosticKind::DeprecatedFormat,
+                        mod_id: enabled.id.clone(),
+                        layer: layer.name.clone(),
+                        target: None,
+                        chunk: None,
+                        origin: None,
+                        edit_index: None,
+                        record: None,
+                        property: None,
+                        object: None,
+                        message: file.to_string(),
+                        file: Some(file.path.into_string()),
+                    });
+                }
                 let result = enabled
                     .content
                     .game_data_declarations(&layer.name)
@@ -479,6 +502,7 @@ impl OverlayBuilder {
                         record: None,
                         property: None,
                         object: None,
+                        file: None,
                         message: format!(
                             "Layer declarations refused: {error}; update the consumer for unsupported bindings"
                         ),

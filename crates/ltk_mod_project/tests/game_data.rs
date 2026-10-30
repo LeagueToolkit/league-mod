@@ -832,3 +832,129 @@ fn a_manifest_naming_the_manifest_name_as_an_override_refuses_the_layer() {
         "{error}"
     );
 }
+
+/// A project whose base layer holds `files`, each a layer-relative name and its text.
+fn project_with_files(root: &Utf8Path, files: &[(&str, &str)]) -> ModProject {
+    fs::create_dir_all(root.join("content/base")).unwrap();
+    for (name, text) in files {
+        fs::write(root.join("content/base").join(name), text).unwrap();
+    }
+    let mut project = ModProject::default();
+    project.name = "formats".into();
+    project.display_name = "Formats".into();
+    project.version = "1.0.0".into();
+    project.layers = vec![ModProjectLayer::base()];
+    project
+}
+
+#[test]
+fn packing_a_project_reports_every_json_and_toml_file_and_still_loads_it() {
+    type Files = &'static [(&'static str, &'static str)];
+    let cases: [(Files, &[&str]); 5] = [
+        (
+            &[(
+                "game_data.json",
+                r#"{"version":1,"modules":[{"target":"shared","links":["a"]}]}"#,
+            )],
+            &["game_data.json"],
+        ),
+        (
+            &[(
+                "game_data.toml",
+                "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['a']\n",
+            )],
+            &["game_data.toml"],
+        ),
+        (
+            &[
+                (
+                    "game_data.yaml",
+                    "version: 1\nmodules:\n  - target: shared\n    source: links.json\n  - target: other\n    source: links.json\n",
+                ),
+                ("links.json", r#"{"version":1,"links":["a"]}"#),
+            ],
+            &["links.json"],
+        ),
+        (
+            &[
+                (
+                    "game_data.yaml",
+                    "version: 1\nmodules:\n  - target: shared\n    source: LINKS.TOML\n",
+                ),
+                ("LINKS.TOML", "version = 1\nlinks = ['a']\n"),
+            ],
+            &["LINKS.TOML"],
+        ),
+        (
+            &[
+                (
+                    "game_data.yml",
+                    "version: 1\nmodules:\n  - target: shared\n    source: links.yaml\n",
+                ),
+                ("links.yaml", "version: 1\nlinks: [a]\n"),
+            ],
+            &[],
+        ),
+    ];
+    for (files, expected) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+        let project = project_with_files(&root, files);
+        let mut archive = Cursor::new(Vec::new());
+
+        let report = ProjectPacker::new(project, root.clone())
+            .pack(ModpkgFormat::new(&mut archive))
+            .unwrap();
+
+        let reported: Vec<&str> = report
+            .deprecated_files()
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(reported, expected);
+        assert!(load_layer(&root, "base", &ModIgnore::empty(&root))
+            .declarations
+            .unwrap()
+            .is_some());
+    }
+}
+
+#[test]
+fn a_deprecated_file_names_the_file_and_says_to_convert_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    project_with_files(
+        &root,
+        &[("game_data.json", r#"{"version":1,"modules":[]}"#)],
+    );
+
+    let layer = load_layer(&root, "base", &ModIgnore::empty(&root));
+
+    let text = layer.deprecated_files()[0].to_string();
+    assert!(text.contains("content/base/game_data.json"), "{text}");
+    assert!(text.contains("YAML"), "{text}");
+}
+
+#[test]
+fn packing_an_imported_archive_reports_no_deprecated_file() {
+    use ltk_mod_project::fantome::{FantomeFormat, FantomeImporter};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let source = root.join("source");
+    let project = fixture(&source);
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::new(project, source)
+        .pack(FantomeFormat::new(&mut archive))
+        .unwrap();
+    archive.set_position(0);
+    let output = root.join("output");
+    let imported = ProjectImporter::new(output.clone())
+        .import(FantomeImporter::new(archive))
+        .unwrap();
+
+    let report = ProjectPacker::new(imported, output)
+        .pack(ModpkgFormat::new(&mut Cursor::new(Vec::new())))
+        .unwrap();
+
+    assert!(report.deprecated_files().is_empty());
+}
