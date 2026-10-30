@@ -791,8 +791,8 @@ pub enum FantomeEntry<'a> {
     /// produces a table for lookup.
     Hashtable(&'a str),
     /// A file under `META/game_data/`, at `<layer>/<path>` relative to the
-    /// prefix: an override file a layer's game-data declarations name, kept
-    /// at its layer-relative path.
+    /// prefix: a layer's [`GAME_DATA_MANIFEST`], or an override file its
+    /// game-data declarations name, kept at its layer-relative path.
     GameData(&'a str),
 }
 
@@ -856,6 +856,11 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
 /// The `META/` directory override files live under, with its trailing slash.
 pub(crate) const GAME_DATA_DIR: &str = "META/game_data/";
 
+/// The layer-relative name of a layer's declarations under `META/game_data/<layer>/`.
+///
+/// The entry is a direct YAML manifest. It names no source.
+pub const GAME_DATA_MANIFEST: &str = "game_data.yaml";
+
 /// The prefix of a non-base layer's WAD directory, `WAD_<layer>/`.
 const LAYER_WAD_DIR_PREFIX: &str = "WAD_";
 
@@ -902,7 +907,7 @@ pub fn wad_entry_name(layer: &str, path: &str) -> String {
     }
 }
 
-/// The archive entry name of the override file at `path` in `layer`:
+/// The archive entry name of the override file or manifest at `path` in `layer`:
 /// `META/game_data/{layer}/{path}`.
 pub fn game_data_entry_name(layer: &str, path: &str) -> String {
     format!("{GAME_DATA_DIR}{layer}/{path}")

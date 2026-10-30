@@ -17,7 +17,10 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_fantome::{is_layer_name, FantomeHashtable, FantomeInfo, FantomeWriteError, FantomeWriter};
+use ltk_fantome::{
+    is_layer_name, FantomeHashtable, FantomeInfo, FantomeWriteError, FantomeWriter,
+    GAME_DATA_MANIFEST,
+};
 use ltk_file::LeagueFileKind;
 use ltk_hashtable::{Category, Hashtable, HashtableSet, Key};
 use ltk_wad::{
@@ -35,6 +38,10 @@ use crate::{PackFormat, PackFormatReport, PackPlan, PackReporter, PlannedFile};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FantomePackError {
+    /// A layer's declarations cannot be written as a manifest.
+    #[error(transparent)]
+    GameData(#[from] ltk_game_data::Error),
+
     /// A file in the project could not be read.
     #[error("Failed to read {path}")]
     Read {
@@ -511,7 +518,12 @@ fn pack_metadata<W: Write + Seek>(
             let layer = info.layers.entry(planned.layer().name.clone()).or_default();
             layer.name = planned.layer().name.clone();
             layer.priority = planned.layer().priority;
-            layer.game_data = Some(program.clone());
+            let manifest = program.parse()?.manifest_yaml()?;
+            writer.write_game_data_resource(
+                &planned.layer().name,
+                GAME_DATA_MANIFEST,
+                &mut manifest.as_bytes(),
+            )?;
         }
         for override_file in planned.override_files() {
             let mut file = File::open(&override_file.source)

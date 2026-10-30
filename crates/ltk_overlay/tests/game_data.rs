@@ -1334,3 +1334,111 @@ fn a_created_object_the_game_declares_elsewhere_is_created_and_reported() {
         assert!(written.objects.contains_key(&object), "{object:?}");
     }
 }
+
+#[test]
+fn a_packed_and_an_imported_fantome_apply_the_declarations_of_their_project() {
+    use ltk_mod_project::{
+        ProjectImporter, ProjectPacker,
+        fantome::{FantomeFormat, FantomeImporter},
+    };
+    use ltk_overlay::FantomeContent;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let game = root.join("game");
+    common::write_game_wad(&game.join(WAD), &[("shared", &bin(&["Game"]))]);
+    project(&root, "source", None, None);
+    let source = root.join("source");
+    fs::write(
+        source.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    source: links.yaml\n",
+    )
+    .unwrap();
+    fs::write(
+        source.join("content/base/links.yaml"),
+        "version: 1\nedits:\n  - links: [Added]\n  - -links: [Game]\n",
+    )
+    .unwrap();
+    let mut archive = Cursor::new(Vec::new());
+    ProjectPacker::from_dir(source.clone())
+        .unwrap()
+        .pack(FantomeFormat::new(&mut archive))
+        .unwrap();
+    archive.set_position(0);
+    let imported = root.join("imported");
+    ProjectImporter::new(imported.clone())
+        .import(FantomeImporter::new(archive.clone()))
+        .unwrap();
+
+    let contents: [(&str, Box<dyn ltk_overlay::ModContentProvider>); 3] = [
+        ("directory", Box::new(FsModContent::new(source))),
+        ("archive", Box::new(FantomeContent::new(archive).unwrap())),
+        ("imported", Box::new(FsModContent::new(imported))),
+    ];
+    for (name, content) in contents {
+        let overlay = root.join("overlay").join(name);
+        let mut builder =
+            OverlayBuilder::new(game.clone(), overlay.clone(), root.join("state").join(name));
+        builder.set_enabled_mods(vec![EnabledMod {
+            id: "mod".into(),
+            content,
+            enabled_layers: None,
+        }]);
+
+        let result = builder.build().unwrap();
+
+        assert!(
+            result.game_data_diagnostics.is_empty(),
+            "{name}: {:?}",
+            result.game_data_diagnostics
+        );
+        assert_eq!(
+            chunk(&overlay.join(WAD), "shared"),
+            bin(&["Added"]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_fantome_layer_prefers_the_yaml_entry_over_the_metadata_field() {
+    use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter, GAME_DATA_MANIFEST};
+    use ltk_overlay::{FantomeContent, ModContentProvider};
+    let in_metadata = ltk_game_data::load_declarations(
+        "game_data.yaml",
+        "version: 1\nmodules:\n  - target: shared\n    links: [Metadata]\n",
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let mut info = FantomeInfo::default();
+    info.name = "declarations".into();
+    info.layers = [(
+        "base".into(),
+        FantomeLayerInfo {
+            name: "base".into(),
+            game_data: Some(in_metadata.try_into().unwrap()),
+            ..Default::default()
+        },
+    )]
+    .into();
+    let mut archive = Cursor::new(Vec::new());
+    let mut writer = FantomeWriter::new(&mut archive);
+    writer.write_info(&info).unwrap();
+    writer
+        .write_game_data_resource(
+            "base",
+            GAME_DATA_MANIFEST,
+            &mut "\u{feff}version: 1\nmodules:\n  - target: shared\n    links: [Entry]\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    archive.set_position(0);
+    let mut content = FantomeContent::new(archive).unwrap();
+
+    let declarations = content.game_data_declarations("base").unwrap().unwrap();
+
+    let ltk_game_data::Selector::Target { edits, .. } = &declarations.modules[0].selector else {
+        panic!("expected a target selector");
+    };
+    assert_eq!(edits[0].links.add[0].as_str(), "Entry");
+}

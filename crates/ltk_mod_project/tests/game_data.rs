@@ -16,6 +16,19 @@ fn edits_of(module: &ltk_game_data::Module) -> &[ltk_game_data::Edit] {
     }
 }
 
+/// The declarations a `.fantome` stores as a layer's YAML entry.
+fn fantome_declarations<R: std::io::Read + std::io::Seek>(
+    reader: &mut ltk_fantome::FantomeReader<R>,
+    layer: &str,
+) -> ltk_game_data::Declarations {
+    let entry = reader
+        .read_game_data_resource(layer, ltk_fantome::GAME_DATA_MANIFEST)
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(entry).unwrap();
+    ltk_game_data::load_declarations("game_data.yaml", &text, |_| unreachable!()).unwrap()
+}
+
 fn fixture(root: &Utf8Path) -> ModProject {
     fs::create_dir_all(root.join("content/base/Test.wad.client")).unwrap();
     fs::write(root.join("content/base/game_data.yaml"), "version: 1\nmodules:\n  - target: shared\n    source: Test.wad.client/links.json\n  - target: '0123456789ABCDEF'\n    links: []\n").unwrap();
@@ -140,13 +153,7 @@ fn fantome_round_trip_preserves_compiled_sources() {
         .unwrap();
     archive.set_position(0);
     let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
-    let info = reader.read_info().unwrap();
-    let declarations = info.layers["base"]
-        .game_data
-        .as_ref()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let declarations = fantome_declarations(&mut reader, "base");
     assert_eq!(
         edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
         "Added"
@@ -444,6 +451,7 @@ fn override_files_round_trip_through_fantome() {
     assert_eq!(
         names,
         [
+            "META/game_data/base/game_data.yaml",
             "META/game_data/base/Test.wad.client/inner.ptch",
             "META/game_data/base/top.ptch"
         ]
@@ -519,7 +527,11 @@ fn entry_bodies_round_trip_through_both_archives() {
             package.load_metadata().unwrap().layers[0].game_data.clone()
         } else {
             let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
-            reader.read_info().unwrap().layers["base"].game_data.clone()
+            Some(
+                fantome_declarations(&mut reader, "base")
+                    .try_into()
+                    .unwrap(),
+            )
         };
         let declarations = document.unwrap().parse().unwrap();
         assert_eq!(declarations, authored, "{format}");
@@ -623,7 +635,11 @@ fn module_names_round_trip_through_both_archives_and_extraction() {
             package.load_metadata().unwrap().layers[0].game_data.clone()
         } else {
             let mut reader = ltk_fantome::FantomeReader::new(archive.clone()).unwrap();
-            reader.read_info().unwrap().layers["base"].game_data.clone()
+            Some(
+                fantome_declarations(&mut reader, "base")
+                    .try_into()
+                    .unwrap(),
+            )
         };
         let carried = document.unwrap().parse().unwrap();
         assert_eq!(names(&carried), expected, "{format}");
@@ -691,4 +707,128 @@ fn an_imported_archive_holds_a_yaml_manifest_and_no_json_manifest() {
         };
         assert_eq!(selectors(&extracted), selectors(&authored), "{format}");
     }
+}
+
+/// The raw text of an archive's `META/info.json`.
+fn info_json(archive: &Cursor<Vec<u8>>) -> String {
+    let mut zip = zip::ZipArchive::new(archive.clone()).unwrap();
+    let mut entry = zip.by_name("META/info.json").unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut text).unwrap();
+    text
+}
+
+#[test]
+fn a_packed_fantome_stores_declarations_as_a_yaml_entry_and_not_in_its_metadata() {
+    use ltk_mod_project::fantome::FantomeFormat;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let project = fixture(&source);
+    let authored = load_layer(&source, "base", &ModIgnore::empty(&source))
+        .declarations
+        .unwrap()
+        .unwrap();
+    let mut archive = Cursor::new(Vec::new());
+
+    ProjectPacker::new(project, source)
+        .pack(FantomeFormat::new(&mut archive))
+        .unwrap();
+
+    assert!(!info_json(&archive).contains("GameData"));
+    archive.set_position(0);
+    let mut reader = ltk_fantome::FantomeReader::new(archive).unwrap();
+    assert_eq!(reader.read_info().unwrap().layers["base"].game_data, None);
+    let entry = reader
+        .read_game_data_resource("base", ltk_fantome::GAME_DATA_MANIFEST)
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(entry).unwrap();
+    let carried =
+        ltk_game_data::load_declarations("game_data.yaml", &text, |_| panic!("names a source"))
+            .unwrap();
+    let edits = |declarations: &ltk_game_data::Declarations| {
+        declarations
+            .modules
+            .iter()
+            .map(|module| module.selector.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(edits(&carried), edits(&authored));
+}
+
+#[test]
+fn a_fantome_import_prefers_the_yaml_entry_over_the_metadata_field() {
+    use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
+    use ltk_mod_project::fantome::FantomeImporter;
+    let tmp = tempfile::tempdir().unwrap();
+    let output = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let in_metadata = ltk_game_data::load_declarations(
+        "game_data.yaml",
+        "version: 1\nmodules:\n  - target: shared\n    links: [Metadata]\n",
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let mut info = FantomeInfo::default();
+    info.name = "Declarations".into();
+    info.layers = [(
+        "base".into(),
+        FantomeLayerInfo {
+            name: "base".into(),
+            game_data: Some(in_metadata.try_into().unwrap()),
+            ..Default::default()
+        },
+    )]
+    .into();
+    let mut archive = Cursor::new(Vec::new());
+    let mut writer = FantomeWriter::new(&mut archive);
+    writer.write_info(&info).unwrap();
+    writer
+        .write_game_data_resource(
+            "base",
+            ltk_fantome::GAME_DATA_MANIFEST,
+            &mut "version: 1\nmodules:\n  - target: shared\n    links: [Entry]\n".as_bytes(),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    archive.set_position(0);
+
+    ProjectImporter::new(output.clone())
+        .import(FantomeImporter::new(archive))
+        .unwrap();
+
+    let declarations = load_layer(&output, "base", &ModIgnore::empty(&output))
+        .declarations
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        edits_of(&declarations.modules[0])[0].links.add[0].as_str(),
+        "Entry"
+    );
+}
+
+/// An override file cannot take the manifest's entry: an override path ends in `.ptch`.
+#[test]
+fn a_manifest_naming_the_manifest_name_as_an_override_refuses_the_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
+    let project = override_fixture(&root);
+    fs::write(
+        root.join("content/base/game_data.yaml"),
+        "version: 1\nmodules:\n  - target: shared\n    overrides: [game_data.yaml]\n",
+    )
+    .unwrap();
+    let mut archive = Cursor::new(Vec::new());
+
+    let error = ProjectPacker::new(project, root)
+        .pack(ltk_mod_project::fantome::FantomeFormat::new(&mut archive))
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            ltk_mod_project::PackError::GameData(error)
+                if error.kind == ltk_game_data::ErrorKind::OverridePathExtension
+        ),
+        "{error}"
+    );
 }
