@@ -7,7 +7,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use colored::Colorize;
 use ltk_mod_project::fantome::FantomeFormat;
 use ltk_mod_project::modpkg::{ModpkgFormat, ModpkgPackError};
-use ltk_mod_project::{ConfigFormat, ModProject, PackError, PackageFormat, ProjectPacker};
+use ltk_mod_project::{
+    ConfigFormat, ModProject, PackError, PackReport, PackageFormat, ProjectPacker,
+};
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use std::fs::File;
 use std::io::BufWriter;
@@ -92,9 +94,7 @@ fn pack_to_modpkg(
         );
     }
 
-    for file in report.deprecated_files() {
-        println_pad!("{} {file}", "⚠️  Deprecated:".bright_yellow());
-    }
+    report_deprecated_files(&report);
 
     println_pad!(
         "{}\n{} {}",
@@ -166,9 +166,11 @@ fn pack_to_fantome_format(
     let file = File::create(&output_path).into_diagnostic()?;
     let writer = BufWriter::new(file);
 
-    ProjectPacker::new(mod_project, project_root.to_owned())
+    let report = ProjectPacker::new(mod_project, project_root.to_owned())
         .pack(FantomeFormat::new(writer))
         .map_err(|source| CliError::FantomePackingFailed { source })?;
+
+    report_deprecated_files(&report);
 
     println_pad!(
         "{}\n{} {}",
@@ -180,6 +182,13 @@ fn pack_to_fantome_format(
     );
 
     Ok(())
+}
+
+/// Print a warning for every JSON or TOML manifest and source file the pack read.
+fn report_deprecated_files(report: &PackReport) {
+    for file in report.deprecated_files() {
+        println_pad!("{} {file}", "⚠️  Deprecated:".bright_yellow());
+    }
 }
 
 /// Name the layers stored as `WAD_<layer>/` directories, which Fantome tools
