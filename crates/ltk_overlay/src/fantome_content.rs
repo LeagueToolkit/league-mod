@@ -50,6 +50,29 @@ fn read_zip_entry_bytes(entry: &mut ZipFile<'_, impl Read>) -> io::Result<Vec<u8
     Ok(data)
 }
 
+/// The declarations of a layer's manifest entry. The entry names no source: a `source` key
+/// refuses the layer with [`InputMissing`](ltk_game_data::ErrorKind::InputMissing).
+fn manifest_declarations(
+    layer: &str,
+    bytes: &[u8],
+) -> std::result::Result<ltk_game_data::Declarations, ltk_game_data::Error> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let text = std::str::from_utf8(bytes).map_err(|e| {
+        ltk_game_data::Error::in_document(
+            ltk_game_data::ErrorKind::Metadata {
+                detail: e.to_string(),
+            },
+            layer,
+        )
+    })?;
+    ltk_game_data::load_declarations(ltk_fantome::GAME_DATA_MANIFEST, text, |source| {
+        Err(ltk_game_data::Error::in_document(
+            ltk_game_data::ErrorKind::InputMissing,
+            source,
+        ))
+    })
+}
+
 /// The bytes one archive entry occupies, viewed inside the whole archive.
 ///
 /// A packed WAD is addressed from its own first byte, so reading one where the
@@ -388,6 +411,28 @@ impl<R: Read + Seek> FantomeContent<R> {
         Ok(self.archive_map.clone())
     }
 
+    /// The bytes of `META/game_data/{layer}/{path}`, matched case-insensitively like every
+    /// `META/` entry. `None` for an archive holding no such entry.
+    fn game_data_entry(&mut self, layer: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let want = ltk_fantome::game_data_entry_name(layer, path);
+        let zip_path = self
+            .archive
+            .file_names()
+            .filter_map(|name| name.ok())
+            .find(|name| name.eq_ignore_ascii_case(&want))
+            .map(std::borrow::Cow::into_owned);
+        let Some(zip_path) = zip_path else {
+            return Ok(None);
+        };
+        let mut entry = self
+            .archive
+            .by_name(&zip_path)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
+        read_zip_entry_bytes(&mut entry)
+            .map(Some)
+            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))
+    }
+
     /// The TOC entry `rel_path` names inside this archive's packed WAD, if any.
     ///
     /// Packed chunks are addressed by the hex hash their filename spells, which
@@ -415,6 +460,12 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
         &mut self,
         layer: &str,
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
+        if let Some(bytes) = self
+            .game_data_entry(layer, ltk_fantome::GAME_DATA_MANIFEST)
+            .map_err(|e| ltk_game_data::Error::io(layer, &e))?
+        {
+            return manifest_declarations(layer, &bytes).map(Some);
+        }
         let name = self.index.info_entry.as_ref().ok_or_else(|| {
             ltk_game_data::Error::in_document(ltk_game_data::ErrorKind::InputMissing, layer)
         })?;
@@ -448,24 +499,8 @@ impl<R: Read + Seek + Send + Sync> ModContentProvider for FantomeContent<R> {
     }
 
     fn read_game_data_resource(&mut self, layer: &str, path: &str) -> Result<Vec<u8>> {
-        // `META/game_data/{layer}/{path}`, matched case-insensitively like
-        // every `META/` entry.
-        let want = ltk_fantome::game_data_entry_name(layer, path);
-        let zip_path = self
-            .archive
-            .file_names()
-            .filter_map(|name| name.ok())
-            .find(|name| name.eq_ignore_ascii_case(&want))
-            .map(std::borrow::Cow::into_owned);
-        let Some(zip_path) = zip_path else {
-            return Err(ModContentError::game_data_resource_missing(layer, path));
-        };
-        let mut entry = self
-            .archive
-            .by_name(&zip_path)
-            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))?;
-        read_zip_entry_bytes(&mut entry)
-            .map_err(|source| Error::archive_entry(zip_path.as_str(), source))
+        self.game_data_entry(layer, path)?
+            .ok_or_else(|| ModContentError::game_data_resource_missing(layer, path))
     }
 
     fn mod_project(&mut self) -> Result<ModProject> {

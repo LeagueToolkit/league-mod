@@ -282,9 +282,10 @@ fn scalar_targets_preserve_identifier_kind_and_spelling() {
             if let Some(hash) = hash {
                 assert_eq!(target.chunk_hash(), hash);
             }
-            let manifest = declarations.manifest_json().unwrap();
-            let json: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-            assert_eq!(json["modules"][0]["target"], value);
+            let manifest = declarations.manifest_yaml().unwrap();
+            let reloaded =
+                load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
+            assert_eq!(target_of(&reloaded.modules[0]).0.as_str(), value);
             let document =
                 ltk_game_data::DeclarationDocument::try_from(declarations.clone()).unwrap();
             assert_eq!(document.parse().unwrap(), declarations);
@@ -350,8 +351,8 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
             .is_empty()
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&declarations.manifest_json().unwrap()).unwrap(),
-        serde_json::json!({"version":1,"modules":[{"target":"shared","edits":[{"links":["Added"],"-links":["Removed"]}]}]})
+        declarations.manifest_yaml().unwrap(),
+        "version: 1\nmodules:\n- target: shared\n  edits:\n  - links:\n    - Added\n    -links:\n    - Removed\n"
     );
     let mut unsupported = wire;
     unsupported["modules"][0]["edits"][0]["modes"] = serde_json::json!({});
@@ -421,8 +422,8 @@ links = ["Shared"]
         let parsed = document.parse().unwrap();
         assert_eq!(parsed, declarations, "{name}");
         assert_eq!(entry_names(&parsed.modules[0]), names, "{name}");
-        let manifest = declarations.manifest_json().unwrap();
-        let again = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+        let manifest = declarations.manifest_yaml().unwrap();
+        let again = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
         assert_eq!(
             again.modules[0].selector, declarations.modules[0].selector,
             "{name}"
@@ -740,9 +741,9 @@ fn documents_round_trip_overrides_and_manifests_write_them() {
     let json = serde_json::to_string(&document).unwrap();
     assert!(json.contains(r#""overrides":["a.ptch"]"#), "{json}");
     assert_eq!(document.parse().unwrap(), declarations);
-    let manifest = declarations.manifest_json().unwrap();
-    assert!(manifest.contains(r#""overrides": ["#), "{manifest}");
-    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
+    assert!(manifest.contains("overrides:\n"), "{manifest}");
+    let reloaded = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
     assert_eq!(
         target_of(&reloaded.modules[0]).1,
         target_of(&declarations.modules[0]).1
@@ -832,7 +833,7 @@ fn an_override_path_refuses_a_drive_prefix() {
 #[test]
 fn a_written_manifest_loads_to_the_same_declarations() {
     let declarations = load_declarations(
-        "game_data.json",
+        "game_data.yaml",
         r#"{"version":1,"modules":[
             {"target":"shared","edits":[{"overrides":["a.ptch"],"+links":["x"],"-links":["y"]},{"links":[]}]},
             {"entries":{"Characters/A":{"links":["s"]},"0x0000abcd":{"-links":["t"]}}},
@@ -841,61 +842,36 @@ fn a_written_manifest_loads_to_the_same_declarations() {
         |_| unreachable!(),
     )
     .unwrap();
-    let manifest = declarations.manifest_json().unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
     assert_eq!(
         manifest,
-        r#"{
-  "version": 1,
-  "modules": [
-    {
-      "target": "shared",
-      "edits": [
-        {
-          "overrides": [
-            "a.ptch"
-          ],
-          "links": [
-            "x"
-          ],
-          "-links": [
-            "y"
-          ]
-        },
-        {
-          "links": []
-        }
-      ]
-    },
-    {
-      "entries": {
-        "Characters/A": {
-          "links": [
-            "s"
-          ]
-        },
-        "0x0000abcd": {
-          "links": [],
-          "-links": [
-            "t"
-          ]
-        }
-      }
-    },
-    {
-      "target": "0123456789ABCDEF",
-      "edits": [
-        {
-          "overrides": [
-            "b.ptch"
-          ],
-          "links": []
-        }
-      ]
-    }
-  ]
-}"#
+        r#"version: 1
+modules:
+- target: shared
+  edits:
+  - overrides:
+    - a.ptch
+    links:
+    - x
+    -links:
+    - "y"
+  - links: []
+- entries:
+    Characters/A:
+      links:
+      - s
+    "0x0000abcd":
+      links: []
+      -links:
+      - t
+- target: 0123456789ABCDEF
+  edits:
+  - overrides:
+    - b.ptch
+    links: []
+"#
     );
-    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    let reloaded = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
     assert_eq!(reloaded, declarations);
 }
 
@@ -1055,11 +1031,129 @@ fn module_names_round_trip_through_the_document_and_the_manifest() {
     let reread: DeclarationDocument = serde_json::from_str(&json).unwrap();
     assert_eq!(reread.parse().unwrap(), declarations);
 
-    let manifest = declarations.manifest_json().unwrap();
-    let reloaded = load_declarations("game_data.json", &manifest, |_| unreachable!()).unwrap();
+    let manifest = declarations.manifest_yaml().unwrap();
+    let reloaded = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
     assert_eq!(
         module_names(&reloaded),
         [Some("Ahri recolor"), Some("Ahri recolor"), None]
     );
-    assert_eq!(reloaded.manifest_json().unwrap(), manifest);
+    assert_eq!(reloaded.manifest_yaml().unwrap(), manifest);
+}
+
+/// Every spelling a YAML writer can mistake for another type, in each place a manifest holds a
+/// string.
+const AWKWARD_MANIFEST: &str = r#"
+version: 1
+modules:
+  - name: '123'
+    target: '0123456789012345'
+    edits:
+      - links: ['1e3', 'null', '~', 'true', '0x12345678', 'a: b', 'c #d', '  padded  ']
+        -links: ['-1']
+        '0x12345678':
+          count: 18446744073709551615
+          offset: -1
+          ratio: 1.0
+          text: 'null'
+          multiline: "first\nsecond\n"
+          long: 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty'
+          flag: true
+          absent: null
+          pin: !f32 1.5
+          ptr: !pointer(Particle) {'0x00000001': 1}
+          +tags: ['1', '2']
+  - target: '0123456789ABCDEF'
+    links: []
+  - target: '1234'
+    links: []
+  - target: '12345678901234e5'
+    links: []
+  - target: data/characters/a.bin
+    objects:
+      '0xdeadbeef': {class: '0x00c0ffee', set: {a: 1}}
+      Characters/Gone: {remove: true}
+  - name: Ordered
+    entries:
+      Characters/Z: {a: 1}
+      '0xABCDEF01': {b: 2}
+      Characters/A: {links: ['0123456789012345']}
+      Characters/M: {'-c': [3]}
+  - entries: {}
+"#;
+
+#[test]
+fn a_yaml_manifest_loads_to_the_declarations_it_was_written_from() {
+    let declarations =
+        load_declarations("game_data.yaml", AWKWARD_MANIFEST, |_| unreachable!()).unwrap();
+
+    let manifest = declarations.manifest_yaml().unwrap();
+    let reloaded = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
+
+    let selectors = |declarations: &ltk_game_data::Declarations| -> Vec<Selector> {
+        declarations
+            .modules
+            .iter()
+            .map(|module| module.selector.clone())
+            .collect()
+    };
+    assert_eq!(selectors(&reloaded), selectors(&declarations), "{manifest}");
+    assert_eq!(
+        module_names(&reloaded),
+        [Some("123"), None, None, None, None, Some("Ordered"), None]
+    );
+    assert_eq!(
+        entry_names(&reloaded.modules[5]),
+        ["Characters/Z", "0xABCDEF01", "Characters/A", "Characters/M"]
+    );
+    assert_eq!(reloaded.manifest_yaml().unwrap(), manifest);
+}
+
+#[test]
+fn a_yaml_manifest_keeps_numeric_looking_targets_as_strings() {
+    let declarations =
+        load_declarations("game_data.yaml", AWKWARD_MANIFEST, |_| unreachable!()).unwrap();
+
+    let manifest = declarations.manifest_yaml().unwrap();
+    let reloaded = load_declarations("game_data.yaml", &manifest, |_| unreachable!()).unwrap();
+
+    assert_eq!(
+        target_of(&reloaded.modules[0]).0.as_str(),
+        "0123456789012345"
+    );
+    assert_eq!(
+        target_of(&reloaded.modules[0]).0.chunk_hash(),
+        0x0123456789012345
+    );
+    assert_eq!(target_of(&reloaded.modules[2]).0.as_str(), "1234");
+    assert_eq!(
+        target_of(&reloaded.modules[3]).0.as_str(),
+        "12345678901234e5"
+    );
+    assert_eq!(
+        target_of(&reloaded.modules[3]).0.chunk_hash(),
+        0x12345678901234e5
+    );
+}
+
+#[test]
+fn a_yaml_manifest_refuses_a_property_path_spelling_a_binding_keyword() {
+    let mut declarations = load_declarations(
+        "game_data.yaml",
+        "version: 1\nmodules:\n  - entries:\n      Characters/A: {a: 1}\n",
+        |_| unreachable!(),
+    )
+    .unwrap();
+    let Selector::Entries(entries) = &mut declarations.modules[0].selector else {
+        panic!("expected an entries selector");
+    };
+    entries[0].properties = vec![
+        ltk_game_data::PropertyEdit::parse("links", ltk_game_data::Value::Integer(1)).unwrap(),
+    ];
+
+    let error = declarations.manifest_yaml().unwrap_err();
+
+    assert!(
+        matches!(&error.kind, ErrorKind::ReservedBindingKey { key } if key == "links"),
+        "{error:?}"
+    );
 }

@@ -629,6 +629,11 @@ impl<R: Read + Seek> FantomeReader<R> {
     /// Write every `META/game_data/` entry under `content_dir`, at
     /// `<layer>/<path>`.
     ///
+    /// The layer directory is the spelling `META/info.json` declares for that
+    /// layer, matched case-insensitively, and the entry's own spelling when the
+    /// metadata declares no such layer. A layer's manifest lands under
+    /// [`GAME_DATA_MANIFEST`], whatever case its entry spells.
+    ///
     /// An entry whose relative path is absolute or climbs with `..` is
     /// skipped: the archive names where a file lands, and a name that leaves
     /// the content directory names nowhere.
@@ -637,6 +642,8 @@ impl<R: Read + Seek> FantomeReader<R> {
     ///
     /// Returns an error if the archive is malformed or a file cannot be written.
     pub fn extract_game_data(&mut self, content_dir: &Utf8Path) -> Result<(), FantomeExtractError> {
+        let layer_dirs = self.declared_layer_spellings();
+
         for i in 0..self.archive.len() {
             let mut file = self.archive.by_index(i)?;
             let file_name = self.names[i].clone();
@@ -653,7 +660,23 @@ impl<R: Read + Seek> FantomeReader<R> {
                 continue;
             }
 
-            extract_entry(&mut file, &content_dir.join(relative))?;
+            let target = match relative_path.split_once('/') {
+                Some((layer, path)) => {
+                    let layer = match layer.eq_ignore_ascii_case(BASE_LAYER) {
+                        true => BASE_LAYER,
+                        false => layer_dirs
+                            .get(&layer.to_ascii_lowercase())
+                            .map_or(layer, String::as_str),
+                    };
+                    let path = match path.eq_ignore_ascii_case(GAME_DATA_MANIFEST) {
+                        true => GAME_DATA_MANIFEST,
+                        false => path,
+                    };
+                    content_dir.join(layer).join(path)
+                }
+                None => content_dir.join(relative),
+            };
+            extract_entry(&mut file, &target)?;
         }
 
         Ok(())
@@ -791,8 +814,8 @@ pub enum FantomeEntry<'a> {
     /// produces a table for lookup.
     Hashtable(&'a str),
     /// A file under `META/game_data/`, at `<layer>/<path>` relative to the
-    /// prefix: an override file a layer's game-data declarations name, kept
-    /// at its layer-relative path.
+    /// prefix: a layer's [`GAME_DATA_MANIFEST`], or an override file its
+    /// game-data declarations name, kept at its layer-relative path.
     GameData(&'a str),
 }
 
@@ -856,6 +879,11 @@ pub fn classify_entry(entry_name: &str) -> Option<FantomeEntry<'_>> {
 /// The `META/` directory override files live under, with its trailing slash.
 pub(crate) const GAME_DATA_DIR: &str = "META/game_data/";
 
+/// The layer-relative name of a layer's declarations under `META/game_data/<layer>/`.
+///
+/// The entry is a direct YAML manifest. It names no source.
+pub const GAME_DATA_MANIFEST: &str = "game_data.yaml";
+
 /// The prefix of a non-base layer's WAD directory, `WAD_<layer>/`.
 const LAYER_WAD_DIR_PREFIX: &str = "WAD_";
 
@@ -902,7 +930,7 @@ pub fn wad_entry_name(layer: &str, path: &str) -> String {
     }
 }
 
-/// The archive entry name of the override file at `path` in `layer`:
+/// The archive entry name of the override file or manifest at `path` in `layer`:
 /// `META/game_data/{layer}/{path}`.
 pub fn game_data_entry_name(layer: &str, path: &str) -> String {
     format!("{GAME_DATA_DIR}{layer}/{path}")

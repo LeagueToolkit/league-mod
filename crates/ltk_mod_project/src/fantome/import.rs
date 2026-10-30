@@ -7,7 +7,7 @@ use std::io::{Read, Seek};
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{
     classify_entry, FantomeEntry, FantomeExtractError, FantomeReader, NamingPolicy, NoResolver,
-    PathResolver, WadExtractOptions, WadProgress,
+    PathResolver, WadExtractOptions, WadProgress, GAME_DATA_MANIFEST,
 };
 use ltk_hashtable::{GameResolver, Hashtable, HashtableEntry, HashtableSet};
 use ltk_wad::WadHash;
@@ -85,6 +85,9 @@ impl FantomeImportError {
 ///    project manifest rewritten to the new paths - and name packed WAD
 ///    chunks from those tables first, ahead of the supplied resolver, since
 ///    the mod's own table is the authority on the names its author invented
+/// 4. Extract every `META/game_data/` entry to `content/`, and write a manifest
+///    for a layer that stores its declarations in the metadata and holds no
+///    manifest entry
 ///
 /// The project the archive's metadata describes is returned for the driver to
 /// write out as `mod.config.json`.
@@ -275,7 +278,12 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
                 } else {
                     &layer.name
                 };
-                crate::game_data::write_manifest(output_dir, name, &document)?;
+                if reader
+                    .read_game_data_resource(name, GAME_DATA_MANIFEST)?
+                    .is_none()
+                {
+                    crate::game_data::write_manifest(output_dir, name, &document)?;
+                }
             }
         }
 

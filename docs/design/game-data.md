@@ -234,14 +234,16 @@ unset displays as the code's statement alone. `Display` is a log rendering; a co
 a contained document and validates the result; reading a document refuses a duplicate mapping
 key anywhere in it. `Declarations` exposes mutable `version` and `modules` fields; `validate()`
 checks supported declaration versions, and refuses a target module with no edit and an entries
-module with no entry. `manifest_json()` validates and writes a direct JSON manifest.
+module with no entry. `manifest_yaml()` validates and writes a direct YAML manifest
+([ADR-0041](../adr/0041-yaml-manifests.md)). A string the YAML core schema reads as another type
+is quoted.
 A conversion to a serialized form refuses what that form cannot carry, and the manifest and
 the document refuse the same things ([ADR-0023](../adr/0023-refusing-serialization.md)): a
 property path spelling a binding keyword, one signed key held twice by an entry, and an
 integer outside the union of the `i64` and `u64` ranges. An entry name spelling a binding
 keyword is refused earlier, at construction
 ([ADR-0026](../adr/0026-entry-names-refuse-a-binding-keyword.md)).
-`manifest_json()` output loads
+`manifest_yaml()` output loads
 to the declarations it was written from. Target and link-path validity is enforced by their
 types ([section 4](#s4)). `apply()` runs each edit's phases in phase order, each edit over the
 result of the preceding one, returns bytes, and leaves its input unchanged. `applied` counts
@@ -263,7 +265,10 @@ spellings, including retained base entries.
 
 A layer has at most one `game_data.yaml`, `game_data.yml`, `game_data.toml`, or
 `game_data.json`. A manifest or source file's extension names its format, compared ASCII
-case-insensitively. The manifest requires integer `version: 1` and a `modules` array.
+case-insensitively. YAML is the manifest format. JSON and TOML are deprecated
+([ADR-0041](../adr/0041-yaml-manifests.md)): a file in either format loads, and a pack
+([section 5](#s5)) or an overlay build ([section 6](#s6)) of a project directory reports it.
+`is_deprecated_format(name)` answers for a file name. The manifest requires integer `version: 1` and a `modules` array.
 A module contains one selector and an optional `name`. A `target` selector takes a compact
 binding body, `edits`, or `source`. An `entries` selector is a mapping of entry names to entry bodies and takes
 nothing else; an `entries` module is one batch. The mapping may be empty, and such a module
@@ -446,14 +451,26 @@ retain their origins. Archive declarations use the target strings specified in
 [section 4](#s4). An override file travels under its layer-relative path
 ([ADR-0013](../adr/0013-override-file-placement.md)): modpkg stores it as a chunk of its layer
 with no WAD; Fantome stores it as `META/game_data/<layer>/<path>`, classified as
-`FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.json` manifest per
+`FantomeEntry::GameData`. Extraction reconstructs a direct `game_data.yaml` manifest per
 layer and places every override file at its path under the layer's content directory.
-The modpkg layer metadata field is `game_data`; the Fantome layer field is `GameData`.
+`LayerDeclarations::deprecated_files()` and `PackReport::deprecated_files()` list the JSON and
+TOML manifest and source files of a project as `DeprecatedFile`, the layer and the layer-relative
+path. Its `Display` names the file and says to convert it to YAML. An archive's declarations are
+not manifest files and report none.
+The modpkg layer metadata field is `game_data`. A Fantome layer stores its declarations as the
+direct manifest `META/game_data/<layer>/game_data.yaml`, classified as `FantomeEntry::GameData`
+and named by `GAME_DATA_MANIFEST` ([ADR-0042](../adr/0042-fantome-declaration-entry.md)). The
+entry names no source. An override file cannot take the entry's name: an `OverridePath` ends in
+`.ptch`. A packed `info.json` carries no declarations. A reader and an import take the entry
+first, and read the Fantome layer field `GameData` for a layer with no entry. Extraction places the
+entry at the layer spelling `info.json` declares and at the name `game_data.yaml`, each matched
+ASCII case-insensitively. A module read from
+the entry has `game_data.yaml` as its origin manifest and no origin source.
 Modpkg metadata uses schema version 4. Absent fields represent no declarations.
 `DeclarationDocument` retains unsupported fields; its `parse()` method validates the complete
 layer before execution. A document and a manifest carry an `entries` mapping in authored
 order ([ADR-0011](../adr/0011-insertion-ordered-declaration-documents.md)). An edit with no
-binding is a legal document value; `manifest_json()` writes `name` for a named module,
+binding is a legal document value; `manifest_yaml()` writes `name` for a named module,
 `links` for every edit,
 `overrides` for an edit with override paths, and one key per entry name for an edit with
 entry edits, each value the entry body with every `Value` as its literal.
@@ -709,8 +726,11 @@ absent as `None`. `GameDataDiagnosticKind` is non-exhaustive and distinguishes
 `DeclarationsRejected`, `TargetSkipped`, `NoEffect`, `EntryUnresolved`, `EntryFanOut`, `IndexUnavailable`,
 `OverrideUnreadable`, `OverrideInvalid`, `OverrideRecordSkipped`, `LinkRemovalUnmatched`,
 `PropertyEditSkipped`, `SchemaFallback`, `ReferenceUnreadable`, `ObjectSkipped`,
-`ObjectShadowsGame`, `LinkUnsupported`, `EntryUnreadable`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
-are informational. A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
+`ObjectShadowsGame`, `LinkUnsupported`, `EntryUnreadable`, `DeprecatedFormat`, and `Unknown`. `EntryFanOut`, `SchemaFallback`, and `ObjectShadowsGame`
+are informational. `DeprecatedFormat` is one warning per JSON or TOML manifest or source file a
+project directory's `ModContentProvider::deprecated_game_data_files` lists, with the
+layer-relative path in its optional `file` field. The file loads. An archive provider lists none.
+A `GameDataDiagnostic` of kind `OverrideRecordSkipped` carries the
 `SkippedRecord` in its optional `record` field, one of kind `PropertyEditSkipped` carries
 the `SkippedProperty` in its optional `property` field, and one of kind `ObjectSkipped`
 carries the `SkippedObject` in its optional `object` field; each is absent otherwise and
@@ -847,3 +867,5 @@ which another mod's copy of the referenced entry does not change what resolves.
 | D41 | An `entries` module may hold no entry, and applies nothing | `EntriesEmpty` at loading | An author names a module before filling it, and a tool writes it as it is named | [section 4](#s4), [ADR-0034](../adr/0034-an-empty-entries-module-loads.md) |
 | D42 | A YAML tag on an object body names the class and tags the body's `set` | A keyword tag with the class in parentheses; a struct tag; `class` and `set` only | An object body has one kind and takes no type pin; the document form keeps one shape | [section 4](#s4), [ADR-0037](../adr/0037-object-class-tags.md) |
 | D43 | A struct pin on a list of structs is the list of that one element | A list of one pin only; `KindMismatch` | A struct pin spells one struct, and a pin on a list names the item kind; the option of structs reads the same pin the same way | [section 6](#s6) |
+| D44 | A manifest is written as YAML; JSON and TOML files report a warning | `manifest_json` beside `manifest_yaml`; JSON and TOML kept indefinitely | The manager edits YAML and refuses JSON | [section 4](#s4), [ADR-0041](../adr/0041-yaml-manifests.md) |
+| D45 | A packed Fantome layer stores its declarations as a YAML entry | The `GameData` field of `info.json` | `info.json` is metadata other tools read and extend | [section 5](#s5), [ADR-0042](../adr/0042-fantome-declaration-entry.md) |

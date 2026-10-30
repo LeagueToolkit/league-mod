@@ -50,8 +50,8 @@ pub use normalize::{
 };
 pub use packed::PackedWadSource;
 pub use reader::{
-    FantomeEntry, FantomeReader, LayerWad, WadExtractOptions, WadProgress, classify_entry,
-    game_data_entry_name, is_layer_name, wad_entry_name,
+    FantomeEntry, FantomeReader, GAME_DATA_MANIFEST, LayerWad, WadExtractOptions, WadProgress,
+    classify_entry, game_data_entry_name, is_layer_name, wad_entry_name,
 };
 pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
 pub use writer::FantomeWriter;
@@ -281,7 +281,8 @@ pub enum FantomeLicense {
 /// `Default` is for struct update syntax. A default layer info names no layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct FantomeLayerInfo {
-    /// The layer's versioned executable game-data program.
+    /// The layer's declarations in the metadata form. A [`GAME_DATA_MANIFEST`] entry of the
+    /// layer takes precedence, and a packed archive stores only that entry.
     #[serde(rename = "GameData", default, skip_serializing_if = "Option::is_none")]
     pub game_data: Option<ltk_game_data::DeclarationDocument>,
     #[serde(rename = "Name")]
