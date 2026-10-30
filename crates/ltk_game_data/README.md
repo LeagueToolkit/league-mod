@@ -19,10 +19,12 @@ modules:
 ```rust
 use ltk_game_data::{Selector, apply, load_declarations};
 
-let declarations = load_declarations("game_data.json", r#"{
-  "version": 1,
-  "modules": [{"target":"shared", "links": ["mods/example"]}]
-}"#, |path| Err(ltk_game_data::Error::new(path, "source unavailable")))?;
+let declarations = load_declarations("game_data.yaml", r#"
+version: 1
+modules:
+  - target: shared
+    links: [mods/example]
+"#, |path| Err(ltk_game_data::Error::new(path, "source unavailable")))?;
 let Selector::Target { edits, .. } = &declarations.modules[0].selector else {
     unreachable!("the module names a target");
 };

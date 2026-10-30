@@ -1,13 +1,14 @@
 //! Layer declaration loading and build-resource classification.
 
-use std::{collections::HashSet, fmt, io::Cursor};
+use std::{collections::HashSet, io::Cursor};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_game_data::{
     Declarations, Error, ErrorKind, OverridePath, ReferencedInputs, Selector, MANIFEST_NAMES,
+    REFUSED_MANIFEST_NAMES,
 };
 
-use crate::{ModIgnore, ModProjectLayer, CONTENT_DIR_NAME};
+use crate::{ModIgnore, ModProjectLayer};
 
 /// An override file a layer's declarations name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,33 +19,11 @@ pub struct OverrideFile {
     pub source: Utf8PathBuf,
 }
 
-/// A manifest or source file of a layer in a deprecated format: JSON or TOML.
-///
-/// The file loads. `Display` names it and says to convert it to YAML.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeprecatedFile {
-    /// The layer holding the file.
-    pub layer: String,
-    /// The file's layer-relative path, as the manifest spells it.
-    pub path: Utf8PathBuf,
-}
-
-impl fmt::Display for DeprecatedFile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{CONTENT_DIR_NAME}/{}/{}: JSON and TOML declarations are deprecated, convert the file to YAML",
-            self.layer, self.path
-        )
-    }
-}
-
 /// A layer's declaration result and classified input files.
 pub struct LayerDeclarations {
     pub declarations: Result<Option<Declarations>, Error>,
     inputs: HashSet<Utf8PathBuf>,
     override_files: Vec<OverrideFile>,
-    deprecated_files: Vec<DeprecatedFile>,
 }
 
 impl LayerDeclarations {
@@ -64,12 +43,6 @@ impl LayerDeclarations {
     pub fn override_files(&self) -> &[OverrideFile] {
         &self.override_files
     }
-
-    /// The manifest and source files read in a deprecated format, one per distinct path in
-    /// first-read order. Holds what was read before a refusal, for refused declarations.
-    pub fn deprecated_files(&self) -> &[DeprecatedFile] {
-        &self.deprecated_files
-    }
 }
 
 /// Loads declarations and classifies inputs for one layer.
@@ -81,23 +54,19 @@ pub fn load_layer(project_root: &Utf8Path, layer: &str, ignore: &ModIgnore) -> L
 /// One layer's declaration load: the manifest, its sources, and its override files, each
 /// read through the layer's containment and ignore rules and recorded as an input.
 struct Loader<'a> {
-    layer: &'a str,
     root: Utf8PathBuf,
     ignore: &'a ModIgnore,
     inputs: HashSet<Utf8PathBuf>,
     override_files: Vec<OverrideFile>,
-    deprecated_files: Vec<DeprecatedFile>,
 }
 
 impl<'a> Loader<'a> {
     fn new(project_root: &Utf8Path, layer: &'a str, ignore: &'a ModIgnore) -> Self {
         Self {
-            layer,
             root: ModProjectLayer::content_path(project_root, layer),
             ignore,
             inputs: HashSet::new(),
             override_files: Vec::new(),
-            deprecated_files: Vec::new(),
         }
     }
 
@@ -110,13 +79,12 @@ impl<'a> Loader<'a> {
             declarations,
             inputs: self.inputs,
             override_files: self.override_files,
-            deprecated_files: self.deprecated_files,
         }
     }
 
-    /// The manifests present in the layer, by candidate name order.
-    fn manifests(&self) -> Vec<Utf8PathBuf> {
-        MANIFEST_NAMES
+    /// The files of the layer with one of `names`, in the order of `names`.
+    fn present(&self, names: &[&str]) -> Vec<Utf8PathBuf> {
+        names
             .iter()
             .map(|name| self.root.join(name))
             .filter(|path| path.try_exists().unwrap_or(true))
@@ -193,23 +161,7 @@ impl<'a> Loader<'a> {
 
     fn read_text(&mut self, path: &Utf8Path, root_canonical: &Utf8Path) -> Result<String, Error> {
         self.required(path, root_canonical)?;
-        let text = std::fs::read_to_string(path).map_err(|e| input_error(path.as_str(), &e))?;
-        self.record_deprecated(path);
-        Ok(text)
-    }
-
-    /// Records a read manifest or source file in a deprecated format, once per distinct path.
-    fn record_deprecated(&mut self, path: &Utf8Path) {
-        if !ltk_game_data::is_deprecated_format(path.as_str()) {
-            return;
-        }
-        let path = path.strip_prefix(&self.root).unwrap_or(path);
-        if !self.deprecated_files.iter().any(|file| file.path == path) {
-            self.deprecated_files.push(DeprecatedFile {
-                layer: self.layer.to_owned(),
-                path: path.to_owned(),
-            });
-        }
+        std::fs::read_to_string(path).map_err(|e| input_error(path.as_str(), &e))
     }
 
     /// Reads and checks one override file and records it, once per distinct path.
@@ -234,9 +186,14 @@ impl<'a> Loader<'a> {
     }
 
     fn declarations(&mut self) -> Result<Option<Declarations>, Error> {
-        let manifests = self.manifests();
+        let manifests = self.present(&MANIFEST_NAMES);
+        let refused = self.present(&REFUSED_MANIFEST_NAMES);
         self.inputs.extend(manifests.iter().cloned());
+        self.inputs.extend(refused.iter().cloned());
         self.discover(&manifests);
+        if let Some(path) = refused.first() {
+            return Err(Error::in_document(ErrorKind::UnknownFormat, path.as_str()));
+        }
         if manifests.is_empty() {
             return Ok(None);
         }

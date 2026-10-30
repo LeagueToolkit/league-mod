@@ -81,8 +81,8 @@ fn refused_declarations_keep_sources_out_of_wad_and_raw_content() {
         &game.join(WAD),
         &[
             ("shared", &bin(&[])),
-            ("source.json", b"game source"),
-            ("raw-source.json", b"game raw"),
+            ("source.yaml", b"game source"),
+            ("raw-source.yaml", b"game raw"),
         ],
     );
     let mut enabled = project(
@@ -92,8 +92,8 @@ fn refused_declarations_keep_sources_out_of_wad_and_raw_content() {
         Some(
             r#"{"version":1,"modules":[
         {"target":"shared","unsupported":true},
-        {"target":"shared","source":"Test.wad.client/source.json"},
-        {"target":"shared","source":"raw/raw-source.json"}
+        {"target":"shared","source":"Test.wad.client/source.yaml"},
+        {"target":"shared","source":"raw/raw-source.yaml"}
     ]}"#,
         ),
     );
@@ -101,11 +101,11 @@ fn refused_declarations_keep_sources_out_of_wad_and_raw_content() {
     fs::create_dir_all(path.join("content/base/raw")).unwrap();
     let source = r#"{"version":1,"links":["declared"]}"#;
     fs::write(
-        path.join("content/base/Test.wad.client/source.json"),
+        path.join("content/base/Test.wad.client/source.yaml"),
         source,
     )
     .unwrap();
-    fs::write(path.join("content/base/raw/raw-source.json"), source).unwrap();
+    fs::write(path.join("content/base/raw/raw-source.yaml"), source).unwrap();
     enabled.content = Box::new(FsModContent::new(path).with_raw_overrides());
     let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
     builder.set_enabled_mods(vec![enabled]);
@@ -115,8 +115,8 @@ fn refused_declarations_keep_sources_out_of_wad_and_raw_content() {
         result.game_data_diagnostics[0].kind,
         ltk_overlay::game_data::GameDataDiagnosticKind::DeclarationsRejected
     );
-    assert_eq!(chunk(&overlay.join(WAD), "source.json"), b"game source");
-    assert_eq!(chunk(&overlay.join(WAD), "raw-source.json"), b"game raw");
+    assert_eq!(chunk(&overlay.join(WAD), "source.yaml"), b"game source");
+    assert_eq!(chunk(&overlay.join(WAD), "raw-source.yaml"), b"game raw");
     assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["ordinary"]));
 }
 
@@ -149,7 +149,7 @@ fn archives_patch_game_only_targets_and_preserve_diagnostics_on_cached_builds() 
             ],
         );
         let declarations = ltk_game_data::load_declarations(
-            "game_data.json",
+            "game_data.yaml",
             &r#"{"version":1,"modules":[
             {"target":"TARGET","edits":[{"-links":["Absent"]},{"links":["Added"]}]},
             {"target":"missing","links":["Added"]},
@@ -861,7 +861,7 @@ fn archives_apply_packed_overrides_and_report_unreadable_and_invalid_files() {
         let state = root.join("state");
         common::write_game_wad(&game.join(WAD), &[("shared", &speed_bin())]);
         let declarations = ltk_game_data::load_declarations(
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"target":"shared","overrides":["patches/speed.ptch","prop.ptch","missing.ptch"],"links":["Added"]}]}"#,
             |_| unreachable!(),
         )
@@ -1444,107 +1444,40 @@ fn a_fantome_layer_prefers_the_yaml_entry_over_the_metadata_field() {
 }
 
 #[test]
-fn a_project_directory_reports_json_and_toml_files_and_applies_them() {
+fn a_json_or_toml_manifest_is_rejected_with_the_conversion_to_make() {
     use ltk_overlay::game_data::GameDataDiagnosticKind;
-    type Files = &'static [(&'static str, &'static str)];
-    let cases: [(Files, &[&str]); 4] = [
-        (
-            &[(
-                "game_data.json",
-                r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
-            )],
-            &["game_data.json"],
-        ),
-        (
-            &[(
-                "game_data.toml",
-                "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['Added']\n",
-            )],
-            &["game_data.toml"],
-        ),
-        (
-            &[
-                (
-                    "game_data.yaml",
-                    "version: 1\nmodules:\n  - target: shared\n    source: links.json\n",
-                ),
-                ("links.json", r#"{"version":1,"links":["Added"]}"#),
-            ],
-            &["links.json"],
-        ),
-        (
-            &[
-                (
-                    "game_data.yaml",
-                    "version: 1\nmodules:\n  - target: shared\n    source: links.yaml\n",
-                ),
-                ("links.yaml", "version: 1\nlinks: [Added]\n"),
-            ],
-            &[],
-        ),
-    ];
-    for (files, expected) in cases {
+    for name in ["game_data.json", "game_data.toml"] {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(tmp.path().to_owned()).unwrap();
         let game = root.join("game");
         let overlay = root.join("overlay");
         common::write_game_wad(&game.join(WAD), &[("shared", &bin(&["Game"]))]);
         let enabled = project(&root, "mod", None, None);
-        for (name, text) in files {
-            fs::write(root.join("mod/content/base").join(name), text).unwrap();
-        }
+        fs::write(
+            root.join("mod/content/base").join(name),
+            r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
+        )
+        .unwrap();
         let mut builder = OverlayBuilder::new(game, overlay.clone(), root.join("state"));
         builder.set_enabled_mods(vec![enabled]);
 
         let result = builder.build().unwrap();
 
-        let reported: Vec<&str> = result
-            .game_data_diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == GameDataDiagnosticKind::DeprecatedFormat)
-            .filter_map(|diagnostic| diagnostic.file.as_deref())
-            .collect();
-        assert_eq!(reported, expected);
-        assert_eq!(result.game_data_diagnostics.len(), expected.len());
-        for diagnostic in &result.game_data_diagnostics {
-            assert_eq!(diagnostic.layer, "base");
-            assert!(
-                diagnostic.message.contains("YAML"),
-                "{}",
-                diagnostic.message
-            );
-        }
-        assert_eq!(chunk(&overlay.join(WAD), "shared"), bin(&["Game", "Added"]));
+        let [diagnostic] = result.game_data_diagnostics.as_slice() else {
+            panic!("{name}: {:?}", result.game_data_diagnostics);
+        };
+        assert_eq!(
+            diagnostic.kind,
+            GameDataDiagnosticKind::DeclarationsRejected
+        );
+        assert_eq!(diagnostic.layer, "base");
+        assert!(diagnostic.message.contains(name), "{}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains("convert the file to YAML"),
+            "{}",
+            diagnostic.message
+        );
+        let rebuilt = builder.build().unwrap();
+        assert_eq!(rebuilt.game_data_diagnostics.len(), 1, "{name}");
     }
-}
-
-#[test]
-fn an_archive_reports_no_deprecated_file() {
-    use ltk_fantome::{FantomeInfo, FantomeLayerInfo, FantomeWriter};
-    use ltk_overlay::{FantomeContent, ModContentProvider};
-    let declarations = ltk_game_data::load_declarations(
-        "game_data.json",
-        r#"{"version":1,"modules":[{"target":"shared","links":["Added"]}]}"#,
-        |_| unreachable!(),
-    )
-    .unwrap();
-    let mut info = FantomeInfo::default();
-    info.name = "declarations".into();
-    info.layers = [(
-        "base".into(),
-        FantomeLayerInfo {
-            name: "base".into(),
-            game_data: Some(declarations.try_into().unwrap()),
-            ..Default::default()
-        },
-    )]
-    .into();
-    let mut archive = Cursor::new(Vec::new());
-    let mut writer = FantomeWriter::new(&mut archive);
-    writer.write_info(&info).unwrap();
-    writer.finish().unwrap();
-    archive.set_position(0);
-    let mut content = FantomeContent::new(archive).unwrap();
-
-    assert!(content.deprecated_game_data_files("base").is_empty());
 }

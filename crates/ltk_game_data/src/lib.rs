@@ -36,7 +36,7 @@ pub use ltk_meta::{
     BinObject, PropertyKind,
     path::{FieldNames, PropertyPath},
 };
-pub use manifest::{MANIFEST_NAMES, ReferencedInputs, is_deprecated_format, load_declarations};
+pub use manifest::{MANIFEST_NAMES, REFUSED_MANIFEST_NAMES, ReferencedInputs, load_declarations};
 pub use property::{PropertyEdit, Sign};
 pub use reference::Reference;
 pub use render::Names;

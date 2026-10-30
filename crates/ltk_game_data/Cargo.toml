@@ -11,7 +11,6 @@ camino = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde-saphyr = { version = "1.3", default-features = false, features = ["deserialize", "serialize"] }
-toml = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
 ltk_meta = { workspace = true }
 ltk_hash = { workspace = true, features = ["serde"] }

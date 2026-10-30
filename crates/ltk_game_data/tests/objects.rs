@@ -147,20 +147,7 @@ modules:
         remove: true
 ";
 
-const TOML: &str = r#"version = 1
-[[modules]]
-target = "a.bin"
-[modules.objects."Characters/Copy"]
-clone = "Characters/A"
-set = { speed = { f32 = 2.5 } }
-[modules.objects."Characters/New"]
-class = "C"
-set = { label = "fresh" }
-[modules.objects."Characters/Old"]
-remove = true
-"#;
-
-const JSON: &str = r#"{"version": 1, "modules": [{"target": "a.bin", "objects": {
+const FLOW: &str = r#"{"version": 1, "modules": [{"target": "a.bin", "objects": {
   "Characters/Copy": {"clone": "Characters/A", "set": {"speed": {"f32": 2.5}}},
   "Characters/New": {"class": "C", "set": {"label": "fresh"}},
   "Characters/Old": {"remove": true}
@@ -186,9 +173,7 @@ fn objects_load_from_every_format_as_one_model() {
             if class.as_str() == "C" && class.class_hash() == h("C") && properties.len() == 1
     ));
     assert_eq!(edit.objects[2], ObjectEdit::Remove);
-    for (name, text) in [("game_data.toml", TOML), ("game_data.json", JSON)] {
-        assert_eq!(edits(&load(name, text)), edits(&yaml), "{name}");
-    }
+    assert_eq!(edits(&load("game_data.yaml", FLOW)), edits(&yaml));
 }
 
 #[test]

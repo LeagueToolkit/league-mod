@@ -13,7 +13,6 @@
 
 use crate::error::{Error, ModContentError, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use ltk_mod_project::game_data::DeprecatedFile;
 use ltk_mod_project::{CONTENT_DIR_NAME, ModIgnore, ModProject, ModProjectLayer};
 use ltk_wad::WadChunkCompression;
 use xxhash_rust::xxh3::xxh3_64;
@@ -111,11 +110,6 @@ pub trait ModContentProvider: Send + Sync {
         _layer: &str,
     ) -> std::result::Result<Option<ltk_game_data::Declarations>, ltk_game_data::Error> {
         Ok(None)
-    }
-    /// The layer's manifest and source files in a deprecated format, JSON or TOML. Empty for
-    /// a provider that reads no authored file, which every archive is.
-    fn deprecated_game_data_files(&mut self, _layer: &str) -> Vec<DeprecatedFile> {
-        Vec::new()
     }
 
     /// The bytes of the layer's game-data override file at a layer-relative path.
@@ -407,16 +401,6 @@ impl ModContentProvider for FsModContent {
         ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore).declarations
     }
 
-    fn deprecated_game_data_files(&mut self, layer: &str) -> Vec<DeprecatedFile> {
-        // A filter that does not load refuses the declarations, which reports it.
-        let Ok(ignore) = self.ignore() else {
-            return Vec::new();
-        };
-        ltk_mod_project::game_data::load_layer(&self.mod_dir, layer, ignore)
-            .deprecated_files()
-            .to_vec()
-    }
-
     fn read_game_data_resource(&mut self, layer: &str, path: &str) -> Result<Vec<u8>> {
         let layer_dir = ModProjectLayer::content_path(&self.mod_dir, layer);
         let file_path = layer_dir.join(path);
@@ -507,6 +491,7 @@ impl ModContentProvider for FsModContent {
                 };
                 if ltk_game_data::MANIFEST_NAMES
                     .iter()
+                    .chain(&ltk_game_data::REFUSED_MANIFEST_NAMES)
                     .any(|name| path.join(name).exists())
                 {
                     return Ok(None);

@@ -50,22 +50,7 @@ modules:
         Teemo_R_Debuff: null
 "#;
 
-const TOML: &str = r#"version = 1
-
-[[modules]]
-target = "data/characters/teemo/skins/skin0.bin"
-"Characters/Teemo/Skins/Skin0" = {
-  skinMeshProperties = { selfIllumination = 1.0, "+tagEventList" = ["Jade_Teemo"] },
-  "healthBarData.unitHealthBarStyle" = { u8 = 12 },
-  iconCircle = "assets/teemo_circle.tex",
-  "-skinAudioProperties.bankUnits" = [0, 2],
-}
-"Characters/Teemo/Skins/Skin0/Resources" = {
-  "+resourceMap" = { Teemo_R_Mis = { link = "Characters/Jade_Teemo/Particles/R_Mis" }, Teemo_R_Debuff = "" },
-}
-"#;
-
-const JSON: &str = r#"{
+const FLOW: &str = r#"{
   "version": 1,
   "modules": [
     {
@@ -84,10 +69,9 @@ const JSON: &str = r#"{
 }"#;
 
 #[test]
-fn entry_bodies_load_from_every_format_in_key_order() {
+fn entry_bodies_load_in_key_order_from_block_and_flow_spellings() {
     let yaml = load("game_data.yaml", YAML);
-    let toml = load("game_data.toml", TOML);
-    let json = load("game_data.json", JSON);
+    let flow = load("game_data.yaml", FLOW);
     let edits = target_edits(&yaml.modules[0]);
     assert_eq!(edits.len(), 1);
     let entries = &edits[0].entries;
@@ -130,14 +114,8 @@ fn entry_bodies_load_from_every_format_in_key_order() {
         *pinned,
         Value::Mapping(IndexMap::from([("u8".to_owned(), Value::Integer(12))]))
     );
-    // TOML spells a null link as the empty string; the other two carry null.
-    assert_eq!(target_edits(&json.modules[0]), edits);
-    let toml_edits = target_edits(&toml.modules[0]);
+    assert_eq!(target_edits(&flow.modules[0]), edits);
     let resources = EntryName::try_from("Characters/Teemo/Skins/Skin0/Resources").unwrap();
-    let Value::Mapping(map) = &toml_edits[0].entries[&resources][0].value else {
-        panic!("expected a mapping");
-    };
-    assert_eq!(map["Teemo_R_Debuff"], Value::String(String::new()));
     let Value::Mapping(map) = &entries[&resources][0].value else {
         panic!("expected a mapping");
     };
@@ -178,12 +156,12 @@ fn root_keys_that_are_not_entry_names_are_unsupported_bindings() {
             "version: 1\nmodules:\n  - target: a.bin\n    clone: {}\n",
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "speed": 1}]}"#,
         ),
         (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = \"a.bin\"\nmodes = { a = 1 }\n",
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    modes: {a: 1}\n",
         ),
     ] {
         let error = load_declarations(name, text, no_source).unwrap_err();
@@ -220,13 +198,13 @@ fn structural_refusals_name_the_key() {
             |kind| matches!(kind, ErrorKind::Syntax { detail } if detail.contains("!widget")),
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"a": {"pointer": 5}}}]}"#,
             |kind| *kind == ErrorKind::StructPinShape,
         ),
         (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { a = { embed = { class = 1 } } }\n",
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: {embed: {class: 1}}\n",
             |kind| *kind == ErrorKind::StructPinShape,
         ),
         (
@@ -236,14 +214,14 @@ fn structural_refusals_name_the_key() {
         ),
         // A `ref` whose value is not a string at all.
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"a": {"ref": 5}}}]}"#,
             |kind| *kind == ErrorKind::ReferenceShape,
         ),
         // A string with no `:` to split at.
         (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { a = { ref = \"nocolon\" } }\n",
+            "game_data.yaml",
+            "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: {ref: nocolon}\n",
             |kind| *kind == ErrorKind::ReferenceShape,
         ),
         // A reference nested in a list, whose path half does not parse.
@@ -276,7 +254,7 @@ fn a_class_tag_and_the_struct_pin_load_as_one_value() {
     let tagged = "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      +components:\n        - !pointer(0x50db156b)\n          options: !embed(PostEffectOptions)\n            HeightFog: true\n      ptr: !pointer(X)\n";
     let spelled = r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"+components": [{"pointer": {"class": "0x50db156b", "set": {"options": {"embed": {"class": "PostEffectOptions", "set": {"HeightFog": true}}}}}}], "ptr": {"pointer": {"class": "X"}}}}]}"#;
     let tagged = load("game_data.yaml", tagged);
-    let spelled = load("game_data.json", spelled);
+    let spelled = load("game_data.yaml", spelled);
     let name = EntryName::try_from("Characters/A").unwrap();
     assert_eq!(
         target_edits(&tagged.modules[0])[0].entries[&name],
@@ -288,20 +266,16 @@ fn a_class_tag_and_the_struct_pin_load_as_one_value() {
 fn duplicate_signed_keys_are_errors_in_every_format() {
     for (name, text) in [
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"a": 1, "a": 2}}]}"#,
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"a": {"b": 1, "b": 2}}}]}"#,
         ),
         (
             "game_data.yaml",
             "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      a: 1\n      a: 2\n",
-        ),
-        (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { a = 1, a = 2 }\n",
         ),
     ] {
         let error = load_declarations(name, text, no_source).unwrap_err();
@@ -352,7 +326,7 @@ fn entries_module(properties: Vec<PropertyEdit>) -> Declarations {
             name: None,
             selector: Selector::Entries(entries),
             origin: ltk_game_data::Origin {
-                manifest: "game_data.json".into(),
+                manifest: "game_data.yaml".into(),
                 source: None,
                 module_index: 0,
             },
@@ -494,7 +468,7 @@ fn an_empty_target_refuses_to_load_and_to_write() {
                 edits: Vec::new(),
             },
             origin: ltk_game_data::Origin {
-                manifest: "game_data.json".into(),
+                manifest: "game_data.yaml".into(),
                 source: None,
                 module_index: 0,
             },
@@ -542,10 +516,9 @@ fn integers_span_the_i64_and_u64_ranges() {
 
 /// A reference is one value however the document spells it.
 ///
-/// The YAML tag and the one-key mapping are the same value, as a type pin's two spellings
-/// are, and JSON and TOML have only the mapping.
+/// The YAML tag and the one-key mapping are the same value, as a type pin's two spellings are.
 #[test]
-fn a_reference_loads_from_every_format_as_one_value() {
+fn a_reference_loads_from_every_spelling_as_one_value() {
     let expected = Value::Mapping(IndexMap::from([(
         "ref".to_owned(),
         Value::String("Characters/B:speed".to_owned()),
@@ -560,12 +533,8 @@ fn a_reference_loads_from_every_format_as_one_value() {
             "version: 1\nmodules:\n  - target: a.bin\n    Characters/A:\n      speed: {ref: \"Characters/B:speed\"}\n",
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version": 1, "modules": [{"target": "a.bin", "Characters/A": {"speed": {"ref": "Characters/B:speed"}}}]}"#,
-        ),
-        (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = \"a.bin\"\n\"Characters/A\" = { speed = { ref = \"Characters/B:speed\" } }\n",
         ),
     ];
     for (name, text) in cases {

@@ -26,7 +26,7 @@ use crate::{ErrorKind, Reference};
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Value {
-    /// `null` in YAML and JSON. TOML has no null.
+    /// `null`.
     Null,
     Bool(bool),
     /// An integer of the union of the `i64` and `u64` ranges.

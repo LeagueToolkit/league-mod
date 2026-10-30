@@ -9,7 +9,6 @@ use ltk_hashtable::{Collision, Hashtable, HashtableReadError, HashtableSet};
 use super::plan::{PackPlan, PlannedFile, PlannedHashtable, PlannedLayer, PlannedLicense};
 use super::progress::{PackProgress, PackReporter};
 use super::{IgnoreMode, PackFormat, PackOptions};
-use crate::game_data::DeprecatedFile;
 use crate::{
     canonical_license_file_name, find_license_file, ContentWalkError, ModIgnore, ModIgnoreError,
     ModProject, ModProjectError, ModProjectLayer, CONTENT_DIR_NAME, MODIGNORE_FILE_NAME,
@@ -116,7 +115,6 @@ impl<E> PackError<E> {
 pub struct PackReport {
     ignored: Vec<Utf8PathBuf>,
     trimmed_game_names: usize,
-    deprecated_files: Vec<DeprecatedFile>,
 }
 
 impl PackReport {
@@ -140,12 +138,6 @@ impl PackReport {
     /// zero. Only the modpkg format trims; every other format reports 0.
     pub fn trimmed_game_names(&self) -> usize {
         self.trimmed_game_names
-    }
-
-    /// The manifest and source files in a deprecated format, by layer. Report each one to the
-    /// author: its `Display` names the file and says to convert it to YAML.
-    pub fn deprecated_files(&self) -> &[DeprecatedFile] {
-        &self.deprecated_files
     }
 }
 
@@ -287,7 +279,6 @@ impl ProjectPacker {
         let content_dir = self.project_root.join(CONTENT_DIR_NAME);
         let layer_count = layers.len() as u32;
         let mut ignored = Vec::new();
-        let mut deprecated_files = Vec::new();
         let mut planned = Vec::with_capacity(layers.len());
         for (index, layer) in layers.into_iter().enumerate() {
             progress.report_layer(&layer.name, index as u32, layer_count);
@@ -296,7 +287,6 @@ impl ProjectPacker {
             let mut files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
             files.retain(|file| !declarations.is_declaration_input(file.source()));
             let override_files = declarations.override_files().to_vec();
-            deprecated_files.extend_from_slice(declarations.deprecated_files());
             let declarations = declarations.declarations?;
             planned.push(
                 PlannedLayer::new(layer, files).with_game_data(declarations, override_files)?,
@@ -324,7 +314,6 @@ impl ProjectPacker {
         Ok(PackReport {
             ignored,
             trimmed_game_names: format_report.trimmed_game_names,
-            deprecated_files,
         })
     }
 

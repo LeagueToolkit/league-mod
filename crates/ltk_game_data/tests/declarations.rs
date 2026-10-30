@@ -112,37 +112,37 @@ fn duplicate_base_links_keep_the_first_casing() {
 fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
     let invalid = [
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"version":1,"modules":[]}"#,
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"target":"shared","links":[],"edits":[] }]}"#,
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"target":"shared","links":[],"+links":[]}]}"#,
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"target":"shared","edits":[{"links":[],"+links":[]}]}]}"#,
         ),
         (
-            "game_data.json",
-            r#"{"version":1,"modules":[{"target":"shared","source":"a.json","links":[] }]}"#,
+            "game_data.yaml",
+            r#"{"version":1,"modules":[{"target":"shared","source":"a.yaml","links":[] }]}"#,
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"target":{"path":"shared","hash":"0123456789abcdef"},"links":[] }]}"#,
         ),
         (
             "game_data.yaml",
             "version: 1\nmodules:\n- target: shared\n  links: []\n  links: []\n",
         ),
-        ("game_data.toml", "version = 2\nmodules = []"),
+        ("game_data.yaml", "version: 2\nmodules: []\n"),
         (
-            "game_data.toml",
-            "version = 1\n[[modules]]\ntarget = 'shared'\nmodes = ['Map11/ARAM']",
+            "game_data.yaml",
+            "version: 1\nmodules:\n- target: shared\n  modes: [Map11/ARAM]\n",
         ),
     ];
     for (name, text) in invalid {
@@ -154,10 +154,10 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
             "{text}"
         );
     }
-    let toml = "version = 1\n[[modules]]\ntarget = 'shared'\nlinks = ['yes']";
+    let yes = "version: 1\nmodules:\n- target: shared\n  links: ['yes']\n";
     assert_eq!(
         target_of(
-            &load_declarations("game_data.toml", toml, |_| unreachable!())
+            &load_declarations("game_data.yaml", yes, |_| unreachable!())
                 .unwrap()
                 .modules[0]
         )
@@ -178,20 +178,20 @@ fn formats_reject_duplicate_keys_mixed_bodies_and_unsupported_bindings() {
 
 #[test]
 fn input_discovery_retains_sources_in_rejected_documents() {
-    let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  unknown: !f32 1.0\n  source: one.json\n- source: two.json\n";
+    let yaml = "version: 1\nversion: 1\nmodules:\n- target: shared\n  unknown: !f32 1.0\n  source: one.yaml\n- source: two.yaml\n";
     assert!(load_declarations("game_data.yaml", yaml, |_| unreachable!()).is_err());
     assert_eq!(
         ReferencedInputs::discover("game_data.yaml", yaml)
             .unwrap()
             .sources,
-        ["one.json", "two.json"]
+        ["one.yaml", "two.yaml"]
     );
-    let json = r#"{"version":1,"modules":[{"source":"one.json","source":"two.json"}]}"#;
+    let json = r#"{"version":1,"modules":[{"source":"one.yaml","source":"two.yaml"}]}"#;
     assert_eq!(
-        ReferencedInputs::discover("game_data.json", json)
+        ReferencedInputs::discover("game_data.yaml", json)
             .unwrap()
             .sources,
-        ["one.json", "two.json"]
+        ["one.yaml", "two.yaml"]
     );
 }
 
@@ -203,14 +203,14 @@ fn yaml_sources_and_edits_execute_in_order_without_rewriting_objects() {
 version: 1
 modules:
   - target: shared
-    source: patches/links.json
+    source: patches/links.yaml
   - target: '0123456789abcdef'
     edits:
       - '+links': [After]
       - '-links': [after]
 "#,
         |source| {
-            assert_eq!(source, "patches/links.json");
+            assert_eq!(source, "patches/links.yaml");
             Ok(r#"{"version":1,"+links":["Shared","other"],"-links":["MISSING"]}"#.to_owned())
         },
     )
@@ -218,7 +218,7 @@ modules:
     assert_eq!(declarations.modules.len(), 2);
     assert_eq!(
         declarations.modules[0].origin.source.as_deref(),
-        Some("patches/links.json")
+        Some("patches/links.yaml")
     );
     assert_eq!(
         target_of(&declarations.modules[1]).0.chunk_hash(),
@@ -260,16 +260,12 @@ fn scalar_targets_preserve_identifier_kind_and_spelling() {
     ] {
         for (name, text) in [
             (
-                "game_data.json",
+                "game_data.yaml",
                 format!(r#"{{"version":1,"modules":[{{"target":"{value}","links":[]}}]}}"#),
             ),
             (
                 "game_data.yaml",
                 format!("version: 1\nmodules:\n- target: '{value}'\n  links: []\n"),
-            ),
-            (
-                "game_data.toml",
-                format!("version = 1\n[[modules]]\ntarget = '{value}'\nlinks = []\n"),
             ),
         ] {
             let declarations = load_declarations(name, &text, |_| unreachable!()).unwrap();
@@ -328,7 +324,7 @@ fn declaration_documents_preserve_wire_fields_and_refuse_unsupported_bindings() 
         "modules": [{
             "target": "shared",
             "edits": [{"links": ["Added"], "-links": ["Removed"]}],
-            "origin": {"manifest": "game_data.yaml", "source": "links.json", "module": 2}
+            "origin": {"manifest": "game_data.yaml", "source": "links.yaml", "module": 2}
         }]
     });
     let document: DeclarationDocument = serde_json::from_value(wire.clone()).unwrap();
@@ -375,26 +371,11 @@ modules:
       Characters/Ahri/Skins/Skin0:
         '-links': [Gone]
 "#;
-    let toml = r#"
-version = 1
-[[modules]]
-[modules.entries."Characters/Teemo/Skins/Skin0"]
-links = ["Shared"]
-[modules.entries."Characters/Teemo/Skins/Skin0/Resources"]
-"-links" = ["Old"]
-"+links" = ["New"]
-[modules.entries."Characters/Ahri/Skins/Skin0"]
-"-links" = ["Gone"]
-"#;
-    let json = r#"{"version":1,"modules":[{"entries":{
+    let flow = r#"{"version":1,"modules":[{"entries":{
         "Characters/Teemo/Skins/Skin0":{"links":["Shared"]},
         "Characters/Teemo/Skins/Skin0/Resources":{"-links":["Old"],"+links":["New"]},
         "Characters/Ahri/Skins/Skin0":{"-links":["Gone"]}}}]}"#;
-    for (name, text) in [
-        ("game_data.yaml", yaml),
-        ("game_data.toml", toml),
-        ("game_data.json", json),
-    ] {
+    for (name, text) in [("game_data.yaml", yaml), ("game_data.yaml", flow)] {
         let declarations = load_declarations(name, text, |_| unreachable!()).unwrap();
         assert_eq!(declarations.modules.len(), 1, "{name}");
         assert_eq!(declarations.modules[0].origin.module_index, 0);
@@ -438,9 +419,9 @@ fn a_module_requires_exactly_one_selector() {
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"target":"shared","entries":{"x":{"links":["a"]}}}]}"#,
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"edits":[]}]}"#,
         r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"entries":{"x":{"links":["a"]}},"links":["a"]}]}"#,
-        r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"entries":{"x":{"links":["a"]}},"source":"a.json"}]}"#,
+        r#"{"version":1,"modules":[{"target":"a","links":["a"]},{"entries":{"x":{"links":["a"]}},"source":"a.yaml"}]}"#,
     ] {
-        let error = load_declarations("game_data.json", text, |_| unreachable!()).unwrap_err();
+        let error = load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("module 1"), "{text}: {error}");
     }
     let document: ltk_game_data::DeclarationDocument = serde_json::from_value(serde_json::json!({
@@ -468,7 +449,7 @@ fn a_module_requires_exactly_one_selector() {
 #[test]
 fn entry_bodies_refuse_sources_unknown_keys_and_empty_names() {
     for text in [
-        r#"{"version":1,"modules":[{"entries":{"x":{"source":"a.json"}}}]}"#,
+        r#"{"version":1,"modules":[{"entries":{"x":{"source":"a.yaml"}}}]}"#,
         r#"{"version":1,"modules":[{"target":"a","edits":[]}]}"#,
         r#"{"version":1,"modules":[{"target":"a","edits":[{}]}]}"#,
         r#"{"version":1,"modules":[{"entries":{"x":{}}}]}"#,
@@ -477,7 +458,7 @@ fn entry_bodies_refuse_sources_unknown_keys_and_empty_names() {
         r#"{"version":1,"modules":[{"entries":{"x":{"links":["a"]},"x":{"links":["b"]}}}]}"#,
     ] {
         assert!(
-            load_declarations("game_data.json", text, |_| panic!(
+            load_declarations("game_data.yaml", text, |_| panic!(
                 "an entry body must not read a source"
             ))
             .is_err(),
@@ -614,19 +595,15 @@ fn overrides_inside_entries_are_errors() {
             "version: 1\nmodules:\n  - entries:\n      Characters/Teemo:\n        overrides: [a.ptch]\n".to_owned(),
         ),
         (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"entries":{"Characters/Teemo":{"overrides":["a.ptch"]}}}]}"#.to_owned(),
-        ),
-        (
-            "game_data.toml",
-            "version = 1\n[[modules]]\n[modules.entries.\"Characters/Teemo\"]\noverrides = [\"a.ptch\"]\n".to_owned(),
         ),
     ] {
         let error = load_declarations(name, &text, |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("overrides"), "{name}: {error}");
     }
     let document: DeclarationDocument = serde_json::from_str(
-        r#"{"version":1,"modules":[{"entries":{"Characters/Teemo":{"overrides":["a.ptch"]}},"origin":{"manifest":"game_data.json","source":null,"module":0}}]}"#,
+        r#"{"version":1,"modules":[{"entries":{"Characters/Teemo":{"overrides":["a.ptch"]}},"origin":{"manifest":"game_data.yaml","source":null,"module":0}}]}"#,
     )
     .unwrap();
     assert!(document.parse().is_err());
@@ -638,7 +615,7 @@ fn overrides_rewrite_objects_and_report_skipped_records() {
     let mut v2 = base.clone();
     v2[4] = 2;
     let declarations = load_declarations(
-        "game_data.json",
+        "game_data.yaml",
         r#"{"version":1,"modules":[{"target":"shared","edits":[
             {"overrides":["first.ptch","second.ptch"],"links":["Added"]},
             {"overrides":["third.ptch"]}
@@ -690,7 +667,7 @@ fn overrides_rewrite_objects_and_report_skipped_records() {
 fn unavailable_overrides_are_reported_and_links_still_apply() {
     let base = base_bin();
     let declarations = load_declarations(
-        "game_data.json",
+        "game_data.yaml",
         r#"{"version":1,"modules":[{"target":"shared","overrides":["missing.ptch","prop.ptch"],"links":["Added"]}]}"#,
         |_| unreachable!(),
     )
@@ -732,7 +709,7 @@ fn unavailable_overrides_are_reported_and_links_still_apply() {
 #[test]
 fn documents_round_trip_overrides_and_manifests_write_them() {
     let declarations = load_declarations(
-        "game_data.json",
+        "game_data.yaml",
         r#"{"version":1,"modules":[{"target":"shared","edits":[{"overrides":["a.ptch"]},{"links":["x"]}]}]}"#,
         |_| unreachable!(),
     )
@@ -770,7 +747,7 @@ fn override_discovery_retains_paths_in_rejected_documents() {
     );
     let source = r#"{"version":1,"overrides":["d.ptch"],"edits":[{"overrides":["e.ptch"]}]}"#;
     assert_eq!(
-        ReferencedInputs::discover("source.json", source).unwrap(),
+        ReferencedInputs::discover("source.yaml", source).unwrap(),
         ReferencedInputs {
             sources: vec![],
             overrides: vec!["d.ptch".into(), "e.ptch".into()],
@@ -796,8 +773,6 @@ fn a_document_extension_is_compared_without_case() {
     let yaml = "version: 1\nmodules:\n- target: shared\n  links: [a]\n";
     assert!(load_declarations("game_data.YAML", yaml, |_| unreachable!()).is_ok());
     assert!(load_declarations("game_data.YML", yaml, |_| unreachable!()).is_ok());
-    let json = r#"{"version":1,"modules":[{"target":"shared","links":["a"]}]}"#;
-    assert!(load_declarations("game_data.JSON", json, |_| unreachable!()).is_ok());
     let manifest = "version: 1\nmodules:\n- target: shared\n  source: Shared.YAML\n";
     assert!(
         load_declarations("game_data.yaml", manifest, |name| {
@@ -806,17 +781,51 @@ fn a_document_extension_is_compared_without_case() {
         })
         .is_ok()
     );
-    let error = load_declarations("game_data.rito", yaml, |_| unreachable!()).unwrap_err();
-    assert!(matches!(error.kind, ErrorKind::UnknownFormat));
 }
 
 #[test]
-fn a_json_error_span_points_at_the_offending_byte_of_a_multibyte_line() {
-    let text = "{\n  \"version\": 1,\n  \"modules\": [{\"target\": \"\u{e9}\u{e9}\u{e9}\u{e9}\", \"links\": }]\n}";
-    let error = load_declarations("game_data.json", text, |_| unreachable!()).unwrap_err();
-    let span = error.location.span.expect("a syntax error carries a span");
-    assert_eq!(&text[span.start..span.end], "}");
-    assert!(span.end <= text.len());
+fn a_document_in_another_format_is_refused_with_the_conversion_to_make() {
+    let json = r#"{"version":1,"modules":[{"target":"shared","links":["a"]}]}"#;
+    for name in [
+        "game_data.json",
+        "game_data.JSON",
+        "game_data.toml",
+        "game_data.rito",
+    ] {
+        let error = load_declarations(name, json, |_| unreachable!()).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::UnknownFormat, "{name}");
+        let text = error.to_string();
+        assert!(text.contains(name), "{text}");
+        assert!(text.contains("convert the file to YAML"), "{text}");
+    }
+}
+
+#[test]
+fn a_source_in_another_format_is_refused_by_its_own_name() {
+    for source in ["links.json", "links.toml"] {
+        let manifest = format!("version: 1\nmodules:\n- target: shared\n  source: {source}\n");
+        let error = load_declarations("game_data.yaml", &manifest, |_| {
+            Ok(r#"{"version":1,"links":["a"]}"#.to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::UnknownFormat, "{source}");
+        assert!(error.to_string().contains(source), "{error}");
+    }
+}
+
+#[test]
+fn an_archive_document_with_a_json_origin_parses_and_writes_a_yaml_manifest() {
+    let document: DeclarationDocument = serde_json::from_str(
+        r#"{"version":1,"modules":[{"target":"shared","edits":[{"links":["a"]}],"origin":{"manifest":"game_data.json","source":"links.toml","module":0}}]}"#,
+    )
+    .unwrap();
+    let declarations = document.parse().unwrap();
+    assert_eq!(
+        declarations.modules[0].origin.manifest.as_str(),
+        "game_data.json"
+    );
+    let manifest = declarations.manifest_yaml().unwrap();
+    assert!(load_declarations("game_data.yaml", &manifest, |_| unreachable!()).is_ok());
 }
 
 #[test]
@@ -877,7 +886,7 @@ modules:
 
 #[test]
 fn errors_carry_codes_and_typed_locations() {
-    use ltk_game_data::{ErrorKind, Location, Span};
+    use ltk_game_data::{ErrorKind, Location};
 
     let text = "version: 1\nmodules:\n  - target: a.bin\n    entries: {}\n";
     let error = load_declarations("game_data.yaml", text, |_| unreachable!()).unwrap_err();
@@ -916,20 +925,6 @@ fn errors_carry_codes_and_typed_locations() {
     .unwrap_err();
     assert!(matches!(error.kind, ErrorKind::Syntax { .. }), "{error}");
     assert!(error.location.span.is_some(), "{error}");
-    let error = load_declarations(
-        "game_data.json",
-        r#"{"version": 1, "modules": [}"#,
-        |_| unreachable!(),
-    )
-    .unwrap_err();
-    assert_eq!(error.location.span, Some(Span { start: 27, end: 28 }));
-    let error = load_declarations(
-        "game_data.toml",
-        "version = 1\nmodules = [",
-        |_| unreachable!(),
-    )
-    .unwrap_err();
-    assert!(error.location.span.is_some(), "{error}");
 
     let error = Target::try_from("").unwrap_err();
     assert_eq!(error.kind, ErrorKind::EmptyTarget);
@@ -946,18 +941,14 @@ fn module_names(declarations: &ltk_game_data::Declarations) -> Vec<Option<&str>>
 }
 
 #[test]
-fn every_format_reads_an_optional_module_name_beside_either_selector() {
+fn a_manifest_reads_an_optional_module_name_beside_either_selector() {
     let manifests = [
         (
             "game_data.yaml",
             "version: 1\nmodules:\n  - name: Ahri recolor\n    target: a.bin\n    links: [x]\n  - entries:\n      Characters/Ahri:\n        speed: 2\n    name: Ahri recolor\n  - target: b.bin\n    links: [y]\n",
         ),
         (
-            "game_data.toml",
-            "version = 1\n\n[[modules]]\nname = \"Ahri recolor\"\ntarget = \"a.bin\"\nlinks = [\"x\"]\n\n[[modules]]\nname = \"Ahri recolor\"\nentries = { \"Characters/Ahri\" = { speed = 2 } }\n\n[[modules]]\ntarget = \"b.bin\"\nlinks = [\"y\"]\n",
-        ),
-        (
-            "game_data.json",
+            "game_data.yaml",
             r#"{"version":1,"modules":[{"name":"Ahri recolor","target":"a.bin","links":["x"]},{"name":"Ahri recolor","entries":{"Characters/Ahri":{"speed":2}}},{"target":"b.bin","links":["y"]}]}"#,
         ),
     ];
