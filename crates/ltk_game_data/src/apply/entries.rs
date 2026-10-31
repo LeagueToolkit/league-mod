@@ -14,6 +14,8 @@ use ltk_meta::{
     property::values,
 };
 
+use ltk_hash::HashWidth;
+
 use crate::{BinHash, EntryName, PropertyEdit, Schema, Shape, Sign, Value};
 
 use super::{
@@ -315,6 +317,12 @@ impl Phase<'_> {
         }
         let base = properties.get(&field);
         match self.schema.expected(class, field) {
+            // A bin stores an 8-byte `hash` where a schema of an older build answers `string`.
+            Some(shape) if shape.kind == K::String && base.is_some_and(is_wide_hash) => Ok(Site {
+                shape: base.map_or(shape, Shape::of),
+                base: base.cloned(),
+                typing: Typing::Base,
+            }),
             Some(shape) => Ok(Site {
                 shape,
                 base: base.cloned(),
@@ -441,6 +449,11 @@ enum Contained {
     },
 }
 
+/// Returns `true` if `value` is a `hash` value stored in 8 bytes.
+fn is_wide_hash(value: &V) -> bool {
+    matches!(value, V::Hash(hash) if hash.value.width() == HashWidth::W8)
+}
+
 impl Contained {
     /// The container `current` holds, or `None` for an absent property of container shape.
     fn of(current: Option<V>, shape: Shape) -> Result<Option<Self>, Reason> {
@@ -481,11 +494,13 @@ impl Contained {
                 },
                 key: None,
                 item: Some(*item),
+                width: None,
             },
             Self::Map { key, item, .. } => Shape {
                 kind: K::Map,
                 key: Some(*key),
                 item: Some(*item),
+                width: None,
             },
         }
     }

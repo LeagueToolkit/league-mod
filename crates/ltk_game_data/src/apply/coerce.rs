@@ -6,7 +6,7 @@
 use std::cell::Cell;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use ltk_hash::{BinHash, HashValue, WadHash};
+use ltk_hash::{BinHash, HashValue, HashWidth, WadHash};
 use ltk_meta::{PropertyKind as K, PropertyValueEnum as V, path::PropertyPath, property::values};
 
 use crate::{Schema, Shape, Value, kind_named, path_hash};
@@ -36,11 +36,12 @@ pub(super) struct Coercer<'a> {
 
 impl Coercer<'_> {
     /// Reads `value` as `shape`. `base` is the property's base value, the class source of a
-    /// struct pin without `class`.
+    /// struct pin without `class`, and the width of a `hash` shape that states no width.
     ///
     /// Every element, key, field, and operand reaches its own value through here, so the
     /// reference row is read once and holds everywhere a value is.
     pub(super) fn coerce(&self, value: &Value, shape: Shape, base: Option<&V>) -> Coerced {
+        let shape = shape.with_width_of(base);
         if let Some(text) = value.reference() {
             return self.referenced(text, shape);
         }
@@ -63,7 +64,7 @@ impl Coercer<'_> {
             .ok_or(Reason::ReferenceMissingEntry)?;
         let value = super::address::resolve(object, &reference.path)
             .map_err(|_| Reason::ReferenceUnresolved)?;
-        if Shape::of(value) == shape {
+        if Shape::of(value).agrees(shape) {
             Ok(value.clone())
         } else {
             Err(Reason::KindMismatch)
@@ -176,7 +177,7 @@ impl Coercer<'_> {
                 Value::String(text) => values::String::new(text.clone()).into(),
                 _ => return Err(Reason::KindMismatch),
             },
-            K::Hash => values::Hash::new(hash_value(value)?).into(),
+            K::Hash => values::Hash::new(hash_value(value, shape.width)?).into(),
             K::ObjectLink => values::ObjectLink::new(hash32(value)?).into(),
             K::WadChunkLink => values::WadChunkLink::new(hash64(value)?).into(),
             K::Container | K::UnorderedContainer => self.list(value, shape)?,
@@ -354,6 +355,13 @@ fn hex32(text: &str) -> Option<BinHash> {
     hex(text, 8).and_then(|hash| u32::try_from(hash).ok().map(BinHash))
 }
 
+/// The 8-byte `hash` value of a path: XXH3 of the ASCII-lowercased path.
+pub(crate) fn wide_hash_of(path: &str) -> HashValue {
+    HashValue::wide(xxhash_rust::xxh3::xxh3_64(
+        path.to_ascii_lowercase().as_bytes(),
+    ))
+}
+
 /// The hash `0x` and exactly `digits` hexadecimal digits spell.
 fn hex(text: &str, digits: usize) -> Option<u64> {
     let spelled = text.strip_prefix("0x")?;
@@ -414,13 +422,24 @@ fn hash32(value: &Value) -> Result<BinHash, Reason> {
     }
 }
 
-/// Reads `value` as a `hash` value. Returns an 8-byte hash for a string of `0x` and 16
-/// hexadecimal digits. Returns the 4-byte hash that [`hash32`] reads for any other value.
-fn hash_value(value: &Value) -> Result<HashValue, Reason> {
+/// Reads `value` as a `hash` value of `width`. Returns an 8-byte hash for a string of `0x` and
+/// 16 hexadecimal digits at any width. At width 8, returns [`wide_hash_of`] of any other
+/// string and zero for null and `""`, and fails with `KindMismatch` for `0x` and 8
+/// hexadecimal digits. At any other width, returns the 4-byte hash that [`hash32`] reads.
+fn hash_value(value: &Value, width: Option<HashWidth>) -> Result<HashValue, Reason> {
     if let Value::String(text) = value
         && let Some(wide) = hex(text, 16)
     {
         return Ok(HashValue::wide(wide));
+    }
+    if width == Some(HashWidth::W8) {
+        return match value {
+            Value::Null => Ok(HashValue::wide(0)),
+            Value::String(text) if text.is_empty() => Ok(HashValue::wide(0)),
+            Value::String(text) if hex(text, 8).is_some() => Err(Reason::KindMismatch),
+            Value::String(text) => Ok(wide_hash_of(text)),
+            _ => Err(Reason::KindMismatch),
+        };
     }
     hash32(value).map(HashValue::from)
 }

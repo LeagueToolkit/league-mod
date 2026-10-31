@@ -8,7 +8,11 @@ use ltk_meta::{Bin, BinObject, PropertyValueEnum as V};
 
 use crate::{BinHash, EntryName, ObjectEdit, PropertyEdit};
 
-use super::{ObjectSkipReason, SkippedObject, coerce::Coercer, entries};
+use super::{
+    ObjectSkipReason, SkippedObject,
+    coerce::{Coercer, wide_hash_of},
+    entries,
+};
 
 /// What the creation phase did: the objects it skipped, how many it created, and the outcome
 /// of their `set` edits.
@@ -78,11 +82,12 @@ pub(super) fn create(
 
 /// A copy of `object`, the entry `source`, as the entry `name`.
 ///
-/// A top-level `hash` property holding the hash of `source`, and a top-level `string`
-/// property spelling the path of `source`, compared ASCII case-insensitively, name the object
-/// itself. The copy holds the hash of `name` and the path of `name` there. A hash-form name
-/// has no path, and a string property is left as it is where either name is hash-form. An
-/// object hash occupies 4 bytes, and an 8-byte `hash` property is left as it is.
+/// A top-level 4-byte `hash` property holding the hash of `source`, a top-level 8-byte `hash`
+/// property holding the XXH3 of the path of `source`, and a top-level `string` property
+/// spelling the path of `source`, compared ASCII case-insensitively, name the object itself.
+/// The copy holds the matching form of `name` there. A hash-form name has no path, and an
+/// 8-byte `hash` property or a `string` property is left as it is where either name is
+/// hash-form.
 fn clone_as(object: &BinObject, source: &EntryName, name: &EntryName) -> BinObject {
     let mut copy = object.clone();
     copy.path_hash = name.object_hash();
@@ -91,6 +96,9 @@ fn clone_as(object: &BinObject, source: &EntryName, name: &EntryName) -> BinObje
         match value {
             V::Hash(hash) if hash.value.try_as_bin_hash() == Some(source.object_hash()) => {
                 hash.value = name.object_hash().into();
+            }
+            V::Hash(hash) if spelled && hash.value == wide_hash_of(source.as_str()) => {
+                hash.value = wide_hash_of(name.as_str());
             }
             V::String(text) if spelled && text.value.eq_ignore_ascii_case(source.as_str()) => {
                 name.as_str().clone_into(&mut text.value);

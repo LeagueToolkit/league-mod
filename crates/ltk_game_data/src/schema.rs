@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use ltk_hash::BinHash;
+use ltk_hash::{BinHash, HashWidth};
 use ltk_meta::{PropertyKind, PropertyValueEnum, path::ValueShape};
 
 /// The class schema of the installed patch.
@@ -83,6 +83,9 @@ pub struct Shape {
     pub key: Option<PropertyKind>,
     /// A container's or an option's item kind; a map's value kind.
     pub item: Option<PropertyKind>,
+    /// The stored width of a `hash` property. `None` for any other kind, and for a `hash`
+    /// property whose width is not known.
+    pub width: Option<HashWidth>,
 }
 
 impl Shape {
@@ -93,13 +96,35 @@ impl Shape {
             kind,
             key: None,
             item: None,
+            width: None,
         }
     }
 
     /// The shape of a value in a base tree.
     #[must_use]
     pub fn of(value: &PropertyValueEnum) -> Self {
-        Self::from(ValueShape::of(value))
+        Self::from(ValueShape::of(value)).with_width_of(Some(value))
+    }
+
+    /// Returns this shape with the width of `base` if `base` is a `hash` value and this shape
+    /// states no width.
+    pub(crate) fn with_width_of(self, base: Option<&PropertyValueEnum>) -> Self {
+        match base {
+            Some(PropertyValueEnum::Hash(hash)) if self.width.is_none() => Self {
+                width: Some(hash.value.width()),
+                ..self
+            },
+            _ => self,
+        }
+    }
+
+    /// Returns `true` if the kinds of both shapes are equal and no two stated widths differ.
+    pub(crate) fn agrees(self, other: Self) -> bool {
+        let widths_agree = match (self.width, other.width) {
+            (Some(left), Some(right)) => left == right,
+            _ => true,
+        };
+        self.kind == other.kind && self.key == other.key && self.item == other.item && widths_agree
     }
 }
 
@@ -109,6 +134,7 @@ impl From<ValueShape> for Shape {
             kind: shape.kind,
             key: shape.key_kind,
             item: shape.item_kind,
+            width: None,
         }
     }
 }

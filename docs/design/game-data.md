@@ -17,7 +17,7 @@ to a value of the installed game.
 - **Selector:** What a module edits: a chunk target with edits, or a mapping of entry names to entry edits.
 - **Edit:** One batch of bindings on a chunk, applied phase by phase. The phases are override files, then object creations, then entry edits, then object removals, then link removals followed by additions.
 - **Object edit:** The creation of an object in a chunk, cloned from an entry of the chunk or constructed from a class, with a `set` of property edits; or the removal of an object.
-- **Own path:** The path of an object held by the object itself: a top-level `hash` property holding its object hash, or a top-level `string` property spelling its path.
+- **Own path:** The path of an object held by the object itself: a top-level 4-byte `hash` property holding its object hash, a top-level 8-byte `hash` property holding the XXH3 of its ASCII-lowercased path, or a top-level `string` property spelling its path.
 - **Override file:** A `.ptch` file in a layer holding `PTCH` records applied over a target.
 - **Override path:** The layer-relative, forward-slash path of an override file.
 - **Entry edit:** The bindings of one entry: its property edits and, in an `entries` module, its links.
@@ -33,7 +33,7 @@ to a value of the installed game.
 - **Struct tag:** The YAML spelling of a struct pin: `!pointer` or `!embed`, with an optional class in parentheses, `!embed(C)`, on the mapping of the pin's `set`.
 - **Class tag:** The YAML spelling of a constructed object: the class as a local tag, `!C`, on the mapping of the object body's `set`.
 - **Schema:** The class schema of the installed patch: the shape of each field of each class, reached through the `Schema` trait.
-- **Shape:** A property type: a kind, and for a container or an option its item kind, for a map its key kind and item kind.
+- **Shape:** A property type: a kind, for a container or an option its item kind, for a map its key kind and item kind, and for a `hash` its stored width where the width is known.
 - **Coercion:** The reading of a value as the shape of its property.
 - **Reference:** A one-key mapping keyed `ref` whose value is an entry name, a `:`, and a property path. In YAML a local tag `!ref` on a string is the same reference. It names the value at that path in the installed game's copy of the entry.
 - **Rendering:** The reading of a bin's property value as a `Value`. The inverse of coercion.
@@ -121,6 +121,9 @@ pub struct Shape {
     pub key: Option<PropertyKind>,
     /// A container's or an option's item kind; a map's value kind.
     pub item: Option<PropertyKind>,
+    /// The stored width of a `hash` property. `None` for any other kind, and for a `hash`
+    /// property whose width is not known.
+    pub width: Option<HashWidth>,
 }
 
 /// The schema that says nothing. Every property is typed from the base, and no class is known.
@@ -171,7 +174,7 @@ impl Value {
 
 `PropertyKind` is `ltk_meta::PropertyKind`; `PropertyPath` is `ltk_meta::path::PropertyPath`;
 both are re-exported. `Shape` implements `Copy`, `PartialEq`, `Eq`, and `Hash`, and
-`Shape::bare(kind)` is the shape with no key and no item. `NoSchema` implements `Schema` with
+`Shape::bare(kind)` is the shape with no key, no item, and no width. `NoSchema` implements `Schema` with
 `expected` answering `None` and `has_class` answering `false`
 ([ADR-0022](../adr/0022-unattested-class-refusal.md)).
 
@@ -584,9 +587,11 @@ and a later edit clones it. A construction whose class the schema does not know
 (`Schema::has_class`) is `UnknownClass`. A clone copies the source's class and properties
 under the new object hash, and rewrites its own path
 ([ADR-0030](../adr/0030-own-path-rewrite.md)): a top-level `hash` property holding the source's
-object hash holds the new object hash, and a top-level `string` property equal to the source's
-path, ASCII case-insensitively, holds the new name. A string is left as it is where either
-name is hash-form. An 8-byte `hash` property is left as it is. A construction holds its class and no property. The phase inserts every
+object hash holds the new object hash, a top-level 8-byte `hash` property holding the XXH3 of
+the source's ASCII-lowercased path holds the XXH3 of the new name
+([ADR-0043](../adr/0043-8-byte-hash-values.md)), and a top-level `string` property equal to
+the source's path, ASCII case-insensitively, holds the new name. An 8-byte `hash` and a string
+are left as they are where either name is hash-form. A construction holds its class and no property. The phase inserts every
 created object in mapping order, then runs each object's `set` as the entry edits of its name;
 a `set` edit that does not apply is `PropertyEditSkipped` under the object's name, and the
 object stays created. The entry edits phase edits a created object as any other entry. The
@@ -614,7 +619,9 @@ A map edit is a whole-map replacement; no `{key}` record is emitted.
 
 **Typing.** The shape of a property is the schema's answer for the field on the class of the
 struct holding it: `Schema::expected`. Where `expected` is `None` and the base holds the
-property, the base value's shape is the type. Where `expected` is `None` and the base omits
+property, the base value's shape is the type. Where `expected` answers `string` and the base
+holds an 8-byte `hash`, the base value's shape is the type
+([ADR-0043](../adr/0043-8-byte-hash-values.md)). Where `expected` is `None` and the base omits
 the property, `Schema::fallback` is the type: the best-known shape of the field for a build the
 schema does not describe ([ADR-0033](../adr/0033-schema-fallback-shape.md)). A property typed
 from the base or through `fallback` is one `SchemaFallback` diagnostic naming the path. A
@@ -640,6 +647,7 @@ key is one field name of the pinned class typed by `expected`, or by `fallback` 
 | boolean | `bool`, `flag` | As is |
 | string | `string` | As is |
 | string | `hash` | FNV-1a 32 of the ASCII-lowercased string; `0x` and 8 hexadecimal digits pass through; `0x` and 16 hexadecimal digits are an 8-byte hash; `""` is `0` |
+| string | 8-byte `hash` | XXH3 of the ASCII-lowercased string, in 8 bytes; `0x` and 16 hexadecimal digits pass through; `0x` and 8 hexadecimal digits are `KindMismatch`; `""` is an 8-byte `0`. The width of a `hash` is the width the shape states, else the width of the base value ([ADR-0043](../adr/0043-8-byte-hash-values.md)) |
 | string | `link` | FNV-1a 32 of the ASCII-lowercased string; `0x` and 8 hexadecimal digits pass through; `""` is `0` |
 | string | `file` | XXH64 of the ASCII-lowercased string; `0x` and 16 hexadecimal digits pass through; `""` is `0` |
 | null | `hash`, `link`, `file` | `0` |
