@@ -58,6 +58,7 @@ fn base_bin() -> Vec<u8> {
         )
         .property(h("label"), values::String::new("Characters/B".into()))
         .property(h("wideId"), values::Hash::new(wide_id()))
+        .property(h("wideName"), values::Hash::new(wide("characters/a")))
         .build();
     let mut cursor = Cursor::new(Vec::new());
     Bin::builder()
@@ -66,6 +67,13 @@ fn base_bin() -> Vec<u8> {
         .to_writer(&mut cursor)
         .unwrap();
     cursor.into_inner()
+}
+
+/// The 8-byte hash of `path`: XXH3 of the ASCII-lowercased path.
+fn wide(path: &str) -> ltk_hash::HashValue {
+    ltk_hash::HashValue::wide(xxhash_rust::xxh3::xxh3_64(
+        path.to_ascii_lowercase().as_bytes(),
+    ))
 }
 
 /// An 8-byte hash whose low 4 bytes are the object hash of `Characters/A`.
@@ -379,6 +387,70 @@ fn a_clone_copies_its_source_applies_set_and_names_itself() {
     assert_eq!(
         at(source, "objectPath"),
         values::Hash::new(h("Characters/A")).into()
+    );
+}
+
+#[test]
+fn clone_rewrites_wide_own_path() {
+    let text = manifest("objects:\n  Characters/Copy:\n    clone: Characters/A");
+    let output = run(&text, &TestSchema);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    assert_eq!(
+        at(object(&bin, "Characters/Copy"), "wideName"),
+        values::Hash::new(wide("Characters/Copy")).into()
+    );
+    assert_eq!(
+        at(object(&bin, "Characters/A"), "wideName"),
+        values::Hash::new(wide("Characters/A")).into()
+    );
+}
+
+#[test]
+fn clone_keeps_wide_own_path_with_hash_form_name() {
+    let text = manifest("objects:\n  '0x12345678':\n    clone: Characters/A");
+    let output = run(&text, &TestSchema);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    assert_eq!(
+        at(&bin.objects[&BinHash(0x1234_5678)], "wideName"),
+        values::Hash::new(wide("Characters/A")).into()
+    );
+}
+
+#[test]
+fn clone_set_hashes_string_with_xxh3_at_wide_base() {
+    let text = manifest(
+        "objects:\n  Characters/Copy:\n    clone: Characters/A\n    set: {wideName: Other/Path}",
+    );
+    let output = run(&text, &NoSchema);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    assert_eq!(
+        at(object(&bin, "Characters/Copy"), "wideName"),
+        values::Hash::new(wide("Other/Path")).into()
+    );
+}
+
+#[test]
+fn clone_set_hashes_string_with_xxh3_over_schema_string() {
+    /// A schema that answers `string` for every field of class `C`.
+    struct StringSchema;
+    impl Schema for StringSchema {
+        fn expected(&self, _: BinHash, _: BinHash) -> Option<Shape> {
+            Some(Shape::bare(K::String))
+        }
+        fn has_class(&self, class: BinHash) -> bool {
+            class == h("C")
+        }
+    }
+    let text = manifest(
+        "objects:\n  Characters/Copy:\n    clone: Characters/A\n    set: {wideName: Other/Path}",
+    );
+    let output = run(&text, &StringSchema);
+    let bin = Bin::from_reader(&mut Cursor::new(&output.bytes)).unwrap();
+    assert_eq!(
+        at(object(&bin, "Characters/Copy"), "wideName"),
+        values::Hash::new(wide("Other/Path")).into()
     );
 }
 

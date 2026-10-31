@@ -55,6 +55,7 @@ impl TestSchema {
             kind: K::Container,
             key: None,
             item: Some(item),
+            width: None,
         };
         let fields = HashMap::from([
             (field("C", "speed"), Shape::bare(K::F32)),
@@ -68,6 +69,7 @@ impl TestSchema {
                     kind: K::Map,
                     key: Some(K::Hash),
                     item: Some(K::ObjectLink),
+                    width: None,
                 },
             ),
             (field("C", "mesh"), Shape::bare(K::Embedded)),
@@ -78,6 +80,7 @@ impl TestSchema {
                     kind: K::Optional,
                     key: None,
                     item: Some(K::U32),
+                    width: None,
                 },
             ),
             (
@@ -86,6 +89,7 @@ impl TestSchema {
                     kind: K::Optional,
                     key: None,
                     item: Some(K::Struct),
+                    width: None,
                 },
             ),
             (field("C", "color"), Shape::bare(K::Color)),
@@ -98,6 +102,13 @@ impl TestSchema {
             (field("C", "extras"), list(K::U16)),
             (field("C", "wide"), Shape::bare(K::I64)),
             (field("C", "id"), Shape::bare(K::Hash)),
+            (
+                field("C", "wideId"),
+                Shape {
+                    width: Some(ltk_hash::HashWidth::W8),
+                    ..Shape::bare(K::Hash)
+                },
+            ),
             (field("C", "mesh2"), Shape::bare(K::Embedded)),
             (
                 field("C", "tags2"),
@@ -105,6 +116,7 @@ impl TestSchema {
                     kind: K::UnorderedContainer,
                     key: None,
                     item: Some(K::Hash),
+                    width: None,
                 },
             ),
             (field("C", "names"), list(K::Hash)),
@@ -393,6 +405,29 @@ fn a_set_field_typed_through_the_fallback_reports_its_property() {
         value_at(&output, "mesh2.texture"),
         values::String::new("z".into()).into()
     );
+}
+
+#[test]
+fn wide_hash_coerces_by_schema_width() {
+    let wide = |hash| V::from(values::Hash::new(ltk_hash::HashValue::wide(hash)));
+    let xxh3 = xxhash_rust::xxh3::xxh3_64(b"maps/foo_mat");
+    for (body, expected) in [
+        ("wideId: Maps/Foo_MAT", wide(xxh3)),
+        ("wideId: !hash Maps/Foo_MAT", wide(xxh3)),
+        ("wideId: '0x0123456789abcdef'", wide(0x0123_4567_89ab_cdef)),
+        ("wideId: ''", wide(0)),
+        ("wideId: null", wide(0)),
+    ] {
+        let output = run(&manifest(body), &TestSchema::new());
+        assert_eq!(skips(&output), [], "{body}");
+        assert_eq!(value_at(&output, "wideId"), expected, "{body}");
+    }
+}
+
+#[test]
+fn wide_hash_refuses_narrow_spelling() {
+    let output = run(&manifest("wideId: '0x01234567'"), &TestSchema::new());
+    assert_eq!(skips(&output), [("wideId", Reason::KindMismatch)]);
 }
 
 #[test]
