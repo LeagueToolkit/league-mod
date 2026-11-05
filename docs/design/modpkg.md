@@ -488,8 +488,10 @@ one file name with no further `/`.
 
 The `hashtables` list of the metadata document ([section 11.5](#s11.5)) is the manifest, and
 it is authoritative: a chunk under `_meta_/hashes/` that no manifest entry declares is not a
-table and is not read. A manifest entry whose chunk is missing is an error. Two manifest
-entries MAY declare one chunk path (one table read under two shapes); the chunk is stored once.
+table and is not read. A reader skips a manifest entry whose chunk is missing or does not fit
+the grammar, and reports the skipped entry. A reader reads a table chunk that starts with a UTF-8
+byte order mark without the mark. Two manifest entries MAY declare one chunk path (one table
+read under two shapes); the chunk is stored once.
 
 A `game` table in a modpkg MAY be *trimmed*: a name whose key equals the path hash of a chunk
 the package stores under a real path MAY be left out, the stored path being the name's

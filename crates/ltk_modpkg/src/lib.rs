@@ -29,9 +29,11 @@ pub use decoder::ModpkgDecoder;
 pub use error::{InvalidSlugError, ModpkgError};
 pub use extractor::ModpkgExtractor;
 pub use hashes::{ChunkKey, LayerHash, PathHash, WadNameHash};
-pub use hashtable::{ModpkgHashtable, HASHTABLES_CHUNK_DIR};
+pub use hashtable::{ModpkgHashtable, SkippedHashtable, HASHTABLES_CHUNK_DIR};
 pub use indices::{LayerIndex, WadIndex};
 pub use license::*;
+/// The type of [`SkippedHashtable::reason`].
+pub use ltk_hashtable::HashtableSkipReason;
 pub use metadata::*;
 pub use plan::{
     hashtable_file_name, ChunkDestination, ExtractionPlan, PlannedChunk, HASHES_DIR_NAME,
