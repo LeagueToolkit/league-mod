@@ -52,16 +52,21 @@ pub enum FantomeRewriteError {
 ///
 /// The candidates are `META/hashes/{category}.hashes.txt`, then
 /// `META/hashes/{category}2.hashes.txt`, `META/hashes/{category}3.hashes.txt`
-/// and onward. A writer that declares a new table for a mod's own names takes
-/// its path from here. `is_taken` receives each candidate in the casing above.
-/// Archive entry names compare case-insensitively, and `is_taken` is expected
-/// to compare the same way.
+/// and onward: [`ltk_hashtable::free_table_name`] under `META/hashes/`. A
+/// writer that declares a new table for a mod's own names takes its path from
+/// here. `is_taken` receives each candidate in the casing above. Archive entry
+/// names compare case-insensitively, and `is_taken` is expected to compare the
+/// same way.
 pub fn free_table_path(category: &Category, mut is_taken: impl FnMut(&str) -> bool) -> String {
-    std::iter::once(format!("META/hashes/{category}.hashes.txt"))
-        .chain((2u64..).map(|n| format!("META/hashes/{category}{n}.hashes.txt")))
-        .find(|candidate| !is_taken(candidate))
-        .expect("the candidate sequence is unbounded")
+    let name = ltk_hashtable::free_table_name(category, |name| {
+        is_taken(&format!("{HASHTABLES_DIR}{name}"))
+    });
+
+    format!("{HASHTABLES_DIR}{name}")
 }
+
+/// The archive directory that holds the hashtable files, with its trailing `/`.
+const HASHTABLES_DIR: &str = "META/hashes/";
 
 /// One table file the rewrite will emit, and the manifest entry declaring it.
 struct PlannedTable {

@@ -310,7 +310,7 @@ fn a_declared_table_the_archive_does_not_hold_is_skipped_and_reported_absent() {
     assert!(matches!(skipped[0].reason, HashtableSkipReason::Absent));
     assert_eq!(
         skipped[0].to_string(),
-        "Skipped the hashtable META/hashes/game.harvested.hashes.txt: the archive holds no entry at that path"
+        "Skipped the hashtable META/hashes/game.harvested.hashes.txt: the container holds no file at that path"
     );
 }
 

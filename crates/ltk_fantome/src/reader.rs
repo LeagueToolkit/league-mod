@@ -11,6 +11,7 @@ use std::fmt;
 use std::io::{self, Cursor, Read, Seek};
 
 use camino::Utf8Path;
+use ltk_hashtable::HashtableSkipReason;
 use ltk_wad::{NamingPolicy, NoResolver, PathResolver, Wad, WadExtractor};
 use zip::ZipArchive;
 use zip::read::ZipFile;
@@ -171,25 +172,6 @@ impl fmt::Display for SkippedHashtable {
             "Skipped the hashtable {}: {}",
             self.manifest.path, self.reason
         )
-    }
-}
-
-/// The reason a read skipped a hashtable declaration.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum HashtableSkipReason {
-    /// The archive holds no entry at the declared path.
-    Absent,
-    /// The entry at the declared path does not fit the table grammar.
-    Unreadable(ltk_hashtable::HashtableReadError),
-}
-
-impl fmt::Display for HashtableSkipReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Absent => f.write_str("the archive holds no entry at that path"),
-            Self::Unreadable(source) => write!(f, "{source}"),
-        }
     }
 }
 
