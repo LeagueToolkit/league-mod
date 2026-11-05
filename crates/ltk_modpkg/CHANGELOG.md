@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.19](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.12.18...ltk_modpkg-v0.12.19) - 2026-11-05
+
+### Added
+
+- *(modpkg)* skip unreadable declared hashtables
+
 ## [0.12.18](https://github.com/LeagueToolkit/league-mod/compare/ltk_modpkg-v0.12.17...ltk_modpkg-v0.12.18) - 2026-10-31
 
 ### Other
