@@ -1,6 +1,6 @@
 //! [`FantomeImporter`]: decodes a Fantome archive into a mod project directory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{Read, Seek};
 
@@ -84,7 +84,9 @@ impl FantomeImportError {
 /// 3. Recover the hashtables the archive declares into `hashes/`, with the
 ///    project manifest rewritten to the new paths - and name packed WAD
 ///    chunks from those tables first, ahead of the supplied resolver, since
-///    the mod's own table is the authority on the names its author invented
+///    the mod's own table is the authority on the names its author invented.
+///    A declared table whose file is absent or unreadable is skipped, and the
+///    project manifest does not declare it
 /// 4. Extract every `META/game_data/` entry to `content/`, and write a manifest
 ///    for a layer that stores its declarations in the metadata and holds no
 ///    manifest entry
@@ -187,6 +189,20 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
         let mut info = reader.read_info()?;
         info.declare_layers(reader.layer_names().iter().map(String::as_str));
         let declarations = info.layers.clone();
+
+        // Read before the WADs are unpacked: the mod's own tables name its
+        // chunks, ahead of whatever resolver the caller supplied. A
+        // declaration the read skipped leaves the manifest here, and the
+        // project declares only the files the import writes.
+        let declared_tables = reader.read_hashtables()?;
+        let own_names = HashtableSet::build(declared_tables.iter().cloned());
+        let read_paths: HashSet<&str> = declared_tables
+            .iter()
+            .map(|(entry, _)| entry.path().as_str())
+            .collect();
+        info.hashtables
+            .retain(|manifest| read_paths.contains(manifest.path.as_str()));
+
         // Where each declared table lands. Computed once, before anything is
         // written: what the routes declare is what the config carries and
         // where the files land, so the files and the manifest cannot
@@ -199,11 +215,6 @@ impl<R: Read + Seek> ImportFormat for FantomeImporter<'_, R> {
             .collect();
         let mut mod_project = ModProject::from(info);
         mod_project.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
-
-        // Read before the WADs are unpacked: the mod's own tables name its
-        // chunks, ahead of whatever resolver the caller supplied.
-        let declared_tables = reader.read_hashtables()?;
-        let own_names = HashtableSet::build(declared_tables.iter().cloned());
 
         let output_dir = target.output_dir();
         let cancellation = target.cancellation();

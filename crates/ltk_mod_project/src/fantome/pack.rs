@@ -18,8 +18,8 @@ use std::io::{self, Seek, SeekFrom, Write};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{
-    is_layer_name, FantomeHashtable, FantomeInfo, FantomeWriteError, FantomeWriter,
-    GAME_DATA_MANIFEST,
+    free_table_path, is_layer_name, FantomeHashtable, FantomeInfo, FantomeWriteError,
+    FantomeWriter, GAME_DATA_MANIFEST,
 };
 use ltk_file::LeagueFileKind;
 use ltk_hashtable::{Category, Hashtable, HashtableSet, Key};
@@ -28,6 +28,7 @@ use ltk_wad::{
     WadChunkBuilder, WadChunkCompression, WadHash,
 };
 
+use crate::hashtable_routes::PlannedRoute;
 use crate::{PackFormat, PackFormatReport, PackPlan, PackReporter, PlannedFile};
 
 /// Failure to encode a pack plan as a Fantome archive.
@@ -364,32 +365,53 @@ struct Building<'a, 'p> {
     unreadable: Option<Utf8PathBuf>,
 }
 
-/// The names the packed WADs would otherwise lose, and where to declare them.
+/// The `game` table that carries the chunk paths of the packed WADs, with the
+/// declaration it is written under.
 ///
-/// A packed WAD keys its chunks by the hash of their path and carries no paths
-/// at all, so without this a pack of `assets/thing.bin` reads back as
-/// `b0881a7f01fd23ad` - the author's own file names, gone from their own mod.
-/// Harvesting them into a `game` table costs one small entry and makes the
-/// archive self-describing: an import resolves its chunks through the tables
-/// the archive declares before it consults any resolver a caller supplied.
+/// A packed WAD keys its chunks by the hash of their path and carries no
+/// paths. Without this table a pack of `assets/thing.bin` reads back as
+/// `b0881a7f01fd23ad`. An import resolves its chunks through the tables the
+/// archive declares before it consults any resolver a caller supplied.
+struct ChunkPathTable {
+    /// The declaration: a route's own for a merge, a new one otherwise.
+    manifest: FantomeHashtable,
+    /// The table to write under `manifest`.
+    table: Hashtable,
+}
+
+/// Returns the table that embeds the chunk paths no declared table resolves.
 ///
-/// The harvest adds and never repeats: a name the project's own declared tables
-/// already resolve is left to them, so a project that declares a table covering
-/// its chunks packs exactly as it did before this existed.
+/// The chunk paths merge into the first `game` table among `routes` whose
+/// keys are computable, and the merged table keeps every name it held. If no
+/// route qualifies, the chunk paths land in a new table at the path
+/// [`free_table_path`] returns. One rule holds for every writer of a mod's
+/// own names, and a project that came out of an import packs its chunk paths
+/// back into the table they came from.
 ///
-/// `None` when there is nothing left to record - every name already declared,
-/// or a project whose files are all bare hashes, which came out of an
-/// extraction that could not name them either.
+/// Returns `None` if there is nothing to embed: every name is declared, or the
+/// project's files are all bare hashes from an extraction that could not name
+/// them either.
 ///
 /// A name the table grammar refuses - it is printable ASCII with `/`
 /// separators, which every real WAD path is - is left out rather than failing
-/// the pack. Such a chunk stays hex, which is exactly where it would have been
-/// without any of this.
-fn harvested_routes(
+/// the pack. Such a chunk stays hex.
+fn chunk_path_table(
     plan: &PackPlan<'_>,
-    taken: &HashSet<String>,
-) -> Option<(FantomeHashtable, Hashtable)> {
-    let (algorithm, width) = Category::Game.default_shape()?;
+    routes: &[PlannedRoute<'_, FantomeHashtable>],
+) -> Option<ChunkPathTable> {
+    let target = routes.iter().find(|route| {
+        let entry = route.planned.entry();
+        route.manifest.category == Category::Game
+            && Key::of("", entry.algorithm(), entry.width()).is_some()
+    });
+    let (algorithm, width) = match target {
+        Some(route) => (
+            route.planned.entry().algorithm().clone(),
+            route.planned.entry().width(),
+        ),
+        None => Category::Game.default_shape()?,
+    };
+
     let declared = HashtableSet::build(
         plan.hashtables()
             .iter()
@@ -397,11 +419,13 @@ fn harvested_routes(
     );
 
     let mut names: BTreeSet<&str> = BTreeSet::new();
+    let mut keys = HashSet::new();
     let files = plan.layers().iter().flat_map(|planned| planned.files());
     for file in files {
         if file.wad().is_none() {
             continue;
         }
+
         // The path the extraction would have resolved: the `.ltk` a collided
         // path gained comes off, and a chunk that landed under its bare hash
         // has no name to record.
@@ -409,46 +433,47 @@ fn harvested_routes(
         if is_hex_chunk_path(named) {
             continue;
         }
+
         let Some(key) = Key::of(named.as_str(), &algorithm, width) else {
             continue;
         };
-        if declared.resolve(&Category::Game, key).is_none() {
+        if declared.resolve(&Category::Game, key).is_none() && keys.insert(key) {
             names.insert(named.as_str());
         }
     }
-
-    let mut table = Hashtable::default();
+    let mut fresh = Hashtable::default();
     for name in names {
-        let _ = table.push(name);
+        let _ = fresh.push(name);
     }
-    table.names().next()?;
+    fresh.names().next()?;
+
+    let (manifest, held) = match target {
+        Some(route) => (route.manifest.clone(), Some(route.planned.table())),
+        None => {
+            let path = free_table_path(&Category::Game, |candidate| {
+                routes
+                    .iter()
+                    .any(|route| route.manifest.path.eq_ignore_ascii_case(candidate))
+            });
+            let manifest = FantomeHashtable {
+                path,
+                category: Category::Game,
+                algorithm,
+                bits: width.bits(),
+            };
+            (manifest, None)
+        }
+    };
+
+    let mut table = Hashtable::from_names(
+        held.into_iter()
+            .flat_map(Hashtable::names)
+            .chain(fresh.names()),
+    )
+    .expect("every name came out of a validated table");
     table.sort();
 
-    Some((
-        FantomeHashtable {
-            path: free_harvest_path(taken),
-            category: Category::Game,
-            algorithm,
-            bits: width.bits(),
-        },
-        table,
-    ))
-}
-
-/// The first harvested-table path `taken` does not already hold.
-///
-/// Deliberately not the conventional `game.hashes.txt`: that name belongs to a
-/// table the author declared, and an archive where it sometimes means one and
-/// sometimes the other is an archive nobody can read confidently. The spelling
-/// is the one `ltk_fantome`'s own name merge uses for the same reason.
-fn free_harvest_path(taken: &HashSet<String>) -> String {
-    (1..)
-        .map(|attempt| match attempt {
-            1 => "META/hashes/game.harvested.hashes.txt".to_owned(),
-            n => format!("META/hashes/game.harvested{n}.hashes.txt"),
-        })
-        .find(|candidate| !taken.contains(&candidate.to_ascii_lowercase()))
-        .expect("the candidate sequence is unbounded")
+    Some(ChunkPathTable { manifest, table })
 }
 
 /// Bytes of a file that have to be read before its type can be named.
@@ -539,20 +564,35 @@ fn pack_metadata<W: Write + Seek>(
     }
     info.hashtables = routes.iter().map(|route| route.manifest.clone()).collect();
 
+    // The chunk paths the packed WADs drop, embedded so an import can give
+    // the author back the names they gave their own files.
+    let chunk_paths = chunk_path_table(plan, &routes);
+
     let mut written = HashSet::new();
     for route in &routes {
-        if written.insert(route.manifest.path.to_ascii_lowercase()) {
-            writer.write_hashtable(&route.manifest, route.planned.table())?;
+        if !written.insert(route.manifest.path.to_ascii_lowercase()) {
+            continue;
         }
+
+        let table = match &chunk_paths {
+            Some(merged)
+                if merged
+                    .manifest
+                    .path
+                    .eq_ignore_ascii_case(&route.manifest.path) =>
+            {
+                &merged.table
+            }
+            _ => route.planned.table(),
+        };
+        writer.write_hashtable(&route.manifest, table)?;
     }
 
-    // The chunk paths the packed WADs drop, kept beside them so an import can
-    // give the author back the names they gave their own files. Declared after
-    // the project's own tables and never in place of one - see
-    // [`harvested_routes`].
-    if let Some((manifest, table)) = harvested_routes(plan, &written) {
-        writer.write_hashtable(&manifest, &table)?;
-        info.hashtables.push(manifest);
+    if let Some(new) =
+        chunk_paths.filter(|table| !written.contains(&table.manifest.path.to_ascii_lowercase()))
+    {
+        writer.write_hashtable(&new.manifest, &new.table)?;
+        info.hashtables.push(new.manifest);
     }
 
     writer.write_info(&info)?;

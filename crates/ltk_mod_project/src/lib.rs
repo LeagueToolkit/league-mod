@@ -19,14 +19,16 @@ mod package_format;
 mod hashtable_routes;
 
 #[cfg(feature = "fantome")]
+pub mod embed;
+#[cfg(feature = "fantome")]
 pub mod fantome;
 #[cfg(feature = "modpkg")]
 pub mod modpkg;
-#[cfg(feature = "fantome")]
-pub mod preserve;
 
 pub use cancellation::Cancellation;
 pub use config_format::ConfigFormat;
+#[cfg(feature = "fantome")]
+pub use embed::{embed_archive_names, EmbedError, EmbedOutcome, EmbedReport};
 pub use error::{ModProjectError, SerializeError};
 #[cfg(any(feature = "fantome", feature = "modpkg"))]
 pub use hashtable_routes::DuplicateHashtableName;
@@ -45,8 +47,6 @@ pub use pack::{
     PlannedLicense, ProjectPacker,
 };
 pub use package_format::PackageFormat;
-#[cfg(feature = "fantome")]
-pub use preserve::{preserve_archive_names, HarvestReport, PreserveError, PreserveOutcome};
 
 /// The directory every layer's content sits under, in the project root.
 pub const CONTENT_DIR_NAME: &str = "content";

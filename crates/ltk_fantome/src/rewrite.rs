@@ -1,4 +1,4 @@
-//! Editing an archive in place: merge harvested names, replace content, or
+//! Editing an archive in place: embed a mod's names, replace content, or
 //! both, in one pass.
 //!
 //! The rewrite raw-copies every entry it does not itself replace, so the
@@ -16,7 +16,7 @@ use std::io::{Read, Seek, Write};
 
 use ltk_hashtable::{Category, Hashtable, HashtableSet, Key};
 
-use crate::reader::is_packed_wad;
+use crate::reader::{DeclaredHashtables, is_packed_wad};
 use crate::{
     FantomeExtractError, FantomeHashtable, FantomeReader, FantomeWriteError, FantomeWriter,
 };
@@ -24,7 +24,7 @@ use crate::{
 /// What a rewrite did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RewriteOutcome {
-    /// Every harvested name was already declared; nothing was written to the
+    /// Every given name was already declared, and nothing was written to the
     /// sink.
     Unchanged,
     /// The sink holds the rewritten archive.
@@ -47,20 +47,19 @@ pub enum FantomeRewriteError {
     Write(#[from] FantomeWriteError),
 }
 
-/// The first conventional table path for `category` that `taken` does not
-/// hold. The `{category}.hashes.txt` name is a convention, not a rule, so a
-/// qualifier is added whenever the plain name would land on an entry that is
-/// already someone's.
-fn free_table_path(category: &Category, taken: &HashSet<String>) -> String {
-    let mut candidates =
-        std::iter::once(format!("META/hashes/{category}.hashes.txt")).chain((1..).map(|attempt| {
-            match attempt {
-                1 => format!("META/hashes/{category}.harvested.hashes.txt"),
-                n => format!("META/hashes/{category}.harvested{n}.hashes.txt"),
-            }
-        }));
-    candidates
-        .find(|candidate| !taken.contains(&candidate.to_ascii_lowercase()))
+/// Returns the first conventional table path for `category` that `is_taken`
+/// rejects.
+///
+/// The candidates are `META/hashes/{category}.hashes.txt`, then
+/// `META/hashes/{category}2.hashes.txt`, `META/hashes/{category}3.hashes.txt`
+/// and onward. A writer that declares a new table for a mod's own names takes
+/// its path from here. `is_taken` receives each candidate in the casing above.
+/// Archive entry names compare case-insensitively, and `is_taken` is expected
+/// to compare the same way.
+pub fn free_table_path(category: &Category, mut is_taken: impl FnMut(&str) -> bool) -> String {
+    std::iter::once(format!("META/hashes/{category}.hashes.txt"))
+        .chain((2u64..).map(|n| format!("META/hashes/{category}{n}.hashes.txt")))
+        .find(|candidate| !is_taken(candidate))
         .expect("the candidate sequence is unbounded")
 }
 
@@ -70,15 +69,24 @@ struct PlannedTable {
     table: Hashtable,
 }
 
-/// Merge `harvested` names into the archive `reader` holds, writing the
-/// result to `sink`.
+/// Merge `names` into the archive `reader` holds, writing the result to
+/// `sink`.
 ///
 /// The merge adds and never replaces: a name whose key an archive's declared
-/// tables already resolve is not added again, an existing manifest gains
-/// entries rather than losing any, and an existing table file gains the
-/// category's new names in `LC_ALL=C` order while keeping every name it
-/// already held. Every other entry is raw-copied byte-for-byte, wrong CRC32
-/// values included.
+/// tables already resolve is not added again, and an existing table file
+/// gains the category's new names in `LC_ALL=C` order while keeping every
+/// name it already held. Every other entry is raw-copied byte-for-byte, wrong
+/// CRC32 values included.
+///
+/// A category's new names merge into the first table of the category that
+/// the archive declares, holds and can read, and whose keys are computable.
+/// If the archive declares no such table, the names land in a new table at
+/// the path [`free_table_path`] returns.
+///
+/// A declaration whose file is absent or unreadable is skipped, as
+/// [`FantomeReader::read_hashtables`] skips it. The manifest the rewrite writes
+/// leaves that declaration out. An unreadable file is raw-copied as an
+/// undeclared entry.
 ///
 /// When nothing is genuinely new the sink is left untouched and
 /// [`RewriteOutcome::Unchanged`] comes back - deciding costs one read, so a
@@ -93,12 +101,12 @@ struct PlannedTable {
 pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
     reader: &mut FantomeReader<R>,
     sink: W,
-    harvested: &[(Category, Hashtable)],
+    names: &[(Category, Hashtable)],
 ) -> Result<RewriteOutcome, FantomeRewriteError> {
-    replace_entries(reader, sink, &[], harvested)
+    replace_entries(reader, sink, &[], names)
 }
 
-/// Write `entries` in place of what the archive holds, and merge `harvested`.
+/// Write `entries` in place of what the archive holds, and merge `names`.
 ///
 /// Each entry is an archive path and the bytes to store under it, replacing
 /// that path where the archive has one and adding it where it has none. Every
@@ -106,7 +114,7 @@ pub fn add_hashtables<R: Read + Seek, W: Write + Seek>(
 /// byte copy - which is what makes editing a large archive worth doing at all
 /// over packing its project again.
 ///
-/// `harvested` merges exactly as [`add_hashtables`] describes, because that is
+/// `names` merges exactly as [`add_hashtables`] describes, because that is
 /// this function with no entries. A caller replacing content it hashed a name
 /// out of wants both halves in one pass: two passes would write the archive
 /// twice to change it once.
@@ -129,15 +137,20 @@ pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
     reader: &mut FantomeReader<R>,
     sink: W,
     entries: &[(&str, &[u8])],
-    harvested: &[(Category, Hashtable)],
+    names: &[(Category, Hashtable)],
 ) -> Result<RewriteOutcome, FantomeRewriteError> {
     let mut info = reader.read_info()?;
-    let declared = reader.read_hashtables()?;
+    let DeclaredHashtables {
+        tables: declared,
+        skipped,
+    } = reader.read_declared_hashtables(&info.hashtables)?;
+    info.hashtables
+        .retain(|manifest| !skipped.iter().any(|skip| skip.manifest == *manifest));
     let resolved = HashtableSet::build(declared.iter().cloned());
 
-    // Paths a new entry must not land on: everything the manifest already
-    // declares - the entries this tool cannot read included, since unknown is
-    // not disposable - and every entry the archive holds.
+    // Paths a new entry must not land on: every path the kept manifest
+    // declares, and every entry the archive holds. A declaration with a width
+    // this tool cannot use is kept, and its path is taken.
     let mut taken: HashSet<String> = info
         .hashtables
         .iter()
@@ -148,7 +161,7 @@ pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
     let mut plans: Vec<PlannedTable> = Vec::new();
     let mut names_added = 0;
 
-    for (category, table) in harvested {
+    for (category, table) in names {
         // The shape new keys are judged in: the first declared entry of the
         // category whose keys are computable, else the registry's shape. A
         // category with neither is skipped - its keys mean nothing here.
@@ -194,7 +207,9 @@ pub fn replace_entries<R: Read + Seek, W: Write + Seek>(
                 (manifest.clone(), base)
             }
             None => {
-                let path = free_table_path(category, &taken);
+                let path = free_table_path(category, |candidate| {
+                    taken.contains(&candidate.to_ascii_lowercase())
+                });
                 taken.insert(path.to_ascii_lowercase());
                 let manifest = FantomeHashtable {
                     path,

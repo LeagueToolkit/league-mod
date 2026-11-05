@@ -120,41 +120,52 @@ identity verified in flight, never decompressed. The fallback for content that c
 is to decompress and recompress it.
 _Avoid_: raw copy, zero-copy, fast path
 
-### Preserving names
+### Embedding names
 
-**Harvest**:
-Reading a mod's names out of the places they currently survive - its on-disk chunk paths and the
-strings inside its own bins - so they can be written into an embedded hashtable.
-_Avoid_: scan, extract, recover, generate
+**Embedded names**:
+A mod's own names, read out of the places they survive - its on-disk chunk paths and the strings
+inside its own bins - and written into an embedded hashtable.
+_Avoid_: harvest, harvested names, scan, extract, recover, generate
 
 **Rewrite**:
-Writing a mod's harvested names back into its own archive, every other entry untouched. Runs only
-when the harvest found a name the archive does not already declare.
+Writing a mod's embedded names back into its own archive, every other entry untouched. Runs only
+when the embed found a name the archive does not already declare.
 _Avoid_: repack, resave, update
 
-**Preserve**:
-The whole motion the manager calls at import: harvest a mod's names, then rewrite them into the
-mod's container. Harvest is the reading half; rewrite is the writing half.
-_Avoid_: fix, import-fix, process
+**Embed**:
+The whole motion the manager calls at import: read a mod's names, then rewrite them into the
+mod's container. The read is the first half, and the rewrite is the writing half.
+_Avoid_: preserve, harvest, fix, import-fix, process
+
+**Merge target**:
+The first `game` table a mod declares whose keys are computable. A mod's embedded names merge
+into it. A mod that declares none gains a new table at `META/hashes/game.hashes.txt`.
+_Avoid_: harvested table, home table
+
+**Skipped declaration**:
+A manifest entry whose table file is absent from the container or does not fit the table
+grammar. A read skips and reports it, and a rewrite drops it from the manifest. It fails nothing.
+_Avoid_: missing table, broken table
 
 **Exclusions**:
-The names a harvest leaves out of a table because a reader can recover them without the mod's
-help - in practice, the community hashtables. Handed in by the caller, never assumed.
+The names an embed leaves out of a table: the names a reader can recover without the mod's help,
+in practice the community hashtables. Handed in by the caller, never assumed.
 _Avoid_: filter, skip list, blacklist
 
-**Unharvestable name**:
-A name that survives nowhere the harvest can read: its chunk is hex-named and no bin still spells
-it out. Counted and reported, never guessed at.
-_Avoid_: lost name, missing name, unknown name
+**Unnamed chunk**:
+A chunk whose name survives nowhere the embed can read: it is hex-named and no bin still spells
+its path out. Counted and reported, never guessed at.
+_Avoid_: unharvestable name, lost name, missing name, unknown name
 
-**Harvest report**:
-A preserve's account of itself: whether the mod was rewritten and how many names were
-unharvestable. What separates a mod that harvested cleanly from one that did not.
-_Avoid_: result, summary, stats
+**Embed report**:
+An embed's account of itself: whether the mod was rewritten, how many chunks are unnamed, and
+which declarations were skipped. What separates a mod whose names embedded cleanly from one whose
+names did not.
+_Avoid_: harvest report, result, summary, stats
 
 **Covered mod**:
 A mod whose names the community hashtables and its own stored paths already fully account for.
-Preserving one adds nothing, so its archive is never touched.
+Embedding its names adds nothing, and its archive is never touched.
 _Avoid_: clean mod, known mod, no-op mod
 
 **Unrepresentable path**:

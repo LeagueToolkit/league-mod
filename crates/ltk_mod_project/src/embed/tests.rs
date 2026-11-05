@@ -5,7 +5,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use ltk_fantome::{FantomeInfo, FantomeReader, FantomeWriter};
 use ltk_hashtable::Category;
 
-use super::{preserve_archive_names, PreserveOutcome};
+use super::{embed_archive_names, EmbedOutcome};
 
 fn info_named(name: &str) -> FantomeInfo {
     let mut info = FantomeInfo::default();
@@ -33,7 +33,7 @@ fn temp_dir() -> (tempfile::TempDir, Utf8PathBuf) {
 }
 
 #[test]
-fn chunk_paths_on_disk_are_harvested_and_a_hex_name_is_not_guessed_at() {
+fn chunk_paths_on_disk_are_embedded_and_a_hex_name_is_not_guessed_at() {
     let (_guard, dir) = temp_dir();
     let source = write_source(
         &dir,
@@ -44,13 +44,10 @@ fn chunk_paths_on_disk_are_harvested_and_a_hex_name_is_not_guessed_at() {
     );
     let dest = dir.join("library.fantome");
 
-    let report = preserve_archive_names(&source, &dest, None).unwrap();
+    let report = embed_archive_names(&source, &dest, None).unwrap();
 
-    assert_eq!(
-        report.outcome,
-        PreserveOutcome::Rewritten { names_added: 1 }
-    );
-    assert_eq!(report.unharvestable, 1);
+    assert_eq!(report.outcome, EmbedOutcome::Rewritten { embedded: 1 });
+    assert_eq!(report.unnamed, 1);
 
     let mut reader = FantomeReader::new(File::open(dest.as_std_path()).unwrap()).unwrap();
     let tables = reader.read_hashtables().unwrap();
@@ -84,7 +81,7 @@ fn bin_with(paths: &[&str]) -> Vec<u8> {
 }
 
 #[test]
-fn names_in_a_packed_wads_bins_are_harvested() {
+fn names_in_a_packed_wads_bins_are_embedded() {
     use std::io::Write;
 
     use ltk_wad::{WadBuilder, WadChunkBuilder};
@@ -117,15 +114,12 @@ fn names_in_a_packed_wads_bins_are_harvested() {
     zip.finish().unwrap();
     let dest = dir.join("library.fantome");
 
-    let report = preserve_archive_names(&source, &dest, None).unwrap();
+    let report = embed_archive_names(&source, &dest, None).unwrap();
 
     // The bin named the texture chunk; the bin chunk itself is named by
     // nothing and is counted, not guessed at.
-    assert_eq!(
-        report.outcome,
-        PreserveOutcome::Rewritten { names_added: 1 }
-    );
-    assert_eq!(report.unharvestable, 1);
+    assert_eq!(report.outcome, EmbedOutcome::Rewritten { embedded: 1 });
+    assert_eq!(report.unnamed, 1);
 
     let mut reader = FantomeReader::new(File::open(dest.as_std_path()).unwrap()).unwrap();
     let tables = reader.read_hashtables().unwrap();
@@ -154,12 +148,9 @@ fn the_exclusions_remove_names_a_reader_can_recover_elsewhere() {
     )]
     .into();
 
-    let report = preserve_archive_names(&source, &dest, Some(&community)).unwrap();
+    let report = embed_archive_names(&source, &dest, Some(&community)).unwrap();
 
-    assert_eq!(
-        report.outcome,
-        PreserveOutcome::Rewritten { names_added: 1 }
-    );
+    assert_eq!(report.outcome, EmbedOutcome::Rewritten { embedded: 1 });
     let mut reader = FantomeReader::new(File::open(dest.as_std_path()).unwrap()).unwrap();
     let tables = reader.read_hashtables().unwrap();
     assert_eq!(
@@ -169,35 +160,87 @@ fn the_exclusions_remove_names_a_reader_can_recover_elsewhere() {
 }
 
 #[test]
-fn preserving_twice_is_a_no_op() {
+fn embedding_twice_is_a_no_op() {
     let (_guard, dir) = temp_dir();
     let source = write_source(&dir, &[("Aatrox.wad.client", "assets/custom/a.tex", b"a")]);
     let dest = dir.join("library.fantome");
 
-    let first = preserve_archive_names(&source, &dest, None).unwrap();
-    assert_eq!(first.outcome, PreserveOutcome::Rewritten { names_added: 1 });
+    let first = embed_archive_names(&source, &dest, None).unwrap();
+    assert_eq!(first.outcome, EmbedOutcome::Rewritten { embedded: 1 });
     let after_first = std::fs::read(dest.as_std_path()).unwrap();
 
-    // A second preserve of the already-preserved archive, in place.
-    let second = preserve_archive_names(&dest, &dest, None).unwrap();
-    assert_eq!(second.outcome, PreserveOutcome::Unchanged);
+    // A second embed of the archive with its names embedded, in place.
+    let second = embed_archive_names(&dest, &dest, None).unwrap();
+    assert_eq!(second.outcome, EmbedOutcome::Unchanged);
     assert_eq!(std::fs::read(dest.as_std_path()).unwrap(), after_first);
 }
 
 #[test]
-fn a_preserve_that_fails_leaves_the_destination_as_it_was() {
+fn an_embed_that_fails_leaves_the_destination_as_it_was() {
     let (_guard, dir) = temp_dir();
     let source = dir.join("broken.fantome");
     std::fs::write(source.as_std_path(), b"not a zip archive").unwrap();
     let dest = dir.join("library.fantome");
     std::fs::write(dest.as_std_path(), b"existing library archive").unwrap();
 
-    preserve_archive_names(&source, &dest, None).unwrap_err();
+    embed_archive_names(&source, &dest, None).unwrap_err();
 
     assert_eq!(
         std::fs::read(dest.as_std_path()).unwrap(),
         b"existing library archive"
     );
+}
+
+/// The archive a third-party repack leaves: `META/info.json` declares a
+/// table, and the archive holds no `META/hashes/` entry.
+#[test]
+fn an_embed_skips_a_declared_table_the_archive_does_not_hold() {
+    use ltk_fantome::{FantomeHashtable, HashtableSkipReason};
+
+    let absent = FantomeHashtable {
+        path: "META/hashes/game.harvested.hashes.txt".to_owned(),
+        category: Category::Game,
+        algorithm: ltk_hashtable::Algorithm::Xxh64,
+        bits: 64,
+    };
+
+    let (_guard, dir) = temp_dir();
+    let source = dir.join("mod.fantome");
+    let mut info = info_named("Repacked");
+    info.hashtables = vec![absent.clone()];
+    let mut writer = FantomeWriter::new(File::create(source.as_std_path()).unwrap());
+    writer.write_info(&info).unwrap();
+    writer
+        .write_wad_entry(
+            ltk_fantome::BASE_LAYER,
+            "Aatrox.wad.client",
+            "assets/custom/a.tex",
+            &mut &b"a"[..],
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    let dest = dir.join("library.fantome");
+
+    let report = embed_archive_names(&source, &dest, None).unwrap();
+
+    assert_eq!(report.outcome, EmbedOutcome::Rewritten { embedded: 1 });
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].manifest, absent);
+    assert!(matches!(
+        report.skipped[0].reason,
+        HashtableSkipReason::Absent
+    ));
+
+    let mut reader = FantomeReader::new(File::open(dest.as_std_path()).unwrap()).unwrap();
+    let declared: Vec<String> = reader
+        .read_info()
+        .unwrap()
+        .hashtables
+        .into_iter()
+        .map(|manifest| manifest.path)
+        .collect();
+    assert_eq!(declared, ["META/hashes/game.hashes.txt"]);
+    assert!(reader.skipped_hashtables().unwrap().is_empty());
 }
 
 #[test]
@@ -216,9 +259,9 @@ fn a_covered_mod_is_copied_to_the_destination_unrewritten() {
     )]
     .into();
 
-    let report = preserve_archive_names(&source, &dest, Some(&community)).unwrap();
+    let report = embed_archive_names(&source, &dest, Some(&community)).unwrap();
 
-    assert_eq!(report.outcome, PreserveOutcome::Unchanged);
+    assert_eq!(report.outcome, EmbedOutcome::Unchanged);
     assert_eq!(
         std::fs::read(dest.as_std_path()).unwrap(),
         std::fs::read(source.as_std_path()).unwrap()
