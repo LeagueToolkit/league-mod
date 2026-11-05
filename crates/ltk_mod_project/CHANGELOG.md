@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.20.1...ltk_mod_project-v0.21.0) - 2026-11-05
+
+### Added
+
+- *(mod_project)* [**breaking**] rename preserve to embed
+
 ## [0.20.1](https://github.com/LeagueToolkit/league-mod/compare/ltk_mod_project-v0.20.0...ltk_mod_project-v0.20.1) - 2026-10-31
 
 ### Other
