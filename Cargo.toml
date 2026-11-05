@@ -23,6 +23,7 @@ ltk_file = "0.2.12"
 ltk_meta = "0.9"
 ltk_io_ext = "0.4.8"
 ltk_rst = "0.2.2"
+ltk_ritobin = "0.12.3"
 
 # Workspace crates
 ltk_fantome = { version = "0.19.0", path = "crates/ltk_fantome" }
