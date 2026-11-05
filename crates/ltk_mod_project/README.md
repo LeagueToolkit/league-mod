@@ -41,7 +41,7 @@ this crate knows what a project is and drives them.
 | --------- | ------- | ------------------------------------------------------------------------------------------ |
 | *(none)*  | yes     | config types, layout constants, `.modignore`, the pack and import drivers and their traits |
 | `modpkg`  | no      | `modpkg::{ModpkgFormat, ModpkgImporter, read_project}` and `modpkg::thumbnail`              |
-| `fantome` | no      | `fantome::{FantomeFormat, FantomeImporter}` and the `preserve` module                       |
+| `fantome` | no      | `fantome::{FantomeFormat, FantomeImporter}` and the `embed` module                          |
 
 The features are independent; a tool that handles both formats enables both.
 
@@ -315,13 +315,17 @@ matching on a concrete format's failure is one level deep: `PackError::Format(in
 `ModProjectError` covers config access alone: no config file in a directory, an unreadable file, a
 parse failure naming the path, an unsupported extension.
 
-## Preserving Fantome names
+## Embedding Fantome names
 
-With the `fantome` feature, `preserve::preserve_archive_names` reads an archive, harvests the
-names its entries still carry, and writes an archive that declares them. It is import-shaped -
-source in, destination out - so the way a mod enters a library is the preserve, and a repair that
-runs on library mods cannot run before the harvest. `HarvestReport` counts the chunks whose names
-are unrecoverable; it never guesses at one.
+With the `fantome` feature, `embed::embed_archive_names` reads the names an archive's entries
+carry and writes an archive that declares them. It is import-shaped: source in, destination out.
+The way a mod enters a library is the embed, and a repair that runs on library mods runs after it.
+`EmbedReport` counts the chunks whose names are unrecoverable and never guesses at one. It lists
+the hashtable declarations the embed skipped for an absent or unreadable file.
+
+The embedded names of a mod go into the first `game` table the mod declares whose keys are
+computable. If it declares none, they go into a new table at `META/hashes/game.hashes.txt`. The
+Fantome pack follows the same rule for the chunk paths of its packed WADs.
 
 ## Related
 

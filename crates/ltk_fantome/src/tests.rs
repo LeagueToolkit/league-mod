@@ -248,6 +248,144 @@ fn an_undeclared_hashes_entry_is_not_read() {
     assert!(reader.read_hashtables().unwrap().is_empty());
 }
 
+/// An archive whose `META/info.json` declares `manifests`, holding `files` as
+/// `(path, bytes)` entries.
+fn archive_declaring_tables(manifests: &[FantomeHashtable], files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::{Cursor, Write as _};
+
+    use zip::write::SimpleFileOptions;
+
+    let info = FantomeInfo {
+        name: "Mod".to_owned(),
+        hashtables: manifests.to_vec(),
+        ..Default::default()
+    };
+
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    zip.start_file("META/info.json", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(serde_json::to_string(&info).unwrap().as_bytes())
+        .unwrap();
+
+    for (path, bytes) in files {
+        zip.start_file(*path, SimpleFileOptions::default()).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+
+    zip.finish().unwrap().into_inner()
+}
+
+/// A `game` declaration at `path`, keyed by 64-bit xxh64.
+fn game_table_at(path: &str) -> FantomeHashtable {
+    FantomeHashtable {
+        path: path.to_owned(),
+        category: ltk_hashtable::Category::Game,
+        algorithm: ltk_hashtable::Algorithm::Xxh64,
+        bits: 64,
+    }
+}
+
+#[test]
+fn a_declared_table_the_archive_does_not_hold_is_skipped_and_reported_absent() {
+    use std::io::Cursor;
+
+    use crate::{FantomeReader, HashtableSkipReason};
+
+    let absent = game_table_at("META/hashes/game.harvested.hashes.txt");
+    let present = game_table_at("META/hashes/game.hashes.txt");
+    let bytes = archive_declaring_tables(
+        &[absent.clone(), present],
+        &[("META/hashes/game.hashes.txt", b"assets/one.tex\n")],
+    );
+
+    let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+    let tables = reader.read_hashtables().unwrap();
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].0.path(), "META/hashes/game.hashes.txt");
+
+    let skipped = reader.skipped_hashtables().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].manifest, absent);
+    assert!(matches!(skipped[0].reason, HashtableSkipReason::Absent));
+    assert_eq!(
+        skipped[0].to_string(),
+        "Skipped the hashtable META/hashes/game.harvested.hashes.txt: the archive holds no entry at that path"
+    );
+}
+
+#[test]
+fn a_declared_table_outside_the_grammar_is_skipped_and_reported_unreadable() {
+    use std::io::Cursor;
+
+    use crate::{FantomeReader, HashtableSkipReason};
+
+    let unreadable = game_table_at("META/hashes/game.hashes.txt");
+    let bytes = archive_declaring_tables(
+        std::slice::from_ref(&unreadable),
+        &[("META/hashes/game.hashes.txt", b"assets\\back\\slash.tex\n")],
+    );
+
+    let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+    assert!(reader.read_hashtables().unwrap().is_empty());
+
+    let skipped = reader.skipped_hashtables().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].manifest, unreadable);
+    assert!(matches!(
+        skipped[0].reason,
+        HashtableSkipReason::Unreadable(ltk_hashtable::HashtableReadError::InvalidName { .. })
+    ));
+}
+
+#[test]
+fn a_table_file_with_a_byte_order_mark_reads_without_it() {
+    use std::io::Cursor;
+
+    use crate::FantomeReader;
+
+    let bytes = archive_declaring_tables(
+        &[game_table_at("META/hashes/game.hashes.txt")],
+        &[(
+            "META/hashes/game.hashes.txt",
+            b"\xEF\xBB\xBFassets/one.tex\nassets/two.tex\n",
+        )],
+    );
+
+    let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+    let tables = reader.read_hashtables().unwrap();
+    assert_eq!(
+        tables[0].1.names().collect::<Vec<_>>(),
+        ["assets/one.tex", "assets/two.tex"]
+    );
+    assert!(reader.skipped_hashtables().unwrap().is_empty());
+}
+
+#[test]
+fn free_table_path_numbers_the_category_after_the_plain_name() {
+    use ltk_hashtable::Category;
+
+    use crate::free_table_path;
+
+    assert_eq!(
+        free_table_path(&Category::Game, |_| false),
+        "META/hashes/game.hashes.txt"
+    );
+
+    let taken = [
+        "meta/hashes/game.hashes.txt",
+        "meta/hashes/game2.hashes.txt",
+    ];
+    assert_eq!(
+        free_table_path(&Category::Game, |candidate| {
+            taken.contains(&candidate.to_ascii_lowercase().as_str())
+        }),
+        "META/hashes/game3.hashes.txt"
+    );
+}
+
 #[test]
 fn a_meta_hashes_entry_classifies_as_a_hashtable() {
     use crate::{FantomeEntry, classify_entry};
@@ -274,7 +412,7 @@ fn a_meta_hashes_entry_classifies_as_a_hashtable() {
     assert_eq!(classify_entry("META/game_data/base/"), None);
 }
 
-// The rewrite: raw-copy every entry, merge in harvested names, never touch
+// The rewrite: raw-copy every entry, merge in a mod's names, never touch
 // what is already there.
 
 mod rewrite {
@@ -331,10 +469,9 @@ mod rewrite {
         );
 
         let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
-        let harvested = Hashtable::from_names(["ASSETS/Custom/New.tex"]).unwrap();
+        let names = Hashtable::from_names(["ASSETS/Custom/New.tex"]).unwrap();
         let mut sink = Cursor::new(Vec::new());
-        let outcome =
-            add_hashtables(&mut reader, &mut sink, &[(Category::Game, harvested)]).unwrap();
+        let outcome = add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
         assert_eq!(outcome, RewriteOutcome::Rewritten { names_added: 1 });
 
         let out = sink.into_inner();
@@ -692,7 +829,7 @@ mod rewrite_merge {
     }
 
     #[test]
-    fn a_harvest_that_adds_nothing_performs_no_rewrite() {
+    fn names_that_add_nothing_perform_no_rewrite() {
         let bytes = archive_declaring(
             b"ASSETS/Custom/Known.tex
 ",
@@ -700,10 +837,9 @@ mod rewrite_merge {
         let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
 
         // The same canonical name in another casing is not new.
-        let harvested = Hashtable::from_names(["assets/custom/known.tex"]).unwrap();
+        let names = Hashtable::from_names(["assets/custom/known.tex"]).unwrap();
         let mut sink = Cursor::new(Vec::new());
-        let outcome =
-            add_hashtables(&mut reader, &mut sink, &[(Category::Game, harvested)]).unwrap();
+        let outcome = add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
 
         assert_eq!(outcome, RewriteOutcome::Unchanged);
         assert!(sink.into_inner().is_empty());
@@ -717,11 +853,9 @@ mod rewrite_merge {
         );
         let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
 
-        let harvested =
-            Hashtable::from_names(["B/EXISTING.TEX", "a/new.tex", "A/NEW.TEX"]).unwrap();
+        let names = Hashtable::from_names(["B/EXISTING.TEX", "a/new.tex", "A/NEW.TEX"]).unwrap();
         let mut sink = Cursor::new(Vec::new());
-        let outcome =
-            add_hashtables(&mut reader, &mut sink, &[(Category::Game, harvested)]).unwrap();
+        let outcome = add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
         assert_eq!(outcome, RewriteOutcome::Rewritten { names_added: 1 });
 
         let mut out_reader = FantomeReader::new(Cursor::new(sink.into_inner())).unwrap();
@@ -736,6 +870,97 @@ mod rewrite_merge {
             tables[0].1.names().collect::<Vec<_>>(),
             ["a/new.tex", "b/Existing.tex"]
         );
+    }
+
+    /// The archive a third-party repack leaves: `META/info.json` declares a
+    /// table, and the archive holds no `META/hashes/` entry.
+    #[test]
+    fn a_rewrite_drops_an_absent_declaration_and_declares_game_hashes_txt() {
+        let bytes = super::archive_declaring_tables(
+            &[super::game_table_at(
+                "META/hashes/game.harvested.hashes.txt",
+            )],
+            &[],
+        );
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+        let names = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        let outcome = add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
+        assert_eq!(outcome, RewriteOutcome::Rewritten { names_added: 1 });
+
+        let mut out_reader = FantomeReader::new(Cursor::new(sink.into_inner())).unwrap();
+        assert_eq!(
+            out_reader.read_info().unwrap().hashtables,
+            vec![game_manifest()]
+        );
+        assert!(out_reader.skipped_hashtables().unwrap().is_empty());
+        assert_eq!(
+            out_reader.read_hashtables().unwrap()[0]
+                .1
+                .names()
+                .collect::<Vec<_>>(),
+            ["assets/custom/new.tex"]
+        );
+    }
+
+    #[test]
+    fn a_rewrite_merges_into_the_first_readable_game_table() {
+        let authored = super::game_table_at("META/hashes/authored.hashes.txt");
+        let bytes = super::archive_declaring_tables(
+            &[
+                super::game_table_at("META/hashes/game.harvested.hashes.txt"),
+                authored.clone(),
+            ],
+            &[("META/hashes/authored.hashes.txt", b"b/existing.tex\n")],
+        );
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+        let names = Hashtable::from_names(["a/new.tex"]).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
+
+        let mut out_reader = FantomeReader::new(Cursor::new(sink.into_inner())).unwrap();
+        assert_eq!(out_reader.read_info().unwrap().hashtables, vec![authored]);
+
+        let tables = out_reader.read_hashtables().unwrap();
+        assert_eq!(
+            tables[0].1.names().collect::<Vec<_>>(),
+            ["a/new.tex", "b/existing.tex"]
+        );
+    }
+
+    #[test]
+    fn a_rewrite_drops_an_unreadable_declaration_and_raw_copies_its_file() {
+        use std::io::Read as _;
+
+        const UNREADABLE: &[u8] = b"assets\\back\\slash.tex\n";
+
+        let bytes = super::archive_declaring_tables(
+            &[game_manifest()],
+            &[("META/hashes/game.hashes.txt", UNREADABLE)],
+        );
+        let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
+
+        let names = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
+        let mut sink = Cursor::new(Vec::new());
+        add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
+
+        let out = sink.into_inner();
+        let mut out_reader = FantomeReader::new(Cursor::new(out.clone())).unwrap();
+        assert_eq!(
+            out_reader.read_info().unwrap().hashtables,
+            vec![super::game_table_at("META/hashes/game2.hashes.txt")]
+        );
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(out)).unwrap();
+        let mut kept = Vec::new();
+        archive
+            .by_name("META/hashes/game.hashes.txt")
+            .unwrap()
+            .read_to_end(&mut kept)
+            .unwrap();
+        assert_eq!(kept, UNREADABLE);
     }
 }
 
@@ -762,9 +987,9 @@ fn an_unknown_info_field_survives_a_rewrite() {
     let bytes = zip.finish().unwrap().into_inner();
 
     let mut reader = crate::FantomeReader::new(Cursor::new(bytes)).unwrap();
-    let harvested = Hashtable::from_names(["assets/custom/one.tex"]).unwrap();
+    let names = Hashtable::from_names(["assets/custom/one.tex"]).unwrap();
     let mut sink = Cursor::new(Vec::new());
-    crate::add_hashtables(&mut reader, &mut sink, &[(Category::Game, harvested)]).unwrap();
+    crate::add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
 
     let mut out_reader = crate::FantomeReader::new(Cursor::new(sink.into_inner())).unwrap();
     let info = out_reader.read_info().unwrap();
@@ -845,9 +1070,9 @@ fn a_manifest_entry_the_rewrite_cannot_read_is_never_shadowed() {
     let bytes = writer.finish().unwrap().into_inner();
 
     let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
-    let harvested = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
+    let names = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
     let mut sink = Cursor::new(Vec::new());
-    add_hashtables(&mut reader, &mut sink, &[(Category::Game, harvested)]).unwrap();
+    add_hashtables(&mut reader, &mut sink, &[(Category::Game, names)]).unwrap();
 
     let out = sink.into_inner();
     let mut out_reader = FantomeReader::new(Cursor::new(out.clone())).unwrap();
@@ -856,7 +1081,7 @@ fn a_manifest_entry_the_rewrite_cannot_read_is_never_shadowed() {
     // Both entries are declared, at two distinct paths.
     assert_eq!(info.hashtables.len(), 2);
     assert_eq!(info.hashtables[0], unreadable);
-    assert_ne!(info.hashtables[1].path, unreadable.path);
+    assert_eq!(info.hashtables[1].path, "META/hashes/game2.hashes.txt");
 
     // The unreadable entry survived byte-for-byte.
     let mut archive = zip::ZipArchive::new(Cursor::new(out)).unwrap();
@@ -922,7 +1147,7 @@ fn a_sink_that_fails_part_way_surfaces_the_error() {
     let bytes = writer.finish().unwrap().into_inner();
 
     let mut reader = FantomeReader::new(Cursor::new(bytes)).unwrap();
-    let harvested = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
+    let names = Hashtable::from_names(["assets/custom/new.tex"]).unwrap();
     let sink = FailingSink {
         inner: Cursor::new(Vec::new()),
         budget: 64,
@@ -931,7 +1156,7 @@ fn a_sink_that_fails_part_way_surfaces_the_error() {
     // The failure surfaces as an error rather than a truncated archive being
     // reported written; keeping the original safe is the temp-and-rename
     // above this call.
-    add_hashtables(&mut reader, sink, &[(Category::Game, harvested)]).unwrap_err();
+    add_hashtables(&mut reader, sink, &[(Category::Game, names)]).unwrap_err();
 }
 
 #[test]

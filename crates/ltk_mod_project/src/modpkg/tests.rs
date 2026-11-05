@@ -903,16 +903,14 @@ fn a_modpkg_converted_through_a_project_carries_its_tables_to_fantome() {
 
     fantome_buffer.set_position(0);
     let mut reader = ltk_fantome::FantomeReader::new(fantome_buffer).unwrap();
-    // The pack also harvests its own chunk paths into a table of their own, so
-    // the declared one is found by name rather than by being the only one.
+    // The pack embeds its own chunk path, `data.bin`, in the declared table.
     let tables = reader.read_hashtables().unwrap();
-    let (entry, table) = tables
-        .iter()
-        .find(|(entry, _)| entry.path() == "META/hashes/game.hashes.txt")
-        .expect("the declared table");
+    assert_eq!(tables.len(), 1);
+    let (entry, table) = &tables[0];
+    assert_eq!(entry.path(), "META/hashes/game.hashes.txt");
     assert_eq!(
         table.names().collect::<Vec<_>>(),
-        ["ASSETS/Custom/CasedName.tex"]
+        ["ASSETS/Custom/CasedName.tex", "data.bin"]
     );
     assert_eq!(*entry.category(), ltk_hashtable::Category::Game);
 }

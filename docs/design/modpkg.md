@@ -822,7 +822,7 @@ Both formats pack from one mod project. What crosses between them:
 | Thumbnail                          | WebP                       | `META/image.png`, re-encoded to PNG                  |
 | Readme                             | `_meta_/readme.md`         | `META/README.md`                                     |
 | Embedded hashtables                | `_meta_/hashes/`           | `META/hashes/` (extension)                           |
-| Chunk paths                        | path table, authored casing | none inside a packed WAD; recovered through a harvested `game` table |
+| Chunk paths                        | path table, authored casing | none inside a packed WAD; recovered through the embedded `game` table |
 | Distributor                        | `distributor`              | `Distributor` (extension)                            |
 | Packing tool                       | `generator`                | `Generator` (extension)                              |
 

@@ -41,6 +41,12 @@ pub enum FantomeExtractError {
     MissingMetadata,
 
     /// The manifest declares a hashtable file the archive does not hold.
+    ///
+    /// Not produced. A read skips such a declaration and
+    /// [`FantomeReader::skipped_hashtables`] lists it.
+    ///
+    /// [`FantomeReader::skipped_hashtables`]: crate::FantomeReader::skipped_hashtables
+    #[deprecated(note = "not produced; see `FantomeReader::skipped_hashtables`")]
     #[error("The manifest declares {path}, but the archive holds no such entry")]
     MissingHashtable {
         /// The declared path, relative to the archive root.
@@ -48,6 +54,12 @@ pub enum FantomeExtractError {
     },
 
     /// A declared hashtable file does not fit the table grammar.
+    ///
+    /// Not produced. A read skips such a declaration and
+    /// [`FantomeReader::skipped_hashtables`] lists it.
+    ///
+    /// [`FantomeReader::skipped_hashtables`]: crate::FantomeReader::skipped_hashtables
+    #[deprecated(note = "not produced; see `FantomeReader::skipped_hashtables`")]
     #[error("Failed to read the hashtable at {path}")]
     Hashtable {
         /// The declared path, relative to the archive root.

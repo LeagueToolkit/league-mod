@@ -17,7 +17,7 @@ use zip::read::ZipFile;
 
 use crate::error::FantomeExtractError;
 use crate::packed::PackedWadSource;
-use crate::{BASE_LAYER, FantomeInfo};
+use crate::{BASE_LAYER, FantomeHashtable, FantomeInfo};
 
 /// Reads a Fantome archive entry by entry.
 pub struct FantomeReader<R: Read + Seek> {
@@ -151,6 +151,62 @@ impl fmt::Debug for WadExtractOptions<'_> {
     }
 }
 
+/// A hashtable declaration that a read skipped, and the reason it was skipped.
+///
+/// [`FantomeReader::skipped_hashtables`] lists these. [`Display`](fmt::Display)
+/// renders one as a message for a log.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SkippedHashtable {
+    /// The declaration, as `META/info.json` holds it.
+    pub manifest: FantomeHashtable,
+    /// The reason the read skipped the declaration.
+    pub reason: HashtableSkipReason,
+}
+
+impl fmt::Display for SkippedHashtable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Skipped the hashtable {}: {}",
+            self.manifest.path, self.reason
+        )
+    }
+}
+
+/// The reason a read skipped a hashtable declaration.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum HashtableSkipReason {
+    /// The archive holds no entry at the declared path.
+    Absent,
+    /// The entry at the declared path does not fit the table grammar.
+    Unreadable(ltk_hashtable::HashtableReadError),
+}
+
+impl fmt::Display for HashtableSkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => f.write_str("the archive holds no entry at that path"),
+            Self::Unreadable(source) => write!(f, "{source}"),
+        }
+    }
+}
+
+/// The tables a manifest declares, split into the ones read and the ones
+/// skipped.
+#[derive(Debug, Default)]
+pub(crate) struct DeclaredHashtables {
+    /// The tables read, each with its declaration, in manifest order.
+    pub(crate) tables: Vec<(ltk_hashtable::HashtableEntry, ltk_hashtable::Hashtable)>,
+    /// The declarations whose file is absent or unreadable, in manifest order.
+    pub(crate) skipped: Vec<SkippedHashtable>,
+}
+
+/// The UTF-8 byte order mark. Tools in the wild write one at the start of a
+/// table file, and the table grammar refuses it.
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
 /// Stream one entry into `sink`, without letting the zip crate check its CRC32.
 ///
 /// Fantome tools in the wild write CRC32 values that do not match the bytes
@@ -244,30 +300,60 @@ impl<R: Read + Seek> FantomeReader<R> {
         Ok(info)
     }
 
-    /// Read the hashtables the manifest declares - and only those.
+    /// Reads the hashtables the manifest declares - and only those.
     ///
     /// An entry in `META/hashes/` that no manifest entry declares is not a
-    /// table and is not read; the manifest is authoritative. An entry whose
-    /// declared width is not one a key can have is skipped rather than
-    /// refused - it still travels with the archive, it just cannot answer a
-    /// lookup here.
+    /// table and is not read. The manifest is authoritative. A declaration
+    /// whose width is not one a key can have is skipped. It still travels with
+    /// the archive and answers no lookup here.
+    ///
+    /// A declaration whose file is absent or does not fit the table grammar is
+    /// skipped. [`skipped_hashtables`](Self::skipped_hashtables) lists those
+    /// declarations. A table file that starts with a UTF-8 byte order mark is
+    /// read without it.
     ///
     /// The pairs feed `ltk_hashtable::HashtableSet::build` as they are.
     ///
     /// # Errors
     ///
-    /// Returns an error if the archive cannot be read, a declared table file
-    /// is missing, or one does not fit the table grammar.
+    /// Returns an error if the archive or its metadata cannot be read.
     pub fn read_hashtables(
         &mut self,
     ) -> Result<Vec<(ltk_hashtable::HashtableEntry, ltk_hashtable::Hashtable)>, FantomeExtractError>
     {
         let info = self.read_info()?;
-        let mut tables = Vec::new();
-        for manifest in &info.hashtables {
+
+        Ok(self.read_declared_hashtables(&info.hashtables)?.tables)
+    }
+
+    /// Lists the hashtable declarations that [`read_hashtables`](Self::read_hashtables)
+    /// skips for an absent or unreadable file, in manifest order.
+    ///
+    /// A declaration whose width no key can have is not listed. Its file is
+    /// never read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive or its metadata cannot be read.
+    pub fn skipped_hashtables(&mut self) -> Result<Vec<SkippedHashtable>, FantomeExtractError> {
+        let info = self.read_info()?;
+
+        Ok(self.read_declared_hashtables(&info.hashtables)?.skipped)
+    }
+
+    /// Reads the tables `manifests` declare, and lists the declarations whose
+    /// file is absent or unreadable.
+    pub(crate) fn read_declared_hashtables(
+        &mut self,
+        manifests: &[FantomeHashtable],
+    ) -> Result<DeclaredHashtables, FantomeExtractError> {
+        let mut declared = DeclaredHashtables::default();
+
+        for manifest in manifests {
             let Some(entry) = manifest.to_entry() else {
                 continue;
             };
+
             // Case-insensitive like every other entry lookup here: archives
             // in the wild spell `META/` in any casing.
             let index = self
@@ -275,21 +361,25 @@ impl<R: Read + Seek> FantomeReader<R> {
                 .iter()
                 .position(|name| name.eq_ignore_ascii_case(&manifest.path));
             let Some(index) = index else {
-                return Err(FantomeExtractError::MissingHashtable {
-                    path: manifest.path.clone(),
+                declared.skipped.push(SkippedHashtable {
+                    manifest: manifest.clone(),
+                    reason: HashtableSkipReason::Absent,
                 });
+                continue;
             };
+
             let content = read_entry(&mut self.archive.by_index(index)?)?;
-            let table =
-                ltk_hashtable::Hashtable::from_reader(content.as_slice()).map_err(|source| {
-                    FantomeExtractError::Hashtable {
-                        path: manifest.path.clone(),
-                        source,
-                    }
-                })?;
-            tables.push((entry, table));
+            let content = content.strip_prefix(UTF8_BOM).unwrap_or(&content);
+            match ltk_hashtable::Hashtable::from_reader(content) {
+                Ok(table) => declared.tables.push((entry, table)),
+                Err(source) => declared.skipped.push(SkippedHashtable {
+                    manifest: manifest.clone(),
+                    reason: HashtableSkipReason::Unreadable(source),
+                }),
+            }
         }
-        Ok(tables)
+
+        Ok(declared)
     }
 
     /// Read the bytes of the packed WAD `wad_name` of `layer`, stored as the

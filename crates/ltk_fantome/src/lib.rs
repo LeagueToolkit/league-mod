@@ -7,7 +7,7 @@
 //! composes the primitives here.
 //!
 //! Three operations rewrite an archive in place of reading it:
-//! [`add_hashtables`] merges harvested names into one, [`normalize_archive`]
+//! [`add_hashtables`] embeds a mod's names into one, [`normalize_archive`]
 //! holds its packed WADs stored so a reader can seek to them, and
 //! [`apply_delta`] repairs its content - chunks inside a packed WAD, whole
 //! entries, or both - without repacking the mod. All three raw-copy everything
@@ -50,10 +50,13 @@ pub use normalize::{
 };
 pub use packed::PackedWadSource;
 pub use reader::{
-    FantomeEntry, FantomeReader, GAME_DATA_MANIFEST, LayerWad, WadExtractOptions, WadProgress,
-    classify_entry, game_data_entry_name, is_layer_name, wad_entry_name,
+    FantomeEntry, FantomeReader, GAME_DATA_MANIFEST, HashtableSkipReason, LayerWad,
+    SkippedHashtable, WadExtractOptions, WadProgress, classify_entry, game_data_entry_name,
+    is_layer_name, wad_entry_name,
 };
-pub use rewrite::{FantomeRewriteError, RewriteOutcome, add_hashtables, replace_entries};
+pub use rewrite::{
+    FantomeRewriteError, RewriteOutcome, add_hashtables, free_table_path, replace_entries,
+};
 pub use writer::FantomeWriter;
 
 /// The name of the base layer, whose WAD directory is `WAD/`.
