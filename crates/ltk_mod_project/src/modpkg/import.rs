@@ -1,9 +1,11 @@
 //! [`ModpkgImporter`]: decodes a `.modpkg` archive into a mod project directory.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{Read, Seek};
 
 use camino::Utf8Path;
+use ltk_hashtable::{Hashtable, HashtableEntry};
 use ltk_modpkg::{
     ChunkDestination, ExtractionPlan, Modpkg, ModpkgError, ModpkgExtractor, PlannedChunk,
 };
@@ -45,10 +47,13 @@ pub enum ModpkgImportError {
 ///
 /// A package stores its chunks under the paths they were packed from, so there
 /// is nothing to name and no counterpart here to the Fantome importer's
-/// resolver and naming policy. The declared hashtables come back too: the
-/// extractor writes them under `hashes/` by the package format's own
-/// placement rule, and the recovered project manifest maps each declared
-/// entry through that same rule, so the files and the manifest agree.
+/// resolver and naming policy. The declared hashtables come back too: each
+/// table [`Modpkg::load_hashtables`] reads is written under `hashes/` by the
+/// package format's own placement rule, and the recovered project manifest
+/// maps each read entry through that same rule. A declared table whose chunk
+/// is absent or unreadable is skipped, and the project manifest does not
+/// declare it. An unreadable chunk lands under `hashes/` as an undeclared
+/// file, as every stored `_meta_/hashes/` chunk does.
 ///
 /// The progress unit is the layer: a package's content extracts to `content/`
 /// whole rather than a WAD at a time, and the layer is the largest step an
@@ -98,8 +103,23 @@ impl<R: Read + Seek> ImportFormat for ModpkgImporter<R> {
         progress: &mut ImportReporter<'_>,
     ) -> Result<ModProject, Self::Error> {
         let mut modpkg = Modpkg::mount_from_reader(self.reader)?;
-        let project = read_project(&mut modpkg)?;
-        let declarations = modpkg.load_metadata()?.layers;
+        let mut project = read_project(&mut modpkg)?;
+        let metadata = modpkg.load_metadata()?;
+        let declarations = metadata.layers;
+
+        // The project declares only the tables the import writes. A
+        // declaration the load skipped leaves the manifest here.
+        let declared_tables = modpkg.load_hashtables()?;
+        let read_paths: HashSet<&str> = declared_tables
+            .iter()
+            .map(|(entry, _)| entry.path().as_str())
+            .collect();
+        let read_manifests: Vec<_> = metadata
+            .hashtables
+            .into_iter()
+            .filter(|manifest| read_paths.contains(manifest.path.as_str()))
+            .collect();
+        project.hashtables = super::convert::project_hashtables(&read_manifests);
 
         let output_dir = target.output_dir();
         let content_dir = target.content_dir();
@@ -120,6 +140,7 @@ impl<R: Read + Seek> ImportFormat for ModpkgImporter<R> {
         }
         progress.report_writing_metadata();
         extractor.extract_meta(output_dir)?;
+        write_hashtables(output_dir, &declared_tables)?;
         for layer in declarations {
             if let Some(document) = layer.game_data {
                 crate::game_data::write_manifest(output_dir, &layer.name, &document)?;
@@ -132,6 +153,33 @@ impl<R: Read + Seek> ImportFormat for ModpkgImporter<R> {
     fn is_cancellation(error: &Self::Error) -> bool {
         matches!(error, ModpkgImportError::Cancelled)
     }
+}
+
+/// Writes each table in `tables` over the file the extraction wrote for its chunk.
+///
+/// The written file holds the table as the load read it. A chunk that starts
+/// with a byte order mark lands without the mark.
+fn write_hashtables(
+    output_dir: &Utf8Path,
+    tables: &[(HashtableEntry, Hashtable)],
+) -> Result<(), ModpkgError> {
+    for (entry, table) in tables {
+        let Some(file_name) = ltk_modpkg::hashtable_file_name(entry.path().as_str()) else {
+            continue;
+        };
+
+        let destination = ChunkDestination::Hashtable { file_name }.compose();
+        let path = output_dir.join(destination);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        table.write_to(&mut file)?;
+        std::io::Write::flush(&mut file)?;
+    }
+
+    Ok(())
 }
 
 /// A `.modpkg` extraction plan answers where an import would put every chunk.

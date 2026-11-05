@@ -8,6 +8,8 @@
 //!
 //! [`ModpkgMetadata::hashtables`]: crate::ModpkgMetadata::hashtables
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// The chunk directory hashtable chunks are stored under.
@@ -61,55 +63,122 @@ impl ModpkgHashtable {
     }
 }
 
+/// A hashtable declaration that a read skipped, and the reason it was skipped.
+///
+/// [`Modpkg::skipped_hashtables`](crate::Modpkg::skipped_hashtables) lists
+/// these. [`Display`](fmt::Display) renders one as a message for a log.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SkippedHashtable {
+    /// The declaration, as the metadata holds it.
+    pub manifest: ModpkgHashtable,
+    /// The reason the read skipped the declaration.
+    pub reason: ltk_hashtable::HashtableSkipReason,
+}
+
+impl fmt::Display for SkippedHashtable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Skipped the hashtable {}: {}",
+            self.manifest.path, self.reason
+        )
+    }
+}
+
+/// The tables a manifest declares, split into the ones read and the ones
+/// skipped.
+#[derive(Debug, Default)]
+struct DeclaredHashtables {
+    /// The tables read, each with its declaration, in manifest order.
+    tables: Vec<(ltk_hashtable::HashtableEntry, ltk_hashtable::Hashtable)>,
+    /// The declarations whose chunk is absent or unreadable, in manifest order.
+    skipped: Vec<SkippedHashtable>,
+}
+
+/// The UTF-8 byte order mark. Tools in the wild write one at the start of a
+/// table file, and the table grammar refuses it.
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
 impl<TSource: std::io::Read + std::io::Seek> crate::Modpkg<TSource> {
-    /// Load the hashtables the metadata declares - and only those.
+    /// Loads the hashtables the metadata declares - and only those.
     ///
     /// A chunk under `_meta_/hashes/` that no manifest entry declares is not
-    /// a table and is not read; the manifest is authoritative. An entry whose
-    /// declared width is not one a key can have is skipped rather than
-    /// refused - it still travels with the package, it just cannot answer a
-    /// lookup here.
+    /// a table and is not read. The manifest is authoritative. A declaration
+    /// whose width is not one a key can have is skipped. It travels with the
+    /// package and answers no lookup here.
+    ///
+    /// A declaration whose chunk is absent or does not fit the table grammar
+    /// is skipped. [`skipped_hashtables`](Self::skipped_hashtables) lists those
+    /// declarations. A table chunk that starts with a UTF-8 byte order mark is
+    /// read without it.
     ///
     /// The pairs feed `ltk_hashtable::HashtableSet::build` as they are, in
     /// manifest order.
     ///
     /// # Errors
     ///
-    /// Returns an error if the package cannot be read, a declared table chunk
-    /// is missing, or one does not fit the table grammar.
+    /// Returns an error if the metadata cannot be read, a declared chunk
+    /// belongs to a layer or a WAD, or a declared chunk cannot be decompressed.
     pub fn load_hashtables(
         &mut self,
     ) -> Result<Vec<(ltk_hashtable::HashtableEntry, ltk_hashtable::Hashtable)>, crate::ModpkgError>
     {
+        Ok(self.load_declared_hashtables()?.tables)
+    }
+
+    /// Lists the hashtable declarations that [`load_hashtables`](Self::load_hashtables)
+    /// skips for an absent or unreadable chunk, in manifest order.
+    ///
+    /// A declaration whose width no key can have is not listed. Its chunk is
+    /// never read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as
+    /// [`load_hashtables`](Self::load_hashtables).
+    pub fn skipped_hashtables(&mut self) -> Result<Vec<SkippedHashtable>, crate::ModpkgError> {
+        Ok(self.load_declared_hashtables()?.skipped)
+    }
+
+    /// Loads the tables the metadata declares, and lists the declarations
+    /// whose chunk is absent or unreadable.
+    fn load_declared_hashtables(&mut self) -> Result<DeclaredHashtables, crate::ModpkgError> {
         let manifests = self.load_metadata()?.hashtables;
-        let mut tables = Vec::new();
+        let mut declared = DeclaredHashtables::default();
+
         for manifest in manifests {
             let Some(entry) = manifest.to_entry() else {
                 continue;
             };
-            let chunk = *self.chunk(&manifest.path, None).map_err(|error| {
-                // Named by path rather than hash: the manifest holds the
-                // path, and a hex hash names nothing to a user.
-                match error {
-                    crate::ModpkgError::MissingChunk(_) => crate::ModpkgError::MissingHashtable {
-                        path: manifest.path.clone(),
-                    },
-                    other => other,
+
+            let chunk = match self.chunk(&manifest.path, None) {
+                Ok(chunk) => *chunk,
+                Err(crate::ModpkgError::MissingChunk(_)) => {
+                    declared.skipped.push(SkippedHashtable {
+                        manifest,
+                        reason: ltk_hashtable::HashtableSkipReason::Absent,
+                    });
+                    continue;
                 }
-            })?;
+                Err(other) => return Err(other),
+            };
             if chunk.layer().is_some() || chunk.wad().is_some() {
                 return Err(crate::ModpkgError::InvalidMetaChunk);
             }
+
             let data = self.decoder().load_chunk_decompressed(&chunk)?;
-            let table = ltk_hashtable::Hashtable::from_reader(&*data).map_err(|source| {
-                crate::ModpkgError::InvalidHashtable {
-                    path: manifest.path.clone(),
-                    source,
-                }
-            })?;
-            tables.push((entry, table));
+            let data = data.strip_prefix(UTF8_BOM).unwrap_or(&data);
+            match ltk_hashtable::Hashtable::from_reader(data) {
+                Ok(table) => declared.tables.push((entry, table)),
+                Err(source) => declared.skipped.push(SkippedHashtable {
+                    manifest,
+                    reason: ltk_hashtable::HashtableSkipReason::Unreadable(source),
+                }),
+            }
         }
-        Ok(tables)
+
+        Ok(declared)
     }
 }
 
@@ -195,19 +264,70 @@ mod tests {
         assert_eq!(tables[0].0.path(), "_meta_/hashes/game.ok.hashes.txt");
     }
 
-    /// A declared chunk that does not fit the table grammar fails the load,
-    /// named by the path the manifest declared.
+    /// Removes the chunk at `path` from a mounted package. The result is a
+    /// package whose writer declared a table it did not store.
+    fn drop_chunk(modpkg: &mut Modpkg<Cursor<Vec<u8>>>, path: &str) {
+        let key = modpkg.resolve_chunk_key(path, None).unwrap();
+        modpkg.chunks.remove(&key);
+    }
+
     #[test]
-    fn a_table_outside_the_grammar_fails_by_its_declared_path() {
-        let mut modpkg = package([(manifest("game.hashes.txt", 64), "\u{feff}bom.tex\n")]);
+    fn a_declared_chunk_the_package_does_not_hold_is_skipped_and_reported_absent() {
+        let absent = manifest("game.harvested.hashes.txt", 64);
+        let mut modpkg = package([
+            (absent.clone(), "ASSETS/Custom/One.tex\n"),
+            (manifest("game.hashes.txt", 64), "ASSETS/Custom/Two.tex\n"),
+        ]);
+        drop_chunk(&mut modpkg, &absent.path);
 
-        let error = modpkg.load_hashtables().unwrap_err();
+        let tables = modpkg.load_hashtables().unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].0.path(), "_meta_/hashes/game.hashes.txt");
 
+        let skipped = modpkg.skipped_hashtables().unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].manifest, absent);
         assert!(matches!(
-            error,
-            crate::ModpkgError::InvalidHashtable { ref path, .. }
-                if path == "_meta_/hashes/game.hashes.txt"
+            skipped[0].reason,
+            ltk_hashtable::HashtableSkipReason::Absent
         ));
+        assert_eq!(
+            skipped[0].to_string(),
+            "Skipped the hashtable _meta_/hashes/game.harvested.hashes.txt: the container holds no file at that path"
+        );
+    }
+
+    #[test]
+    fn a_declared_chunk_outside_the_grammar_is_skipped_and_reported_unreadable() {
+        let unreadable = manifest("game.hashes.txt", 64);
+        let mut modpkg = package([(unreadable.clone(), "assets\\back\\slash.tex\n")]);
+
+        assert!(modpkg.load_hashtables().unwrap().is_empty());
+
+        let skipped = modpkg.skipped_hashtables().unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].manifest, unreadable);
+        assert!(matches!(
+            skipped[0].reason,
+            ltk_hashtable::HashtableSkipReason::Unreadable(
+                ltk_hashtable::HashtableReadError::InvalidName { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn a_table_chunk_with_a_byte_order_mark_reads_without_it() {
+        let mut modpkg = package([(
+            manifest("game.hashes.txt", 64),
+            "\u{feff}ASSETS/Custom/One.tex\nASSETS/Custom/Two.tex\n",
+        )]);
+
+        let tables = modpkg.load_hashtables().unwrap();
+        assert_eq!(
+            tables[0].1.names().collect::<Vec<_>>(),
+            ["ASSETS/Custom/One.tex", "ASSETS/Custom/Two.tex"]
+        );
+        assert!(modpkg.skipped_hashtables().unwrap().is_empty());
     }
 
     /// A package declaring no tables loads none - including one written

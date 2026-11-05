@@ -1255,6 +1255,80 @@ fn an_impossible_width_is_dropped_from_the_imported_manifest() {
     assert!(ModProject::from(&metadata).hashtables.is_empty());
 }
 
+/// A package that declares a `game` table at each `_meta_/hashes/` file name
+/// in `tables`, with that file's bytes, and returns the archive bytes.
+fn archive_declaring_tables(tables: &[(&str, &str)]) -> Vec<u8> {
+    let metadata = ModpkgMetadata {
+        name: "test-mod".to_string(),
+        display_name: "Test Mod".to_string(),
+        ..ModpkgMetadata::default()
+    };
+    let mut builder = ModpkgBuilder::default()
+        .with_metadata(metadata)
+        .with_layer(ModpkgLayerBuilder::base());
+    for (file_name, data) in tables {
+        let manifest = ltk_modpkg::ModpkgHashtable {
+            path: format!("{}/{file_name}", ltk_modpkg::HASHTABLES_CHUNK_DIR),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        };
+        builder = builder.with_hashtable(manifest, *data).unwrap();
+    }
+
+    let mut buffer = Cursor::new(Vec::new());
+    builder
+        .build_to_writer(&mut buffer, |_| Ok(Vec::new()))
+        .unwrap();
+    buffer.into_inner()
+}
+
+#[test]
+fn an_import_declares_only_the_tables_it_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+    let archive = archive_declaring_tables(&[
+        ("game.hashes.txt", "ASSETS/Custom/One.tex\n"),
+        ("game.broken.hashes.txt", "assets\\back\\slash.tex\n"),
+    ]);
+
+    let imported = import(archive, &output);
+
+    assert_eq!(
+        imported.hashtables,
+        [crate::ModProjectHashtable {
+            path: "hashes/game.hashes.txt".to_string(),
+            category: ltk_hashtable::Category::Game,
+            algorithm: ltk_hashtable::Algorithm::Xxh64,
+            bits: 64,
+        }]
+    );
+    assert_eq!(
+        fs::read_to_string(output.join("hashes/game.hashes.txt")).unwrap(),
+        "ASSETS/Custom/One.tex\n"
+    );
+}
+
+#[test]
+fn an_import_writes_a_table_with_a_byte_order_mark_without_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let output = utf8_tempdir(&tmp).join("imported");
+    let archive =
+        archive_declaring_tables(&[("game.hashes.txt", "\u{feff}ASSETS/Custom/One.tex\n")]);
+
+    let imported = import(archive, &output);
+
+    assert_eq!(imported.hashtables.len(), 1);
+    assert_eq!(
+        fs::read_to_string(output.join("hashes/game.hashes.txt")).unwrap(),
+        "ASSETS/Custom/One.tex\n"
+    );
+    ProjectPacker::from_dir(output)
+        .unwrap()
+        .pack(ModpkgFormat::new(Cursor::new(Vec::new())))
+        .unwrap();
+}
+
 // -- importing a package as a project ---------------------------------------
 
 /// Pack a project with a base-layer and a second-layer file, plus a readme, and

@@ -37,6 +37,8 @@ pub use delta::{
     ArchiveDelta, DeltaProgress, DeltaReport, DeltaStep, FantomeDeltaError, apply_delta,
 };
 pub use error::{FantomeExtractError, FantomeWriteError};
+/// The type of [`SkippedHashtable::reason`].
+pub use ltk_hashtable::HashtableSkipReason;
 /// Re-exported because this crate's own signatures name them.
 ///
 /// [`WadExtractOptions`] takes the first three: a caller names chunks by
@@ -50,9 +52,8 @@ pub use normalize::{
 };
 pub use packed::PackedWadSource;
 pub use reader::{
-    FantomeEntry, FantomeReader, GAME_DATA_MANIFEST, HashtableSkipReason, LayerWad,
-    SkippedHashtable, WadExtractOptions, WadProgress, classify_entry, game_data_entry_name,
-    is_layer_name, wad_entry_name,
+    FantomeEntry, FantomeReader, GAME_DATA_MANIFEST, LayerWad, SkippedHashtable, WadExtractOptions,
+    WadProgress, classify_entry, game_data_entry_name, is_layer_name, wad_entry_name,
 };
 pub use rewrite::{
     FantomeRewriteError, RewriteOutcome, add_hashtables, free_table_path, replace_entries,

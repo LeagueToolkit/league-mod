@@ -335,3 +335,27 @@ fn a_colliding_pair_is_reported_once_however_often_it_recurs() {
 
     assert_eq!(set.collisions().len(), 1);
 }
+
+// Naming: a new table takes the first free conventional file name.
+
+#[test]
+fn free_table_name_numbers_the_category_after_the_plain_name() {
+    use crate::free_table_name;
+
+    assert_eq!(
+        free_table_name(&Category::Game, |_| false),
+        "game.hashes.txt"
+    );
+
+    let taken = ["hashes/game.hashes.txt", "hashes/game2.hashes.txt"];
+    assert_eq!(
+        free_table_name(&Category::Game, |name| {
+            taken.contains(&format!("hashes/{name}").as_str())
+        }),
+        "game3.hashes.txt"
+    );
+    assert_eq!(
+        free_table_name(&Category::BinHashes, |name| name == "binhashes.hashes.txt"),
+        "binhashes2.hashes.txt"
+    );
+}

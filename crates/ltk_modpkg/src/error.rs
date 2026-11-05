@@ -67,10 +67,22 @@ pub enum ModpkgError {
     InvalidMetaChunk,
 
     /// The metadata declares a hashtable whose chunk the package does not hold.
+    ///
+    /// Not produced. A load skips such a declaration and
+    /// [`Modpkg::skipped_hashtables`] lists it.
+    ///
+    /// [`Modpkg::skipped_hashtables`]: crate::Modpkg::skipped_hashtables
+    #[deprecated(note = "not produced; see `Modpkg::skipped_hashtables`")]
     #[error("Missing hashtable chunk: {path}")]
     MissingHashtable { path: String },
 
     /// A declared hashtable chunk does not fit the table grammar.
+    ///
+    /// Not produced. A load skips such a declaration and
+    /// [`Modpkg::skipped_hashtables`] lists it.
+    ///
+    /// [`Modpkg::skipped_hashtables`]: crate::Modpkg::skipped_hashtables
+    #[deprecated(note = "not produced; see `Modpkg::skipped_hashtables`")]
     #[error("Invalid hashtable: {path}")]
     InvalidHashtable {
         path: String,
