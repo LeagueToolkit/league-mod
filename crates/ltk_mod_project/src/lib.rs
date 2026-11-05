@@ -14,6 +14,7 @@ mod license_file;
 mod modignore;
 pub mod pack;
 mod package_format;
+pub mod ritobin;
 
 #[cfg(any(feature = "fantome", feature = "modpkg"))]
 mod hashtable_routes;

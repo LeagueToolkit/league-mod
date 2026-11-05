@@ -1,5 +1,5 @@
 //! [`ProjectPacker`]: the format-neutral packing driver.
-
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 
@@ -13,7 +13,7 @@ use crate::{
     canonical_license_file_name, find_license_file, ContentWalkError, ModIgnore, ModIgnoreError,
     ModProject, ModProjectError, ModProjectLayer, CONTENT_DIR_NAME, MODIGNORE_FILE_NAME,
 };
-
+use crate::ritobin::{bin_rel_path, is_ritobin_source, transform_file, RitobinTransformError};
 /// Failure to pack a mod project.
 ///
 /// The variants here are the driver's: they can occur whatever format is
@@ -94,7 +94,26 @@ pub enum PackError<E> {
         filter_root: Utf8PathBuf,
         project_content_dir: Utf8PathBuf,
     },
+        /// A `.py` or `.ritobin` source could not be converted to `.bin`.
+    #[error("Failed to convert {path} to .bin")]
+    Ritobin {
+        path: Utf8PathBuf,
+        #[source]
+        source: RitobinTransformError,
+    },
 
+    /// Two files in one layer would pack to the same archive path, such as
+    /// `skin0.py` next to `skin0.bin`.
+    #[error("{path} and another file both pack to {rel_path}")]
+    RitobinConflict { path: Utf8PathBuf, rel_path: String },
+
+    /// The staging directory for converted bins could not be created or written.
+    #[error("Failed to stage converted bin at {path}")]
+    Staging {
+        path: Utf8PathBuf,
+        #[source]
+        source: io::Error,
+    },
     /// The format failed to write the archive; see the format's own error
     /// type for the cases.
     #[error(transparent)]
@@ -280,12 +299,18 @@ impl ProjectPacker {
         let layer_count = layers.len() as u32;
         let mut ignored = Vec::new();
         let mut planned = Vec::with_capacity(layers.len());
+        // Converted `.bin` files live here until the format has written them.
+        let staging = tempfile::tempdir()
+            .map_err(|source| PackError::scan(&self.project_root, source))?;
+        let staging_root = Utf8PathBuf::from_path_buf(staging.path().to_path_buf())
+            .map_err(PackError::NonUtf8Path)?;
         for (index, layer) in layers.into_iter().enumerate() {
             progress.report_layer(&layer.name, index as u32, layer_count);
             let declarations =
                 crate::game_data::load_layer(&self.project_root, &layer.name, ignore);
             let mut files = scan_layer(&content_dir, &layer, ignore, &mut ignored)?;
             files.retain(|file| !declarations.is_declaration_input(file.source()));
+            let files = convert_ritobin_files(files, &staging_root, index)?;
             let override_files = declarations.override_files().to_vec();
             let declarations = declarations.declarations?;
             planned.push(
@@ -499,4 +524,61 @@ fn rel_path_normalized(path: &Utf8Path, base: &Utf8Path) -> String {
         .expect("scanned path must sit under the scanned directory")
         .as_str()
         .replace('\\', "/")
+}
+
+/// Replace every `.py` / `.ritobin` source with a staged `.bin` that packs at
+/// the same path under a `.bin` extension.
+fn convert_ritobin_files<E>(
+    files: Vec<PlannedFile>,
+    staging_root: &Utf8Path,
+    layer_index: usize,
+) -> Result<Vec<PlannedFile>, PackError<E>> {
+    // Archive paths are matched case-insensitively, the way the game hashes them.
+    let key = |wad: Option<&str>, rel: &str| (wad.map(str::to_owned), rel.to_ascii_lowercase());
+
+    let mut taken: HashSet<(Option<String>, String)> = files
+        .iter()
+        .filter(|f| !is_ritobin_source(f.rel_path()))
+        .map(|f| key(f.wad(), f.rel_path()))
+        .collect();
+
+    if taken.len() == files.len() {
+        return Ok(files);
+    }
+
+    let layer_dir = staging_root.join(layer_index.to_string());
+    fs::create_dir_all(layer_dir.as_std_path()).map_err(|source| PackError::Staging {
+        path: layer_dir.clone(),
+        source,
+    })?;
+
+    let mut out = Vec::with_capacity(files.len());
+    for (n, file) in files.into_iter().enumerate() {
+        if !is_ritobin_source(file.rel_path()) {
+            out.push(file);
+            continue;
+        }
+
+        let new_rel = bin_rel_path(file.rel_path());
+        if !taken.insert(key(file.wad(), &new_rel)) {
+            return Err(PackError::RitobinConflict {
+                path: file.source().to_owned(),
+                rel_path: new_rel,
+            });
+        }
+
+        let bytes = transform_file(file.source()).map_err(|source| PackError::Ritobin {
+            path: file.source().to_owned(),
+            source,
+        })?;
+
+        let staged = layer_dir.join(format!("{n}.bin"));
+        fs::write(staged.as_std_path(), bytes).map_err(|source| PackError::Staging {
+            path: staged.clone(),
+            source,
+        })?;
+
+        out.push(PlannedFile::new(staged, new_rel, file.wad().map(str::to_owned)));
+    }
+    Ok(out)
 }

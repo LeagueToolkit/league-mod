@@ -23,13 +23,14 @@ toml = { workspace = true }
 serde_json = { workspace = true }
 ltk_hashtable = { workspace = true }
 ltk_meta = { workspace = true }
+ltk_ritobin = { workspace = true }
+tempfile = { workspace = true }
 
 # Optional: packing backends, one cargo feature per format
 ltk_modpkg = { workspace = true, optional = true }
 ltk_fantome = { workspace = true, optional = true }
 ltk_wad = { workspace = true, optional = true }
 ltk_file = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
 image = { workspace = true, features = ["webp", "png", "jpeg", "gif", "bmp", "tiff", "ico"], optional = true }
 webp-animation = { version = "0.9", optional = true }
 semver = { workspace = true, optional = true }
@@ -44,7 +45,6 @@ fantome = [
     "dep:slug",
     "dep:ltk_wad",
     "dep:ltk_file",
-    "dep:tempfile",
     "ltk_hashtable/wad"]
 
 [dev-dependencies]
