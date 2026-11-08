@@ -20,6 +20,10 @@ use ltk_wad::{is_hex_chunk_path, NameRecovery, NoResolver, PathResolver, Wad, Wa
 #[cfg(test)]
 mod tests;
 
+/// The read size of the plain copy of an unchanged archive. `io::copy` reads a
+/// bare `File` 8 KiB at a time outside Linux.
+const COPY_BUFFER_SIZE: usize = 1024 * 1024;
+
 /// An embed's account of itself.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -145,8 +149,9 @@ pub fn embed_archive_names(
                 // The plain copy still lands through the temp file and the
                 // rename, so an interrupted embed can no more truncate a
                 // covered mod than a rewritten one.
-                let mut original =
+                let original =
                     File::open(source.as_std_path()).map_err(|e| EmbedError::io(source, e))?;
+                let mut original = BufReader::with_capacity(COPY_BUFFER_SIZE, original);
                 std::io::copy(&mut original, temp.as_file_mut())
                     .map_err(|e| EmbedError::io(dest, e))?;
                 temp.persist(dest.as_std_path())
